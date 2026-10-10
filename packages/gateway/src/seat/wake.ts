@@ -26,11 +26,12 @@ import type { GatewayState, NextWake, SeatState, WakeRecord, WakeScheduler } fro
 // A wake drains every pending own and social reason, the self-wake if its time has come, and the
 // urgent reasons only once their gap has passed: an urgent trigger inside the gap stays pending
 // and fires at the end of the gap, so a wake is exempt as urgent at most once per urgentMinGap and
-// a budget-charged wake never rides on an urgent reason it did not wait for. This reads the §8.5
-// `begin` bullet ("drains every pending reason") and perfidia-1 §14.2 ("delivers every pending
-// trigger") together with their gap rule ("at most one urgent wake starts per 600 s") and the P11
-// urgent-timing bullet, which the literal drain would break. The briefing still lists every
-// incoming attack (§8.2), so a non-urgent wake inside the gap does not hide one.
+// a budget-charged wake never rides on an urgent reason it did not wait for. This is a deviation
+// from the letter of the §8.5 `begin` bullet ("drains every pending reason") and of perfidia-1
+// §14.2 ("delivers every pending trigger"), made to keep their gap rule ("at most one urgent wake
+// starts per 600 s") and the P11 urgent-timing bullet, which the literal drain would break. The
+// briefing still lists every incoming attack (§8.2), so a non-urgent wake inside the gap does not
+// hide one.
 //
 // Public messages never wake (§8.5, perfidia-1 §11.1), whatever their audience or the wake table:
 // `message` is a standard event type, so the check stays ruleset-agnostic.

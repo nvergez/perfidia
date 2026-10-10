@@ -124,7 +124,8 @@ export interface ArchiveSearch {
  * event both public and addressed to the seat appears once). `text` is an ASCII case-insensitive
  * substring of the event's `text` field or of its summary; `kinds` filters by type (an empty list
  * filters nothing); `with` keeps events that visibly involve that player (`involves`); `since`
- * and `until` bound `t`, inclusive. Returns the hits and whether more matched.
+ * and `until` bound `t`, inclusive. Returns the hits and whether more matched (an addition to
+ * §8.4, for the `more` of the `read_notes` result; `searchArchive` keeps §8.4's signature).
  */
 export function searchArchivePage(
   gw: GatewayState,

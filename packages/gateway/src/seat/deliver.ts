@@ -30,7 +30,8 @@ function claimPublicWake(gw: GatewayState, rules: GatewayRules, ev: DomainEvent)
  * archive and inbox of every recipient and, when public, to the feed. Wake triggers are ingested
  * per recipient role and, for a public event, with the `public` role for every seat (subject to
  * `publicOncePerDay`); a public message wakes nobody, whatever its audience (`ingest` drops it).
- * A `player_eliminated` event eliminates its player's seat.
+ * A `player_eliminated` event eliminates its player's seat (an addition to §8.4, so the `ev` line
+ * drives the elimination in the live host and in the rebuild alike).
  *
  * Events are copied, so the gateway state never aliases an engine object.
  */

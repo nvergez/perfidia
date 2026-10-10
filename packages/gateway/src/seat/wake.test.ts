@@ -422,6 +422,21 @@ describe("self-wakes", () => {
     expect(seatOf(gw, P1).wake.selfAt).toBe(44200);
   });
 
+  test("the clamp range starts at the end_turn call time, which the seat state does not hold", () => {
+    const d = started(RULES, false);
+    d.deliver(queueEmpty(1000, P1));
+    d.advance(1600);
+    expect(d.lastWake(P1).t).toBe(1600);
+    d.advance(5000); // a real-time turn: the agent calls end_turn {nextWakeIn: 100} at 5000
+    const s = seatOf(d.gw, P1);
+    expect([s.wake.inTurn, s.wake.lastEnd, s.lastBriefingAt]).toEqual([true, 0, 1600]);
+    // from lastEnd the floor would be 600, from the wake 2200: only `now` gives 5600
+    expect(d.wake.requestSelfWake(P1, 5100, 5000)).toEqual({ at: 5600, clamped: true });
+    d.close(P1);
+    expect(s.wake.selfAt).toBe(5600);
+    expect(s.lastTurn?.nextWake).toEqual({ at: 5600, kind: "self" });
+  });
+
   test("a later request replaces the pending self-wake", () => {
     const d = started(RULES, false);
     d.deliver(queueEmpty(1000, P1));

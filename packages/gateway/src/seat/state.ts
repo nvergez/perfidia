@@ -91,7 +91,8 @@ export function todayCounters(s: SeatState, t: GameTime): DayCounters {
 /**
  * Called once the briefing of a wake is built: the inbox is emptied and the news cursor moves to
  * the last delivered event. The host builds the briefing between `begin` and this call; the
- * rebuild calls it right after `begin` for each `wake` line.
+ * rebuild calls it right after `begin` for each `wake` line. An addition to the `wake` fold of
+ * §10.5, which names `begin` alone.
  */
 export function briefed(gw: GatewayState, seat: PlayerId, t: GameTime): void {
   const s = seatOf(gw, seat);
@@ -107,7 +108,8 @@ export function addressedTo(d: Delivered, seat: PlayerId): boolean {
 
 /**
  * Public events delivered since the seat's last briefing, oldest first, except those addressed to
- * the seat, which its inbox already holds.
+ * the seat, which its inbox already holds. A deviation from §8.4 ("feed after lastBriefingAt"): the
+ * cursor is the delivery number `lastBriefingE`, and the addressed events are left out.
  */
 export function unreadNews(gw: GatewayState, seat: PlayerId): Delivered[] {
   const s = seatOf(gw, seat);

@@ -4,7 +4,9 @@ import { groupDigits } from "./text.ts";
 
 // The errors the seat logic raises (§7.2 layers 1 and 4): their wording is a pure function of the
 // code, the details and the time, which a `gw` line carries. The live host returns these texts,
-// and the rebuild (§10.5) regenerates the same `lastTurn` messages from the logged details.
+// and the rebuild (§10.5) regenerates the same `lastTurn` messages from the logged details. §7.3
+// puts every domain code's wording in `present/explain.ts`; for these four codes it should
+// delegate here, so the agent and the rebuild see one wording.
 
 /** Codes worded here. */
 export const SEAT_ERROR_CODES = [

@@ -76,7 +76,10 @@ export interface TurnFailure {
   count: number;
 }
 
-/** A failed result the agent never saw; `count` only when several calls failed that way. */
+/**
+ * A failed result the agent never saw; `count` only when several calls failed that way. `count` is
+ * an addition to §8.2, which lists each `TURN_OVER` or `CALLS_CAP` call on its own.
+ */
 export interface UnseenFailure {
   tool: string;
   code: ErrorCode;
@@ -152,18 +155,29 @@ export interface NextWake {
 
 /** The wake scheduler of §8.5: a stateless view over `GatewayState`; its state lives in `SeatState.wake`. */
 export interface WakeScheduler {
+  /** The match's gateway rules (an addition to §8.5: `deliver` reads `publicOncePerDay` here). */
   readonly rules: GatewayRules;
   /** Records a trigger for `seat` if `rules.wake[ev.type][role]` names a class; never for a public message. */
   ingest(seat: PlayerId, ev: DomainEvent, role: WakeRole): void;
-  /** Clamps `at` into `[now + selfWake.min, now + selfWake.max]` and makes it the pending self-wake. */
+  /**
+   * Clamps `at` into `[now + selfWake.min, now + selfWake.max]` and makes it the pending self-wake.
+   * `now`, the time of the `end_turn` call, is an addition to §8.5's `requestSelfWake(seat, at)`:
+   * the scheduler has no clock, and in a real-time turn neither `lastEnd` nor the wake time is it.
+   */
   requestSelfWake(seat: PlayerId, at: GameTime, now: GameTime): { at: GameTime; clamped: boolean };
   /** Earliest wake of an idle, alive seat; `null` when none. */
   nextWakeTime(): GameTime | null;
   /** Idle, alive seats whose wake time is `<= t`, sorted by player number. */
   due(t: GameTime): PlayerId[];
-  /** The seat's effective next wake; `null` while it is in a turn or eliminated. */
+  /**
+   * The seat's effective next wake; `null` while it is in a turn or eliminated. An addition to §8.5,
+   * for the `turn` line's `next` and `lastTurn.nextWake`.
+   */
   peek(seat: PlayerId): NextWake | null;
-  /** Opens a turn: drains the due reasons, charges a budget, counts the turn. */
+  /**
+   * Opens a turn: drains the due reasons, charges a budget, counts the turn. Unlike §8.5's "drains
+   * every pending reason", urgent reasons still inside `urgentMinGap` stay pending (see `wake.ts`).
+   */
   begin(seat: PlayerId, t: GameTime): WakeRecord;
   /** Closes the turn: clears `inTurn` synchronously and sets `lastEnd`. */
   end(seat: PlayerId, t: GameTime): void;

@@ -13,7 +13,9 @@ import type {
 // Turn bookkeeping driven by the `act`, `gw` and `turn` lines (§8.4, §10.5): daily counters, the
 // failures of the turn in progress, and `lastTurn` when the turn closes. The `message` of a failure
 // is the explanation the agent got (or would have got): the live host passes the `ToolResult`'s,
-// the rebuild re-explains the violation that the engine re-run supplies.
+// the rebuild re-explains the violation that the engine re-run supplies. `recordAct`, `recordGw`
+// and `closeTurn` are the `act`, `gw` and `turn` folds of §10.5, which describes them in words
+// ("daily counters and the round's failures", "end, selfAt and lastTurn") rather than by name.
 
 /** Codes listed in `lastTurn.unseen` whatever the round: calls that never ran. */
 const alwaysUnseen = (code: ErrorCode): boolean => code === "TURN_OVER" || code === "CALLS_CAP";
@@ -23,7 +25,7 @@ const alwaysUnseen = (code: ErrorCode): boolean => code === "TURN_OVER" || code 
  * agent in the next round, so they are dropped (the always-unseen codes aside), and a repeated
  * `TURN_OVER` or `CALLS_CAP` only counts on its code's first entry: the list stays bounded by the
  * failures of one round, whose calls are capped, plus two entries, however many calls an agent
- * sends.
+ * sends. The folding is a deviation from §8.2, which lists each such call.
  */
 function addFailure(s: SeatState, f: Omit<TurnFailure, "count">): void {
   if (alwaysUnseen(f.code)) {

@@ -13,6 +13,9 @@ export function appendedNotes(notes: string, text: string): string {
 /**
  * Writes the notebook, or rejects with `NOTE_TOO_LONG` and the numbers when the result would
  * exceed `max` characters (UTF-16 code units). A rejection leaves the notes unchanged.
+ *
+ * `t`, the time of the call, is an addition to §8.4's `writeNote(s, text, mode, max)`: every
+ * `ToolResult` carries it (§7.3). The rebuild passes the `note` line's `t`.
  */
 export function writeNote(
   s: SeatState,
