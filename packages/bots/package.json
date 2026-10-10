@@ -1,0 +1,17 @@
+{
+  "name": "@perfidia/bots",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@perfidia/gateway": "workspace:*",
+    "@perfidia/protocol": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/bun": "catalog:",
+    "fast-check": "catalog:"
+  }
+}

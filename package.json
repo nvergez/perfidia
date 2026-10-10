@@ -1,0 +1,36 @@
+{
+  "name": "perfidia",
+  "private": true,
+  "workspaces": {
+    "packages": [
+      "packages/*"
+    ],
+    "catalog": {
+      "@types/bun": "1.4.2",
+      "fast-check": "4.10.2",
+      "typescript": "7.0.2",
+      "zod": "4.6.5"
+    }
+  },
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc -b",
+    "lint": "oxlint --type-aware --deny-warnings",
+    "format": "oxfmt",
+    "format:check": "oxfmt --check",
+    "test": "bun test",
+    "check": "bun run typecheck && bun run lint && bun run format:check && bun run test"
+  },
+  "devDependencies": {
+    "@types/bun": "catalog:",
+    "fast-check": "catalog:",
+    "oxfmt": "0.72.0",
+    "oxlint": "1.87.0",
+    "oxlint-tsgolint": "7.0.2003",
+    "typescript": "catalog:"
+  },
+  "overrides": {
+    "typescript": "7.0.2"
+  },
+  "packageManager": "bun@1.4.3"
+}

@@ -1,0 +1,19 @@
+{
+  "name": "@perfidia/sim",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@perfidia/bots": "workspace:*",
+    "@perfidia/engine": "workspace:*",
+    "@perfidia/gateway": "workspace:*",
+    "@perfidia/protocol": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/bun": "catalog:",
+    "fast-check": "catalog:"
+  }
+}
