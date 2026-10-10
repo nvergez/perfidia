@@ -1,0 +1,8 @@
+[install]
+# Each workspace package only sees the dependencies it declares, so an
+# undeclared import (e.g. engine -> gateway) fails to resolve.
+linker = "isolated"
+
+[run]
+# Run package bins (tsc, oxlint, oxfmt) with Bun even when their shebang says node.
+bun = true

@@ -1,0 +1,8 @@
+{
+  "recommendations": [
+    "TypeScriptTeam.native-preview",
+    "oxc.oxc-vscode",
+    "EditorConfig.EditorConfig"
+  ],
+  "unwantedRecommendations": ["dbaeumer.vscode-eslint", "esbenp.prettier-vscode", "biomejs.biome"]
+}
