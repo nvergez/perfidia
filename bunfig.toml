@@ -6,3 +6,7 @@ linker = "isolated"
 [run]
 # Run package bins (tsc, oxlint, oxfmt) with Bun even when their shebang says node.
 bun = true
+
+[test]
+# Agents work in git worktrees under .claude/worktrees; never pick up their tests.
+pathIgnorePatterns = [".claude/**"]
