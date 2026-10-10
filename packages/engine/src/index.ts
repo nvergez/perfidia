@@ -1,5 +1,4 @@
-import { PROTOCOL_PACKAGE } from "@perfidia/protocol";
+export * from "./core/index.ts";
 
-// Placeholder until the real engine code lands.
+// Placeholder still imported by the gateway placeholder; removed once nothing imports it (§15.1).
 export const ENGINE_PACKAGE = "@perfidia/engine";
-export const ENGINE_UPSTREAM = PROTOCOL_PACKAGE;
