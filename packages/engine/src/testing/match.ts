@@ -8,7 +8,6 @@ import {
   loadMatch,
   resolveConfig,
   rulesHashOf,
-  runTestStep,
   stateHash,
   type InvariantLevel,
   type Match,
@@ -25,6 +24,7 @@ import {
   type MatchSetup,
   type Snapshot,
 } from "@perfidia/protocol";
+import { runTestStep } from "../kernel/match.ts";
 import { fakeDomain } from "./domain.ts";
 import { FIXTURE_REF, fixtureRuleset, type FixtureExt } from "./fixture.ts";
 import { buildState, scheduleAt } from "./state.ts";
@@ -86,7 +86,8 @@ export function matchFromState(
 /**
  * Runs `edit(ctx)` at `now`, then `afterStep({cause: {kind: "test"}, events})`, the emitted-event
  * check and the step invariants; returns the events emitted. E.g. to edit alliance membership
- * directly and watch a ruleset react.
+ * directly and watch a ruleset react. It edits the state outside the action pipeline and the log,
+ * so it lives here only: the kernel barrel does not export `runTestStep` (§5.3).
  */
 export function testStep(match: Match, edit: (ctx: Ctx) => void): DomainEvent[] {
   return runTestStep(match, edit);
@@ -148,7 +149,7 @@ export function fixtureState(
   const rules = fixtureRules(o.players ?? 2);
   const now = o.now ?? 0;
   const openAt = fixtureRuleset.defaults.time.openAt;
-  const ext: FixtureExt = { opened: now >= openAt, renames: 0 };
+  const ext: FixtureExt = { opened: now >= openAt, renames: 0, holds: {} };
   const state = buildState({ rules, players: o.players ?? 2, seed: o.seed ?? 7, now, ext });
   if (now < openAt) scheduleAt(state, rules, "fixture_open", openAt, "");
   return { state, rules };

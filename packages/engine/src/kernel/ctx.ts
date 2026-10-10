@@ -1,27 +1,31 @@
 import { fnv1a64, streamRng, type OpaqueIdMinter } from "@perfidia/engine/core";
 import type { AnyRuleset, Ctx, ReadCtx, Rng } from "@perfidia/engine/contracts";
-import type {
-  AllianceId,
-  CityId,
-  CompiledRules,
-  DeepReadonly,
-  DomainEvent,
-  GameState,
-  GameTime,
-  MatchResult,
-  MessageId,
-  MovementId,
-  PlayerId,
-  ProposalId,
-  QueueItemId,
-  ReportId,
+import {
+  MatchResultSchema,
+  type AllianceId,
+  type CityId,
+  type CompiledRules,
+  type DeepReadonly,
+  type DomainEvent,
+  type GameState,
+  type GameTime,
+  type MatchResult,
+  type MessageId,
+  type MovementId,
+  type PlayerId,
+  type ProposalId,
+  type QueueItemId,
+  type ReportId,
 } from "@perfidia/protocol";
-import { canonicalCopy, jsonCopy, readonlyView } from "./copy.ts";
-import { EngineBug } from "./errors.ts";
+import { canonicalCopy, jsonCopy, lookup, readonlyView } from "./copy.ts";
+import { EngineBug, errorMessage } from "./errors.ts";
 import { deepFreeze } from "./freeze.ts";
 import { cancelEvent, scheduleEvent } from "./queue.ts";
 
 // The context objects of a step (docs/architecture.md §5.2, §6.4, §6.6).
+
+/** The standard event of the end of a match; only `endMatch` emits it. */
+const MATCH_ENDED = "match_ended";
 
 /** What a `Ctx` needs from its match; kept by the match, never stored in the state. */
 export interface CtxEnv {
@@ -102,7 +106,19 @@ export class StepCtx implements Ctx {
     return makeReadCtx(this.env, this.state);
   }
 
+  /** §6.4. `match_ended` is the kernel's own event: `endMatch` emits it and `emit` refuses it. */
   emit(e: Omit<DomainEvent, "t">): void {
+    if (e.type === MATCH_ENDED) {
+      throw new EngineBug(
+        "engine",
+        "match_ended is emitted by the kernel when ctx.endMatch(result) ends the match; call endMatch instead of emitting it",
+      );
+    }
+    this.route(e);
+  }
+
+  /** Serialises once, folds `evHash` and collects the parsed copy (§6.4). */
+  private route(e: Omit<DomainEvent, "t">): void {
     const event: DomainEvent = { ...e, t: this.now };
     const { text, copy } = canonicalCopy(event);
     this.state.evHash = fnv1a64(`${this.state.evHash}\n${text}`);
@@ -156,20 +172,73 @@ export class StepCtx implements Ctx {
     return takeStream(this.env, this.state.seed, stream);
   }
 
+  /**
+   * Ends the match: checks `result` (the `MatchResult` schema, `endedAt = now`, winners and
+   * standings naming distinct players of the match; `EngineBug` otherwise), stores a copy, sets
+   * `status = "ended"` and emits the standard `match_ended` event `{reason, winners}`. The kernel
+   * emits that event, exactly once per match: a ruleset never emits it itself (`emit` refuses it).
+   * Nothing else is processed afterwards: no `afterStep`, no further event.
+   */
   endMatch(result: MatchResult): void {
     if (this.state.status === "ended") {
-      throw new EngineBug("engine", "endMatch called on a match that has already ended", {
-        reason: result.reason,
-      });
+      throw new EngineBug("engine", "endMatch called on a match that has already ended");
     }
-    const copy = jsonCopy(result);
+    const copy = this.checkResult(result);
     this.state.status = "ended";
     this.state.result = copy;
-    this.emit({
-      type: "match_ended",
+    this.route({
+      type: MATCH_ENDED,
       public: true,
       to: [],
       data: { reason: copy.reason, winners: copy.winners },
+    });
+  }
+
+  /** A checked canonical copy of a result (see `endMatch`). */
+  private checkResult(result: MatchResult): MatchResult {
+    let copy: unknown;
+    try {
+      copy = jsonCopy<unknown>(result);
+    } catch (error) {
+      throw new EngineBug(
+        "engine",
+        `endMatch: the result is not canonical JSON: ${errorMessage(error)}`,
+        {},
+        error,
+      );
+    }
+    const problems: string[] = [];
+    const parsed = MatchResultSchema.safeParse(copy);
+    if (!parsed.success) {
+      for (const i of parsed.error.issues) {
+        const path = i.path.map((p) => String(p)).join(".");
+        problems.push(path === "" ? i.message : `${path}: ${i.message}`);
+      }
+    } else {
+      const r = parsed.data;
+      if (r.endedAt !== this.now) {
+        problems.push(`endedAt is ${r.endedAt}; the match ends now, at ${this.now}`);
+      }
+      const names = (what: string, players: readonly PlayerId[]): void => {
+        const seen = new Set<string>();
+        for (const p of players) {
+          if (lookup(this.state.players, p) === undefined) {
+            problems.push(`${what} names ${p}, who is not a player of this match`);
+          } else if (seen.has(p)) {
+            problems.push(`${what} names ${p} twice`);
+          }
+          seen.add(p);
+        }
+      };
+      names("winners", r.winners);
+      names(
+        "standings",
+        r.standings.map((row) => row.player),
+      );
+      if (problems.length === 0) return r;
+    }
+    throw new EngineBug("engine", `endMatch: invalid result: ${problems.join("; ")}`, {
+      problems,
     });
   }
 }

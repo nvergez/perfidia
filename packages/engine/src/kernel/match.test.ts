@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { canonicalJson, fnv1a64 } from "@perfidia/engine/core";
-import type { ActionHandler, DomainModule, Ruleset } from "@perfidia/engine/contracts";
+import type { ActionHandler, Ctx, DomainModule, Ruleset } from "@perfidia/engine/contracts";
 import {
   LogRecorder,
   addBuildItem,
@@ -17,11 +17,13 @@ import {
 } from "@perfidia/engine/testing";
 import type { Action, ActionOf, Json, MatchSetup } from "@perfidia/protocol";
 import fc from "fast-check";
+import * as kernel from "./index.ts";
 import {
   EngineBug,
   EngineMisuse,
   MatchConfigError,
   createMatch,
+  loadMatch,
   stateHash,
   type Match,
 } from "./index.ts";
@@ -194,7 +196,7 @@ describe("createMatch", () => {
         ...fixtureRuleset.hooks,
         createWorld: (w) => ({
           ...fixtureRuleset.hooks.createWorld(w),
-          ext: { opened: false, renames: -1 },
+          ext: { opened: false, renames: -1, holds: {} },
         }),
       },
     };
@@ -404,13 +406,41 @@ describe("emit and boundary copies (§6.4, §6.6)", () => {
     expect(Object.isFrozen(opened?.data)).toBe(true);
   });
 
-  test("the result and the setup are copies", () => {
+  test("the result is a copy; the setup is frozen at every level and snapshots copy it", () => {
     const m = fixtureMatch();
     m.advanceTo(86400);
     const result = m.result;
     if (result === null) throw new Error("not ended");
     result.winners.push("p9");
     expect(m.result?.winners).not.toContain("p9");
+
+    for (const invariants of ["off", "checkpoint", "step"] as const) {
+      const live = fixtureMatch({ invariants, overrides: { "time.travel": 7200 } });
+      live.apply("p1", { type: "attack", from: "c1", to: "c2", units: { soldier: 2 } });
+      const snapText = canonicalJson(live.snapshot(1));
+      const h = live.hash();
+      const setup = live.setup;
+      expect(Object.isFrozen(setup)).toBe(true);
+      expect(Object.isFrozen(setup.seats)).toBe(true);
+      expect(Object.isFrozen(setup.overrides)).toBe(true);
+      expect(() => setup.seats.push({ id: "p3" })).toThrow(TypeError);
+      expect(() => {
+        setup.overrides["time.travel"] = 9999;
+      }).toThrow(TypeError);
+      expect(() => {
+        setup.idKey = "0".repeat(32);
+      }).toThrow(TypeError);
+      expect(canonicalJson(live.snapshot(1))).toBe(snapText);
+      expect(live.hash()).toBe(h);
+
+      const snap = live.snapshot(1);
+      snap.setup.idKey = "0".repeat(32);
+      expect(live.setup.idKey).not.toBe(snap.setup.idKey);
+      const loaded = loadMatch(live.snapshot(1), fixtureRuleset, fakeDomain, { invariants });
+      expect(Object.isFrozen(loaded.setup.seats)).toBe(true);
+      expect(() => loaded.setup.seats.push({ id: "p3" })).toThrow(TypeError);
+      expect(loaded.hash()).toBe(h);
+    }
   });
 });
 
@@ -718,5 +748,218 @@ describe("matchFromState", () => {
     const m = matchFromState(state, fixtureRuleset);
     expect(m.now).toBe(0);
     expect(m.advanceTo(7200).events.map((e) => e.type)).toEqual(["fixture_opened"]);
+  });
+
+  test("testStep lives in the testing kit only: the kernel barrel does not export it", () => {
+    expect(Object.keys(kernel)).not.toContain("runTestStep");
+    expect(Object.keys(kernel)).toContain("createMatch");
+  });
+});
+
+function caught(fn: () => unknown): unknown {
+  try {
+    fn();
+  } catch (error) {
+    return error;
+  }
+  throw new Error("expected a throw");
+}
+
+function bugOf(fn: () => unknown): EngineBug {
+  const error = caught(fn);
+  if (error instanceof EngineBug) return error;
+  throw new Error(`expected an EngineBug, got ${String(error)}`);
+}
+
+function withHooks(hooks: Partial<FixtureRuleset["hooks"]>): FixtureRuleset {
+  return { ...fixtureRuleset, hooks: { ...fixtureRuleset.hooks, ...hooks } };
+}
+
+const fakeBuild: ActionHandler = fakeDomain.actions.build;
+const fakeAttack: ActionHandler = fakeDomain.actions.attack;
+
+function setWood(ctx: Ctx, wood: number): void {
+  const c1 = ctx.state.cities["c1"];
+  if (c1 === undefined) throw new Error("no c1");
+  c1.stock.wood = wood;
+}
+
+describe("only EngineMisuse and EngineBug leave the kernel (§5.3)", () => {
+  test("a float left in the state is an invariant EngineBug at the next checkpoint", () => {
+    const floating = withHooks({ on: { fixture_open: (ctx) => setWood(ctx, 1.5) } });
+    const m = createMatch(fixtureSetup(), floating, fakeDomain, { invariants: "checkpoint" });
+    const bug = bugOf(() => m.advanceTo(7200));
+    expect(bug.kind).toBe("invariant");
+    expect(bug.message).toContain("the state is not canonical JSON at t = 7200");
+    expect(bug.message).toContain("1.5 is not a safe integer at $.cities.c1.stock.wood");
+    expect(() => m.advanceTo(7300)).toThrow(EngineMisuse);
+    expect(bugOf(() => m.hash()).kind).toBe("invariant");
+    expect(bugOf(() => m.snapshot(0)).kind).toBe("invariant");
+  });
+
+  test("a float left by an action is an EngineBug at its trace hash, else at the checkpoint", () => {
+    const floating = withHooks({
+      actions: {
+        ...fixtureRuleset.hooks.actions,
+        build: {
+          validate: (r, seat, a) => fakeBuild.validate(r, seat, a),
+          apply: (ctx, seat, plan) => {
+            const data = fakeBuild.apply(ctx, seat, plan);
+            setWood(ctx, 0.5);
+            return data;
+          },
+        },
+      },
+    });
+    const build: Action = { type: "build", city: "c1", building: "tower" };
+    const traced = createMatch(fixtureSetup(), floating, fakeDomain, {
+      invariants: "checkpoint",
+      traceHashes: true,
+    });
+    expect(bugOf(() => traced.apply("p1", build)).kind).toBe("invariant");
+    expect(() => traced.apply("p1", build)).toThrow(EngineMisuse);
+    const plain = createMatch(fixtureSetup(), floating, fakeDomain, { invariants: "checkpoint" });
+    expect(plain.apply("p1", build).ok).toBe(true);
+    expect(bugOf(() => plain.advanceTo(3600)).message).toContain("at t = 3600");
+  });
+
+  test("a float in a violation or a warning is an EngineBug of kind engine", () => {
+    const guarding = withHooks({
+      guard: () => ({ code: "FIXTURE_CLOSED", details: { availableAt: 1.5 } }),
+    });
+    const build: Action = { type: "build", city: "c1", building: "tower" };
+    for (const invariants of ["checkpoint", "step"] as const) {
+      const m = createMatch(fixtureSetup(), guarding, fakeDomain, { invariants });
+      const bug = bugOf(() => m.apply("p1", build));
+      expect(bug.kind).toBe("engine");
+      expect(bug.message).toContain("hooks.guard returned a violation that is not canonical JSON");
+      expect(() => m.apply("p1", build)).toThrow(EngineMisuse);
+    }
+    const warning = withHooks({
+      actions: {
+        ...fixtureRuleset.hooks.actions,
+        build: {
+          validate: (r, seat, a) => {
+            const verdict = fakeBuild.validate(r, seat, a);
+            return verdict.ok
+              ? { ...verdict, warnings: [{ code: "FIXTURE_CLOSED", details: { x: 0.5 } }] }
+              : verdict;
+          },
+          apply: (ctx, seat, plan) => fakeBuild.apply(ctx, seat, plan),
+        },
+      },
+    });
+    const m = createMatch(fixtureSetup(), warning, fakeDomain, { invariants: "checkpoint" });
+    expect(bugOf(() => m.apply("p1", build)).message).toContain(
+      "build.validate returned a violation that is not canonical JSON",
+    );
+  });
+
+  test("any other error thrown inside the kernel becomes an EngineBug of kind engine", () => {
+    const m = fixtureMatch();
+    const bug = bugOf(() =>
+      testStep(m, () => {
+        throw new TypeError("edit failed");
+      }),
+    );
+    expect(bug.kind).toBe("engine");
+    expect(bug.message).toContain("TypeError: edit failed");
+    expect(bug.cause).toBeInstanceOf(TypeError);
+    expect(() => m.advanceTo(10)).toThrow(EngineMisuse);
+  });
+});
+
+describe("apply hands handlers the canonical action", () => {
+  test("record keys are in canonical order, as in the replayed act line", () => {
+    const seen: string[][] = [];
+    const recording = withHooks({
+      actions: {
+        ...fixtureRuleset.hooks.actions,
+        attack: {
+          validate: (r, seat, a) => {
+            if (a.type === "attack") seen.push(Object.keys(a.units));
+            return fakeAttack.validate(r, seat, a);
+          },
+          apply: (ctx, seat, plan) => fakeAttack.apply(ctx, seat, plan),
+        },
+      },
+    });
+    const units: Record<string, number> = {};
+    units["soldier"] = 2;
+    units["ship"] = 1;
+    const m = createMatch(fixtureSetup(), recording, fakeDomain, { invariants: "step" });
+    m.apply("p1", { type: "attack", from: "c1", to: "c2", units });
+    m.apply("p1", { type: "attack", from: "c1", to: "c2", units: { ship: 1, soldier: 2 } });
+    expect(Object.keys(units)).toEqual(["soldier", "ship"]);
+    expect(seen).toEqual([
+      ["ship", "soldier"],
+      ["ship", "soldier"],
+    ]);
+  });
+});
+
+type Finish = FixtureRuleset["hooks"]["finish"];
+
+/** The fixture's own `finish`. */
+const finishOf: Finish = (ctx) => fixtureRuleset.hooks.finish(ctx);
+
+describe("endMatch (§5.2)", () => {
+  test("an invalid result is an EngineBug at every invariant level", () => {
+    const cases: [Finish, string][] = [
+      [
+        (ctx) => {
+          const result = { ...finishOf(ctx), bogus: 1 };
+          return result;
+        },
+        'Unrecognized key: "bogus"',
+      ],
+      [(ctx) => ({ ...finishOf(ctx), winners: ["p7"] }), "winners names p7, who is not a player"],
+      [(ctx) => ({ ...finishOf(ctx), winners: ["p1", "p1"] }), "winners names p1 twice"],
+      [(ctx) => ({ ...finishOf(ctx), endedAt: 5 }), "endedAt is 5; the match ends now, at 86400"],
+      [
+        (ctx) => {
+          const r = finishOf(ctx);
+          return { ...r, standings: [...r.standings, ...r.standings] };
+        },
+        "standings names p1 twice",
+      ],
+      [
+        (ctx) => {
+          const r = finishOf(ctx);
+          for (const row of r.standings) row.score += 0.5;
+          return r;
+        },
+        "the result is not canonical JSON",
+      ],
+    ];
+    for (const [finish, message] of cases) {
+      for (const invariants of ["off", "checkpoint", "step"] as const) {
+        const m = createMatch(fixtureSetup(), withHooks({ finish }), fakeDomain, { invariants });
+        const bug = bugOf(() => m.advanceTo(86400));
+        expect(bug.kind).toBe("engine");
+        expect(bug.message).toContain(message);
+        expect(m.ended).toBe(false);
+      }
+    }
+  });
+
+  test("the kernel emits match_ended once; a ruleset that emits it is an EngineBug", () => {
+    const m = fixtureMatch();
+    const types = m.advanceTo(86400).events.map((e) => e.type);
+    expect(types.filter((t) => t === "match_ended")).toHaveLength(1);
+    const emitting = withHooks({
+      on: {
+        fixture_open: (ctx) => {
+          ctx.emit({
+            type: "match_ended",
+            public: true,
+            to: [],
+            data: { reason: "x", winners: [] },
+          });
+        },
+      },
+    });
+    const bug = bugOf(() => create({ ruleset: emitting }).advanceTo(7200));
+    expect(bug.message).toContain("match_ended is emitted by the kernel");
   });
 });

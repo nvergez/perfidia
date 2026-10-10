@@ -12,12 +12,17 @@ import {
   CityIdSchema,
   PlayerIdSchema,
   compareIds,
+  safeRecord,
   z,
   type ActionOf,
   type City,
+  type CityId,
   type CompiledRules,
   type DeepReadonly,
+  type GameState,
+  type GameTime,
   type Island,
+  type JsonObject,
   type MatchResult,
   type PlayerId,
   type Res,
@@ -25,7 +30,7 @@ import {
   type UnitCounts,
   type Violation,
 } from "@perfidia/protocol";
-import { addUnits, must, sendHome, unitTotal } from "./util.ts";
+import { addUnits, must, own, sendHome, unitTotal } from "./util.ts";
 
 // The fixture ruleset `fixture-1@1.0.0` (docs/architecture.md §15 T04): two islands, constant
 // travel, a trivial attack and spy, simple standings, one world timer, a non-empty `ext`, one
@@ -38,6 +43,12 @@ import { addUnits, must, sendHome, unitTotal } from "./util.ts";
 // (`fixture_rename`) opens at the `fixture_open` timer. After every step, a living player without a
 // city is eliminated, and the last one alive wins (`last_standing`); otherwise the best score at
 // `matchEnd` wins (`time`). A hand-built state should therefore give every living player a city.
+//
+// Holds, a besieged-like marker: a city with a stationed `hold` group of another player is held by
+// that player. `ext.holds` records it (holder and since when), refreshed after every step from the
+// stationed groups; `publicCity` shows it on the held city, and the `briefing` hook lists the holds
+// the viewer takes part in. A hand-built state sets `ext.holds` with `fixtureHolds(state)`, or lets
+// the first step (a `testStep` with no edit, say) refresh it.
 
 const Int = z.int().nonnegative();
 
@@ -79,7 +90,15 @@ export const FixtureConfigSchema = z.strictObject({
 });
 export type FixtureConfig = z.infer<typeof FixtureConfigSchema>;
 
-export const FixtureExtSchema = z.strictObject({ opened: z.boolean(), renames: Int });
+export const FixtureHoldSchema = z.strictObject({ by: PlayerIdSchema, since: Int });
+export type FixtureHold = z.infer<typeof FixtureHoldSchema>;
+
+export const FixtureExtSchema = z.strictObject({
+  opened: z.boolean(),
+  renames: Int,
+  /** The held cities: by whom, since when. */
+  holds: safeRecord(CityIdSchema, FixtureHoldSchema),
+});
 export type FixtureExt = z.infer<typeof FixtureExtSchema>;
 
 export const FIXTURE_REF = "fixture-1@1.0.0";
@@ -339,6 +358,58 @@ function standingsOf(r: ReadCtx<FixtureConfig, FixtureExt>): Standing[] {
   }));
 }
 
+/** The first stationed `hold` group of a player other than the owner, if any. */
+function holderOf(city: DeepReadonly<City>): PlayerId | null {
+  return city.stationed.find((g) => g.role === "hold" && g.owner !== city.owner)?.owner ?? null;
+}
+
+/**
+ * The holds of `state` (the `ext.holds` the fixture keeps): every city with a `hold` group of
+ * another player, held since the time already recorded for that holder, else since `state.now`.
+ */
+export function fixtureHolds(state: DeepReadonly<GameState>): Record<CityId, FixtureHold> {
+  const ext = FixtureExtSchema.safeParse(state.ext);
+  const before = ext.success ? ext.data.holds : {};
+  const holds: Record<CityId, FixtureHold> = {};
+  for (const city of Object.values(state.cities).toSorted((a, b) => compareIds(a.id, b.id))) {
+    const by = holderOf(city);
+    if (by === null) continue;
+    const prev = own(before, city.id);
+    holds[city.id] = { by, since: prev?.by === by ? prev.since : state.now };
+  }
+  return holds;
+}
+
+/** A time as the agent-facing pair of §7.3. */
+function timePair(t: GameTime): [GameTime, string] {
+  return [t, fmtTime(t)];
+}
+
+/** The `publicCity` extra: the hold of a held city, nothing for any other city. */
+function publicCityOf(r: ReadCtx<FixtureConfig, FixtureExt>, city: CityId): JsonObject {
+  const hold = own(r.ext().holds, city);
+  return hold === undefined ? {} : { held: { by: hold.by, since: timePair(hold.since) } };
+}
+
+/** The `briefing` hook: renaming, and the holds the viewer takes part in, as holder or owner. */
+function briefingOf(r: ReadCtx<FixtureConfig, FixtureExt>, viewer: PlayerId): JsonObject {
+  const ext = r.ext();
+  const holding: JsonObject[] = [];
+  const held: JsonObject[] = [];
+  for (const [city, hold] of Object.entries(ext.holds).toSorted((a, b) => compareIds(a[0], b[0]))) {
+    const owner = own(r.state.cities, city)?.owner ?? null;
+    if (hold.by === viewer) holding.push({ city, owner, since: timePair(hold.since) });
+    if (owner === viewer) held.push({ city, by: hold.by, since: timePair(hold.since) });
+  }
+  return {
+    renamingOpen: ext.opened,
+    renames: ext.renames,
+    openAt: timePair(r.config.time.openAt),
+    holding,
+    held,
+  };
+}
+
 function goneFor(
   ctx: Ctx<FixtureConfig, FixtureExt>,
   owner: PlayerId | null,
@@ -464,7 +535,7 @@ export const fixtureRuleset: Ruleset<FixtureConfig, FixtureExt> = {
       return {
         islands,
         cities: cities.toSorted((a, b) => compareIds(a.id, b.id)),
-        ext: { opened: false, renames: 0 },
+        ext: { opened: false, renames: 0, holds: {} },
         timers: [{ kind: "fixture_open", at: w.config.time.openAt, ref: "" }],
       };
     },
@@ -543,6 +614,7 @@ export const fixtureRuleset: Ruleset<FixtureConfig, FixtureExt> = {
       return a.type === "ext" && !r.ext().opened ? closedViolation(r.config.time.openAt) : null;
     },
     afterStep(ctx: Ctx<FixtureConfig, FixtureExt>, _step: StepInfo) {
+      ctx.state.ext = { ...ctx.ext(), holds: fixtureHolds(ctx.state) };
       const r = ctx.read();
       for (const p of Object.values(ctx.state.players).toSorted((a, b) => compareIds(a.id, b.id))) {
         if (!p.alive || citiesOf(r, p.id).length > 0) continue;
@@ -573,12 +645,8 @@ export const fixtureRuleset: Ruleset<FixtureConfig, FixtureExt> = {
       };
     },
     visibility: {
-      publicCity: (r) => ({ renamingOpen: r.ext().opened }),
-      briefing: (r) => ({
-        renamingOpen: r.ext().opened,
-        renames: r.ext().renames,
-        openAt: r.config.time.openAt,
-      }),
+      publicCity: (r, _viewer, city) => publicCityOf(r, city),
+      briefing: briefingOf,
     },
     actions: { ext: renameHandler },
     invariants: [

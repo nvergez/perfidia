@@ -9,13 +9,28 @@ import {
   type FixtureConfig,
   type FixtureExt,
 } from "@perfidia/engine/testing";
-import type { Action, CityId, LogLine, PlayerId } from "@perfidia/protocol";
+import { canonicalJson } from "@perfidia/engine/core";
+import type {
+  Action,
+  ActLine,
+  CityId,
+  CkptLine,
+  HeaderLine,
+  LogLine,
+  PlayerId,
+} from "@perfidia/protocol";
 import fc from "fast-check";
-import { verifyLog, type ReplayReport, type VerifyOptions } from "./index.ts";
+import {
+  verifyLog,
+  type ReplayDivergence,
+  type ReplayReport,
+  type VerifyOptions,
+} from "./index.ts";
 
 // Level E replay (§10.4) and P7: a log recorded from a random run replays with zero divergence, and
-// tampering with an act's `a` or `r`, the order of act lines, an `ev` line or a `ckpt` line is
-// reported at the right `n` or hour.
+// tampering with an act's `a` (whether or not that changes its verdict) or `r`, the order of act
+// lines, the payloads of two act lines, an `ev` line (a non-integer number included) or a `ckpt`
+// line is reported at the right `n` or hour.
 
 const resolve = (ref: string): AnyRuleset | undefined =>
   ref === fixtureRuleset.ref ? fixtureRuleset : undefined;
@@ -183,6 +198,44 @@ const runArb = fc.record({
   steps: fc.array(stepArb, { maxLength: 40 }),
 });
 
+/** The first act line after `index`, if any. */
+function nextAct(lines: readonly LogLine[], index: number): ActLine | undefined {
+  return lines.slice(index + 1).find((l): l is ActLine => l.k === "act");
+}
+
+/** The first ckpt line after `index`, if any. */
+function nextCkpt(lines: readonly LogLine[], index: number): CkptLine | undefined {
+  return lines.slice(index + 1).find((l): l is CkptLine => l.k === "ckpt");
+}
+
+/** Whether the act line at `index` is followed by ev lines of its own events. */
+function hasOwnEvents(lines: readonly LogLine[], index: number): boolean {
+  return lines[index + 1]?.k === "ev" && emitterN(lines, index + 1) !== undefined;
+}
+
+/**
+ * A change made at act line `index` (and `last`) that keeps every `n` and `t` shows once the
+ * replay observes it: at that act's verdict or events, at a later act or event before the next
+ * checkpoint, at that checkpoint, or at the end when no checkpoint follows.
+ */
+function expectBetween(
+  d: ReplayDivergence | undefined,
+  lines: readonly LogLine[],
+  index: number,
+  last = index,
+): void {
+  const first = lines[index];
+  if (first?.k !== "act") throw new Error("not an act line");
+  const ck = nextCkpt(lines, last);
+  const end = lines.at(-1);
+  const bound = ck?.t ?? (end?.k === "end" ? end.t : Number.MAX_SAFE_INTEGER);
+  expect(["result", "event", "checkpoint", "end"]).toContain(d?.kind ?? "none");
+  expect(d?.t ?? -1).toBeGreaterThanOrEqual(first.t);
+  expect(d?.t ?? -1).toBeLessThanOrEqual(bound);
+  if (d?.n !== undefined) expect(d.n).toBeGreaterThanOrEqual(first.n);
+  if (d?.kind === "checkpoint") expect(d.hour).toBe(ck?.hour ?? -1);
+}
+
 /** The n of the act line whose events this ev line carries, if any. */
 function emitterN(lines: readonly LogLine[], index: number): number | undefined {
   const line = lines[index];
@@ -213,7 +266,7 @@ describe("P7: replay of recorded logs", () => {
   });
 
   test("tampering is reported at the right n or hour", () => {
-    const tamper = fc.constantFrom("a", "r", "order", "ev", "ckpt");
+    const tamper = fc.constantFrom("a", "units", "r", "order", "swap", "ev", "float", "ckpt");
     fc.assert(
       fc.property(runArb, tamper, fc.nat(), ({ seed, players, steps }, kind, pick) => {
         const lines = cloneLines(record(seed, players, steps).lines);
@@ -224,13 +277,22 @@ describe("P7: replay of recorded logs", () => {
           case "a":
             candidates = at((l) => l.k === "act" && l.r.ok);
             break;
+          case "units":
+            candidates = at(
+              (l) => l.k === "act" && l.r.ok && (l.a.type === "attack" || l.a.type === "support"),
+            );
+            break;
           case "r":
             candidates = at((l) => l.k === "act");
             break;
           case "order":
             candidates = at((l, i) => l.k === "act" && lines[i + 1]?.k === "act");
             break;
+          case "swap":
+            candidates = at((l, i) => l.k === "act" && nextAct(lines, i)?.t === l.t);
+            break;
           case "ev":
+          case "float":
             candidates = at((l) => l.k === "ev");
             break;
           case "ckpt":
@@ -248,6 +310,29 @@ describe("P7: replay of recorded logs", () => {
         if (kind === "a" && line.k === "act") {
           line.a = { type: "build", city: "c9", building: "tower" };
           expect(report().divergence).toMatchObject({ kind: "result", n: line.n, t: line.t });
+        } else if (kind === "units" && line.k === "act") {
+          if (line.a.type !== "attack" && line.a.type !== "support") return;
+          const k = line.a.units["soldier"] ?? 0;
+          line.a.units["soldier"] = k > 1 ? k - 1 : k + 1;
+          expectBetween(report().divergence, lines, index);
+        } else if (kind === "swap" && line.k === "act") {
+          const other = nextAct(lines, index);
+          if (other === undefined) return;
+          const j = lines.indexOf(other);
+          if (canonicalJson([line.seat, line.a]) === canonicalJson([other.seat, other.a])) return;
+          // A swap can be unobservable (two attacks of one seat that both die in their battle
+          // leave the same state and events); it is certain to show when two seats swap and one
+          // line has events of its own, because every event of an action names its actor.
+          const observable =
+            line.seat !== other.seat && (hasOwnEvents(lines, index) || hasOwnEvents(lines, j));
+          const [seat, a] = [line.seat, line.a];
+          line.seat = other.seat;
+          line.a = other.a;
+          other.seat = seat;
+          other.a = a;
+          const r = verify(lines);
+          if (observable) expect(r.ok).toBe(false);
+          if (!r.ok) expectBetween(r.divergence, lines, index, j);
         } else if (kind === "r" && line.k === "act") {
           line.r = line.r.ok ? { ok: false, code: "INVALID_ARGS" } : { ok: true };
           expect(report().divergence).toMatchObject({ kind: "result", n: line.n, t: line.t });
@@ -259,12 +344,13 @@ describe("P7: replay of recorded logs", () => {
           const d = report().divergence;
           expect([line.n, next.n]).toContain(d?.n ?? -1);
           expect(["order", "result", "event"]).toContain(d?.kind ?? "none");
-        } else if (kind === "ev" && line.k === "ev") {
-          line.e.data["tampered"] = 1;
+        } else if ((kind === "ev" || kind === "float") && line.k === "ev") {
+          line.e.data["tampered"] = kind === "ev" ? 1 : 0.5;
           const n = emitterN(lines, index);
           const d = report().divergence;
           expect(d).toMatchObject({ kind: "event", t: line.t });
           expect(d?.n).toBe(n);
+          if (kind === "float") expect(d?.actual).toContain("0.5 is not a safe integer");
         } else if (line.k === "ckpt") {
           line.h = line.h === "0123456789abcdef" ? "fedcba9876543210" : "0123456789abcdef";
           expect(report().divergence).toMatchObject({
@@ -481,4 +567,115 @@ describe("verifyLog", () => {
     if (a?.k === "act") dup.splice(firstAct + 1, 0, { ...a });
     expect(verify(dup).divergence).toMatchObject({ kind: "order", n: a?.k === "act" ? a.n : -1 });
   });
+
+  test("a non-integer number in any line is a divergence, never a thrown error", () => {
+    const rec = sample();
+    const tampered = (edit: (lines: LogLine[]) => void): ReplayDivergence | undefined => {
+      const lines = cloneLines(rec.lines);
+      edit(lines);
+      const report = verify(lines);
+      expect(report.ok).toBe(false);
+      return report.divergence;
+    };
+
+    const config = tampered((l) => void (headerOf(l).config["extra"] = 1.5));
+    expect(config).toMatchObject({
+      kind: "config",
+      t: 0,
+      expected: "the header's config in canonical JSON",
+    });
+    expect(config?.actual).toContain("1.5 is not a safe integer at $.extra");
+    const override = tampered((l) => void (headerOf(l).setup.overrides["time.travel"] = 5400.5));
+    expect(override).toMatchObject({ kind: "config", t: 0 });
+
+    const act = rec.lines[firstActIndex(rec.lines)];
+    if (act?.k !== "act") throw new Error("no act line");
+    const action = tampered((l) => {
+      const line = l[firstActIndex(l)];
+      if (line?.k === "act") {
+        line.a = { type: "attack", from: "c1", to: "c2", units: { soldier: 0.5 } };
+      }
+    });
+    expect(action).toMatchObject({ kind: "result", t: act.t, n: act.n });
+    expect(action?.actual).toContain("EngineMisuse");
+    const event = tampered((l) => {
+      const ev = l[firstActIndex(l) + 1];
+      if (ev?.k === "ev") ev.e.data["x"] = 1.5;
+    });
+    expect(event).toMatchObject({ kind: "event", t: act.t, n: act.n });
+    expect(event?.actual).toContain("1.5 is not a safe integer at $.data.x");
+    const result = tampered((l) => {
+      const end = l.at(-1);
+      const row = end?.k === "end" ? end.result.standings[0] : undefined;
+      if (row !== undefined) row.score = 0.5;
+    });
+    expect(result).toMatchObject({
+      kind: "result",
+      t: 86400,
+      expected: "the end line's result in canonical JSON",
+    });
+
+    const snap = rec.snapshots.find((s) => s.hour === 8);
+    if (snap === undefined) throw new Error("no snapshot at hour 8");
+    const odd = structuredClone(snap);
+    odd.setup.overrides["x"] = 0.5;
+    expect(verify(rec.lines, { from: odd }).divergence).toMatchObject({
+      kind: "snapshot",
+      expected: "the snapshot's setup in canonical JSON",
+    });
+  });
+
+  test("an ev line the engine did not produce is attributed to the act line it follows", () => {
+    const lines = cloneLines(sample().lines);
+    const i = lines.findIndex((l) => l.k === "act" && l.a.type === "attack");
+    const act = lines[i];
+    const ev = lines[i + 1];
+    if (act?.k !== "act" || ev?.k !== "ev") throw new Error("no attack followed by its event");
+    lines.splice(i + 2, 0, structuredClone(ev));
+    expect(verify(lines).divergence).toMatchObject({
+      kind: "event",
+      t: act.t,
+      n: act.n,
+      actual: "no event",
+    });
+  });
+
+  test("an engine error while replaying is a divergence; a callback's error propagates", () => {
+    const rec = sample();
+    const failing: Ruleset<FixtureConfig, FixtureExt> = {
+      ...fixtureRuleset,
+      hooks: {
+        ...fixtureRuleset.hooks,
+        on: {
+          fixture_open: () => {
+            throw new RangeError("bad maths");
+          },
+        },
+      },
+    };
+    const d = verifyLog(rec.lines, () => failing, fakeDomain).divergence;
+    expect(d).toMatchObject({ kind: "event", t: 7200, expected: "no engine error" });
+    expect(d?.actual).toContain("fixture_open handler threw RangeError: bad maths");
+    expect(() => verify(rec.lines, { onCheckpoint: pacingBug })).toThrow(TypeError);
+    expect(() => verify(rec.lines, { onCheckpoint: pacingBug })).toThrow("pacing bug");
+    expect(() => verify(rec.lines, { onLine: foldBug })).toThrow(RangeError);
+  });
 });
+
+function headerOf(lines: readonly LogLine[]): HeaderLine {
+  const h = lines[0];
+  if (h?.k !== "header") throw new Error("no header");
+  return h;
+}
+
+function firstActIndex(lines: readonly LogLine[]): number {
+  return lines.findIndex((l) => l.k === "act");
+}
+
+function pacingBug(): void {
+  throw new TypeError("pacing bug");
+}
+
+function foldBug(): void {
+  throw new RangeError("fold bug");
+}

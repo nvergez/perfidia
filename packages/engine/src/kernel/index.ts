@@ -12,7 +12,6 @@ export { HOUR, stateHash } from "./snapshot.ts";
 export {
   createMatch,
   loadMatch,
-  runTestStep,
   type ApplyOutput,
   type Match,
   type MatchOptions,

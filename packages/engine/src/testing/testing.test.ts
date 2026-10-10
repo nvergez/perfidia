@@ -6,6 +6,7 @@ import { MovementIdSchema, ProposalIdSchema, TOOL_NAMES, z } from "@perfidia/pro
 import {
   FIXTURE_DEFAULTS,
   FixtureConfigSchema,
+  FixtureExtSchema,
   LogRecorder,
   addAlliance,
   addBuildItem,
@@ -15,6 +16,8 @@ import {
   addProposal,
   addRecruitBatch,
   addStationed,
+  fakeDomain,
+  fixtureHolds,
   fixtureMatch,
   fixtureRules,
   fixtureRuleset,
@@ -71,24 +74,75 @@ describe("the fixture ruleset", () => {
     const generic: AnyRuleset = fixtureRuleset;
     const vis = generic.hooks.visibility;
     const read = () => m.read();
-    expect(vis?.publicCity?.(read(), "p1", "c2")).toEqual({ renamingOpen: false });
+    expect(vis?.publicCity?.(read(), "p1", "c2")).toEqual({});
     expect(vis?.briefing?.(read(), "p1")).toEqual({
       renamingOpen: false,
       renames: 0,
-      openAt: 7200,
+      openAt: [7200, "D1 02:00"],
+      holding: [],
+      held: [],
     });
     m.advanceTo(7200);
     m.apply("p1", { type: "ext", tool: "fixture_rename", args: { city: "c1", name: "Port" } });
     expect(vis?.briefing?.(read(), "p1")).toEqual({
       renamingOpen: true,
       renames: 1,
-      openAt: 7200,
+      openAt: [7200, "D1 02:00"],
+      holding: [],
+      held: [],
     });
     expect(fixtureRuleset.tools?.[0]?.read?.(read(), "p1", {})).toEqual({
       opened: true,
       renames: 1,
     });
     expect(m.read().state.cities["c1"]?.name).toBe("Port");
+  });
+
+  test("a held city shows its hold in publicCity, and the briefing lists it for holder and owner", () => {
+    const { state, rules } = fixtureState({ players: 3, now: 100 });
+    addCity(state, rules, { owner: "p1", capital: true, units: { soldier: 5 } });
+    addCity(state, rules, { owner: "p2", island: "i2", capital: true, units: { soldier: 5 } });
+    addCity(state, rules, { owner: "p3", island: "i2", capital: true });
+    addStationed(state, "c1", { owner: "p2", home: "c2", role: "hold", units: { soldier: 3 } });
+    addStationed(state, "c3", { owner: "p1", home: "c1", role: "support", units: { soldier: 1 } });
+    state.ext = { opened: false, renames: 0, holds: fixtureHolds(state) };
+    const m = matchFromState(state, fixtureRuleset);
+    const generic: AnyRuleset = fixtureRuleset;
+    const vis = generic.hooks.visibility;
+    const r = m.read();
+    const since = [100, "D1 00:01:40"];
+    expect(vis?.publicCity?.(r, "p3", "c1")).toEqual({ held: { by: "p2", since } });
+    expect(vis?.publicCity?.(r, "p1", "c1")).toEqual({ held: { by: "p2", since } });
+    expect(vis?.publicCity?.(r, "p1", "c2")).toEqual({});
+    expect(vis?.publicCity?.(r, "p2", "c3")).toEqual({});
+    expect(vis?.briefing?.(r, "p1")).toMatchObject({
+      holding: [],
+      held: [{ city: "c1", by: "p2", since }],
+    });
+    expect(vis?.briefing?.(r, "p2")).toMatchObject({
+      holding: [{ city: "c1", owner: "p1", since }],
+      held: [],
+    });
+    expect(vis?.briefing?.(r, "p3")).toMatchObject({ holding: [], held: [] });
+  });
+
+  test("afterStep keeps ext.holds in step with the hold groups", () => {
+    const { state, rules } = fixtureState({ now: 100 });
+    addCity(state, rules, { owner: "p1", capital: true });
+    addCity(state, rules, { owner: "p2", island: "i2", capital: true, units: { soldier: 4 } });
+    addStationed(state, "c1", { owner: "p2", home: "c2", role: "hold", units: { soldier: 2 } });
+    const m = matchFromState(state, fixtureRuleset);
+    const holds = () => FixtureExtSchema.parse(m.read().state.ext).holds;
+    expect(holds()).toEqual({});
+    testStep(m, () => {});
+    expect(holds()).toEqual({ c1: { by: "p2", since: 100 } });
+    expect(m.advanceTo(7200).events.map((e) => e.type)).toEqual(["fixture_opened"]);
+    expect(holds()).toEqual({ c1: { by: "p2", since: 100 } });
+    testStep(m, (ctx) => {
+      const group = ctx.state.cities["c1"]?.stationed[0];
+      if (group !== undefined) group.role = "support";
+    });
+    expect(holds()).toEqual({});
   });
 
   test("the world places every seat on the two islands with the seats stream", () => {
@@ -136,6 +190,20 @@ describe("the fixture ruleset", () => {
 });
 
 describe("the fake domain", () => {
+  test("build_done for a seq no build item has throws instead of completing another item", () => {
+    const m = fixtureMatch();
+    m.apply("p1", { type: "build", city: "c1", building: "tower" });
+    m.apply("p1", { type: "build", city: "c1", building: "woodcut" });
+    const buildDone = fakeDomain.events["build_done"];
+    if (buildDone === undefined) throw new Error("no build_done handler");
+    expect(() =>
+      testStep(m, (ctx) =>
+        buildDone(ctx, { at: ctx.now, cls: 1, seq: 999, kind: "build_done", ref: "c1" }),
+      ),
+    ).toThrow(/fake domain: no build item with seq 999/);
+    expect(m.read().state.cities["c1"]?.build.map((b) => b.building)).toEqual(["tower", "woodcut"]);
+  });
+
   test("queues, cancels and completes builds and recruits", () => {
     const m = fixtureMatch();
     m.apply("p1", { type: "build", city: "c1", building: "tower" });

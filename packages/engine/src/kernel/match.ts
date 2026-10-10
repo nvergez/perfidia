@@ -1,4 +1,4 @@
-import { canonicalJson, createOpaqueIdMinter } from "@perfidia/engine/core";
+import { CanonicalJsonError, canonicalJson, createOpaqueIdMinter } from "@perfidia/engine/core";
 import type {
   ActionHandler,
   AnyRuleset,
@@ -112,7 +112,18 @@ interface MatchParts {
 }
 
 function copyViolation(v: Violation, what: string): Violation {
-  const parsed = ViolationSchema.safeParse(jsonCopy(v));
+  let copy: unknown;
+  try {
+    copy = jsonCopy<unknown>(v);
+  } catch (error) {
+    throw new EngineBug(
+      "engine",
+      `${what} returned a violation that is not canonical JSON: ${errorMessage(error)}`,
+      {},
+      error,
+    );
+  }
+  const parsed = ViolationSchema.safeParse(copy);
   if (!parsed.success) {
     throw new EngineBug(
       "engine",
@@ -171,7 +182,8 @@ class KernelMatch implements Match {
   }
 
   get result(): MatchResult | null {
-    return this.state.result === null ? null : jsonCopy(this.state.result);
+    const result = this.state.result;
+    return result === null ? null : this.guarded(() => this.canonical(() => jsonCopy(result)));
   }
 
   read(): ReadCtx {
@@ -184,21 +196,25 @@ class KernelMatch implements Match {
   }
 
   hash(): Hash64 {
-    return stateHash(this.state);
+    return this.guarded(() => this.canonical(() => stateHash(this.state)));
   }
 
   snapshot(afterN: number): Snapshot {
     if (!Number.isSafeInteger(afterN) || afterN < 0) {
       throw new EngineMisuse(`snapshot(${afterN}): afterN is the n of a log line, an integer ≥ 0`);
     }
-    return makeSnapshot({
-      setup: this.setup,
-      configHash: this.configHash,
-      rulesHash: this.rulesHash,
-      hour: this.lastHour,
-      afterN,
-      state: this.state,
-    });
+    return this.guarded(() =>
+      this.canonical(() =>
+        makeSnapshot({
+          setup: this.setup,
+          configHash: this.configHash,
+          rulesHash: this.rulesHash,
+          hour: this.lastHour,
+          afterN,
+          state: this.state,
+        }),
+      ),
+    );
   }
 
   checkInvariants(level: "step" | "checkpoint"): void {
@@ -224,7 +240,8 @@ class KernelMatch implements Match {
           out.events.push(...this.runEvent(ev));
         } else if (ck <= t) {
           state.now = ck;
-          out.checkpoints.push({ hour: this.lastHour + 1, t: ck, h: this.hash() });
+          const h = this.canonical(() => stateHash(state));
+          out.checkpoints.push({ hour: this.lastHour + 1, t: ck, h });
           if (this.level !== "off") runInvariants(this.invariants, "checkpoint", this.read());
           this.lastHour += 1;
         } else {
@@ -293,7 +310,7 @@ class KernelMatch implements Match {
       this.afterStep(ctx, { kind: "action", seat, action });
       this.finishStep(ctx);
       const result: ApplyOutput = { ok: true, data: copy, events: ctx.events, warnings };
-      if (this.trace) result.h = this.hash();
+      if (this.trace) result.h = this.canonical(() => stateHash(state));
       return result;
     });
   }
@@ -394,24 +411,58 @@ class KernelMatch implements Match {
     }
   }
 
+  /**
+   * Runs `fn`, which serialises the state; a state that is not canonical JSON (a stray float, §6.3)
+   * is an `EngineBug` of kind `invariant`.
+   */
+  private canonical<T>(fn: () => T): T {
+    try {
+      return fn();
+    } catch (error) {
+      if (!(error instanceof CanonicalJsonError)) throw error;
+      const t = this.state.now;
+      throw new EngineBug(
+        "invariant",
+        `the state is not canonical JSON at t = ${t}: ${error.message}`,
+        { t },
+        error,
+      );
+    }
+  }
+
+  /**
+   * Runs `fn` and aborts the match on any error but `EngineMisuse`. Only `EngineMisuse` and
+   * `EngineBug` leave the kernel (§5.3): any other error is wrapped in an `EngineBug` of kind
+   * `engine`.
+   */
   private guarded<T>(fn: () => T): T {
     try {
       return fn();
     } catch (error) {
-      if (!(error instanceof EngineMisuse)) this.aborted = errorMessage(error);
-      throw error;
+      if (error instanceof EngineMisuse) throw error;
+      const bug =
+        error instanceof EngineBug
+          ? error
+          : new EngineBug("engine", `the kernel threw ${errorMessage(error)}`, {}, error);
+      this.aborted = errorMessage(bug);
+      throw bug;
     }
   }
 }
 
-/** A validated deep copy of the action, so no handler can keep a reference to the caller's object. */
+/**
+ * The action parsed from its canonical text: a deep copy (no handler can keep a reference to the
+ * caller's object) whose record keys are in canonical order, as in the logged `act` line, so a live
+ * run and its replay hand handlers the same object.
+ */
 function parseAction(a: Action): Action {
+  let text: string;
   try {
-    canonicalJson(a);
+    text = canonicalJson(a);
   } catch (error) {
     throw new EngineMisuse(`apply: the action is not canonical JSON (${errorMessage(error)})`);
   }
-  const parsed = ActionSchema.safeParse(a);
+  const parsed = ActionSchema.safeParse(JSON.parse(text));
   if (!parsed.success) {
     const issue = parsed.error.issues[0];
     const path = issue?.path.map((p) => String(p)).join(".") ?? "";
@@ -461,7 +512,8 @@ export function createMatch(
       })),
     );
   }
-  const s = jsonCopy(parsed.data);
+  // Frozen at every invariant level: `Match.setup` is this object, and every snapshot copies it.
+  const s = deepFreeze(jsonCopy(parsed.data));
   if (s.ruleset !== ruleset.ref) {
     throw new MatchConfigError([
       {
@@ -515,6 +567,7 @@ export function createMatch(
   });
   try {
     match.checkInvariants("checkpoint");
+    match.hash();
   } catch (error) {
     const failures =
       error instanceof EngineBug && Array.isArray(error.details["failures"])
@@ -538,7 +591,7 @@ export function loadMatch(
   opts: MatchOptions = {},
 ): Match {
   const level = opts.invariants ?? "checkpoint";
-  const setup = checkEnvelope(snap);
+  const setup = deepFreeze(checkEnvelope(snap));
   checkRef(snap, setup, ruleset);
   const resolved = resolveConfigFull(ruleset, setup.overrides);
   if (!resolved.ok) {
@@ -645,7 +698,8 @@ export function loadMatch(
 
 /**
  * Runs `edit(ctx)` at `now`, then `afterStep({cause: {kind: "test"}, events})`, the emitted-event
- * check and the step invariants, and returns the events. For `@perfidia/engine/testing` only.
+ * check and the step invariants, and returns the events. For `@perfidia/engine/testing` only: it
+ * edits the state outside the action pipeline and the log, so the kernel barrel does not export it.
  */
 export function runTestStep(match: Match, edit: (ctx: Ctx) => void): DomainEvent[] {
   if (!(match instanceof KernelMatch)) {

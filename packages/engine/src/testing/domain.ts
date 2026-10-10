@@ -475,6 +475,7 @@ function self(p: PlayerId | null): Recipient[] {
 const buildDone: EventHandler = (ctx, ev) => {
   const city = must(ctx.state.cities, ev.ref, "city");
   const index = city.build.findIndex((b) => b.seq === ev.seq);
+  if (index < 0) throw new Error(`fake domain: no build item with seq ${ev.seq}`);
   const [item] = city.build.splice(index, 1);
   if (item === undefined) throw new Error(`fake domain: no build item with seq ${ev.seq}`);
   const max = ctx.rules.buildings.find((b) => b.id === item.building)?.maxLevel ?? item.level;

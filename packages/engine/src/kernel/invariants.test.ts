@@ -250,7 +250,7 @@ describe("kernel invariants", () => {
     m.advanceTo(7300);
     expect(() =>
       testStep(m, (ctx) => {
-        ctx.state.ext = { opened: false, renames: 0 };
+        ctx.state.ext = { opened: false, renames: 0, holds: {} };
       }),
     ).toThrow(/fixture\.opened: renaming is still closed/);
   });

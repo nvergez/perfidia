@@ -90,8 +90,28 @@ interface Pending {
   readonly n?: number;
 }
 
+/** Where a divergence is: its kind, time and, when known, the act line's `n` or the hour. */
+type Where = Omit<ReplayDivergence, "expected" | "actual">;
+
 function withN(d: Omit<ReplayDivergence, "n">, n: number | undefined): ReplayDivergence {
   return n === undefined ? d : { ...d, n };
+}
+
+/**
+ * The canonical text of a value read from the log (or a snapshot). Log schemas accept any JSON
+ * number, so a non-integer is possible in a corrupted or hand-edited log: it is a divergence at
+ * `at`, never a thrown `CanonicalJsonError`.
+ */
+function logText(value: unknown, what: string, at: Where): string {
+  try {
+    return canonicalJson(value);
+  } catch (error) {
+    return diverge({
+      ...at,
+      expected: `${what} in canonical JSON`,
+      actual: `${what}: ${errorMessage(error)}`,
+    });
+  }
 }
 
 function lineN(line: LogLine): number | undefined {
@@ -107,6 +127,11 @@ class Replayer {
   private readonly pending: Pending[] = [];
   private readonly pendingCk: { hour: number; t: GameTime; h: Hash64 }[] = [];
   private match: Match | null = null;
+  /**
+   * The last act line, while only its `ev` lines follow it: an `ev` line at its time carries one of
+   * its events (§10.2), so a missing event is attributed to its `n`.
+   */
+  private lastAct: { readonly t: GameTime; readonly n: number } | null = null;
 
   constructor(report: ReplayReport, opts: VerifyOptions) {
     this.report = report;
@@ -239,6 +264,8 @@ class Replayer {
             actual: `a fatal line (${line.error.kind}): ${line.error.message}`,
           });
       }
+      if (line.k === "act") this.lastAct = { t: line.t, n: line.n };
+      else if (line.k !== "ev") this.lastAct = null;
       this.opts.onLine?.(line, this.m.read(), applied);
     }
     if (!ended) {
@@ -282,11 +309,12 @@ class Replayer {
       });
     }
     const config = canonicalJson(resolved.config);
-    if (config !== canonicalJson(header.config) || resolved.hash !== header.configHash) {
+    const logged = logText(header.config, "the header's config", { kind: "config", t: 0 });
+    if (config !== logged || resolved.hash !== header.configHash) {
       diverge({
         kind: "config",
         t: 0,
-        expected: `config ${header.configHash}: ${canonicalJson(header.config)}`,
+        expected: `config ${header.configHash}: ${logged}`,
         actual: `config ${resolved.hash}: ${config}`,
       });
     }
@@ -320,7 +348,8 @@ class Replayer {
           actual: errorMessage(error),
         });
       }
-      const h = this.m.hash();
+      const m = this.m;
+      const h = this.engine({ kind: "initial", t: 0 }, () => m.hash());
       if (h !== header.initialHash) {
         diverge({ kind: "initial", t: 0, expected: header.initialHash, actual: h });
       }
@@ -337,14 +366,9 @@ class Replayer {
     domain: DomainModule,
   ): [number, number] {
     const t = from.t;
-    if (canonicalJson(from.setup) !== canonicalJson(header.setup)) {
-      diverge({
-        kind: "snapshot",
-        t,
-        expected: canonicalJson(header.setup),
-        actual: canonicalJson(from.setup),
-      });
-    }
+    const logged = logText(header.setup, "the header's setup", { kind: "snapshot", t });
+    const snapped = logText(from.setup, "the snapshot's setup", { kind: "snapshot", t });
+    if (snapped !== logged) diverge({ kind: "snapshot", t, expected: logged, actual: snapped });
     if (from.engine !== ENGINE_VERSION) {
       this.report.warnings.push(
         `the snapshot was written by engine ${from.engine}; replaying with ${ENGINE_VERSION}`,
@@ -411,21 +435,29 @@ class Replayer {
     });
   }
 
+  /**
+   * Runs one engine call; an engine error (an `EngineBug` while replaying) is a divergence at `at`.
+   * Only the engine call is covered: an error thrown by a caller's callback propagates.
+   */
+  private engine<T>(at: Where, fn: () => T): T {
+    try {
+      return fn();
+    } catch (error) {
+      return diverge({ ...at, expected: "no engine error", actual: errorMessage(error) });
+    }
+  }
+
   /** `advanceTo(t)`, split at every hour boundary so `onCheckpoint` sees each checkpoint state. */
   private advance(t: GameTime): void {
     const m = this.m;
-    try {
-      while (!m.ended) {
-        const ck = (Math.floor(m.now / HOUR) + 1) * HOUR;
-        if (ck > t) break;
-        const out = m.advanceTo(ck);
-        this.collect(out.events, out.checkpoints);
-      }
-      const out = m.advanceTo(t);
+    while (!m.ended) {
+      const ck = (Math.floor(m.now / HOUR) + 1) * HOUR;
+      if (ck > t) break;
+      const out = this.engine({ kind: "event", t }, () => m.advanceTo(ck));
       this.collect(out.events, out.checkpoints);
-    } catch (error) {
-      diverge({ kind: "event", t, expected: "no engine error", actual: errorMessage(error) });
     }
+    const out = this.engine({ kind: "event", t }, () => m.advanceTo(t));
+    this.collect(out.events, out.checkpoints);
   }
 
   private collect(
@@ -452,10 +484,14 @@ class Replayer {
     }
     if (!this.compare) return;
     const p = this.pending.shift();
-    const expected = canonicalJson(line.e);
-    if (p === undefined) diverge({ kind: "event", t: line.t, expected, actual: "no event" });
+    const owner = this.lastAct?.t === line.t ? this.lastAct.n : undefined;
+    const n = p === undefined ? owner : p.n;
+    const at: Where =
+      n === undefined ? { kind: "event", t: line.t } : { kind: "event", t: line.t, n };
+    const expected = logText(line.e, "the ev line's event", at);
+    if (p === undefined) diverge({ ...at, expected, actual: "no event" });
     const actual = canonicalJson(p.e);
-    if (actual !== expected) diverge(withN({ kind: "event", t: line.t, expected, actual }, p.n));
+    if (actual !== expected) diverge({ ...at, expected, actual });
   }
 
   private matchCheckpoint(line: CkptLine): void {
@@ -520,28 +556,16 @@ class Replayer {
   }
 
   private applyAct(line: LogLine & { k: "act" }): ApplyOutput {
+    const at = { kind: "result", t: line.t, n: line.n } as const;
+    const expected = logText(line.r, "the act line's result", at);
     let out: ApplyOutput;
     try {
       out = this.m.apply(line.seat, line.a);
     } catch (error) {
-      return diverge({
-        kind: "result",
-        t: line.t,
-        n: line.n,
-        expected: canonicalJson(line.r),
-        actual: errorMessage(error),
-      });
+      return diverge({ ...at, expected, actual: errorMessage(error) });
     }
-    const actual = out.ok ? { ok: true } : { ok: false, code: out.violation.code };
-    if (canonicalJson(actual) !== canonicalJson(line.r)) {
-      diverge({
-        kind: "result",
-        t: line.t,
-        n: line.n,
-        expected: canonicalJson(line.r),
-        actual: canonicalJson(actual),
-      });
-    }
+    const actual = canonicalJson(out.ok ? { ok: true } : { ok: false, code: out.violation.code });
+    if (actual !== expected) diverge({ ...at, expected, actual });
     this.report.actions += 1;
     if (out.ok && this.compare) for (const e of out.events) this.pending.push({ e, n: line.n });
     return out;
@@ -557,11 +581,10 @@ class Replayer {
         actual: "the match is still running",
       });
     }
-    const result = canonicalJson(m.result);
-    if (result !== canonicalJson(line.result)) {
-      diverge({ kind: "result", t: line.t, expected: canonicalJson(line.result), actual: result });
-    }
-    const h = m.hash();
+    const expected = logText(line.result, "the end line's result", { kind: "result", t: line.t });
+    const result = canonicalJson(this.engine({ kind: "end", t: line.t }, () => m.result));
+    if (result !== expected) diverge({ kind: "result", t: line.t, expected, actual: result });
+    const h = this.engine({ kind: "end", t: line.t }, () => m.hash());
     if (h !== line.h) diverge({ kind: "end", t: line.t, expected: line.h, actual: h });
     this.report.finalHash = h;
   }
@@ -569,7 +592,9 @@ class Replayer {
 
 /**
  * Level E verification of a log (§10.4). Returns a report naming the first divergence; never throws
- * for a bad log or an engine error during the replay.
+ * for a bad log (a non-integer number in a line included) or an engine error during the replay. An
+ * error thrown by the caller's `onCheckpoint` or `onLine` propagates unchanged: it is not a
+ * divergence of the log.
  */
 export function verifyLog(
   lines: Iterable<LogLine>,
