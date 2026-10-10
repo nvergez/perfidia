@@ -261,6 +261,10 @@ describe("homecomings (§7.4, §9.3, §12)", () => {
     expect(warned.to).toEqual([{ p: "p2", as: "party" }]);
     expect(warned.data).toMatchObject({ by: "p1", foe: "p2", to: "c1", homecoming: true });
     expect(movementBy(match, "p1", "return").party).toBe("p2");
+    // Once the siege is over, the return has no homecoming foe any more.
+    const left = match.apply("p2", { type: "recall_stationed", at: "c1", home: "c2", units: null });
+    expect(left.ok && ofType(left.events, "siege_broken")[0]?.data["cause"]).toBe("abandoned");
+    expect(movementBy(match, "p1", "return").party).toBeNull();
   });
 });
 
@@ -334,7 +338,13 @@ describe("conquest (§9.4) and re-homing (§7.7)", () => {
       },
     ]);
     const s = match.read().state;
-    expect(s.movements[back]).toMatchObject({ home: "c16", to: "c16", arriveAt: T + 3000 + sail });
+    // It sails on into an unbesieged fallback, so it no longer records p2 as its foe.
+    expect(s.movements[back]).toMatchObject({
+      home: "c16",
+      to: "c16",
+      arriveAt: T + 3000 + sail,
+      party: null,
+    });
     expect(s.movements[out]?.home).toBe("c16");
     expect(plain(cityIn(match, "c20").stationed)).toEqual([
       { owner: "p5", home: "c16", role: "support", units: { guard: 5 } },
@@ -391,8 +401,17 @@ describe("conquest (§9.4) and re-homing (§7.7)", () => {
       departAt: T - 30000,
       arriveAt: T + 4000,
     });
+    w.ext.battlePoints["p5"] = 1000;
     const match = load(w);
+    const standingOf5 = () =>
+      match.ruleset.hooks.standings(match.read()).find((st) => st.player === "p5");
+    // c14 is worth 100; the battle score is capped at floor(100 / 4) = 25.
+    const parts = { cityPoints: 100, battleScore: 25 };
+    expect(standingOf5()).toMatchObject({ score: 125, parts, cities: 1, alive: true });
     const { events } = match.advanceTo(T + 100);
+    // §9.7: the score freezes as it stood with the last city, not at 0.
+    expect(standingOf5()).toMatchObject({ score: 125, parts, cities: 0, alive: false });
+    expect(extOf(match).frozenScores).toEqual({ p5: parts });
     const s = match.read().state;
     expect(s.players["p5"]).toEqual({
       id: "p5",
@@ -454,6 +473,116 @@ describe("conquest (§9.4) and re-homing (§7.7)", () => {
       "p6",
     ]);
     expect(events.at(-1)?.type).toBe("match_ended");
+  });
+});
+
+/**
+ * p5 owns c5 (i4, its fallback) and c14 (i2), which p2 besieges until T + 100. A p5 movement left
+ * c14 for c5 before the siege and lands at T + 5000: the conquest re-homes it onto its own target.
+ * With `siegeOf5`, p3 (c3, i3) besieges c5 meanwhile with a weak garrison.
+ */
+function rehomedOntoTarget(o: {
+  readonly kind: "support" | "attack";
+  readonly party: "p5" | "p3";
+  readonly siegeOf5: boolean;
+}) {
+  const w = world({ now: T });
+  city(w, { id: "c3", owner: "p3", island: "i3" });
+  city(w, { id: "c5", owner: "p5", island: "i4" });
+  city(w, { id: "c9", owner: "p2", island: "i1" });
+  city(w, { id: "c14", owner: "p5", island: "i2" });
+  besiege(w, {
+    city: "c14",
+    by: "p2",
+    garrison: [{ home: "c9", units: { raider: 30, settler: 2 } }],
+    startedAt: T - 21500,
+    endsAt: T + 100,
+  });
+  if (o.siegeOf5) {
+    besiege(w, {
+      city: "c5",
+      by: "p3",
+      garrison: [{ home: "c3", units: { settler: 1, guard: 2 } }],
+      startedAt: T - 1000,
+    });
+  }
+  const m = addMovement(w.state, w.rules, {
+    kind: o.kind,
+    owner: "p5",
+    from: "c14",
+    to: "c5",
+    units: o.kind === "support" ? { guard: 6, settler: 1 } : { raider: 30 },
+    party: o.party,
+    departAt: T - 2000,
+    arriveAt: T + 5000,
+  });
+  const match = load(w);
+  match.advanceTo(T + 100);
+  expect(cityIn(match, "c14").owner).toBe("p2");
+  expect(match.read().state.movements[m.id]?.home).toBe("c5");
+  return { match, id: m.id };
+}
+
+describe("movements re-homed onto their own target (§7.7)", () => {
+  test("a support whose origin fell in flight is home on arrival, not stationed in its home", () => {
+    const { match, id } = rehomedOntoTarget({ kind: "support", party: "p5", siegeOf5: false });
+    const { events } = match.advanceTo(T + 5000);
+    expect(events.map((e) => e.type)).toEqual(["returned"]);
+    expect(copyFor(events, "returned", "p5").data).toEqual({
+      movement: id,
+      city: "c5",
+      units: { guard: 6, settler: 1 },
+      cargo: { wood: 0, stone: 0, gold: 0 },
+    });
+    expect(plain(cityIn(match, "c5").units)).toEqual({ guard: 6, settler: 1 });
+    expect(cityIn(match, "c5").stationed).toHaveLength(0);
+    expect(match.read().state.movements[id]).toBeUndefined();
+  });
+
+  test("an attack re-homed onto its target after the siege there ended is home on arrival", () => {
+    const { match, id } = rehomedOntoTarget({ kind: "attack", party: "p3", siegeOf5: false });
+    const { events } = match.advanceTo(T + 5000);
+    expect(events.map((e) => e.type)).toEqual(["returned"]);
+    expect(plain(cityIn(match, "c5").units)).toEqual({ raider: 30 });
+    expect(match.read().state.movements[id]).toBeUndefined();
+  });
+
+  test("into a home besieged by another player, a support bounces and warns the besieger", () => {
+    const { match, id } = rehomedOntoTarget({ kind: "support", party: "p5", siegeOf5: true });
+    const { events } = match.advanceTo(T + 5000);
+    expect(copyFor(events, "bounced", "p5").data).toEqual({
+      movement: id,
+      kind: "support",
+      reason: "target_besieged",
+    });
+    // §7.6: a return from the island of c5 to itself takes sameIslandTravel, the besieger's hour.
+    const back = match.read().state.movements[id];
+    expect(back).toMatchObject({ kind: "return", home: "c5", fromIsland: "i4", party: "p3" });
+    expect(back?.arriveAt).toBe(T + 5000 + 3600);
+    expect(copyFor(events, "incoming_attack", "p3").data).toMatchObject({
+      movement: id,
+      foe: "p3",
+      to: "c5",
+      arriveAt: T + 8600,
+      homecoming: true,
+    });
+    const fought = match.advanceTo(T + 8600).events;
+    const report = copyFor(fought, "battle_report", "p3").data;
+    expect(report).toMatchObject({ kind: "homecoming", attacker: "p5", defender: "p3" });
+    expect(report["naval"]).toBeNull();
+  });
+
+  test("a relief of the home whose origin fell in flight: survivors of a won relief are home", () => {
+    const { match, id } = rehomedOntoTarget({ kind: "attack", party: "p3", siegeOf5: true });
+    const { events } = match.advanceTo(T + 5000);
+    const report = copyFor(events, "battle_report", "p5").data;
+    expect(report).toMatchObject({ kind: "relief", winner: "attacker", siege: "broken" });
+    expect(ofType(events, "siege_broken")[0]?.data).toMatchObject({ city: "c5", cause: "relief" });
+    const home = copyFor(events, "returned", "p5").data;
+    expect(home).toMatchObject({ movement: id, city: "c5" });
+    expect(plain(cityIn(match, "c5").units)).toEqual(home["units"]);
+    expect(cityIn(match, "c5").units["raider"]).toBeGreaterThan(0);
+    expect(Object.values(match.read().state.movements).some((m) => m.owner === "p5")).toBe(false);
   });
 });
 

@@ -3,6 +3,7 @@ import { stockAt } from "@perfidia/engine/std";
 import { addMovement, addStationed } from "@perfidia/engine/testing";
 import { compareIds, type DomainEvent, type Island, type PlayerId } from "@perfidia/protocol";
 import {
+  besiege,
   city,
   cityIn,
   copyFor,
@@ -363,6 +364,81 @@ describe("§9.8 worked example 2: train, siege, reinforcement, relief", () => {
       units: { raider: 22 },
     });
     expect(Object.values(match.read().state.movements).some((m) => m.owner === "p5")).toBe(false);
+  });
+});
+
+/**
+ * p1's return (cargo 77 wood) lands at T + 1 in c1 (i1), which p2 besieges with 20 guards, 2
+ * warships and a settler. It left from c2 (i2, across water) or from c6 (i1, the same island).
+ */
+function homecomingInto(from: "c2" | "c6", units: Record<string, number>) {
+  const w = world({ now: T });
+  city(w, { id: "c1", owner: "p1", island: "i1" });
+  city(w, { id: "c2", owner: "p2", island: "i2" });
+  city(w, { id: "c6", owner: "p6", island: "i1" });
+  besiege(w, {
+    city: "c1",
+    by: "p2",
+    garrison: [{ home: "c2", units: { settler: 1, guard: 20, warship: 2 } }],
+  });
+  const back = addMovement(w.state, w.rules, {
+    kind: "return",
+    owner: "p1",
+    from,
+    home: "c1",
+    to: "c1",
+    units,
+    cargo: { wood: 77 },
+    party: "p2",
+    departAt: T - 3599,
+    arriveAt: T + 1,
+  });
+  const match = load(w);
+  const stock = stockAt(match.read(), "c1", T + 1);
+  const { events } = match.advanceTo(T + 1);
+  return { match, events, id: back.id, stock };
+}
+
+describe("homecoming battles (§9.3)", () => {
+  const GROUP = { raider: 5, warship: 3, transport: 1 };
+
+  test("across water the naval phase runs; a lost homecoming loses the group, ships and cargo", () => {
+    const { match, events, id, stock } = homecomingInto("c2", GROUP);
+    const r = report(events, "p2");
+    expect(r).toMatchObject({ kind: "homecoming", attacker: "p1", defender: "p2" });
+    expect(r["naval"]).toMatchObject({ Na: 150, Nd: 100, winner: "attacker" });
+    expect(r["land"]).toMatchObject({ A: 100, winner: "defender" });
+    expect(r["siege"]).toBe("holds");
+    expect(report(events, "p1")).toMatchObject({ winner: "defender", phase: "land" });
+    expect(match.read().state.movements[id]).toBeUndefined();
+    expect(ofType(events, "returned")).toEqual([]);
+    expect(stockAt(match.read(), "c1")).toEqual(stock);
+    expect(plain(cityIn(match, "c1").units)).toEqual({});
+    expect(match.read().state.ledger["p1"]?.gone).toEqual(GROUP);
+    // Every garrison ship sank in the naval phase it lost.
+    expect(match.read().state.ledger["p2"]?.gone).toMatchObject({ warship: 2 });
+    expect(extOf(match).sieges["c1"]?.by).toBe("p2");
+  });
+
+  test("from the home's own island there is no naval phase and the garrison keeps its ships", () => {
+    const { match, events, id } = homecomingInto("c6", GROUP);
+    const r = report(events, "p2");
+    expect(r["naval"]).toBeNull();
+    expect(r["land"]).toMatchObject({ A: 100, winner: "defender" });
+    expect(match.read().state.movements[id]).toBeUndefined();
+    expect(match.read().state.ledger["p1"]?.gone).toEqual(GROUP);
+    expect(match.read().state.ledger["p2"]?.gone?.["warship"]).toBeUndefined();
+  });
+
+  test("across water, a return without warships is sunk before any land phase", () => {
+    const units = { raider: 50, transport: 3 };
+    const { match, events, id } = homecomingInto("c2", units);
+    const r = report(events, "p2");
+    expect(r["naval"]).toEqual({ Na: 0, Nd: 100, winner: "defender", q: 0 });
+    expect(r["land"]).toBeNull();
+    expect(report(events, "p1")).toMatchObject({ winner: "defender", phase: "naval" });
+    expect(match.read().state.movements[id]).toBeUndefined();
+    expect(match.read().state.ledger["p1"]?.gone).toEqual(units);
   });
 });
 

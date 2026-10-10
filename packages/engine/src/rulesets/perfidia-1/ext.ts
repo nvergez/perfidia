@@ -48,12 +48,20 @@ export const PairKeySchema = z.string().regex(/^p[1-9][0-9]*\|p[1-9][0-9]*$/, {
 });
 export type PairKey = z.infer<typeof PairKeySchema>;
 
+/** The public parts of a score (§13.1); private, so the wave-3 export list is unchanged. */
+const ScorePartsSchema = z.strictObject({
+  cityPoints: z.int().nonnegative(),
+  battleScore: z.int().nonnegative(),
+});
+
 export const PerfidiaExtSchema = z.strictObject({
   /** The public tie-break order (§2.3 step 7), from t = 0. */
   tiebreak: z.array(PlayerIdSchema),
   sieges: safeRecord(CityIdSchema, SiegeSchema),
   /** Raw battle points (§8.8) by player; never public, only the capped battle score is. */
   battlePoints: safeRecord(PlayerIdSchema, z.int().nonnegative()),
+  /** The score of each eliminated player, frozen as it stood before its last city fell (§9.7). */
+  frozenScores: safeRecord(PlayerIdSchema, ScorePartsSchema),
   /** Pairs related (allies or pact partners) at the end of the last step, sorted. */
   related: z.array(PairKeySchema),
   /** When each pair last stopped being related: the kill-credit cooldown (§8.8). */
@@ -69,7 +77,7 @@ export type PerfidiaExt = z.infer<typeof PerfidiaExtSchema>;
 
 type Ext = DeepReadonly<PerfidiaExt>;
 
-/** The ext of a new world: no siege, no battle point, no relation, domination closed. */
+/** The ext of a new world: no siege, battle point, frozen score or relation; domination closed. */
 export function initialExt(
   players: readonly PlayerId[],
   tiebreak: readonly PlayerId[],
@@ -80,6 +88,7 @@ export function initialExt(
     tiebreak: [...tiebreak],
     sieges: {},
     battlePoints,
+    frozenScores: {},
     related: [],
     relationEnds: {},
     domination: { open: false, countdowns: [] },

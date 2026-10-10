@@ -197,6 +197,40 @@ describe("§13.1 score", () => {
       },
     ]);
   });
+
+  test("an eliminated player's score stays frozen (§9.7); a live score ignores any frozen entry", () => {
+    const ext = initialExt(["p1", "p2"], ["p1", "p2"]);
+    ext.battlePoints["p2"] = 400;
+    ext.frozenScores["p2"] = { cityPoints: 210, battleScore: 40 };
+    ext.frozenScores["p1"] = { cityPoints: 999, battleScore: 99 };
+    const s = state(
+      [{ id: "p1" }, { id: "p2", alive: false, eliminatedAt: 9000 }],
+      [city(1, "p1", FRESH)],
+      ext,
+    );
+    expect(scoreRows(d, s, ext)).toEqual([
+      {
+        player: "p1",
+        alive: true,
+        eliminatedAt: null,
+        score: 105,
+        cities: 1,
+        battlePoints: 0,
+        cityPoints: 105,
+        battleScore: 0,
+      },
+      {
+        player: "p2",
+        alive: false,
+        eliminatedAt: 9000,
+        score: 250,
+        cities: 0,
+        battlePoints: 400,
+        cityPoints: 210,
+        battleScore: 40,
+      },
+    ]);
+  });
 });
 
 const row = (

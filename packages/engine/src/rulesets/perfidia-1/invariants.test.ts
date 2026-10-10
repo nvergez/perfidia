@@ -128,6 +128,20 @@ const CORRUPTIONS: readonly { name: string; plant: (w: World) => void; caught: s
     caught: "perfidia-1.bookkeeping: battle points of p9, who is not a player",
   },
   {
+    name: "a frozen score of an alive player",
+    plant: (w) => {
+      w.ext.frozenScores["p5"] = { cityPoints: 105, battleScore: 0 };
+    },
+    caught: "perfidia-1.bookkeeping: frozen score of p5, who is still alive",
+  },
+  {
+    name: "a frozen score of a non-player",
+    plant: (w) => {
+      w.ext.frozenScores["p9"] = { cityPoints: 105, battleScore: 0 };
+    },
+    caught: "perfidia-1.bookkeeping: frozen score of p9, who is not a player",
+  },
+  {
     name: "a relation that ended in the future",
     plant: (w) => {
       w.ext.relationEnds["p1|p2"] = T + 1;

@@ -1,8 +1,15 @@
 import { describe, expect, test } from "bun:test";
 import type { DepartureDraft, DepartureVerdict } from "@perfidia/engine/contracts";
 import type { Match } from "@perfidia/engine/kernel";
-import type { Action, CityId, IslandId, PlayerId, UnitCounts } from "@perfidia/protocol";
-import { besiege, city, load, world } from "./fixtures.test.ts";
+import {
+  type Action,
+  type CityId,
+  type IslandId,
+  MovementIdSchema,
+  type PlayerId,
+  type UnitCounts,
+} from "@perfidia/protocol";
+import { besiege, city, cityIn, load, plain, world } from "./fixtures.test.ts";
 
 // `hooks.departure` (perfidia-1 §7.3) and `hooks.guard` (§9.2): foe and party, relief of an own
 // besieged city, NOT_BESIEGER, CITY_BESIEGED, the garrison that cannot be dismissed.
@@ -138,6 +145,50 @@ describe("hooks.departure (§7.3)", () => {
       ok: true,
       party: "p2",
     });
+  });
+
+  test("the besieger of the neutral Crown reinforces it with support; nobody supports it otherwise", () => {
+    const free = setting();
+    expect(verdict(free, draft(free, "support", "p1", "c1", "c7", RAIDERS))).toEqual({
+      ok: false,
+      violation: { code: "INVALID_TARGET", details: { city: "c7", kind: "support" } },
+    });
+    const w = world({ now: T });
+    city(w, { id: "c1", owner: "p1", island: "i1", units: { guard: 20, settler: 1 } });
+    city(w, { id: "c2", owner: "p2", island: "i2", units: { guard: 5 } });
+    city(w, { id: "c7", owner: null, island: "i2", tag: "crown" });
+    besiege(w, {
+      city: "c7",
+      by: "p1",
+      garrison: [{ home: "c1", units: { settler: 1, raider: 5 } }],
+    });
+    const m = load(w);
+    const units = { guard: 20, settler: 1 };
+    expect(verdict(m, draft(m, "support", "p1", "c1", "c7", { units }))).toEqual({
+      ok: true,
+      party: "p1",
+    });
+    expect(verdict(m, draft(m, "support", "p2", "c2", "c7", RAIDERS))).toEqual({
+      ok: false,
+      violation: { code: "NOT_BESIEGER", details: { city: "c7", by: "p1", endsAt: ENDS } },
+    });
+    expect(verdict(m, draft(m, "attack", "p1", "c1", "c7", { units }))).toMatchObject({
+      ok: false,
+      violation: { details: { reason: "besieged_by_you" } },
+    });
+
+    const out = m.apply("p1", { type: "support", from: "c1", to: "c7", units });
+    expect(out.ok).toBe(true);
+    if (!out.ok) return;
+    const id = MovementIdSchema.parse(out.data["movement"]);
+    const arriveAt = m.read().state.movements[id]?.arriveAt ?? 0;
+    const { events } = m.advanceTo(arriveAt);
+    expect(events.map((e) => e.type)).toEqual(["support_arrived"]);
+    expect(events[0]?.to).toEqual([{ p: "p1", as: "self" }]);
+    expect(plain(cityIn(m, "c7").stationed)).toEqual([
+      { owner: "p1", home: "c1", role: "hold", units: { guard: 20, raider: 5, settler: 2 } },
+    ]);
+    expect(m.read().state.movements[id]).toBeUndefined();
   });
 
   test("no shipment to a besieged city; spies may watch one; nothing leaves a besieged city", () => {

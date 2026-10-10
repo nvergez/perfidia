@@ -155,8 +155,8 @@ const domination: Invariant = {
 
 /**
  * The bookkeeping refers to the match's players: the tie-break order is a permutation of them,
- * battle points are kept for players only, related pairs are sorted pairs of players, and no
- * relation ended in the future.
+ * battle points are kept for players only, scores are frozen for eliminated players only, related
+ * pairs are sorted pairs of players, and no relation ended in the future.
  */
 const bookkeeping: Invariant = {
   name: "perfidia-1.bookkeeping",
@@ -172,6 +172,11 @@ const bookkeeping: Invariant = {
     }
     for (const p of sortedIds(x.battlePoints)) {
       if (!players.includes(p)) out.push(`battle points of ${p}, who is not a player`);
+    }
+    for (const p of sortedIds(x.frozenScores)) {
+      const player = own(r.state.players, p);
+      if (player === undefined) out.push(`frozen score of ${p}, who is not a player`);
+      else if (player.alive) out.push(`frozen score of ${p}, who is still alive`);
     }
     x.related.forEach((key, i) => {
       if (!pairPlayers(key).every((p) => own(r.state.players, p) !== undefined)) {

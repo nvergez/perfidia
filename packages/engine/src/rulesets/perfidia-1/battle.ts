@@ -420,14 +420,25 @@ function takeAll(ctx: PCtx, m: MovementId): UnitCounts {
   return units;
 }
 
-/** Sends the movement's survivors home from `from` with `cargo` (announced if the home is besieged). */
-function returnSurvivors(ctx: PCtx, m: MovementId, from: CityId, cargo: Readonly<Res>): void {
-  const mv = movementOf(ctx.state, m);
+/**
+ * Sends the movement's survivors home from `from` with `cargo` (announced if the home is besieged)
+ * and removes the movement. Survivors that already stand in their home city (a relief of the home
+ * itself, re-homed there because its origin was conquered in flight, §7.7) are home at once unless
+ * the home is still besieged; then they make the return trip of §7.6, from that island to itself.
+ */
+function sendSurvivorsHome(ctx: PCtx, m: MovementId, from: CityId, cargo: Readonly<Res>): void {
+  const mv = draftMovementOf(ctx, m);
+  if (mv.home === from && siegeOf(ctx.ext(), from) === null && hasUnits(mv.units)) {
+    mv.cargo = { ...cargo };
+    arriveHome(ctx, m);
+    return;
+  }
   const owner = mv.owner;
   const home = mv.home;
   const units = takeAll(ctx, m);
-  if (!hasUnits(units)) return;
-  announceHomecoming(ctx, startReturn(ctx, { owner, home, from, units, cargo }));
+  if (hasUnits(units))
+    announceHomecoming(ctx, startReturn(ctx, { owner, home, from, units, cargo }));
+  deleteMovement(ctx, m);
 }
 
 function isZero(r: Readonly<Res>): boolean {
@@ -467,9 +478,10 @@ function cityBattle(ctx: PCtx, m: MovementId, city: CityId): void {
     siege: besiege ? "started" : null,
   };
   emitReports(ctx, f, outcome, hasUnits(survivors));
-  if (besiege) startSiege(ctx, city, f.attacker, movementOf(ctx.state, m).home, takeAll(ctx, m));
-  else returnSurvivors(ctx, m, city, loot);
-  deleteMovement(ctx, m);
+  if (besiege) {
+    startSiege(ctx, city, f.attacker, movementOf(ctx.state, m).home, takeAll(ctx, m));
+    deleteMovement(ctx, m);
+  } else sendSurvivorsHome(ctx, m, city, loot);
   betray(ctx, f);
 }
 
@@ -489,8 +501,7 @@ function reliefBattle(ctx: PCtx, m: MovementId, city: CityId, besieger: PlayerId
     survived,
   );
   if (broken) breakSiege(ctx, city, "relief");
-  returnSurvivors(ctx, m, city, ZERO);
-  deleteMovement(ctx, m);
+  sendSurvivorsHome(ctx, m, city, ZERO);
   betray(ctx, f);
 }
 
@@ -527,6 +538,8 @@ export function bounceHome(ctx: PCtx, m: MovementId, reason: string): void {
  * `arrive.attack` (§7.5): joins the garrison of a city the mover besieges, fights a relief battle
  * when its recorded foe is the besieger, a city battle when the city is not besieged and still
  * owned by its foe, and bounces otherwise: an attack only ever fights the foe recorded at launch.
+ * A relief re-homed onto its own target (its origin was conquered in flight, §7.7) that finds the
+ * siege over is home on arrival.
  */
 export function arriveAttack(ctx: PCtx, m: MovementId): void {
   const mv = movementOf(ctx.state, m);
@@ -538,7 +551,8 @@ export function arriveAttack(ctx: PCtx, m: MovementId): void {
     else bounceHome(ctx, m, "target_besieged");
     return;
   }
-  if (cityOf(ctx.state, city).owner === mv.party) cityBattle(ctx, m, city);
+  if (mv.home === city) arriveHome(ctx, m);
+  else if (cityOf(ctx.state, city).owner === mv.party) cityBattle(ctx, m, city);
   else bounceHome(ctx, m, "target_changed");
 }
 

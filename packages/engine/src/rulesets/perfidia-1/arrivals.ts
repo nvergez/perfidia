@@ -1,5 +1,6 @@
 import type { CityId, JsonObject, MovementId, UnitCounts } from "@perfidia/protocol";
 import {
+  arriveHome,
   cleanUnits,
   deleteMovement,
   deliverShipment,
@@ -130,7 +131,10 @@ export function arriveSpy(ctx: PCtx, m: MovementId): void {
 /**
  * `arrive.support` (§7.5): joins the garrison of a city the mover besieges, bounces from a city
  * besieged by anyone else, becomes a stationed group in a city still owned by its recorded party,
- * and bounces otherwise.
+ * and bounces otherwise. A support re-homed onto its own target (its origin was conquered in
+ * flight and the target is the fallback, §7.7) is home on arrival: units cannot be stationed in
+ * their home city. Under another player's siege it bounces like any support, so it comes home
+ * through a return the besieger is warned about (§9.3).
  */
 export function arriveSupport(ctx: PCtx, m: MovementId): void {
   const mv = movementOf(ctx.state, m);
@@ -142,7 +146,8 @@ export function arriveSupport(ctx: PCtx, m: MovementId): void {
     return;
   }
   const owner = cityOf(ctx.state, city).owner;
-  if (owner !== null && owner === mv.party) deliverSupport(ctx, m, "support");
+  if (mv.home === city) arriveHome(ctx, m);
+  else if (owner !== null && owner === mv.party) deliverSupport(ctx, m, "support");
   else bounceHome(ctx, m, "target_changed");
 }
 

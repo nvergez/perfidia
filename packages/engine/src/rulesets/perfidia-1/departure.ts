@@ -65,6 +65,10 @@ function attackDeparture(r: PRead, d: DepartureDraft): DepartureVerdict {
  * `hooks.departure` (§7.3): no departure from a besieged city; attacks as above; a support to a
  * besieged city only from its besieger (`NOT_BESIEGER`), recorded with the besieger as its party; no
  * shipment to a besieged city. Everything else follows `std.defaultDeparture`.
+ *
+ * The besieger's support reinforces its garrison (§9.2), so it skips the "player-owned target"
+ * check of §7.3: the neutral Crown is besiegeable like any city (§9.6) and its besieger reinforces
+ * it the same way (§7.5). Its origin is not besieged (checked first), so it is not the target.
  */
 export function departure(r: PRead, d: DepartureDraft): DepartureVerdict {
   const x = r.ext();
@@ -80,8 +84,7 @@ export function departure(r: PRead, d: DepartureDraft): DepartureVerdict {
         details: { city: d.to, by: siege.by, endsAt: siege.endsAt },
       });
     }
-    const verdict = defaultDeparture(r, d);
-    return verdict.ok ? { ...verdict, party: siege.by } : verdict;
+    return { ok: true, party: siege.by };
   }
   if (d.kind === "shipment") return reject(besieged(d.to, siege));
   return defaultDeparture(r, d);

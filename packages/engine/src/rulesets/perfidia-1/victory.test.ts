@@ -172,11 +172,26 @@ describe("domination countdowns", () => {
     expect(events.map((e) => e.type)).toEqual(["match_ended"]);
   });
 
-  const SAME_SECOND = [
+  // a1 = {p1, p2} against a2 = {p3, p4}: [cities, building levels per city] of each, and the
+  // public tie-break order (default p1..p6, where a1 holds the best position).
+  const SAME_SECOND: readonly {
+    why: string;
+    a1: readonly [number, number];
+    a2: readonly [number, number];
+    tiebreak?: readonly PlayerId[];
+    winners: readonly PlayerId[];
+  }[] = [
     { why: "more cities", a1: [13, 0], a2: [14, 0], winners: ["p3", "p4"] },
     { why: "a higher total score", a1: [13, 0], a2: [13, 1], winners: ["p3", "p4"] },
-    { why: "the best tie-break position", a1: [13, 0], a2: [13, 0], winners: ["p1", "p2"] },
-  ] as const;
+    {
+      why: "the best tie-break position (a2's)",
+      a1: [13, 0],
+      a2: [13, 0],
+      tiebreak: ["p5", "p4", "p1", "p2", "p3", "p6"],
+      winners: ["p3", "p4"],
+    },
+    { why: "the best tie-break position (a1's)", a1: [13, 0], a2: [13, 0], winners: ["p1", "p2"] },
+  ];
 
   for (const c of SAME_SECOND) {
     test(`countdowns ending in the same second resolve together: ${c.why} wins`, () => {
@@ -187,9 +202,11 @@ describe("domination countdowns", () => {
       cities(w, "p4", 50, 1, c.a2[1]);
       cities(w, "p5", 60, 1);
       cities(w, "p6", 61, 1);
+      if (c.tiebreak !== undefined) w.ext.tiebreak = [...c.tiebreak];
       addAlliance(w.state, "North", ["p1", "p2"]);
       addAlliance(w.state, "South", ["p3", "p4"]);
-      // a1's event is queued first, so it pops first: the order must not depend on it.
+      // a1's event is queued first, so it pops first, and a1 has the smaller bloc id: the order
+      // must depend on neither.
       countdown(w, { bloc: "a1", members: ["p1", "p2"], endsAt: T + 1000 });
       countdown(w, { bloc: "a2", members: ["p3", "p4"], endsAt: T + 1000 });
       const match = load(w);
@@ -201,6 +218,24 @@ describe("domination countdowns", () => {
       });
     });
   }
+
+  test("blocs qualifying in the same step start in bloc order: alliances, then lone players", () => {
+    const w = world({ now: 259200 - 100 });
+    // p1 alone has more cities and the smallest member id; the alliance a1 still starts first.
+    cities(w, "p1", 1, 14);
+    cities(w, "p3", 20, 11);
+    cities(w, "p4", 40, 1);
+    for (const p of ["p2", "p5", "p6"] as const) cities(w, p, 50 + Number(p.slice(1)), 1);
+    addAlliance(w.state, "South", ["p3", "p4"]);
+    const match = load(w);
+    const { events } = match.advanceTo(259200);
+    // 29 cities: the threshold is max(2·6, ceilDiv(400·29, 1000)) = 12.
+    expect(ofType(events, "domination_started").map((e) => e.data)).toEqual([
+      { key: "a1", members: ["p3", "p4"], cities: 12, threshold: 12, endsAt: 345600 },
+      { key: "p1", members: ["p1"], cities: 14, threshold: 12, endsAt: 345600 },
+    ]);
+    expect(extOf(match).domination.countdowns.map((c) => c.bloc)).toEqual(["a1", "p1"]);
+  });
 });
 
 describe("time victory (§13.3)", () => {
