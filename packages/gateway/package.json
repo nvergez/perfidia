@@ -4,7 +4,11 @@
   "private": true,
   "type": "module",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./seat": "./src/seat/index.ts",
+    "./clock": "./src/clock/index.ts",
+    "./present": "./src/present/index.ts",
+    "./runtime": "./src/runtime/index.ts"
   },
   "dependencies": {
     "@perfidia/engine": "workspace:*",
