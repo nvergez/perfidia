@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { GameTimeSchema, PlayerIdSchema, RulesetRefSchema } from "./ids.ts";
-import { JsonSchema } from "./json.ts";
+import { JsonSchema, safeRecord } from "./json.ts";
 
 // Match setup, clock specs, standings and results (§3.6, §8.7, §10.2).
 
@@ -10,23 +10,52 @@ export const IdKeySchema = z.string().regex(/^[0-9a-f]{32}$/, {
 });
 export type IdKey = z.infer<typeof IdKeySchema>;
 
+/**
+ * Path segments that would reach `Object.prototype` when `resolveConfig` sets the path on a plain
+ * object (prototype pollution through a log header or a CLI override).
+ */
+const RESERVED_SEGMENT = /^(?:__proto__|prototype|constructor)$/;
+
 /** A dotted config path, e.g. `time.siegeDuration`; array elements use numeric segments (`homeRadius.6`). */
-export const ConfigPathSchema = z.string().regex(/^[A-Za-z0-9_]+(\.[A-Za-z0-9_]+)*$/, {
-  error: "expected a dotted config path, such as time.matchEnd",
-});
+export const ConfigPathSchema = z
+  .string()
+  .regex(/^[A-Za-z0-9_]+(\.[A-Za-z0-9_]+)*$/, {
+    error: "expected a dotted config path, such as time.matchEnd",
+  })
+  .superRefine((path, ctx) => {
+    for (const segment of path.split(".")) {
+      if (RESERVED_SEGMENT.test(segment)) {
+        ctx.addIssue({
+          code: "custom",
+          message: `"${segment}" is not a config key: it would reach Object.prototype`,
+        });
+      }
+    }
+  });
+
+/**
+ * The most seats a match can have: opaque ids encode the owner in 4 bits, so owners are players
+ * 1..15 (§4.1). A ruleset's `players(config)` must stay within it.
+ */
+export const MAX_SEATS = 15;
 
 export const MatchSetupSchema = z
   .strictObject({
     /** Always the exact ref, even if the CLI was given a bare id. */
     ruleset: RulesetRefSchema,
     /** Dotted config paths → values. */
-    overrides: z.record(ConfigPathSchema, JsonSchema),
+    overrides: safeRecord(ConfigPathSchema, JsonSchema),
     /** uint32. */
     seed: z.int().min(0).max(4294967295),
     /** Never shown to agents. */
     idKey: IdKeySchema,
     /** `p1..pN` in order. Seats have no names (§4.2). N is checked against the ruleset at creation. */
-    seats: z.array(z.strictObject({ id: PlayerIdSchema })).min(1),
+    seats: z
+      .array(z.strictObject({ id: PlayerIdSchema }))
+      .min(1)
+      .max(MAX_SEATS, {
+        error: `at most ${MAX_SEATS} seats: opaque ids encode the owner as player 1..${MAX_SEATS} (§4.1)`,
+      }),
   })
   .superRefine((setup, ctx) => {
     for (const [i, seat] of setup.seats.entries()) {
@@ -57,7 +86,7 @@ export const StandingSchema = z.strictObject({
   rank: z.int().positive(),
   score: z.int(),
   /** Ruleset-defined, public, e.g. `cityPoints`, `battleScore`. */
-  parts: z.record(z.string().min(1), z.int()),
+  parts: safeRecord(z.string().min(1), z.int()),
   cities: z.int().nonnegative(),
   alive: z.boolean(),
 });

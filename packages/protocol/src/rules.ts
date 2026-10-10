@@ -7,6 +7,7 @@ import {
   RulesetRefSchema,
   UnitIdSchema,
 } from "./ids.ts";
+import { safePartialRecord, safeRecord } from "./json.ts";
 import { RESOURCE_IDS, ResSchema, UnitCountsSchema } from "./resources.ts";
 
 // `CompiledRules` (§3.3), the data contract between a ruleset and the core, with the gateway rules
@@ -46,7 +47,7 @@ export const GatewayRulesSchema = z.strictObject({
   messagesPerDay: Int,
   notesMaxChars: Int,
   /** Event type → class by recipient role; no entry means no wake (inbox or news only). */
-  wake: z.record(EventTypeSchema, z.partialRecord(WakeRoleSchema, WakeClassSchema)),
+  wake: safeRecord(EventTypeSchema, safePartialRecord(WakeRoleSchema, WakeClassSchema)),
   /** Event types whose public wake fires once per game day per `data.key`. */
   publicOncePerDay: z.array(EventTypeSchema),
 });
@@ -61,13 +62,13 @@ export type TravelGroup = z.infer<typeof TravelGroupSchema>;
 
 /** A founded city's start: building levels (a building not listed starts at 0), stock in whole units, units (the escort is added). */
 export const CitySeedSchema = z.strictObject({
-  buildings: z.record(BuildingIdSchema, Int),
+  buildings: safeRecord(BuildingIdSchema, Int),
   stock: ResSchema,
   units: UnitCountsSchema,
 });
 export type CitySeed = z.infer<typeof CitySeedSchema>;
 
-const Requirements = z.record(BuildingIdSchema, z.int().positive());
+const Requirements = safeRecord(BuildingIdSchema, z.int().positive());
 
 export const BuildingTableSchema = z.strictObject({
   id: BuildingIdSchema,
@@ -118,7 +119,7 @@ export const CompiledRulesSchema = z.strictObject({
   /** Canonical order. */
   units: z.array(UnitTableSchema),
   roles: z.strictObject({
-    producers: z.record(z.enum(RESOURCE_IDS), BuildingIdSchema),
+    producers: safeRecord(z.enum(RESOURCE_IDS), BuildingIdSchema),
     /** Index of the storage cap table. */
     storage: BuildingIdSchema,
     /** Index of the pop cap table. */
@@ -192,6 +193,6 @@ export const CompiledRulesSchema = z.strictObject({
   /** `view_map` columns, e.g. transport / warship / spy. */
   travelProbes: z.array(z.strictObject({ label: z.string().min(1), group: TravelGroupSchema })),
   /** Every scheduled event kind → same-second class (§5.1). */
-  eventClasses: z.record(EventTypeSchema, Int),
+  eventClasses: safeRecord(EventTypeSchema, Int),
 });
 export type CompiledRules = z.infer<typeof CompiledRulesSchema>;

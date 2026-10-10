@@ -16,7 +16,7 @@ import {
   TimePairSchema,
   UnitIdSchema,
 } from "./ids.ts";
-import { JsonObjectSchema } from "./json.ts";
+import { JsonObjectSchema, safeRecord } from "./json.ts";
 import { MovementKindSchema } from "./events.ts";
 import { UnitCountsSchema } from "./resources.ts";
 import { ErrorCodeSchema } from "./violations.ts";
@@ -40,15 +40,17 @@ export const WakeKindSchema = z.enum(["urgent", "own", "self", "social", "safety
 export type WakeKind = z.infer<typeof WakeKindSchema>;
 
 /**
- * How a turn ended (§8.2, §9.1): `end_turn`; an empty round; the round-trip cap; the per-wake call
- * cap (`toolCallsPerWake`); a timeout or an agent error; the end of the match; the seat's
- * elimination.
+ * How a turn ended, in the `turn` log line (`why`) and in the next briefing's `lastTurn`: the six
+ * endings of §8.2 (`end_turn`, an empty round, the round-trip cap, a timeout, an agent error, the
+ * end of the match), plus `eliminated`, which §9.1 lists among the endings of a `TurnHandle`: the
+ * seat was eliminated while its turn was open (real time). An eliminated seat never wakes again,
+ * so `eliminated` appears only in `turn` lines, never in a briefing. Reaching `toolCallsPerWake`
+ * does not end a turn: further calls are rejected with `CALLS_CAP` (§8.3).
  */
 export const TurnEndSchema = z.enum([
   "end_turn",
   "empty_round",
   "round_cap",
-  "calls_cap",
   "timeout",
   "error",
   "match_ended",
@@ -82,7 +84,7 @@ export const BriefingCitySchema = z.looseObject({
       end: TimePairSchema,
     }),
   ),
-  recruit: z.record(
+  recruit: safeRecord(
     QueueIdSchema,
     z.array(
       z.looseObject({
@@ -192,6 +194,6 @@ export const BriefingSchema = z.looseObject({
   /** `visibility.briefing(r, seat)`, default `publicMatch(r)`. */
   ext: JsonObjectSchema,
   /** Truncated lists, by list name (`moves`, `msgs`, `events`, `news`). */
-  more: z.record(z.string(), BriefingMoreSchema).optional(),
+  more: safeRecord(z.string(), BriefingMoreSchema).optional(),
 });
 export type Briefing = z.infer<typeof BriefingSchema>;

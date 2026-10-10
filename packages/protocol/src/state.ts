@@ -17,7 +17,7 @@ import {
   Sha256Schema,
   UnitIdSchema,
 } from "./ids.ts";
-import { JsonSchema } from "./json.ts";
+import { JsonSchema, safeRecord } from "./json.ts";
 import { MatchResultSchema } from "./match.ts";
 import { ResSchema, UnitCountsSchema } from "./resources.ts";
 
@@ -107,7 +107,7 @@ export const CitySchema = z.strictObject({
   /** Last materialisation. */
   stockAt: GameTimeSchema,
   /** Every building of the ruleset, 0 included. */
-  buildings: z.record(BuildingIdSchema, Int),
+  buildings: safeRecord(BuildingIdSchema, Int),
   /** The owner's units at home (the neutral garrison when `owner` is null). */
   units: UnitCountsSchema,
   /** Sorted by (owner, home, role). */
@@ -116,7 +116,7 @@ export const CitySchema = z.strictObject({
   itemSeq: Int,
   /** Queue order; each item has its own event. */
   build: z.array(BuildItemSchema),
-  recruit: z.record(QueueIdSchema, z.array(RecruitBatchSchema)),
+  recruit: safeRecord(QueueIdSchema, z.array(RecruitBatchSchema)),
 });
 export type City = z.infer<typeof CitySchema>;
 
@@ -209,27 +209,28 @@ export const GameStateSchema = z.strictObject({
     /** Last allocated alliance number. */
     a: Int,
     /** Private kinds, per owner. */
-    own: z.record(PlayerIdSchema, OwnCountersSchema),
+    own: safeRecord(PlayerIdSchema, OwnCountersSchema),
   }),
   /** Running hash of every emitted event (§6.4). */
   evHash: Hash64Schema,
   /** Sorted by (at, cls, seq). */
   queue: z.array(ScheduledEventSchema),
-  players: z.record(PlayerIdSchema, PlayerSchema),
-  islands: z.record(IslandIdSchema, IslandSchema),
-  cities: z.record(CityIdSchema, CitySchema),
-  movements: z.record(MovementIdSchema, MovementSchema),
-  proposals: z.record(ProposalIdSchema, ProposalSchema),
-  alliances: z.record(AllianceIdSchema, AllianceSchema),
+  players: safeRecord(PlayerIdSchema, PlayerSchema),
+  islands: safeRecord(IslandIdSchema, IslandSchema),
+  cities: safeRecord(CityIdSchema, CitySchema),
+  movements: safeRecord(MovementIdSchema, MovementSchema),
+  proposals: safeRecord(ProposalIdSchema, ProposalSchema),
+  alliances: safeRecord(AllianceIdSchema, AllianceSchema),
   /** Sorted by (a, b), a < b. */
   pacts: z.array(PactSchema),
   /** Unit conservation per owner; the `neutral` entry is always present. */
-  ledger: z
-    .record(z.union([PlayerIdSchema, z.literal("neutral")]), LedgerEntrySchema)
-    .refine((ledger) => Object.hasOwn(ledger, "neutral"), {
+  ledger: safeRecord(z.union([PlayerIdSchema, z.literal("neutral")]), LedgerEntrySchema).refine(
+    (ledger) => Object.hasOwn(ledger, "neutral"),
+    {
       error: "the ledger always has a neutral entry",
       path: ["neutral"],
-    }),
+    },
+  ),
   /** Ruleset-owned, validated by `ruleset.extSchema`. */
   ext: JsonSchema,
   result: MatchResultSchema.nullable(),

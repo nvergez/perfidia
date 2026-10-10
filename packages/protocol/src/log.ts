@@ -3,7 +3,7 @@ import { ActionSchema } from "./actions.ts";
 import { TurnEndSchema, WakeKindSchema, WakeReasonSchema } from "./briefing.ts";
 import { DomainEventSchema } from "./events.ts";
 import { GameTimeSchema, Hash64Schema, PlayerIdSchema, SemverSchema, Sha256Schema } from "./ids.ts";
-import { JsonObjectSchema, JsonSchema } from "./json.ts";
+import { JsonObjectSchema, JsonSchema, safeRecord } from "./json.ts";
 import { ClockSpecSchema, MatchResultSchema, MatchSetupSchema } from "./match.ts";
 import { GameStateSchema } from "./state.ts";
 import { ErrorCodeSchema, ViolationDetailsSchema } from "./violations.ts";
@@ -37,7 +37,7 @@ export const HeaderLineSchema = z.strictObject({
   configHash: Sha256Schema,
   rulesHash: Sha256Schema,
   /** Controller labels at t = 0, e.g. `bot:expander@1`. */
-  controllers: z.record(PlayerIdSchema, z.string().min(1)),
+  controllers: safeRecord(PlayerIdSchema, z.string().min(1)),
   clock: ClockSpecSchema,
   initialHash: Hash64Schema,
   /** ISO wall time at start. */
@@ -166,20 +166,43 @@ export const ControllerLineSchema = z.strictObject({
   label: z.string().min(1),
 });
 
-/** An engine event (covered by `evHash`). */
-export const EvLineSchema = z.strictObject({
-  k: z.literal("ev"),
-  t: GameTimeSchema,
-  e: DomainEventSchema,
-});
+/** An engine event (covered by `evHash`), stamped with the event's own time. */
+export const EvLineSchema = z
+  .strictObject({
+    k: z.literal("ev"),
+    t: GameTimeSchema,
+    e: DomainEventSchema,
+  })
+  .superRefine((line, ctx) => {
+    if (line.e.t !== line.t) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["e", "t"],
+        message: `an ev line carries its event's time: e.t is ${line.e.t}, the line's t is ${line.t}`,
+      });
+    }
+  });
 
-/** The state hash at checkpoint `hour` (t = 3600 · hour). */
-export const CkptLineSchema = z.strictObject({
-  k: z.literal("ckpt"),
-  t: GameTimeSchema,
-  hour: z.int().positive(),
-  h: Hash64Schema,
-});
+/** Game-seconds per checkpoint hour. */
+const HOUR = 3600;
+
+/** The state hash at checkpoint `hour`, at t = 3600 · hour (§5.3, §10.3). */
+export const CkptLineSchema = z
+  .strictObject({
+    k: z.literal("ckpt"),
+    t: GameTimeSchema,
+    hour: z.int().positive(),
+    h: Hash64Schema,
+  })
+  .superRefine((line, ctx) => {
+    if (line.t !== HOUR * line.hour) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["t"],
+        message: `checkpoint hour ${line.hour} is at t = ${HOUR * line.hour}, not ${line.t}`,
+      });
+    }
+  });
 
 export const EndLineSchema = z.strictObject({
   k: z.literal("end"),

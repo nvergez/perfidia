@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { safeRecord } from "./json.ts";
 
 // Player errors are data (§7.3): a code and flat details, worded by the gateway.
 
@@ -62,7 +63,7 @@ export type ErrorCode = z.infer<typeof ErrorCodeSchema>;
  * time-gated rejection; `unit`, `requested`, `home` and `backAt` on unit shortages; `city` and
  * `item` on `QUEUE_ITEM`.
  */
-export const ViolationDetailsSchema = z.record(
+export const ViolationDetailsSchema = safeRecord(
   z.string(),
   z.union([z.int(), z.string(), z.boolean(), z.null()]),
 );

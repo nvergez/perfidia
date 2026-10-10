@@ -4,6 +4,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   actions,
+  agentRules,
   briefing,
   buildItems,
   city,
@@ -54,6 +55,37 @@ const extra = (base: unknown, path: Path): Invalid => ({
   path,
 });
 
+/**
+ * An invalid copy of `base` whose object at `path` has an own `__proto__` key, as `JSON.parse`
+ * creates one; Zod would drop it silently, so the schemas must report it at that key.
+ */
+function protoKeyAt(base: unknown, path: Path): Invalid {
+  const value: unknown = JSON.parse(JSON.stringify(base));
+  const target = path.reduce<unknown>(
+    (node, key) => (typeof node === "object" && node !== null ? Reflect.get(node, key) : undefined),
+    value,
+  );
+  if (typeof target !== "object" || target === null) {
+    throw new Error(`no object at ${JSON.stringify(path)}`);
+  }
+  Object.defineProperty(target, "__proto__", {
+    value: 1,
+    enumerable: true,
+    writable: true,
+    configurable: true,
+  });
+  return { value, path: [...path, "__proto__"] };
+}
+
+const byCodeUnit = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
+
+/** One `p1..pN` seat list. */
+const seats = (n: number): { id: string }[] =>
+  Array.from({ length: n }, (_, i) => ({ id: `p${i + 1}` }));
+
+/** The `ext` action of the fixtures, with its free-form JSON args. */
+const extAction = actions.find((a) => a.type === "ext");
+
 function issuePaths(schema: ZodType, value: unknown): string[] {
   const parsed = schema.safeParse(value);
   if (parsed.success) return [];
@@ -88,6 +120,8 @@ const CASES: Record<string, Case> = {
     invalid: [
       { value: { a: undefined }, path: ["a"] },
       { value: [Number.NaN], path: [0] },
+      protoKeyAt({ a: 1 }, []),
+      protoKeyAt({ a: { b: [1, { c: 2 }] } }, ["a", "b", 1]),
     ],
   },
   JsonObjectSchema: {
@@ -96,6 +130,8 @@ const CASES: Record<string, Case> = {
     invalid: [
       { value: [1], path: [] },
       { value: { a: () => 1 }, path: ["a"] },
+      protoKeyAt({ a: 1 }, []),
+      protoKeyAt({ a: [{ b: {} }] }, ["a", 0, "b"]),
     ],
   },
   // ids.ts
@@ -277,6 +313,7 @@ const CASES: Record<string, Case> = {
       { value: { guard: 0 }, path: ["guard"] },
       { value: { guard: 1.5 }, path: ["guard"] },
       { value: { Guard: 1 }, path: ["Guard"] },
+      protoKeyAt({ guard: 1 }, []),
     ],
   },
   // events.ts
@@ -313,6 +350,8 @@ const CASES: Record<string, Case> = {
       bad(domainEvent, ["data"], [1]),
       bad(domainEvent, ["public"], undefined),
       extra(domainEvent, []),
+      protoKeyAt(domainEvent, ["data"]),
+      protoKeyAt({ ...domainEvent, data: { nested: { a: 1 } } }, ["data", "nested"]),
     ],
   },
   StandardEventTypeSchema: {
@@ -340,6 +379,7 @@ const CASES: Record<string, Case> = {
     invalid: [
       { value: { units: { guard: 1 } }, path: ["units"] },
       { value: { need_gold: 1.5 }, path: ["need_gold"] },
+      protoKeyAt({ city: "c12" }, []),
     ],
   },
   ViolationSchema: {
@@ -373,6 +413,8 @@ const CASES: Record<string, Case> = {
       },
       bad(gatewayRules, ["toolCallsPerWake"], undefined),
       bad(gatewayRules, ["publicOncePerDay", 0], "Domination"),
+      protoKeyAt(gatewayRules, ["wake"]),
+      protoKeyAt(gatewayRules, ["wake", "message"]),
     ],
   },
   TravelGroupSchema: {
@@ -423,6 +465,8 @@ const CASES: Record<string, Case> = {
       bad(compiledRules, ["travelProbes", 0, "group", "units", "transport"], 0),
       bad(compiledRules, ["settlerCost"], []),
       extra(compiledRules, ["movement", "recall"]),
+      protoKeyAt(compiledRules, ["buildings", 1, "requires"]),
+      protoKeyAt(compiledRules, ["eventClasses"]),
     ],
   },
   // match.ts
@@ -440,12 +484,30 @@ const CASES: Record<string, Case> = {
     invalid: [
       { value: "time..matchEnd", path: [] },
       { value: "", path: [] },
+      { value: "__proto__", path: [] },
+      { value: "__proto__.polluted", path: [] },
+      { value: "constructor.prototype", path: [] },
+      { value: "time.prototype", path: [] },
     ],
   },
   MatchSetupSchema: {
     schema: protocol.MatchSetupSchema,
-    valid: [setup, { ...clone(setup), overrides: {} }],
+    valid: [
+      setup,
+      { ...clone(setup), overrides: {} },
+      { ...clone(setup), seats: seats(protocol.MAX_SEATS) },
+    ],
     invalid: [
+      bad(setup, ["seats"], seats(protocol.MAX_SEATS + 1)),
+      {
+        value: withAt(setup, ["overrides", "__proto__.polluted"], true),
+        path: ["overrides", "__proto__.polluted"],
+      },
+      {
+        value: withAt(setup, ["overrides", "constructor.prototype.polluted"], true),
+        path: ["overrides", "constructor.prototype.polluted"],
+      },
+      protoKeyAt(setup, ["overrides"]),
       bad(setup, ["idKey"], ID_KEY.slice(0, 31)),
       bad(setup, ["idKey"], `${ID_KEY}0`),
       bad(setup, ["idKey"], ID_KEY.toUpperCase()),
@@ -592,6 +654,10 @@ const CASES: Record<string, Case> = {
         path: ["players", "x1"],
       },
       extra(gameState, ["cities", "c1"]),
+      protoKeyAt(gameState, ["cities"]),
+      protoKeyAt(gameState, ["cities", "c1", "units"]),
+      protoKeyAt(gameState, ["ledger"]),
+      protoKeyAt(gameState, ["ext", "battlePoints"]),
     ],
   },
   // actions.ts
@@ -619,6 +685,8 @@ const CASES: Record<string, Case> = {
       bad(actions[11], ["to"], []),
       bad(actions[12], ["name"], "Nörth"),
       bad(actions[15], ["tool"], "Rename"),
+      protoKeyAt(extAction, ["args"]),
+      protoKeyAt(actions[4], ["units"]),
     ],
   },
   // views.ts
@@ -734,12 +802,55 @@ const CASES: Record<string, Case> = {
     valid: views.rules.extraTools,
     invalid: [bad(views.rules.extraTools[0], ["family"], "memory")],
   },
+  AgentRulesSchema: {
+    schema: protocol.AgentRulesSchema,
+    valid: [
+      agentRules,
+      // Duration tables left out, as presentation may do to meet its size budget.
+      {
+        ...clone(agentRules),
+        buildings: agentRules.buildings.map((b) => withAt(b, ["time"], undefined)),
+        units: agentRules.units.map((u) => withAt(u, ["time"], undefined)),
+      },
+      // The top level is loose: presentation may add fields.
+      { ...clone(agentRules), resourceScale: 3600, note: "rendered extra" },
+    ],
+    invalid: [
+      bad(agentRules, ["units", 0, "cost", "gold"], -1),
+      bad(agentRules, ["units", 1, "requires", "barracks"], 0),
+      bad(agentRules, ["buildings", 0, "time", 1, 0], -1),
+      bad(agentRules, ["roles", "settler"], undefined),
+      bad(agentRules, ["roles", "wall"], undefined),
+      bad(agentRules, ["levels", "storage", 0], -1),
+      bad(agentRules, ["queues", "build", "requiresOn"], "queued"),
+      bad(agentRules, ["queues", "recruit", 0, "maxBatches"], undefined),
+      bad(agentRules, ["settlerCost"], []),
+      bad(agentRules, ["movement", "recall", "window"], undefined),
+      bad(agentRules, ["diplomacy", "messageMaxChars"], undefined),
+      bad(agentRules, ["toolOptions", "foundSlot"], undefined),
+      bad(agentRules, ["travelProbes", 0, "label"], ""),
+      bad(agentRules, ["gateway"], undefined),
+      bad(agentRules, ["gateway", "wake"], undefined),
+      // `eventClasses` is the ordered list of classes, not the engine's kind → class record.
+      bad(agentRules, ["eventClasses"], compiledRules.eventClasses),
+      bad(agentRules, ["eventClasses", 0], []),
+      bad(agentRules, ["eventClasses", 1, 0], "Build Done"),
+      bad(agentRules, ["eventClasses", 2, 1], "build_done"),
+      extra(agentRules, ["buildings", 0]),
+      extra(agentRules, ["units", 0]),
+      protoKeyAt(agentRules, ["buildings", 1, "requires"]),
+    ],
+  },
   RulesInfoSchema: {
     schema: protocol.RulesInfoSchema,
     valid: [views.rules],
     invalid: [
       bad(views.rules, ["rules", "gateway"], undefined),
       bad(views.rules, ["rules", "gateway", "wake"], undefined),
+      bad(views.rules, ["rules", "units", 0, "cost", "gold"], -1),
+      bad(views.rules, ["rules", "roles", "producers", "wood"], undefined),
+      bad(views.rules, ["rules", "queues", "build", "requiresOn"], undefined),
+      bad(views.rules, ["rules", "eventClasses"], compiledRules.eventClasses),
       bad(views.rules, ["rulesHash"], "x"),
     ],
   },
@@ -756,8 +867,21 @@ const CASES: Record<string, Case> = {
   },
   TurnEndSchema: {
     schema: protocol.TurnEndSchema,
-    valid: ["end_turn", "empty_round", "round_cap", "timeout", "error", "match_ended"],
-    invalid: [{ value: "crash", path: [] }],
+    // The six endings of §8.2, and the seat's elimination during its turn (§9.1).
+    valid: [
+      "end_turn",
+      "empty_round",
+      "round_cap",
+      "timeout",
+      "error",
+      "match_ended",
+      "eliminated",
+    ],
+    // Reaching toolCallsPerWake rejects further calls with CALLS_CAP; it does not end the turn.
+    invalid: [
+      { value: "crash", path: [] },
+      { value: "calls_cap", path: [] },
+    ],
   },
   BriefingLastTurnSchema: {
     schema: protocol.BriefingLastTurnSchema,
@@ -931,6 +1055,13 @@ const CASES: Record<string, Case> = {
     invalid: [
       bad(logLines.header, ["format"], "perfidia-log/2"),
       bad(logLines.header, ["setup", "idKey"], "secret"),
+      {
+        value: withAt(logLines.header, ["setup", "overrides", "__proto__.polluted"], true),
+        path: ["setup", "overrides", "__proto__.polluted"],
+      },
+      protoKeyAt(logLines.header, ["setup", "overrides"]),
+      protoKeyAt(logLines.header, ["config", "time"]),
+      protoKeyAt(logLines.header, ["controllers"]),
     ],
   },
   WakeLineSchema: {
@@ -950,11 +1081,14 @@ const CASES: Record<string, Case> = {
   },
   ActLineSchema: {
     schema: protocol.ActLineSchema,
-    valid: [logLines.act],
+    valid: [logLines.act, withAt(logLines.act, ["a"], extAction)],
     invalid: [
       bad(logLines.act, ["n"], 0),
       bad(logLines.act, ["a", "type"], "teleport"),
       bad(logLines.act, ["r", "ok"], undefined),
+      // An ext action's free-form args: a `__proto__` key must fail, not vanish on replay.
+      protoKeyAt(withAt(logLines.act, ["a"], extAction), ["a", "args"]),
+      protoKeyAt(withAt(logLines.act, ["a"], actions[4]), ["a", "units"]),
     ],
   },
   GwLineSchema: {
@@ -981,7 +1115,11 @@ const CASES: Record<string, Case> = {
       logLines.turn,
       { ...clone(logLines.turn), why: "error", selfAt: null, next: null, error: "agent threw" },
     ],
-    invalid: [bad(logLines.turn, ["why"], "bored"), bad(logLines.turn, ["next", "kind"], "start")],
+    invalid: [
+      bad(logLines.turn, ["why"], "bored"),
+      bad(logLines.turn, ["why"], "calls_cap"),
+      bad(logLines.turn, ["next", "kind"], "start"),
+    ],
   },
   DeferLineSchema: {
     schema: protocol.DeferLineSchema,
@@ -996,12 +1134,24 @@ const CASES: Record<string, Case> = {
   EvLineSchema: {
     schema: protocol.EvLineSchema,
     valid: [logLines.ev],
-    invalid: [bad(logLines.ev, ["e", "to", 0, "as"], "boss")],
+    invalid: [
+      bad(logLines.ev, ["e", "to", 0, "as"], "boss"),
+      bad(logLines.ev, ["e"], undefined),
+      // The line is stamped with its event's time (§10.2).
+      bad(logLines.ev, ["e", "t"], 9),
+      { value: withAt(logLines.ev, ["t"], 9), path: ["e", "t"] },
+      protoKeyAt(logLines.ev, ["e", "data"]),
+    ],
   },
   CkptLineSchema: {
     schema: protocol.CkptLineSchema,
-    valid: [logLines.ckpt],
-    invalid: [bad(logLines.ckpt, ["hour"], 0)],
+    valid: [logLines.ckpt, { ...clone(logLines.ckpt), t: 86400, hour: 24 }],
+    invalid: [
+      bad(logLines.ckpt, ["hour"], 0),
+      // Checkpoint H is at t = 3600 · H (§5.3, §10.3).
+      bad(logLines.ckpt, ["t"], 5),
+      { value: withAt(logLines.ckpt, ["hour"], 2), path: ["t"] },
+    ],
   },
   EndLineSchema: {
     schema: protocol.EndLineSchema,
@@ -1020,6 +1170,9 @@ const CASES: Record<string, Case> = {
       { value: { k: "chat", t: 0 }, path: ["k"] },
       bad(logLines.act, ["seat"], "p0"),
       extra(logLines.ckpt, []),
+      bad(logLines.ckpt, ["t"], 5),
+      bad(logLines.ev, ["e", "t"], 9),
+      protoKeyAt(withAt(logLines.act, ["a"], extAction), ["a", "args"]),
     ],
   },
   SnapshotSchema: {
@@ -1029,8 +1182,82 @@ const CASES: Record<string, Case> = {
       bad(snapshot, ["format"], "perfidia-snapshot/0"),
       bad(snapshot, ["state", "cities", "c1", "owner"], "nobody"),
       bad(snapshot, ["afterN"], -1),
+      bad(snapshot, ["setup", "seats"], seats(protocol.MAX_SEATS + 1)),
+      protoKeyAt(snapshot, ["state", "movements"]),
     ],
   },
+};
+
+/**
+ * Invalid result data of every tool, each reported at the offending field. The `TOOL_RESULT_DATA`
+ * schemas that are not exported under their own names are covered here, not in `CASES`.
+ */
+const TOOL_RESULT_INVALID: Record<protocol.ToolName, readonly Invalid[]> = {
+  view_city: [
+    bad(toolResultData.view_city, ["stock", "wood"], -1),
+    bad(toolResultData.view_city, ["access"], "partial"),
+  ],
+  view_island: [bad(toolResultData.view_island, ["free", 0], -1)],
+  view_map: [bad(toolResultData.view_map, ["cities", 0, "island"], "x7")],
+  view_player: [bad(toolResultData.view_player, ["private", "selfWakeAt"], 230520)],
+  leaderboard: [bad(toolResultData.leaderboard, ["standings", 0, "player"], "p0")],
+  rules: [bad(toolResultData.rules, ["rules", "units", 0, "cost", "gold"], -1)],
+  build: [
+    bad(toolResultData.build, ["items"], []),
+    bad(toolResultData.build, ["items", 0, "level"], 0),
+    bad(toolResultData.build, ["items", 1, "hint"], undefined),
+  ],
+  recruit: [
+    bad(toolResultData.recruit, ["items"], undefined),
+    bad(toolResultData.recruit, ["items", 0, "count"], "max"),
+  ],
+  cancel_queue: [
+    bad(toolResultData.cancel_queue, ["removed"], []),
+    bad(toolResultData.cancel_queue, ["removed", 0], 0),
+    bad(toolResultData.cancel_queue, ["refund", "wood"], -1),
+    bad(toolResultData.cancel_queue, ["city"], undefined),
+  ],
+  send_resources: [bad(toolResultData.send_resources, ["movement"], "m41")],
+  attack: [bad(toolResultData.attack, ["arrive"], 226620)],
+  support: [bad(toolResultData.support, ["movement"], undefined)],
+  spy: [bad(toolResultData.spy, ["arrive", 0], -1)],
+  recall_troops: [
+    bad(toolResultData.recall_troops, ["returns"], undefined),
+    bad(toolResultData.recall_troops, ["returns", 0, "arrive"], 222300),
+    bad(toolResultData.recall_troops, ["returns", 0, "home"], "x3"),
+  ],
+  found_city: [bad(toolResultData.found_city, ["movement"], "c3")],
+  send_message: [bad(toolResultData.send_message, ["message"], "m09xr3")],
+  propose_alliance: [
+    bad(toolResultData.propose_alliance, ["expires"], undefined),
+    bad(toolResultData.propose_alliance, ["proposal"], "q1"),
+  ],
+  answer_proposal: [
+    bad(toolResultData.answer_proposal, ["accept"], "yes"),
+    bad(toolResultData.answer_proposal, ["proposal"], undefined),
+  ],
+  leave_alliance: [
+    { value: [], path: [] },
+    { value: null, path: [] },
+  ],
+  write_note: [
+    bad(toolResultData.write_note, ["chars"], -1),
+    bad(toolResultData.write_note, ["max"], undefined),
+  ],
+  read_notes: [
+    bad(toolResultData.read_notes, ["notes"], undefined),
+    bad(toolResultData.read_notes, ["hits", 0, "e"], -1),
+    bad(
+      toolResultData.read_notes,
+      ["hits"],
+      Array.from({ length: protocol.READ_NOTES_MAX_HITS + 1 }, () => views.archiveHit),
+    ),
+    bad(toolResultData.read_notes, ["entry"], "g09xr2"),
+  ],
+  end_turn: [
+    bad(toolResultData.end_turn, ["clamped"], undefined),
+    bad(toolResultData.end_turn, ["wakeAt"], 230520),
+  ],
 };
 
 describe("every schema accepts its valid fixtures and rejects invalid ones with a useful path", () => {
@@ -1077,16 +1304,28 @@ describe("standard event data", () => {
   }
 });
 
-describe("tool result data", () => {
+describe("tool result data accepts valid data and rejects invalid data with a useful path", () => {
   for (const tool of protocol.TOOL_NAMES) {
     test(tool, () => {
       const schema: ZodType = TOOL_RESULT_DATA[tool];
-      expect(schema.safeParse(toolResultData[tool]).success).toBe(true);
+      const parsed = schema.safeParse(toolResultData[tool]);
+      expect(parsed.success).toBe(true);
+      expect(parsed.data).toEqual(toolResultData[tool]);
       expect(
         protocol.ToolSuccessSchema.safeParse({ ok: true, t: 5, data: toolResultData[tool] })
           .success,
       ).toBe(true);
-      expect(schema.safeParse("not an object").success).toBe(false);
+      expect(issuePaths(schema, "not an object")).toContain(JSON.stringify([]));
+      const invalid = TOOL_RESULT_INVALID[tool];
+      expect(invalid.length).toBeGreaterThan(0);
+      for (const { value, path } of invalid) {
+        const paths = issuePaths(schema, value);
+        if (!paths.includes(JSON.stringify(path))) {
+          throw new Error(
+            `${tool}: expected an issue at ${JSON.stringify(path)} for ${JSON.stringify(value)}, got ${JSON.stringify(paths)}`,
+          );
+        }
+      }
     });
   }
 });
@@ -1103,4 +1342,56 @@ test("parsing never strips or rewrites a valid fixture", () => {
     expect(protocol.LogLineSchema.parse(clone(line))).toEqual(line);
   }
   expect(protocol.GameStateSchema.parse(clone(gameState))).toEqual(gameState);
+});
+
+/** Issue paths of a log line read back from its text. */
+const parseLine = (text: string): string[] => issuePaths(protocol.LogLineSchema, JSON.parse(text));
+
+describe("an own __proto__ key is rejected at the log boundary, never dropped", () => {
+  // Log lines are read back from text: `JSON.parse` creates an own `__proto__` key, which Zod's
+  // record parsing would otherwise drop, so a replayed action would differ from the hashed one.
+  test("in an ext action's args", () => {
+    const line = JSON.stringify(withAt(logLines.act, ["a"], extAction)).replace(
+      '"args":{',
+      '"args":{"__proto__":{"x":1},',
+    );
+    expect(parseLine(line)).toContain(JSON.stringify(["a", "args", "__proto__"]));
+  });
+
+  test("in unit counts, event data, config and overrides", () => {
+    const attack = JSON.stringify(withAt(logLines.act, ["a"], actions[4])).replace(
+      '"units":{',
+      '"units":{"__proto__":3,',
+    );
+    expect(parseLine(attack)).toContain(JSON.stringify(["a", "units", "__proto__"]));
+    const ev = JSON.stringify(logLines.ev).replace('"data":{', '"data":{"__proto__":{},');
+    expect(parseLine(ev)).toContain(JSON.stringify(["e", "data", "__proto__"]));
+    const header = JSON.stringify(logLines.header).replace(
+      '"overrides":{',
+      '"overrides":{"__proto__":1,',
+    );
+    expect(parseLine(header)).toContain(JSON.stringify(["setup", "overrides", "__proto__"]));
+  });
+
+  test("the same lines without the key parse unchanged", () => {
+    const lines: unknown[] = [withAt(logLines.act, ["a"], extAction), logLines.ev, logLines.header];
+    for (const line of lines) {
+      const parsed: unknown = protocol.LogLineSchema.parse(JSON.parse(JSON.stringify(line)));
+      expect(parsed).toEqual(line);
+    }
+  });
+});
+
+test("AgentRules keeps every CompiledRules field except resourceScale (§8.1)", () => {
+  // A field added to CompiledRules must be placed in AgentRules or left out here, deliberately.
+  const compiled = Object.keys(protocol.CompiledRulesSchema.shape).filter(
+    (key) => key !== "resourceScale",
+  );
+  expect(Object.keys(protocol.AgentRulesSchema.shape).toSorted(byCodeUnit)).toEqual(
+    compiled.toSorted(byCodeUnit),
+  );
+  expect(Object.keys(agentRules).toSorted(byCodeUnit)).toEqual(compiled.toSorted(byCodeUnit));
+  // The fixture's classes are the compiled kinds in class order.
+  const byClass = Object.entries(compiledRules.eventClasses).toSorted((a, b) => a[1] - b[1]);
+  expect(agentRules.eventClasses.flat()).toEqual(byClass.map(([kind]) => kind));
 });

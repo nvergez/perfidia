@@ -3,6 +3,7 @@
 
 import type {
   Action,
+  AgentRules,
   Briefing,
   City,
   CompiledRules,
@@ -199,6 +200,27 @@ export const compiledRules: CompiledRules = {
   ],
   eventClasses: { build_done: 1, recruit_done: 2, arrive_attack: 7, match_end: 12 },
 };
+
+/** `compiledRules` as the `rules` tool shows it (§8.1): classes as an ordered list, no `resourceScale`. */
+export const agentRules = {
+  ruleset: compiledRules.ruleset,
+  players: compiledRules.players,
+  time: compiledRules.time,
+  buildings: compiledRules.buildings,
+  units: compiledRules.units,
+  roles: compiledRules.roles,
+  levels: compiledRules.levels,
+  queues: compiledRules.queues,
+  settlerCost: compiledRules.settlerCost,
+  newCity: compiledRules.newCity,
+  neutralProduction: compiledRules.neutralProduction,
+  movement: compiledRules.movement,
+  diplomacy: compiledRules.diplomacy,
+  toolOptions: compiledRules.toolOptions,
+  gateway: compiledRules.gateway,
+  travelProbes: compiledRules.travelProbes,
+  eventClasses: [["build_done"], ["recruit_done"], ["arrive_attack"], ["match_end"]],
+} satisfies AgentRules;
 
 export const city: City = {
   id: "c1",
@@ -730,7 +752,7 @@ export const views = {
     interface: "WAKES ...",
     cheatSheet: "TIME ...",
     config: { time: { matchEnd: 604800 } },
-    rules: { gateway: gatewayRules, eventClasses: [["build_done"], ["recruit_done"]] },
+    rules: agentRules,
     extraTools: [
       {
         name: "hill_status",

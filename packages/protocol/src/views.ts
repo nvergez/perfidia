@@ -18,9 +18,9 @@ import {
   TimePairSchema,
   UnitIdSchema,
 } from "./ids.ts";
-import { JsonObjectSchema } from "./json.ts";
+import { JsonObjectSchema, safeRecord } from "./json.ts";
 import { ResSchema, UnitCountsSchema } from "./resources.ts";
-import { GatewayRulesSchema } from "./rules.ts";
+import { BuildingTableSchema, CompiledRulesSchema, UnitTableSchema } from "./rules.ts";
 
 // Fog-of-war views returned by the read tools (§8.1). Views are fresh objects built by the gateway's
 // presentation layer; every time and duration is a pair `[integer, text]` (§7.3). The schemas list
@@ -131,9 +131,9 @@ export const CityViewFullSchema = z.looseObject({
   rates: ResSchema,
   cap: Int,
   pop: z.looseObject({ used: Int, cap: Int }),
-  buildings: z.record(BuildingIdSchema, Int),
+  buildings: safeRecord(BuildingIdSchema, Int),
   build: z.array(BuildItemViewSchema),
-  recruit: z.record(QueueIdSchema, z.array(RecruitBatchViewSchema)),
+  recruit: safeRecord(QueueIdSchema, z.array(RecruitBatchViewSchema)),
   /** The owner's units at home (trickled units included). */
   units: UnitCountsSchema,
   stationed: z.array(StationedViewSchema),
@@ -204,7 +204,7 @@ export const MapViewSchema = z.looseObject({
   cities: z.array(CityRowSchema),
   from: CityIdSchema.optional(),
   probes: z.array(z.string()).optional(),
-  travel: z.record(IslandIdSchema, z.array(DurationPairSchema)).optional(),
+  travel: safeRecord(IslandIdSchema, z.array(DurationPairSchema)).optional(),
 });
 export type MapView = z.infer<typeof MapViewSchema>;
 
@@ -257,7 +257,7 @@ export const PlayerViewSchema = z.looseObject({
   cities: z.array(CityIdSchema),
   score: z.int(),
   /** Public score parts (never raw battle points). */
-  parts: z.record(z.string(), z.int()),
+  parts: safeRecord(z.string(), z.int()),
   relations: z.array(RelationViewSchema),
   /** Relation to the viewer. */
   relation: z.enum(["self", "ally", "pact", "none"]),
@@ -274,7 +274,7 @@ export const LeaderboardViewSchema = z.looseObject({
       rank: z.int().positive(),
       player: PlayerIdSchema,
       score: z.int(),
-      parts: z.record(z.string(), z.int()),
+      parts: safeRecord(z.string(), z.int()),
       cities: Count,
       alive: z.boolean(),
       alliance: AllianceIdSchema.nullable(),
@@ -323,9 +323,51 @@ export const ExtraToolInfoSchema = z.looseObject({
 export type ExtraToolInfo = z.infer<typeof ExtraToolInfoSchema>;
 
 /**
- * Result data of `rules` (§8.1). `rules` is the agent-relevant part of `CompiledRules`, rendered
- * compactly where it helps, but `rules.gateway` is kept whole: every numeric `GatewayRules` field,
- * the wake table and `publicOncePerDay`. Bots read caps there, never in `interface`.
+ * The agent-relevant part of `CompiledRules` (§8.1), as `RulesInfo.rules`: the contract between
+ * the gateway's presentation, which renders it, and the bots, which read roles, costs, levels,
+ * queues and requirements from it (§11.1). It differs from `CompiledRules` only in these fields:
+ *
+ * - `eventClasses` is the ordered list of same-second classes: entry i lists the scheduled event
+ *   kinds of the i-th class, lowest class first (classes with no kind are dropped, so entries are
+ *   positions, not class numbers); each kind appears once.
+ * - `resourceScale` is left out: it is the engine's storage scale, and agents see whole units.
+ * - `buildings[].time` and `units[].time` (duration tables) may be left out to keep the payload
+ *   within its size budget: the cheat sheet gives the duration formulas, and results and views give
+ *   the actual end times. Bots never rely on them.
+ *
+ * Every other field is kept whole, `gateway` included (every numeric `GatewayRules` field, the wake
+ * table and `publicOncePerDay`). The top level is loose: presentation may add fields, which bots
+ * ignore.
+ */
+export const AgentRulesSchema = CompiledRulesSchema.omit({
+  resourceScale: true,
+  eventClasses: true,
+})
+  .extend({
+    buildings: z.array(BuildingTableSchema.partial({ time: true })),
+    units: z.array(UnitTableSchema.partial({ time: true })),
+    eventClasses: z.array(z.array(EventTypeSchema).min(1)).superRefine((classes, ctx) => {
+      const seen: string[] = [];
+      for (const [i, kinds] of classes.entries()) {
+        for (const [j, kind] of kinds.entries()) {
+          if (seen.includes(kind)) {
+            ctx.addIssue({
+              code: "custom",
+              path: [i, j],
+              message: `${kind} is listed in two classes; each kind has one class`,
+            });
+          }
+          seen.push(kind);
+        }
+      }
+    }),
+  })
+  .loose();
+export type AgentRules = z.infer<typeof AgentRulesSchema>;
+
+/**
+ * Result data of `rules` (§8.1): the interface rules, the cheat sheet, the effective config and the
+ * agent rules. Bots read caps in `rules.gateway`, never in `interface`.
  */
 export const RulesInfoSchema = z.looseObject({
   ruleset: RulesetRefSchema,
@@ -338,7 +380,7 @@ export const RulesInfoSchema = z.looseObject({
   cheatSheet: z.string(),
   /** The effective config. */
   config: JsonObjectSchema,
-  rules: z.looseObject({ gateway: GatewayRulesSchema }),
+  rules: AgentRulesSchema,
   extraTools: z.array(ExtraToolInfoSchema),
 });
 export type RulesInfo = z.infer<typeof RulesInfoSchema>;
