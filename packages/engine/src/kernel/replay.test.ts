@@ -1,0 +1,484 @@
+import { describe, expect, test } from "bun:test";
+import type { AnyRuleset, Ruleset } from "@perfidia/engine/contracts";
+import {
+  FIXTURE_BUILDINGS,
+  LogRecorder,
+  fakeDomain,
+  fixtureMatch,
+  fixtureRuleset,
+  type FixtureConfig,
+  type FixtureExt,
+} from "@perfidia/engine/testing";
+import type { Action, CityId, LogLine, PlayerId } from "@perfidia/protocol";
+import fc from "fast-check";
+import { verifyLog, type ReplayReport, type VerifyOptions } from "./index.ts";
+
+// Level E replay (§10.4) and P7: a log recorded from a random run replays with zero divergence, and
+// tampering with an act's `a` or `r`, the order of act lines, an `ev` line or a `ckpt` line is
+// reported at the right `n` or hour.
+
+const resolve = (ref: string): AnyRuleset | undefined =>
+  ref === fixtureRuleset.ref ? fixtureRuleset : undefined;
+
+function verify(lines: readonly LogLine[], opts: VerifyOptions = {}): ReplayReport {
+  return verifyLog(lines, resolve, fakeDomain, opts);
+}
+
+function cloneLines(lines: readonly LogLine[]): LogLine[] {
+  return structuredClone([...lines]);
+}
+
+type Step =
+  | { readonly k: "act"; readonly seat: number; readonly what: number; readonly x: number }
+  | { readonly k: "wait"; readonly dt: number }
+  | { readonly k: "line"; readonly what: number; readonly seat: number };
+
+const stepArb: fc.Arbitrary<Step> = fc.oneof(
+  {
+    weight: 6,
+    arbitrary: fc.record({
+      k: fc.constant("act" as const),
+      seat: fc.nat({ max: 3 }),
+      what: fc.nat({ max: 11 }),
+      x: fc.nat({ max: 50 }),
+    }),
+  },
+  {
+    weight: 3,
+    arbitrary: fc.record({
+      k: fc.constant("wait" as const),
+      dt: fc.integer({ min: 0, max: 4000 }),
+    }),
+  },
+  {
+    weight: 2,
+    arbitrary: fc.record({
+      k: fc.constant("line" as const),
+      what: fc.nat({ max: 7 }),
+      seat: fc.nat({ max: 3 }),
+    }),
+  },
+);
+
+/** An action intent resolved against the current state, so most are valid. */
+function intent(rec: LogRecorder, seat: PlayerId, what: number, x: number): Action {
+  const s = rec.match.read().state;
+  const n = Object.keys(s.players).length;
+  const me = Number(seat.slice(1));
+  const own: CityId = `c${me}`;
+  const foe: CityId = `c${(me % n) + 1}`;
+  const movements = Object.values(s.movements).filter((m) => m.owner === seat);
+  const proposals = Object.values(s.proposals).filter((p) => p.to === seat);
+  const city = s.cities[own];
+  const items =
+    city === undefined
+      ? []
+      : [...city.build, ...Object.values(city.recruit).flat()].map((i) => i.id);
+  switch (what) {
+    case 0:
+      return {
+        type: "build",
+        city: own,
+        building: FIXTURE_BUILDINGS[x % FIXTURE_BUILDINGS.length] ?? "tower",
+      };
+    case 1:
+      return {
+        type: "recruit",
+        city: own,
+        unit: x % 7 === 0 ? "ship" : "soldier",
+        count: 1 + (x % 4),
+      };
+    case 2:
+      return { type: "attack", from: own, to: foe, units: { soldier: 1 + (x % 6) } };
+    case 3:
+      return { type: "support", from: own, to: foe, units: { soldier: 1 } };
+    case 4:
+      return { type: "spy", from: own, to: foe, gold: 5 + x };
+    case 5: {
+      const m = movements[x % Math.max(1, movements.length)];
+      return { type: "recall", movement: m?.id ?? "m00000" };
+    }
+    case 6:
+      return {
+        type: "send_message",
+        to: x % 2 === 0 ? "all" : [`p${(me % n) + 1}`],
+        text: `hello ${x}`,
+      };
+    case 7:
+      return {
+        type: "propose",
+        to: `p${(me % n) + 1}`,
+        kind: "pact",
+        name: null,
+        text: "peace",
+        until: null,
+      };
+    case 8: {
+      const p = proposals[x % Math.max(1, proposals.length)];
+      return { type: "answer", proposal: p?.id ?? "q00000", accept: x % 3 !== 0 };
+    }
+    case 9:
+      return { type: "cancel_queue", city: own, item: items[x % Math.max(1, items.length)] ?? 99 };
+    case 10:
+      return { type: "ext", tool: "fixture_rename", args: { city: own, name: `Town ${x}` } };
+    default:
+      return { type: "leave", with: null };
+  }
+}
+
+/** Records a log from a random run; every run starts with two adjacent act lines (the first rejected). */
+function record(seed: number, players: number, steps: readonly Step[]): LogRecorder {
+  const m = fixtureMatch({
+    players,
+    seed,
+    overrides: { "time.matchEnd": 6 * 3600 },
+    invariants: "checkpoint",
+  });
+  const rec = new LogRecorder(m, { snapshotEvery: 2 });
+  for (let i = 1; i <= players; i += 1) rec.wake(`p${i}`);
+  rec.batch(0, ["p1", "p2"]);
+  rec.act("p1", { type: "build", city: "c2", building: "tower" });
+  rec.act("p1", { type: "attack", from: "c1", to: "c2", units: { soldier: 2 } });
+  for (const s of steps) {
+    const seat: PlayerId = `p${1 + ("seat" in s ? s.seat % players : 0)}`;
+    if (s.k === "wait") {
+      rec.advanceTo(rec.match.now + s.dt);
+    } else if (s.k === "act") {
+      rec.act(seat, intent(rec, seat, s.what, s.x));
+    } else {
+      switch (s.what) {
+        case 0:
+          rec.wake(seat, ["self"]);
+          break;
+        case 1:
+          rec.turn(seat, "end_turn", rec.match.now + 600);
+          break;
+        case 2:
+          rec.defer(seat, rec.match.now + 1);
+          break;
+        case 3:
+          rec.controller(seat, "bot:turtle@1");
+          break;
+        case 4:
+          rec.gw(seat, "attack", "DAILY_CAP", { cap: 10, used: 10 });
+          break;
+        case 5:
+          rec.obs(seat, "view_city", { city: "c1" });
+          break;
+        case 6:
+          rec.note(seat, "remember", "append");
+          break;
+        default:
+          rec.batch(1, [seat]);
+      }
+    }
+  }
+  rec.end();
+  return rec;
+}
+
+const runArb = fc.record({
+  seed: fc.integer({ min: 0, max: 0xffffffff }),
+  players: fc.integer({ min: 2, max: 4 }),
+  steps: fc.array(stepArb, { maxLength: 40 }),
+});
+
+/** The n of the act line whose events this ev line carries, if any. */
+function emitterN(lines: readonly LogLine[], index: number): number | undefined {
+  const line = lines[index];
+  if (line?.k !== "ev") return undefined;
+  for (let i = index - 1; i >= 0; i -= 1) {
+    const prev = lines[i];
+    if (prev?.k === "ev" && prev.t === line.t) continue;
+    return prev?.k === "act" && prev.t === line.t ? prev.n : undefined;
+  }
+  return undefined;
+}
+
+describe("P7: replay of recorded logs", () => {
+  test("a log recorded from a random run replays with zero divergence", () => {
+    fc.assert(
+      fc.property(runArb, ({ seed, players, steps }) => {
+        const rec = record(seed, players, steps);
+        const report = verify(rec.lines, { invariants: "step" });
+        expect(report.divergence).toBeUndefined();
+        expect(report.ok).toBe(true);
+        expect(report.finalHash).toBe(rec.match.hash());
+        expect(report.actions).toBe(rec.lines.filter((l) => l.k === "act").length);
+        expect(report.checkpoints).toBe(rec.lines.filter((l) => l.k === "ckpt").length);
+        expect(report.warnings).toEqual([]);
+      }),
+      { numRuns: 40 },
+    );
+  });
+
+  test("tampering is reported at the right n or hour", () => {
+    const tamper = fc.constantFrom("a", "r", "order", "ev", "ckpt");
+    fc.assert(
+      fc.property(runArb, tamper, fc.nat(), ({ seed, players, steps }, kind, pick) => {
+        const lines = cloneLines(record(seed, players, steps).lines);
+        const at = (pred: (l: LogLine, i: number) => boolean): number[] =>
+          lines.flatMap((l, i) => (pred(l, i) ? [i] : []));
+        let candidates: number[];
+        switch (kind) {
+          case "a":
+            candidates = at((l) => l.k === "act" && l.r.ok);
+            break;
+          case "r":
+            candidates = at((l) => l.k === "act");
+            break;
+          case "order":
+            candidates = at((l, i) => l.k === "act" && lines[i + 1]?.k === "act");
+            break;
+          case "ev":
+            candidates = at((l) => l.k === "ev");
+            break;
+          case "ckpt":
+            candidates = at((l) => l.k === "ckpt");
+        }
+        const index = candidates[pick % Math.max(1, candidates.length)];
+        if (index === undefined) return;
+        const line = lines[index];
+        if (line === undefined) return;
+        const report = (): ReplayReport => {
+          const r = verify(lines);
+          expect(r.ok).toBe(false);
+          return r;
+        };
+        if (kind === "a" && line.k === "act") {
+          line.a = { type: "build", city: "c9", building: "tower" };
+          expect(report().divergence).toMatchObject({ kind: "result", n: line.n, t: line.t });
+        } else if (kind === "r" && line.k === "act") {
+          line.r = line.r.ok ? { ok: false, code: "INVALID_ARGS" } : { ok: true };
+          expect(report().divergence).toMatchObject({ kind: "result", n: line.n, t: line.t });
+        } else if (kind === "order" && line.k === "act") {
+          const next = lines[index + 1];
+          if (next?.k !== "act") return;
+          lines[index] = next;
+          lines[index + 1] = line;
+          const d = report().divergence;
+          expect([line.n, next.n]).toContain(d?.n ?? -1);
+          expect(["order", "result", "event"]).toContain(d?.kind ?? "none");
+        } else if (kind === "ev" && line.k === "ev") {
+          line.e.data["tampered"] = 1;
+          const n = emitterN(lines, index);
+          const d = report().divergence;
+          expect(d).toMatchObject({ kind: "event", t: line.t });
+          expect(d?.n).toBe(n);
+        } else if (line.k === "ckpt") {
+          line.h = line.h === "0123456789abcdef" ? "fedcba9876543210" : "0123456789abcdef";
+          expect(report().divergence).toMatchObject({
+            kind: "checkpoint",
+            hour: line.hour,
+            t: line.t,
+          });
+        }
+      }),
+      { numRuns: 120 },
+    );
+  });
+
+  test("the logs include defer, controller, wake, turn, batch, gw, obs and note lines", () => {
+    const rec = record(1, 3, [
+      { k: "line", what: 2, seat: 0 },
+      { k: "line", what: 3, seat: 1 },
+      { k: "line", what: 1, seat: 2 },
+      { k: "line", what: 4, seat: 0 },
+      { k: "line", what: 5, seat: 0 },
+      { k: "line", what: 6, seat: 0 },
+      { k: "wait", dt: 3600 },
+      { k: "line", what: 7, seat: 1 },
+    ]);
+    const kinds = new Set(rec.lines.map((l) => l.k));
+    const expected: LogLine["k"][] = [
+      "header",
+      "wake",
+      "batch",
+      "act",
+      "gw",
+      "obs",
+      "note",
+      "turn",
+      "defer",
+      "controller",
+      "ev",
+      "ckpt",
+      "end",
+    ];
+    for (const k of expected) expect(kinds.has(k)).toBe(true);
+    expect(verify(rec.lines).ok).toBe(true);
+  });
+});
+
+function sample(): LogRecorder {
+  const rec = new LogRecorder(fixtureMatch({ players: 3, invariants: "checkpoint" }), {
+    snapshotEvery: 4,
+  });
+  rec.wake("p1");
+  rec.act("p1", { type: "attack", from: "c1", to: "c2", units: { soldier: 4 } });
+  rec.act("p2", { type: "recruit", city: "c2", unit: "soldier", count: 3 });
+  rec.turn("p1");
+  rec.advanceTo(9000);
+  rec.act("p3", { type: "ext", tool: "fixture_rename", args: { city: "c3", name: "Third" } });
+  rec.advanceTo(30000);
+  rec.act("p2", { type: "propose", to: "p1", kind: "pact", name: null, text: "", until: null });
+  rec.end();
+  return rec;
+}
+
+describe("verifyLog", () => {
+  test("onLine is called for every line, in order, with the result of act lines", () => {
+    const rec = sample();
+    const seen: LogLine[] = [];
+    let applied = 0;
+    const report = verify(rec.lines, {
+      onLine: (line, r, out) => {
+        seen.push(line);
+        if (line.k === "act") {
+          expect(out).toBeDefined();
+          applied += 1;
+        } else {
+          expect(out).toBeUndefined();
+        }
+        if (line.k !== "header") expect(r.now).toBeGreaterThanOrEqual(line.t);
+      },
+    });
+    expect(report.ok).toBe(true);
+    expect(seen).toEqual(rec.lines);
+    expect(applied).toBe(4);
+  });
+
+  test("onCheckpoint sees the engine exactly in each checkpoint state", () => {
+    const rec = sample();
+    const hours: number[] = [];
+    const ckpts = new Map(
+      rec.lines.flatMap((l) => (l.k === "ckpt" ? [[l.hour, l.h] as const] : [])),
+    );
+    verify(rec.lines, {
+      onCheckpoint: (hour, r) => {
+        hours.push(hour);
+        expect(r.now).toBe(hour * 3600);
+        expect(ckpts.has(hour)).toBe(true);
+      },
+    });
+    expect(hours).toEqual([...ckpts.keys()]);
+  });
+
+  test("resumes from a snapshot right after the ckpt line of its hour", () => {
+    const rec = sample();
+    const snap = rec.snapshots.find((s) => s.hour === 8);
+    if (snap === undefined) throw new Error("no snapshot at hour 8");
+    const ckptIndex = rec.lines.findIndex((l) => l.k === "ckpt" && l.hour === 8);
+    const seen: LogLine[] = [];
+    const report = verify(rec.lines, { from: snap, onLine: (l) => seen.push(l) });
+    expect(report.ok).toBe(true);
+    expect(report.finalHash).toBe(verify(rec.lines).finalHash);
+    expect(seen).toEqual(rec.lines.slice(ckptIndex + 1));
+    expect(report.actions).toBe(1);
+
+    const wrong = structuredClone(snap);
+    wrong.afterN += 1;
+    expect(verify(rec.lines, { from: wrong }).divergence).toMatchObject({
+      kind: "snapshot",
+      hour: 8,
+    });
+    const lines = cloneLines(rec.lines);
+    const ck = lines[ckptIndex];
+    if (ck?.k === "ckpt") ck.h = "0123456789abcdef";
+    expect(verify(lines, { from: snap }).divergence).toMatchObject({ kind: "snapshot", hour: 8 });
+    const final = rec.snapshots.at(-1);
+    if (final === undefined) throw new Error("no final snapshot");
+    expect(verify(rec.lines, { from: final }).divergence?.kind).toBe("snapshot");
+  });
+
+  test("a rules divergence is reported before replaying", () => {
+    const rec = sample();
+    const changed: Ruleset<FixtureConfig, FixtureExt> = {
+      ...fixtureRuleset,
+      compile: (c, n) => {
+        const rules = fixtureRuleset.compile(c, n);
+        return { ...rules, levels: { ...rules.levels, storage: [600, 1000, 2000, 5000] } };
+      },
+    };
+    const seen: LogLine[] = [];
+    const report = verifyLog(rec.lines, () => changed, fakeDomain, { onLine: (l) => seen.push(l) });
+    expect(report.divergence).toMatchObject({ kind: "rules", t: 0 });
+    expect(report.divergence?.actual).toContain(
+      "the compiled tables differ for fixture-1@1.0.0 under the same config",
+    );
+    expect(report.actions).toBe(0);
+    expect(seen).toEqual([]);
+  });
+
+  test("header, config and initial divergences", () => {
+    const rec = sample();
+    expect(verifyLog(rec.lines, () => undefined, fakeDomain).divergence).toMatchObject({
+      kind: "header",
+      actual: "fixture-1@1.0.0 is not in this build",
+    });
+    expect(verify(rec.lines.slice(1)).divergence?.kind).toBe("header");
+    expect(verify([]).divergence?.kind).toBe("header");
+    const config = cloneLines(rec.lines);
+    const header = config[0];
+    if (header?.k === "header") header.config["start"] = { stock: 1, soldiers: 1 };
+    expect(verify(config).divergence?.kind).toBe("config");
+    const initial = cloneLines(rec.lines);
+    const h2 = initial[0];
+    if (h2?.k === "header") h2.initialHash = "0123456789abcdef";
+    expect(verify(initial).divergence).toMatchObject({
+      kind: "initial",
+      expected: "0123456789abcdef",
+    });
+    const version = cloneLines(rec.lines);
+    const h3 = version[0];
+    if (h3?.k === "header") h3.engine = "0.0.9";
+    const warned = verify(version);
+    expect(warned.ok).toBe(true);
+    expect(warned.warnings[0]).toContain("engine 0.0.9");
+  });
+
+  test("a missing ev or ckpt line, a truncated log, a fatal line and a line after the end are divergences", () => {
+    const rec = sample();
+    const evIndex = rec.lines.findIndex((l) => l.k === "ev" && l.e.type === "fixture_opened");
+    const noEv = cloneLines(rec.lines).filter((_, i) => i !== evIndex);
+    expect(verify(noEv).divergence).toMatchObject({
+      kind: "event",
+      t: 7200,
+      expected: "the ckpt line of hour 2",
+    });
+    expect(verify(noEv, { compareEvents: false }).ok).toBe(true);
+    const ckIndex = rec.lines.findIndex((l) => l.k === "ckpt" && l.hour === 3);
+    const noCk = cloneLines(rec.lines).filter((_, i) => i !== ckIndex);
+    expect(verify(noCk).divergence).toMatchObject({ kind: "checkpoint", hour: 3 });
+    const truncated = cloneLines(rec.lines).slice(0, -1);
+    expect(verify(truncated).divergence).toMatchObject({ kind: "end", expected: "an end line" });
+    const fatal = cloneLines(rec.lines).slice(0, -1);
+    fatal.push({ k: "fatal", t: 86400, error: { kind: "agent", message: "boom" } });
+    expect(verify(fatal).divergence?.actual).toContain("a fatal line (agent): boom");
+    const extra = cloneLines(rec.lines);
+    extra.push({ k: "defer", t: 86400, seat: "p1", to: 86401 });
+    expect(verify(extra).divergence).toMatchObject({ kind: "order" });
+    const result = cloneLines(rec.lines);
+    const end = result.at(-1);
+    if (end?.k === "end") end.result.reason = "domination";
+    expect(verify(result).divergence).toMatchObject({ kind: "result", t: 86400 });
+    const final = cloneLines(rec.lines);
+    const end2 = final.at(-1);
+    if (end2?.k === "end") end2.h = "0123456789abcdef";
+    expect(verify(final).divergence).toMatchObject({ kind: "end", expected: "0123456789abcdef" });
+  });
+
+  test("time going backwards and repeated n are order divergences", () => {
+    const rec = sample();
+    const late = cloneLines(rec.lines);
+    const lastAct = late.findLastIndex((l) => l.k === "act");
+    const act = late[lastAct];
+    if (act?.k === "act") late.splice(lastAct + 1, 0, { ...act, t: 0, n: act.n + 1 });
+    expect(verify(late).divergence).toMatchObject({ kind: "order" });
+    const dup = cloneLines(rec.lines);
+    const firstAct = dup.findIndex((l) => l.k === "act");
+    const a = dup[firstAct];
+    if (a?.k === "act") dup.splice(firstAct + 1, 0, { ...a });
+    expect(verify(dup).divergence).toMatchObject({ kind: "order", n: a?.k === "act" ? a.n : -1 });
+  });
+});
