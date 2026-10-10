@@ -98,6 +98,32 @@ describe("deliver", () => {
     expect(seatOf(gw, P1).wake.urgentAt).toBe(200);
     expect(seatOf(gw, P1).wake.urgentReasons).toEqual(["incoming_attack m00001"]);
   });
+
+  test("a public message is archived for its recipients but ingested for nobody", () => {
+    const { gw, wake } = fresh();
+    for (const p of [P1, P2, P3]) {
+      wake.begin(p, 0);
+      wake.end(p, 0);
+    }
+    const before = [P1, P2, P3].map((p) => structuredClone(seatOf(gw, p).wake));
+    const broadcast = event(
+      100,
+      "message",
+      [
+        [P2, "self"],
+        [P1, "target"],
+        [P3, "target"],
+      ],
+      { message: "g00001", from: P2, to: "all", text: "to all" },
+      true,
+    );
+    deliver(gw, [broadcast], wake);
+    wake.ingest(P1, broadcast, "target"); // a direct ingest is dropped too
+    expect([P1, P2, P3].map((p) => seatOf(gw, p).wake)).toEqual(before);
+    expect(es(seatOf(gw, P1).archive)).toEqual([1]);
+    expect(es(seatOf(gw, P3).archive)).toEqual([1]);
+    expect(es(gw.feed)).toEqual([1]);
+  });
 });
 
 describe("briefing cursor", () => {

@@ -1,18 +1,24 @@
 // P11 (docs/architecture.md §8.5, §13.2): a model test of the wake scheduler with `fc.commands`.
 //
-// The model keeps its own bookkeeping of every seat (pending triggers by class, self-wake, last
-// turn end, budgets charged per game day, urgent wakes per day) and its own formula for the wake
-// time. After every command the scheduler must agree with it exactly (wake time, kind, due seats,
-// every wake record), and the trace must satisfy the properties of §8.5:
+// The model keeps its own bookkeeping of every seat (pending triggers by class and origin,
+// self-wake, last turn end, budgets charged per game day, urgent wakes per day) and its own formula
+// for the wake time. After every command the scheduler must agree with it exactly (wake time, kind,
+// due seats, every wake record). Since that formula mirrors the scheduler's, every real wake record
+// is also checked on its own, against the triggers the commands produced (their time, class and
+// origin), without the formula (`checkRecord`), and so is the real state after another seat's
+// action. The trace must satisfy the properties of §8.5:
 // - per seat and game day, at most ownWakesPerDay own-charged and socialWakesPerDay social-charged wakes;
-// - an own-charged wake always carries the seat's own reason (its self-wake or an own trigger), so
-//   no sequence of other seats' actions produces one;
+// - an own-charged wake always has the seat's due self-wake, or a due own-class trigger caused by
+//   the seat itself; another seat's action never touches the seat's own triggers or self-wake, so
+//   no sequence of other seats' actions produces an own-charged wake;
 // - no alive seat goes more than safetyWake without a wake;
 // - an urgent trigger never wakes the seat before max(its time, lastUrgentStart + urgentMinGap),
 //   and never later than the first moment after that when the seat is idle;
 // - at most ceil(86400 / urgentMinGap) + 1 urgent wakes per seat per game day;
 // - own and social wakes never fire before their group window (or self-wake) is due, and every
-//   wake drains all pending triggers of those classes, so a window produces one wake;
+//   wake drains all pending triggers of those classes, so the triggers of one class first pending
+//   inside one group window are delivered by a single wake; urgent triggers are delivered all
+//   together by an urgent wake, and never by another one;
 // - after a turn ending at t, the next wake is > t unless an urgent trigger is pending and due;
 // - a turn ended without a self-wake request (`end_turn {}`, an empty round, the round cap) leaves
 //   a pending selfAt unchanged.
@@ -35,10 +41,14 @@ const SEATS: readonly PlayerId[] = ["p1", "p2", "p3"];
 const MAX_TURNS_PER_SECOND = 3;
 const KIND_ORDER: readonly NextWakeKind[] = ["start", "urgent", "self", "own", "social", "safety"];
 
+/** Who caused a trigger: the seat itself, or another seat (or the match, for public events). */
+type Origin = "own" | "other";
+
 interface PendingTrigger {
   t: number;
   reason: string;
   cls: "own" | "social";
+  origin: Origin;
 }
 
 interface ModelSeat {
@@ -68,6 +78,14 @@ interface Stats {
   eliminated: number;
   roundTrips: number;
   keptSelf: number;
+  /** Windows of two or more triggers of one class delivered by one wake. */
+  grouped: number;
+  /** Urgent wakes delivering two or more urgent triggers. */
+  urgentJoined: number;
+  /** Battle reports caused by another seat (target or party role) delivered. */
+  battleOther: number;
+  /** Own-charged wakes carried by an own trigger rather than the self-wake. */
+  ownByTrigger: number;
 }
 
 interface Model {
@@ -203,10 +221,6 @@ function modelBegin(m: Model, s: ModelSeat, t: number): WakeRecord {
   if (charge === "own") {
     const firstOwn = minTime(s.normal.filter((n) => n.cls === "own"));
     expect(selfDue || (firstOwn !== null && firstOwn + r.groupWindow <= t)).toBe(true);
-    // Only the seat's own activity: its self-wake or an own trigger.
-    expect(
-      reasons.some((reason) => reason === "self" || /^(queue_empty|battle_report) /.test(reason)),
-    ).toBe(true);
   }
   if (charge === "social") {
     const firstSocial = minTime(s.normal.filter((n) => n.cls === "social"));
@@ -254,6 +268,88 @@ function modelBegin(m: Model, s: ModelSeat, t: number): WakeRecord {
   };
 }
 
+interface Pending {
+  urgent: { t: number; reason: string }[];
+  normal: PendingTrigger[];
+  selfAt: number | null;
+  lastUrgentStart: number | null;
+}
+
+function snapshot(s: ModelSeat): Pending {
+  return {
+    urgent: s.urgent.map((u) => ({ ...u })),
+    normal: s.normal.map((n) => ({ ...n })),
+    selfAt: s.selfAt,
+    lastUrgentStart: s.lastUrgentStart,
+  };
+}
+
+/**
+ * Checks a real wake record against the triggers pending before it, without the model's formula:
+ * which triggers it delivers, when it may fire, and what it may be charged to.
+ */
+function checkRecord(m: Model, t: number, got: WakeRecord, pending: Pending): void {
+  const r = m.rules;
+  const delivered = (reason: string): boolean => got.reasons.includes(reason);
+  const selfDue = pending.selfAt !== null && pending.selfAt <= t;
+  expect(delivered("self")).toBe(selfDue);
+
+  // Every pending own and social trigger is delivered: the triggers of one class first pending
+  // inside one group window are delivered by this single wake, and if the wake is charged to that
+  // class, it waited for the whole window.
+  for (const cls of ["own", "social"] as const) {
+    const inClass = pending.normal.filter((n) => n.cls === cls);
+    if (inClass.length === 0) continue;
+    const first = Math.min(...inClass.map((n) => n.t));
+    const window = inClass.filter((n) => n.t < first + r.groupWindow);
+    for (const n of inClass)
+      expect({ reason: n.reason, delivered: delivered(n.reason) }).toEqual({
+        reason: n.reason,
+        delivered: true,
+      });
+    if (window.length > 1) m.stats.grouped += 1;
+    if (got.charge === cls && !(cls === "own" && selfDue)) {
+      expect(t).toBeGreaterThanOrEqual(first + r.groupWindow);
+    }
+  }
+  if (pending.normal.some((n) => n.origin === "other" && n.reason.startsWith("battle_report "))) {
+    m.stats.battleOther += 1;
+  }
+
+  // An own-charged wake comes from the seat's own activity: its due self-wake, or a due own-class
+  // trigger that the seat caused. Own-class triggers are never caused by another seat.
+  expect(pending.normal.filter((n) => n.cls === "own" && n.origin !== "own")).toEqual([]);
+  if (got.charge === "own") {
+    const own = pending.normal.filter((n) => n.cls === "own" && n.origin === "own");
+    const ownDue = own.length > 0 && Math.min(...own.map((n) => n.t)) + r.groupWindow <= t;
+    expect(selfDue || ownDue).toBe(true);
+    if (!selfDue) m.stats.ownByTrigger += 1;
+  }
+
+  // Urgent triggers are delivered all together by an urgent wake, never by another wake, and
+  // never before their time or the end of the urgent gap.
+  for (const u of pending.urgent) expect(delivered(u.reason)).toBe(got.urgent);
+  if (got.urgent) {
+    expect(pending.urgent.length).toBeGreaterThan(0);
+    expect(t).toBeGreaterThanOrEqual(Math.min(...pending.urgent.map((u) => u.t)));
+    if (pending.lastUrgentStart !== null) {
+      expect(t).toBeGreaterThanOrEqual(pending.lastUrgentStart + r.urgentMinGap);
+    }
+    expect(got.charge).toBeNull();
+    if (pending.urgent.length > 1) m.stats.urgentJoined += 1;
+  }
+
+  // Nothing else is delivered: every reason is a pending trigger or a due start, self or safety.
+  const known = new Set([
+    ...pending.normal.map((n) => n.reason),
+    ...pending.urgent.map((u) => u.reason),
+    "start",
+    "self",
+    "safety",
+  ]);
+  for (const reason of got.reasons) expect(known.has(reason)).toBe(true);
+}
+
 /** Opens a turn for every due seat (deferring those over the per-second cap), comparing each record. */
 function settle(m: Model, r: Real): void {
   for (let guard = 0; ; guard += 1) {
@@ -275,9 +371,11 @@ function settle(m: Model, r: Real): void {
         m.stats.defers += 1;
         continue;
       }
+      const pending = snapshot(s);
       const want = modelBegin(m, s, m.now);
       const got = r.wake.begin(id, m.now);
       briefed(r.gw, id, m.now);
+      checkRecord(m, m.now, got, pending);
       expect(got).toEqual(want);
     }
   }
@@ -390,6 +488,8 @@ const TRIGGER_KINDS = [
   "spy_detected",
   "queue",
   "battle_self",
+  "battle_target",
+  "battle_party",
   "public_message",
   "domination",
   "noise",
@@ -416,6 +516,8 @@ class Trigger implements Cmd {
     let ev: DomainEvent;
     // [seat, class, reason] triggers the model expects (addressed seats only, alive or not).
     let expected: [PlayerId, "urgent" | "own" | "social", string][] = [];
+    // Who caused the event, from the point of view of the addressed seat `to`.
+    let origin: Origin = "other";
     switch (this.kind) {
       case "attack":
       case "attack_ally": {
@@ -455,6 +557,7 @@ class Trigger implements Cmd {
       case "queue":
         ev = event(t, "queue_empty", [[to, "self"]], { city: this.city, queue: "build" });
         expected = [[to, "own", `queue_empty ${this.city}`]];
+        origin = "own";
         break;
       case "battle_self": {
         const report = oid("r", n);
@@ -467,6 +570,24 @@ class Trigger implements Cmd {
           winner: "attacker",
         });
         expected = [[to, "own", `battle_report ${report}`]];
+        origin = "own";
+        break;
+      }
+      case "battle_target":
+      case "battle_party": {
+        // `by` attacked: `to` gets its report as the city's owner (target) or as the recorded
+        // party (a besieger whose siege was relieved).
+        const report = oid("r", n);
+        const role = this.kind === "battle_target" ? "target" : "party";
+        ev = event(t, "battle_report", [[to, role]], {
+          report,
+          city: "c1",
+          attacker: by,
+          defender: to,
+          kind: "city",
+          winner: "defender",
+        });
+        expected = [[to, "social", `battle_report ${report}`]];
         break;
       }
       case "public_message":
@@ -495,16 +616,25 @@ class Trigger implements Cmd {
           { alliance: "a1", player: to, cause: "left" },
           true,
         );
+        origin = "own";
         break;
     }
+    const ownState = (): unknown =>
+      SEATS.map((p) => {
+        const w = seatOf(r.gw, p).wake;
+        return [w.ownFirst, w.selfAt];
+      });
+    const before = ownState();
     deliver(r.gw, [ev], r.wake);
+    // Another seat's action never creates an own trigger or moves a self-wake, for any seat.
+    if (origin === "other") expect(ownState()).toEqual(before);
     for (const [p, cls, reason] of expected) {
       const s = modelSeat(m, p);
       if (!s.alive) continue;
       if (cls === "urgent") {
         if (!s.urgent.some((u) => u.reason === reason)) s.urgent.push({ t, reason });
       } else if (!s.normal.some((x) => x.reason === reason && x.cls === cls)) {
-        s.normal.push({ t, reason, cls });
+        s.normal.push({ t, reason, cls, origin });
       }
     }
     settle(m, r);
@@ -635,7 +765,11 @@ const commandsArb = fc.commands(
       )
       .map(([target, other, kind, city, key]): Cmd => new Trigger(target, other, kind, city, key)),
     fc
-      .tuple(fc.nat(2), fc.nat(1), fc.constantFrom<TriggerKind>("attack", "message", "queue"))
+      .tuple(
+        fc.nat(2),
+        fc.nat(1),
+        fc.constantFrom<TriggerKind>("attack", "message", "queue", "battle_target", "battle_party"),
+      )
       .map(([target, other, kind]): Cmd => new Trigger(target, other, kind, "c1", "a1")),
     fc.nat(2).map((target): Cmd => new Eliminate(target)),
     fc.nat(2).map((target): Cmd => new Burst(target)),
@@ -688,6 +822,10 @@ describe("P11: wake scheduler model test", () => {
       eliminated: 0,
       roundTrips: 0,
       keptSelf: 0,
+      grouped: 0,
+      urgentJoined: 0,
+      battleOther: 0,
+      ownByTrigger: 0,
     };
     fc.assert(
       fc.property(rulesArb, commandsArb, (rules, cmds) => {

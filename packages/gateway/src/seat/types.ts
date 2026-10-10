@@ -61,20 +61,37 @@ export interface DayCounters {
   messages: number;
 }
 
-/** A failed call of the current turn, kept until the turn closes (for `lastTurn.unseen`). */
+/**
+ * A failed call of the current turn that the agent may not have seen, kept until the turn closes
+ * (for `lastTurn.unseen`): the failures of the latest round with one, and one entry per
+ * `TURN_OVER` or `CALLS_CAP` code with the number of calls it stands for.
+ */
 export interface TurnFailure {
-  /** Round index, from 0. */
+  /** Round index, from 0 (of the first call, for a folded entry). */
   round: number;
   tool: string;
   code: ErrorCode;
   message: string;
+  /** Calls folded into this entry: more than 1 only for a repeated `TURN_OVER` or `CALLS_CAP`. */
+  count: number;
+}
+
+/** A failed result the agent never saw; `count` only when several calls failed that way. */
+export interface UnseenFailure {
+  tool: string;
+  code: ErrorCode;
+  message: string;
+  count?: number;
 }
 
 /** How the previous turn ended (§8.2): the briefing's `lastTurn`, before times become pairs. */
 export interface LastTurn {
   ended: TurnEnd;
-  /** Failed results the agent never saw: the last round's failures, and every `TURN_OVER` or `CALLS_CAP`. */
-  unseen: { tool: string; code: ErrorCode; message: string }[];
+  /**
+   * Failed results the agent never saw: the last round's failures, and the `TURN_OVER` and
+   * `CALLS_CAP` rejections, one entry per code (the first call's tool and message, with `count`).
+   */
+  unseen: UnseenFailure[];
   /** The effective next wake when the turn closed; `null` when there is none. */
   nextWake: { at: GameTime; kind: WakeKind } | null;
 }
@@ -136,7 +153,7 @@ export interface NextWake {
 /** The wake scheduler of §8.5: a stateless view over `GatewayState`; its state lives in `SeatState.wake`. */
 export interface WakeScheduler {
   readonly rules: GatewayRules;
-  /** Records a trigger for `seat` if `rules.wake[ev.type][role]` names a class. */
+  /** Records a trigger for `seat` if `rules.wake[ev.type][role]` names a class; never for a public message. */
   ingest(seat: PlayerId, ev: DomainEvent, role: WakeRole): void;
   /** Clamps `at` into `[now + selfWake.min, now + selfWake.max]` and makes it the pending self-wake. */
   requestSelfWake(seat: PlayerId, at: GameTime, now: GameTime): { at: GameTime; clamped: boolean };

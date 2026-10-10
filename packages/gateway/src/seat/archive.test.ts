@@ -1,6 +1,13 @@
 import { describe, expect, test } from "bun:test";
 import { ArchiveEntrySchema, ArchiveHitSchema, type ArchiveHit } from "@perfidia/protocol";
-import { entryId, involves, openArchive, searchArchive, summarizeEvent } from "./archive.ts";
+import {
+  entryId,
+  involves,
+  openArchive,
+  searchArchive,
+  searchArchivePage,
+  summarizeEvent,
+} from "./archive.ts";
 import { deliver } from "./deliver.ts";
 import { briefed, createGatewayState, seatOf, unreadNews } from "./state.ts";
 import {
@@ -56,16 +63,16 @@ const es = (hits: readonly ArchiveHit[]): number[] => hits.map((h) => h.e);
 describe("searchArchive", () => {
   test("scopes: mine (archive), public (feed), all (both, each event once), newest first by (t, e)", () => {
     const gw = world();
-    expect(es(searchArchive(gw, P1, { scope: "mine" }).hits)).toEqual([6, 4, 3, 1]);
-    expect(es(searchArchive(gw, P1, { scope: "public" }).hits)).toEqual([4, 2]);
-    expect(es(searchArchive(gw, P1, { scope: "all" }).hits)).toEqual([6, 4, 3, 2, 1]);
-    expect(es(searchArchive(gw, P1, {}).hits)).toEqual([6, 4, 3, 2, 1]);
-    expect(es(searchArchive(gw, P2, {}).hits)).toEqual([5, 4, 2, 1]);
+    expect(es(searchArchive(gw, P1, { scope: "mine" }))).toEqual([6, 4, 3, 1]);
+    expect(es(searchArchive(gw, P1, { scope: "public" }))).toEqual([4, 2]);
+    expect(es(searchArchive(gw, P1, { scope: "all" }))).toEqual([6, 4, 3, 2, 1]);
+    expect(es(searchArchive(gw, P1, {}))).toEqual([6, 4, 3, 2, 1]);
+    expect(es(searchArchive(gw, P2, {}))).toEqual([5, 4, 2, 1]);
   });
 
   test("hits are protocol archive hits with time pairs, ids and summaries", () => {
     const gw = world();
-    const hits = searchArchive(gw, P1, {}).hits;
+    const hits = searchArchive(gw, P1, {});
     for (const h of hits) expect(ArchiveHitSchema.parse(h)).toEqual(h);
     expect(hits.find((h) => h.e === 3)).toEqual({
       e: 3,
@@ -81,25 +88,25 @@ describe("searchArchive", () => {
 
   test("filters: kinds, counterpart, time range", () => {
     const gw = world();
-    expect(es(searchArchive(gw, P1, { kinds: ["message"] }).hits)).toEqual([2, 1]);
-    expect(es(searchArchive(gw, P1, { kinds: [] }).hits)).toEqual([6, 4, 3, 2, 1]);
-    expect(es(searchArchive(gw, P1, { with: P3 }).hits)).toEqual([3, 2]);
-    expect(es(searchArchive(gw, P1, { with: P2 }).hits)).toEqual([4, 1]);
-    expect(es(searchArchive(gw, P1, { since: 150, until: 250 }).hits)).toEqual([4, 3]);
-    expect(es(searchArchive(gw, P1, { since: 300 }).hits)).toEqual([6]);
-    expect(
-      es(searchArchive(gw, P1, { scope: "mine", kinds: ["message"], since: 100 }).hits),
-    ).toEqual([1]);
+    expect(es(searchArchive(gw, P1, { kinds: ["message"] }))).toEqual([2, 1]);
+    expect(es(searchArchive(gw, P1, { kinds: [] }))).toEqual([6, 4, 3, 2, 1]);
+    expect(es(searchArchive(gw, P1, { with: P3 }))).toEqual([3, 2]);
+    expect(es(searchArchive(gw, P1, { with: P2 }))).toEqual([4, 1]);
+    expect(es(searchArchive(gw, P1, { since: 150, until: 250 }))).toEqual([4, 3]);
+    expect(es(searchArchive(gw, P1, { since: 300 }))).toEqual([6]);
+    expect(es(searchArchive(gw, P1, { scope: "mine", kinds: ["message"], since: 100 }))).toEqual([
+      1,
+    ]);
   });
 
   test("text: ASCII case-insensitive over the message text and the summary, nothing hidden", () => {
     const gw = world();
-    expect(es(searchArchive(gw, P1, { text: "HELLO" }).hits)).toEqual([1]);
-    expect(es(searchArchive(gw, P1, { text: "big news" }).hits)).toEqual([2]);
-    expect(es(searchArchive(gw, P1, { text: "City_Conquered" }).hits)).toEqual([4]);
-    expect(es(searchArchive(gw, P1, { text: "raider:12" }).hits)).toEqual([3]);
-    expect(es(searchArchive(gw, P1, { text: "secret" }).hits)).toEqual([]);
-    expect(es(searchArchive(gw, P2, { text: "SECRET" }).hits)).toEqual([5]);
+    expect(es(searchArchive(gw, P1, { text: "HELLO" }))).toEqual([1]);
+    expect(es(searchArchive(gw, P1, { text: "big news" }))).toEqual([2]);
+    expect(es(searchArchive(gw, P1, { text: "City_Conquered" }))).toEqual([4]);
+    expect(es(searchArchive(gw, P1, { text: "raider:12" }))).toEqual([3]);
+    expect(es(searchArchive(gw, P1, { text: "secret" }))).toEqual([]);
+    expect(es(searchArchive(gw, P2, { text: "SECRET" }))).toEqual([5]);
     // the full text is searched, not only the part the summary quotes
     const long = createGatewayState([P1, P2]);
     deliver(
@@ -107,26 +114,27 @@ describe("searchArchive", () => {
       [message(10, P2, [P1], 1, `${"x".repeat(200)} needle`)],
       createWakeScheduler(long, RULES),
     );
-    expect(searchArchive(long, P1, { text: "NEEDLE" }).hits).toHaveLength(1);
+    expect(searchArchive(long, P1, { text: "NEEDLE" })).toHaveLength(1);
     // only A-Z fold: no Unicode case mapping
     const accents = createGatewayState([P1, P2]);
     deliver(accents, [message(10, P2, [P1], 1, "ÉTÉ")], createWakeScheduler(accents, RULES));
-    expect(searchArchive(accents, P1, { text: "été" }).hits).toEqual([]);
-    expect(searchArchive(accents, P1, { text: "ÉTÉ" }).hits).toHaveLength(1);
+    expect(searchArchive(accents, P1, { text: "été" })).toEqual([]);
+    expect(searchArchive(accents, P1, { text: "ÉTÉ" })).toHaveLength(1);
   });
 
   test("limit (default and maximum 20) and `more`", () => {
     const gw = createGatewayState([P1, P2]);
     const wake = createWakeScheduler(gw, RULES);
     for (let i = 1; i <= 25; i += 1) deliver(gw, [publicMessage(i * 10, P2, i)], wake);
-    const all = searchArchive(gw, P1, { scope: "public" });
+    const all = searchArchivePage(gw, P1, { scope: "public" });
     expect(all.hits).toHaveLength(20);
     expect(all.more).toBe(true);
     expect(all.hits[0]!.e).toBe(25);
-    const five = searchArchive(gw, P1, { scope: "public", limit: 5 });
+    expect(searchArchive(gw, P1, { scope: "public" })).toEqual(all.hits);
+    const five = searchArchivePage(gw, P1, { scope: "public", limit: 5 });
     expect(es(five.hits)).toEqual([25, 24, 23, 22, 21]);
     expect(five.more).toBe(true);
-    const old = searchArchive(gw, P1, { scope: "public", until: 50 });
+    const old = searchArchivePage(gw, P1, { scope: "public", until: 50 });
     expect(es(old.hits)).toEqual([5, 4, 3, 2, 1]);
     expect(old.more).toBe(false);
   });
@@ -138,9 +146,9 @@ describe("searchArchive", () => {
     expect(searchArchive(gw, P1, q)).toEqual(first);
     const copy = viaJson(gw);
     expect(searchArchive(copy, P1, q)).toEqual(first);
-    first.hits[0]!.t[0] = 999999;
-    first.hits[0]!.summary = "x";
-    expect(searchArchive(gw, P1, q).hits[0]).toEqual(searchArchive(copy, P1, q).hits[0]);
+    first[0]!.t[0] = 999999;
+    first[0]!.summary = "x";
+    expect(searchArchive(gw, P1, q)[0]).toEqual(searchArchive(copy, P1, q)[0]);
   });
 
   test("a public event truncated from the news is found by read_notes scope public", () => {
@@ -155,10 +163,83 @@ describe("searchArchive", () => {
     expect(shown.some((d) => d.e === dropped.e)).toBe(false);
     const since = seatOf(gw, P1).lastBriefingAt;
     const found = searchArchive(gw, P1, { scope: "public", since, until: dropped.event.t });
-    expect(es(found.hits)).toEqual([dropped.e]);
-    expect(es(searchArchive(gw, P1, { scope: "public", text: "news 1" }).hits)).toContain(
-      dropped.e,
+    expect(es(found)).toEqual([dropped.e]);
+    expect(es(searchArchive(gw, P1, { scope: "public", text: "news 1" }))).toContain(dropped.e);
+  });
+});
+
+describe("fog of war: recipients are routing metadata", () => {
+  // A public battle headline whose audience the engine computed from hidden data: p5 had troops
+  // stationed in c3 but is not named in the headline. p1 is no recipient at all.
+  const P5 = "p5";
+  function headline(): GatewayState {
+    const gw = createGatewayState([P1, P2, P3, P5]);
+    deliver(
+      gw,
+      [
+        event(
+          400,
+          "battle",
+          [
+            [P2, "party"],
+            [P3, "target"],
+            [P5, "stationed"],
+          ],
+          { city: "c3", attacker: P2, defender: P3, kind: "city", winner: "attacker" },
+          true,
+        ),
+        event(
+          500,
+          "battle_report",
+          [
+            [P3, "target"],
+            [P5, "stationed"],
+          ],
+          { report: R1, city: "c3", attacker: P2, defender: P3, kind: "city", winner: "attacker" },
+        ),
+      ],
+      createWakeScheduler(gw, RULES),
     );
+    return gw;
+  }
+
+  test("search `with` a hidden recipient finds nothing, in every scope", () => {
+    const gw = headline();
+    for (const scope of ["public", "all", "mine"] as const) {
+      expect(searchArchive(gw, P1, { scope, with: P5 })).toEqual([]);
+    }
+    expect(es(searchArchive(gw, P1, { with: P2 }))).toEqual([1]); // named in the data
+    // an addressed seat does not learn its co-recipients either
+    expect(es(searchArchive(gw, P3, { with: P5 }))).toEqual([]);
+    expect(es(searchArchive(gw, P3, { with: P3 }))).toEqual([2, 1]);
+    expect(es(searchArchive(gw, P5, { with: P5 }))).toEqual([2, 1]);
+  });
+
+  test("open shows only the seat's own recipient entry", () => {
+    const gw = headline();
+    expect(openArchive(gw, P3, R1)?.to).toEqual([{ p: P3, as: "target" }]);
+    expect(openArchive(gw, P5, R1)?.to).toEqual([{ p: P5, as: "stationed" }]);
+    expect(openArchive(gw, P1, R1)).toBeNull();
+    // a public entry the seat is not addressed by shows no recipient at all
+    const pub = createGatewayState([P1, P2, P3]);
+    deliver(
+      pub,
+      [
+        event(
+          10,
+          "message",
+          [
+            [P2, "self"],
+            [P3, "target"],
+          ],
+          { message: oid("g", 7), from: P2, to: "all", text: "hear ye" },
+          true,
+        ),
+      ],
+      createWakeScheduler(pub, RULES),
+    );
+    expect(openArchive(pub, P1, oid("g", 7))?.to).toEqual([]);
+    expect(openArchive(pub, P3, oid("g", 7))?.to).toEqual([{ p: P3, as: "target" }]);
   });
 });
 
@@ -173,10 +254,7 @@ describe("openArchive", () => {
       public: false,
       id: oid("g", 1),
       data: { message: oid("g", 1), from: P2, to: [P1], text: "Hello there, shall we talk?" },
-      to: [
-        { p: P2, as: "self" },
-        { p: P1, as: "target" },
-      ],
+      to: [{ p: P1, as: "target" }],
     });
     expect(ArchiveEntrySchema.parse(entry)).toEqual(entry!);
     expect(openArchive(gw, P1, R1)?.e).toBe(3);
@@ -228,8 +306,12 @@ describe("summaries and counterparts", () => {
       { alliance: "a1", name: "p3", members: [P1, P2] },
       true,
     );
-    expect(involves(ev, P2)).toBe(true);
-    expect(involves(ev, P3)).toBe(false); // a name is authored text, never a counterpart
-    expect(involves(message(0, P2, [P1], 1, "p3"), P3)).toBe(false);
+    expect(involves(ev, P2, P3)).toBe(true);
+    expect(involves(ev, P3, P1)).toBe(false); // a name is authored text, never a counterpart
+    expect(involves(message(0, P2, [P1], 1, "p3"), P3, P1)).toBe(false);
+    // a recipient counts only as the viewer itself, never as another recipient
+    const routed = event(0, "queue_empty", [[P1, "self"]], { city: "c1", queue: "build" });
+    expect(involves(routed, P1, P1)).toBe(true);
+    expect(involves(routed, P1, P2)).toBe(false);
   });
 });

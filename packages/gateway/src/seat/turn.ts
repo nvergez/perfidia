@@ -1,6 +1,14 @@
 import type { ActLine, ErrorCode, GwLine, TurnLine, WakeKind } from "@perfidia/protocol";
 import { rollDay, seatOf } from "./state.ts";
-import type { GatewayState, LastTurn, NextWake, WakeScheduler } from "./types.ts";
+import type {
+  GatewayState,
+  LastTurn,
+  NextWake,
+  SeatState,
+  TurnFailure,
+  UnseenFailure,
+  WakeScheduler,
+} from "./types.ts";
 
 // Turn bookkeeping driven by the `act`, `gw` and `turn` lines (§8.4, §10.5): daily counters, the
 // failures of the turn in progress, and `lastTurn` when the turn closes. The `message` of a failure
@@ -9,6 +17,29 @@ import type { GatewayState, LastTurn, NextWake, WakeScheduler } from "./types.ts
 
 /** Codes listed in `lastTurn.unseen` whatever the round: calls that never ran. */
 const alwaysUnseen = (code: ErrorCode): boolean => code === "TURN_OVER" || code === "CALLS_CAP";
+
+/**
+ * Records a failure of the turn in progress. The failures of earlier rounds were shown to the
+ * agent in the next round, so they are dropped (the always-unseen codes aside), and a repeated
+ * `TURN_OVER` or `CALLS_CAP` only counts on its code's first entry: the list stays bounded by the
+ * failures of one round, whose calls are capped, plus two entries, however many calls an agent
+ * sends.
+ */
+function addFailure(s: SeatState, f: Omit<TurnFailure, "count">): void {
+  if (alwaysUnseen(f.code)) {
+    const same = s.turnFailures.find((x) => x.code === f.code);
+    if (same !== undefined) {
+      same.count += 1;
+      return;
+    }
+  }
+  s.turnFailures = s.turnFailures.filter((x) => x.round >= f.round || alwaysUnseen(x.code));
+  s.turnFailures.push({ ...f, count: 1 });
+}
+
+function unseen({ tool, code, message, count }: TurnFailure): UnseenFailure {
+  return count > 1 ? { tool, code, message, count } : { tool, code, message };
+}
 
 /**
  * An `act` line: an engine-accepted `attack` counts one launch and an accepted `send_message`
@@ -26,7 +57,7 @@ export function recordAct(
     else if (line.a.type === "send_message") rollDay(s, line.t).messages += 1;
     return;
   }
-  s.turnFailures.push({
+  addFailure(s, {
     round: line.rt,
     tool: line.tool,
     code: line.r.code,
@@ -40,7 +71,7 @@ export function recordGw(
   line: Pick<GwLine, "seat" | "rt" | "tool" | "r">,
   message: string,
 ): void {
-  seatOf(gw, line.seat).turnFailures.push({
+  addFailure(seatOf(gw, line.seat), {
     round: line.rt,
     tool: line.tool,
     code: line.r.code,
@@ -56,9 +87,10 @@ function asTurnNext(next: NextWake | null): LastTurn["nextWake"] {
 }
 
 /**
- * A `turn` line: the pending self-wake becomes `selfAt`, the scheduler ends the turn at `t`, and
- * `lastTurn` records how it ended, the failures the agent never saw (those of round `rounds - 1`,
- * the last, and every `TURN_OVER` or `CALLS_CAP`) and the effective next wake.
+ * A `turn` line: the scheduler ends the turn at `t` (it throws, changing nothing, when the seat is
+ * not in a turn), the pending self-wake becomes `selfAt`, and `lastTurn` records how the turn
+ * ended, the failures the agent never saw (those of round `rounds - 1`, the last, and the
+ * `TURN_OVER` and `CALLS_CAP` entries) and the effective next wake.
  *
  * `next` is the line's next wake when known (the rebuild, or a host that writes `null` because the
  * match ended); otherwise it is the scheduler's next wake after the end. The return value is what
@@ -72,15 +104,13 @@ export function closeTurn(
   },
 ): Pick<TurnLine, "selfAt" | "next"> {
   const s = seatOf(gw, line.seat);
-  s.wake.selfAt = line.selfAt;
   wake.end(line.seat, line.t);
+  s.wake.selfAt = line.selfAt;
   const next = line.next === undefined ? asTurnNext(wake.peek(line.seat)) : line.next;
   const last = line.rounds - 1;
   s.lastTurn = {
     ended: line.why,
-    unseen: s.turnFailures
-      .filter((f) => f.round >= last || alwaysUnseen(f.code))
-      .map(({ tool, code, message }) => ({ tool, code, message })),
+    unseen: s.turnFailures.filter((f) => f.round >= last || alwaysUnseen(f.code)).map(unseen),
     nextWake: next === null ? null : { at: next.at, kind: next.kind },
   };
   s.turnFailures = [];

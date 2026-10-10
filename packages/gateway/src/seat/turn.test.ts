@@ -117,6 +117,80 @@ describe("lastTurn", () => {
     expect(out).toEqual({ selfAt: 9000, next: { at: 9000, kind: "self" } });
   });
 
+  test("an over-cap round keeps one entry per TURN_OVER or CALLS_CAP code, with a count", () => {
+    const { gw, wake, s } = opened();
+    for (let i = 0; i < 10; i += 1) {
+      recordAct(
+        gw,
+        { t: 0, seat: P1, rt: 0, tool: "build", a: build, r: { ok: false, code: "MAX_LEVEL" } },
+        `call ${i + 1} failed`,
+      );
+    }
+    for (let i = 10; i < 500; i += 1) {
+      recordGw(
+        gw,
+        {
+          seat: P1,
+          rt: 0,
+          tool: i % 2 === 0 ? "spy" : "attack",
+          r: { ok: false, code: "CALLS_CAP" },
+        },
+        `call ${i + 1} did not run`,
+      );
+    }
+    for (let i = 0; i < 300; i += 1) {
+      recordGw(
+        gw,
+        { seat: P1, rt: 1, tool: "build", r: { ok: false, code: "TURN_OVER" } },
+        `after end_turn ${i + 1}`,
+      );
+    }
+    // round 0's engine failures were shown in round 1: dropped as soon as round 1 has a failure
+    expect(s.turnFailures).toHaveLength(2);
+    closeTurn(gw, wake, { t: 0, seat: P1, why: "end_turn", rounds: 2, selfAt: null });
+    expect(s.lastTurn?.unseen).toEqual([
+      { tool: "spy", code: "CALLS_CAP", message: "call 11 did not run", count: 490 },
+      { tool: "build", code: "TURN_OVER", message: "after end_turn 1", count: 300 },
+    ]);
+    expect(BriefingLastTurnSchema.safeParse({ ...s.lastTurn, nextWake: null }).success).toBe(true);
+    expect(JSON.stringify(s.lastTurn).length).toBeLessThan(400);
+  });
+
+  test("the last round's failures stay listed beside the folded caps", () => {
+    const { gw, wake, s } = opened();
+    for (let i = 0; i < 30; i += 1) {
+      recordGw(
+        gw,
+        { seat: P1, rt: 0, tool: "spy", r: { ok: false, code: "CALLS_CAP" } },
+        `call ${i + 11} did not run`,
+      );
+    }
+    for (const code of ["MAX_LEVEL", "QUEUE_FULL"]) {
+      recordAct(
+        gw,
+        { t: 0, seat: P1, rt: 0, tool: "build", a: build, r: { ok: false, code } },
+        code,
+      );
+    }
+    closeTurn(gw, wake, { t: 0, seat: P1, why: "round_cap", rounds: 1, selfAt: null });
+    expect(s.lastTurn?.unseen).toEqual([
+      { tool: "spy", code: "CALLS_CAP", message: "call 11 did not run", count: 30 },
+      { tool: "build", code: "MAX_LEVEL", message: "MAX_LEVEL" },
+      { tool: "build", code: "QUEUE_FULL", message: "QUEUE_FULL" },
+    ]);
+  });
+
+  test("closing a seat that is not in a turn throws and changes nothing", () => {
+    const { gw, wake } = opened();
+    closeTurn(gw, wake, { t: 0, seat: P1, why: "end_turn", rounds: 1, selfAt: null });
+    const before = JSON.stringify(gw);
+    expect(() =>
+      closeTurn(gw, wake, { t: 10, seat: P1, why: "end_turn", rounds: 1, selfAt: 9999 }),
+    ).toThrow(/not in a turn/);
+    expect(JSON.stringify(gw)).toBe(before);
+    expect(seatOf(gw, P1).wake.selfAt).toBeNull();
+  });
+
   test("a new turn starts with no failures", () => {
     const { gw, wake, s } = opened();
     recordAct(

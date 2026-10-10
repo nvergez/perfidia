@@ -64,9 +64,14 @@ function mentions(value: Json, p: PlayerId): boolean {
   return Object.keys(value).some((k) => !isAuthoredKey(k) && mentions(value[k] ?? null, p));
 }
 
-/** Whether the event involves `p`: as a recipient, or named in its data (authored text aside). */
-export function involves(ev: DomainEvent, p: PlayerId): boolean {
-  return ev.to.some((r) => r.p === p) || mentions(ev.data, p);
+/**
+ * Whether `viewer` can tell that the event involves `p`: `p` is named in its data (authored text
+ * aside), or `p` is the viewer itself and among the recipients. The other recipients are routing
+ * metadata that the engine may compute from hidden data (a `stationed` audience, an ally list), so
+ * they never count, nor are they shown (fog of war, §8.1).
+ */
+export function involves(ev: DomainEvent, p: PlayerId, viewer: PlayerId): boolean {
+  return mentions(ev.data, p) || (p === viewer && ev.to.some((r) => r.p === viewer));
 }
 
 /** Entries of `scope`, in delivery order, each once. */
@@ -110,7 +115,7 @@ function toHit(d: Delivered): ArchiveHit {
 export interface ArchiveSearch {
   /** Newest first by `(t, e)`, at most `limit` (default and maximum 20). */
   hits: ArchiveHit[];
-  /** More entries matched than `hits` shows. */
+  /** More entries matched than `hits` shows (the `more` of the `read_notes` result). */
   more: boolean;
 }
 
@@ -118,10 +123,14 @@ export interface ArchiveSearch {
  * Searches the seat's archive (`mine`), the public feed (`public`) or both (`all`, the default; an
  * event both public and addressed to the seat appears once). `text` is an ASCII case-insensitive
  * substring of the event's `text` field or of its summary; `kinds` filters by type (an empty list
- * filters nothing); `with` keeps events involving that player; `since` and `until` bound `t`,
- * inclusive.
+ * filters nothing); `with` keeps events that visibly involve that player (`involves`); `since`
+ * and `until` bound `t`, inclusive. Returns the hits and whether more matched.
  */
-export function searchArchive(gw: GatewayState, seat: PlayerId, q: ArchiveQuery): ArchiveSearch {
+export function searchArchivePage(
+  gw: GatewayState,
+  seat: PlayerId,
+  q: ArchiveQuery,
+): ArchiveSearch {
   const needle = q.text === undefined ? null : foldAscii(q.text);
   const kinds = q.kinds !== undefined && q.kinds.length > 0 ? q.kinds : null;
   const limit = Math.min(READ_NOTES_MAX_HITS, Math.max(1, q.limit ?? READ_NOTES_MAX_HITS));
@@ -129,7 +138,7 @@ export function searchArchive(gw: GatewayState, seat: PlayerId, q: ArchiveQuery)
     if (q.since !== undefined && ev.t < q.since) return false;
     if (q.until !== undefined && ev.t > q.until) return false;
     if (kinds !== null && !kinds.includes(ev.type)) return false;
-    if (q.with !== undefined && !involves(ev, q.with)) return false;
+    if (q.with !== undefined && !involves(ev, q.with, seat)) return false;
     if (needle !== null) {
       const text = ev.data.text;
       const inText = typeof text === "string" && foldAscii(text).includes(needle);
@@ -141,9 +150,16 @@ export function searchArchive(gw: GatewayState, seat: PlayerId, q: ArchiveQuery)
   return { hits: matches.slice(0, limit).map(toHit), more: matches.length > limit };
 }
 
+/** `searchArchivePage`'s hits alone: newest first by `(t, e)`, at most 20 (§8.4). */
+export function searchArchive(gw: GatewayState, seat: PlayerId, q: ArchiveQuery): ArchiveHit[] {
+  return searchArchivePage(gw, seat, q).hits;
+}
+
 /**
  * The full entry with message or report id `id`, from the seat's archive or the public feed;
- * `null` when the seat has none (a hidden id reads exactly like a missing one).
+ * `null` when the seat has none (a hidden id reads exactly like a missing one). `to` holds only the
+ * seat's own recipient entry (its role), empty for a public entry not addressed to it: the other
+ * recipients are routing metadata, never shown (see `involves`).
  */
 export function openArchive(gw: GatewayState, seat: PlayerId, id: string): ArchiveEntry | null {
   const d = pool(gw, seat, "all").find((entry) => entryId(entry.event) === id);
@@ -156,6 +172,6 @@ export function openArchive(gw: GatewayState, seat: PlayerId, id: string): Archi
     public: ev.public,
     id,
     data: ev.data,
-    to: ev.to,
+    to: ev.to.filter((r) => r.p === seat),
   };
 }

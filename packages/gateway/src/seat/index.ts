@@ -25,6 +25,7 @@ export type {
   SeatState,
   SeatWake,
   TurnFailure,
+  UnseenFailure,
   WakeRecord,
   WakeScheduler,
 } from "./types.ts";
@@ -41,7 +42,7 @@ export {
   todayCounters,
   unreadNews,
 } from "./state.ts";
-export { createWakeScheduler, wakeClassOf, wakeReasonOf } from "./wake.ts";
+export { createWakeScheduler, isPublicMessage, wakeClassOf, wakeReasonOf } from "./wake.ts";
 export { deliver } from "./deliver.ts";
 export { appendedNotes, writeNote } from "./notes.ts";
 export { SEAT_ERROR_CODES, seatError, seatErrorText, type SeatErrorCode } from "./errors.ts";
@@ -61,6 +62,7 @@ export {
   involves,
   openArchive,
   searchArchive,
+  searchArchivePage,
   summarizeEvent,
   type ArchiveSearch,
 } from "./archive.ts";

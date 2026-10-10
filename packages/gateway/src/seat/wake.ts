@@ -26,7 +26,14 @@ import type { GatewayState, NextWake, SeatState, WakeRecord, WakeScheduler } fro
 // A wake drains every pending own and social reason, the self-wake if its time has come, and the
 // urgent reasons only once their gap has passed: an urgent trigger inside the gap stays pending
 // and fires at the end of the gap, so a wake is exempt as urgent at most once per urgentMinGap and
-// a budget-charged wake never rides on an urgent reason it did not wait for.
+// a budget-charged wake never rides on an urgent reason it did not wait for. This reads the §8.5
+// `begin` bullet ("drains every pending reason") and perfidia-1 §14.2 ("delivers every pending
+// trigger") together with their gap rule ("at most one urgent wake starts per 600 s") and the P11
+// urgent-timing bullet, which the literal drain would break. The briefing still lists every
+// incoming attack (§8.2), so a non-urgent wake inside the gap does not hide one.
+//
+// Public messages never wake (§8.5, perfidia-1 §11.1), whatever their audience or the wake table:
+// `message` is a standard event type, so the check stays ruleset-agnostic.
 
 const KIND_ORDER: readonly NextWake["kind"][] = [
   "start",
@@ -43,6 +50,11 @@ export function wakeClassOf(rules: GatewayRules, type: string, role: WakeRole): 
   const entry = rules.wake[type];
   if (entry === undefined || !Object.hasOwn(entry, role)) return null;
   return entry[role] ?? null;
+}
+
+/** A public message (`send_message` to `"all"`): it goes to the feed and never wakes anyone. */
+export function isPublicMessage(ev: DomainEvent): boolean {
+  return ev.type === "message" && (ev.public || ev.data.to === "all");
 }
 
 /** Data fields naming what an event concerns, in the order the wake reason picks the first. */
@@ -149,6 +161,7 @@ export function createWakeScheduler(gw: GatewayState, rules: GatewayRules): Wake
   };
 
   const ingest = (seat: PlayerId, ev: DomainEvent, role: WakeRole): void => {
+    if (isPublicMessage(ev)) return;
     const cls = wakeClassOf(rules, ev.type, role);
     if (cls === null) return;
     const s = seatOf(gw, seat);

@@ -16,7 +16,7 @@ import {
   RULES,
 } from "./testkit.test.ts";
 import { closeTurn } from "./turn.ts";
-import { createWakeScheduler, wakeClassOf, wakeReasonOf } from "./wake.ts";
+import { createWakeScheduler, isPublicMessage, wakeClassOf, wakeReasonOf } from "./wake.ts";
 
 const DAY = 86400;
 
@@ -131,12 +131,11 @@ describe("urgent wakes", () => {
     expect(d.lastWake(P1).rec.urgent).toBe(true);
   });
 
-  test("an urgent trigger inside the gap is not drained by an earlier non-urgent wake", () => {
+  test("an urgent wake drains every pending own and social reason and stays exempt", () => {
     const d = started();
     d.deliver(incomingAttack(10000, P1, P2, 1));
     d.deliver(queueEmpty(10001, P1));
     d.deliver(incomingAttack(10050, P1, P2, 2));
-    // own wake at 10601 would come after the urgent one at 10600: use a social trigger instead
     d.deliver(message(10200, P2, [P1], 1));
     expect(d.wake.peek(P1)).toEqual({ at: 10600, kind: "urgent" });
     d.advance(10600);
@@ -146,6 +145,40 @@ describe("urgent wakes", () => {
       "message g00001",
     ]);
     expect(d.lastWake(P1).rec.charge).toBeNull();
+  });
+
+  test("an urgent trigger inside the gap stays pending through an earlier social wake", () => {
+    // A group window shorter than the urgent gap lets a social wake fall inside the gap.
+    const d = started({ ...RULES, groupWindow: 100 });
+    d.deliver(incomingAttack(10000, P1, P2, 1)); // urgent wake at 10000: gap until 10600
+    d.deliver(incomingAttack(10050, P1, P2, 2)); // urgent time 10600
+    d.deliver(message(10100, P2, [P1], 1)); // social time 10200
+    expect(d.wake.peek(P1)).toEqual({ at: 10200, kind: "social" });
+    d.advance(10200);
+    expect(d.lastWake(P1)).toEqual({
+      seat: P1,
+      t: 10200,
+      rec: {
+        reasons: ["message g00001"],
+        urgent: false,
+        charge: "social",
+        day: 0,
+        used: { own: 0, social: 1 },
+      },
+    });
+    expect(seatOf(d.gw, P1).wake.urgentReasons).toEqual(["incoming_attack m00002"]);
+    expect(d.wake.peek(P1)).toEqual({ at: 10600, kind: "urgent" });
+    d.advance(10600);
+    expect(d.lastWake(P1)).toMatchObject({
+      t: 10600,
+      rec: { reasons: ["incoming_attack m00002"], urgent: true, charge: null },
+    });
+    expect(
+      d
+        .wakesOf(P1)
+        .filter((w) => w.rec.urgent)
+        .map((w) => w.t),
+    ).toEqual([10000, 10600]);
   });
 
   test("a self-wake inside the urgent gap does not carry a pending urgent trigger", () => {
@@ -411,6 +444,39 @@ describe("public events", () => {
     expect(d.gw.feed.map((x) => x.e)).toEqual([1]);
   });
 
+  test("a public message addressed to other seats as target wakes nobody, even with a public entry", () => {
+    // The engine may address a `to: "all"` message to every seat (for their archives); the wake
+    // table may even name `message.public`. Neither wakes anyone.
+    const rules: GatewayRules = {
+      ...RULES,
+      wake: { ...RULES.wake, message: { target: "urgent", public: "social" } },
+    };
+    const d = started(rules);
+    const wakeState = () => [P1, P2, P3].map((p) => JSON.stringify(seatOf(d.gw, p).wake));
+    const before = wakeState();
+    const broadcast = event(
+      5000,
+      "message",
+      [
+        [P2, "self"],
+        [P1, "target"],
+        [P3, "target"],
+      ],
+      { message: "g00001", from: P2, to: "all", text: "hear ye" },
+      true,
+    );
+    d.deliver(broadcast);
+    expect(wakeState()).toEqual(before);
+    expect(d.wakes).toHaveLength(3);
+    expect(seatOf(d.gw, P1).archive.map((x) => x.e)).toEqual([1]);
+    expect(d.gw.feed.map((x) => x.e)).toEqual([1]);
+    // `to: "all"` alone makes it public for the wake rules, and a private message still wakes
+    d.deliver({ ...broadcast, t: 5100, public: false });
+    expect(wakeState()).toEqual(before);
+    d.deliver(message(5200, P2, [P1], 2));
+    expect(d.lastWake(P1)).toMatchObject({ t: 5200, rec: { urgent: true } });
+  });
+
   test("domination_started wakes the public role once per bloc per game day", () => {
     const d = started();
     const t0 = 3 * DAY + 1000;
@@ -500,6 +566,13 @@ describe("defer and elimination", () => {
 });
 
 describe("classification and reasons", () => {
+  test("isPublicMessage: a message to all, or a public message", () => {
+    expect(isPublicMessage(publicMessage(0, P2, 1))).toBe(true);
+    expect(isPublicMessage({ ...publicMessage(0, P2, 1), public: false })).toBe(true);
+    expect(isPublicMessage(message(0, P2, [P1], 1))).toBe(false);
+    expect(isPublicMessage(dominationStarted(0, "a1"))).toBe(false);
+  });
+
   test("rules.wake[type][role] gives the class; no entry means no wake", () => {
     expect(wakeClassOf(RULES, "incoming_attack", "party")).toBe("urgent");
     expect(wakeClassOf(RULES, "incoming_attack", "target")).toBe("social");

@@ -2,6 +2,7 @@ import type { DomainEvent, GatewayRules, Json } from "@perfidia/protocol";
 import { dayOf, isSeat, seatOf, sortedSeats } from "./state.ts";
 import { copyEvent } from "./text.ts";
 import type { Delivered, GatewayState, WakeScheduler } from "./types.ts";
+import { isPublicMessage } from "./wake.ts";
 
 // Event delivery (§8.4, §8.6): archive, inbox, public feed, wake triggers. Driven by `ev` lines,
 // in their order: the live host calls it with the events of each engine step, the rebuild with the
@@ -28,7 +29,8 @@ function claimPublicWake(gw: GatewayState, rules: GatewayRules, ev: DomainEvent)
  * Delivers engine events in order. Each event gets the next delivery number; it is appended to the
  * archive and inbox of every recipient and, when public, to the feed. Wake triggers are ingested
  * per recipient role and, for a public event, with the `public` role for every seat (subject to
- * `publicOncePerDay`). A `player_eliminated` event eliminates its player's seat.
+ * `publicOncePerDay`); a public message wakes nobody, whatever its audience (`ingest` drops it).
+ * A `player_eliminated` event eliminates its player's seat.
  *
  * Events are copied, so the gateway state never aliases an engine object.
  */
@@ -48,7 +50,7 @@ export function deliver(
     }
     if (event.public) gw.feed.push(d);
     for (const r of event.to) wake.ingest(r.p, event, r.as);
-    if (event.public && claimPublicWake(gw, wake.rules, event)) {
+    if (event.public && !isPublicMessage(event) && claimPublicWake(gw, wake.rules, event)) {
       for (const s of sortedSeats(gw)) wake.ingest(s.seat, event, "public");
     }
     if (event.type === "player_eliminated") {
