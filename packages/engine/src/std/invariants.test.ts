@@ -153,6 +153,17 @@ const PLANTS: Readonly<Record<string, readonly ((ctx: TestCtx) => void)[]>> = {
       onlyMovement(ctx).to = null;
     },
   ],
+  "std.homes": [
+    (ctx) => {
+      onlyMovement(ctx).home = "c2";
+    },
+    (ctx) => {
+      cityOf(ctx, "c1").owner = null;
+    },
+    (ctx) => {
+      cityOf(ctx, "c3").owner = "p2";
+    },
+  ],
   "std.buildings": [
     (ctx) => {
       delete cityOf(ctx, "c1").buildings["rampart"];

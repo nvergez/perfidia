@@ -4,6 +4,7 @@
 import {
   RESOURCE_IDS,
   compareIds,
+  type CityId,
   type DeepReadonly,
   type PlayerId,
   type Stationed,
@@ -279,6 +280,37 @@ const movements: Invariant = {
   },
 };
 
+/**
+ * Everything homed in a city belongs to its owner: every movement's and every stationed group's
+ * home is owned by the movement's or group's owner. An owner change must re-home, disband or
+ * eliminate what was homed in the city within the same step (§5.4 `transferCity`); otherwise a
+ * return would later reach a home its owner lost, and the former owner's cargo would count in
+ * the new owner's shipment cap. Missing homes are `std.movements` and `std.stationed` reports.
+ */
+const homes: Invariant = {
+  name: "std.homes",
+  level: "step",
+  check(r) {
+    const out: string[] = [];
+    const check = (where: string, owner: PlayerId, home: CityId): void => {
+      const city = r.state.cities[home];
+      if (city !== undefined && city.owner !== owner) {
+        out.push(`${where} of ${owner} is homed in ${home}, owned by ${city.owner ?? "neutral"}`);
+      }
+    };
+    for (const id of sortedIds(r.state.movements)) {
+      const m = r.state.movements[id];
+      if (m !== undefined) check(id, m.owner, m.home);
+    }
+    for (const id of sortedIds(r.state.cities)) {
+      for (const g of r.state.cities[id]?.stationed ?? []) {
+        check(`${id} group ${groupKey(g)}`, g.owner, g.home);
+      }
+    }
+    return capped(out);
+  },
+};
+
 /** Every city has every building of the rules, within 0..maxLevel, and no other. */
 const buildings: Invariant = {
   name: "std.buildings",
@@ -397,6 +429,7 @@ export const stdInvariants: readonly Invariant[] = Object.freeze([
   eliminated,
   attackMinTravel,
   movements,
+  homes,
   buildings,
   queues,
   unitsKnown,

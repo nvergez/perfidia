@@ -290,12 +290,16 @@ export function fallbackCity(r: ReadCtx, p: PlayerId): CityId | null {
 
 /**
  * Cargo in flight from `origin` (whole units, all resources): its shipments and the returns of
- * its bounced shipments, both counted by home city until they arrive (§7.3 of perfidia-1).
+ * its bounced shipments, both counted by home city until they arrive (§7.3 of perfidia-1). Only
+ * movements of the city's current owner count, so a former owner's cargo can never weigh on (or
+ * show up in the details of) the new owner's shipment cap (fog-safe validation, §7.2).
  */
 export function inFlightCargo(r: ReadCtx, origin: CityId): number {
+  const owner = r.state.cities[origin]?.owner ?? null;
+  if (owner === null) return 0;
   let n = 0;
   for (const m of Object.values(r.state.movements)) {
-    if (m.home !== origin) continue;
+    if (m.home !== origin || m.owner !== owner) continue;
     if (m.kind === "shipment" || (m.kind === "return" && m.back?.kind === "shipment")) {
       n += resTotal(m.cargo);
     }

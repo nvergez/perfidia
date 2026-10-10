@@ -727,6 +727,9 @@ export function danglingRefs(state: GameState): string[] {
   const alive = (p: string): boolean =>
     Object.values(state.players).some((x) => x.id === p && x.alive);
   const cityExists = (id: string): boolean => cities.some((c) => c.id === id);
+  /** Homed in an existing city its owner does not own (missing homes are reported apart). */
+  const lostHome = (owner: string, home: string): boolean =>
+    cities.some((c) => c.id === home && c.owner !== owner);
   for (const ev of state.queue) {
     if (ev.kind === "build_done" || ev.kind === "recruit_done") {
       const c = cities.find((x) => x.id === ev.ref);
@@ -748,6 +751,7 @@ export function danglingRefs(state: GameState): string[] {
     if (!state.queue.some((e) => e.seq === m.seq)) out.push(`${m.id} has no arrival event`);
     if (!alive(m.owner)) out.push(`${m.id} belongs to ${m.owner}, who is out`);
     if (!cityExists(m.home)) out.push(`${m.id} is homed in a missing city`);
+    if (lostHome(m.owner, m.home)) out.push(`${m.id} is homed in ${m.home}, not ${m.owner}'s`);
   }
   for (const c of cities) {
     for (const it of [...c.build, ...Object.values(c.recruit).flat()]) {
@@ -757,6 +761,9 @@ export function danglingRefs(state: GameState): string[] {
       if (!alive(g.owner)) out.push(`${c.id} hosts units of ${g.owner}, who is out`);
       if (!cityExists(g.home)) out.push(`${c.id} hosts units homed in a missing city`);
       if (g.home === c.id) out.push(`${c.id} hosts units homed in itself`);
+      if (lostHome(g.owner, g.home)) {
+        out.push(`${c.id} hosts units of ${g.owner} homed in ${g.home}, not ${g.owner}'s`);
+      }
     }
     if (c.owner !== null && !alive(c.owner)) out.push(`${c.id} belongs to ${c.owner}, who is out`);
   }

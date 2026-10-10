@@ -19,7 +19,7 @@ import type {
 } from "@perfidia/engine/contracts";
 import { incomingAudience } from "./audience.ts";
 import { freeSlots, inFlightCargo, insufficientResources, relation } from "./derive.ts";
-import { levelOf, resTotal, unitTable } from "./util.ts";
+import { levelOf, resTotal } from "./util.ts";
 
 /**
  * - `cityAccess`: `full` for the owner and the owner's allies (live shared vision), `public`
@@ -66,11 +66,12 @@ const DEPARTURE_RULES: Readonly<Record<DepartureDraft["kind"], KindRule>> = Obje
       return reject("INVALID_TARGET", { city: d.to, kind: d.kind });
     }
     const crossing = originIsland(r, d) !== d.island;
-    const fights = Object.keys(d.units).some((id) => {
-      if ((d.units[id] ?? 0) <= 0) return false;
-      const u = unitTable(r.rules, id);
-      return u.domain === "land" ? u.attack > 0 : crossing && u.naval > 0;
-    });
+    // Canonical unit order (§6.5): the draft's key order never matters, and an id the rules do not
+    // define counts as no fighter (the generic units-at-home check rejects it).
+    const fights = r.rules.units.some(
+      (u) =>
+        (d.units[u.id] ?? 0) > 0 && (u.domain === "land" ? u.attack > 0 : crossing && u.naval > 0),
+    );
     if (!fights) return reject("NO_UNITS", { kind: d.kind, crossing });
     return { ok: true, party: target.owner };
   },

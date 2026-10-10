@@ -1,14 +1,20 @@
 import { describe, expect, test } from "bun:test";
+import { compareIds, type CityId, type MovementId, type PlayerId } from "@perfidia/protocol";
+import type { DepartureDraft } from "@perfidia/engine/contracts";
 import {
   StdError,
+  bounce,
   checkStd,
+  defaultDeparture,
   disbandHomed,
   eliminate,
   enqueueBuild,
   enqueueRecruit,
   foundCity,
+  inFlightCargo,
   launch,
   rehomeAll,
+  startReturn,
   stockAt,
   transferCity,
   turnBack,
@@ -25,6 +31,39 @@ import {
 } from "./fixtures.test.ts";
 
 const NO_RES = res(0, 0, 0);
+
+/** The `std.homes` violations among every std invariant's reports. */
+function homeViolations(ctx: TestCtx): string[] {
+  return checkStd(ctx.read()).filter((v) => v.startsWith("std.homes:"));
+}
+
+/** A shipment of `wood` from `from` to `to`, recorded party: the target's owner. */
+function shipment(
+  ctx: TestCtx,
+  owner: PlayerId,
+  from: CityId,
+  to: CityId,
+  wood: number,
+): MovementId {
+  const target = cityOf(ctx, to);
+  const d: DepartureDraft = {
+    kind: "shipment",
+    owner,
+    from,
+    to,
+    island: target.island,
+    slot: null,
+    units: {},
+    cargo: res(wood, 0, 0),
+    gold: 0,
+  };
+  return launch(ctx, d, target.owner);
+}
+
+/** The movements' arrival events in queue order, `(at, cls, seq)`. */
+function arrivalOrder(ctx: TestCtx, ms: readonly MovementId[]): MovementId[] {
+  return ctx.state.queue.flatMap((e) => ms.filter((m) => m === e.ref));
+}
 
 describe("foundCity", () => {
   test("founds in the requested slot when free, else the lowest, from the newCity seed plus the escort", () => {
@@ -197,6 +236,70 @@ describe("transferCity and rehomeAll", () => {
     expect(danglingRefs(ctx.state)).toEqual([]);
   });
 
+  test("a transfer leaves what is homed in the city elsewhere to the caller: std.homes and danglingRefs report it until it is re-homed", () => {
+    const ctx = ctxAt(50000);
+    withSecondCity(ctx);
+    const out = launch(
+      ctx,
+      {
+        kind: "support",
+        owner: "p2",
+        from: "c2",
+        to: "c3",
+        island: "i3",
+        slot: null,
+        units: { pike: 3 },
+        cargo: NO_RES,
+        gold: 0,
+      },
+      "p3",
+    );
+    cityOf(ctx, "c2").units.pike = 9;
+    cityOf(ctx, "c3").stationed.push({
+      owner: "p2",
+      home: "c2",
+      role: "support",
+      units: { pike: 1 },
+    });
+    expect(checkStd(ctx.read())).toEqual([]);
+    transferCity(ctx, "c2", "p1");
+    expect(homeViolations(ctx)).toEqual([
+      `std.homes: ${out} of p2 is homed in c2, owned by p1`,
+      "std.homes: c3 group p2|c2|support of p2 is homed in c2, owned by p1",
+    ]);
+    expect(danglingRefs(ctx.state)).toEqual([
+      `${out} is homed in c2, not p2's`,
+      "c3 hosts units of p2 homed in c2, not p2's",
+    ]);
+    rehomeAll(ctx, "c2", "c6");
+    expect(checkStd(ctx.read())).toEqual([]);
+    expect(danglingRefs(ctx.state)).toEqual([]);
+  });
+
+  test("rehomeAll reschedules returns that sail on in their previous seq order, not in id order", () => {
+    const ctx = ctxAt(50000);
+    withSecondCity(ctx);
+    // Six cargo returns of p2 from c3, all due in c2 at the same second, in launch order.
+    const returns = Array.from({ length: 6 }, () =>
+      startReturn(ctx, { owner: "p2", home: "c2", from: "c3", units: {}, cargo: res(1, 0, 0) }),
+    );
+    const due = 50000 + 15000; // i3 → i2
+    expect(returns.map((m) => movementOf(ctx, m).arriveAt)).toEqual(returns.map(() => due));
+    expect(arrivalOrder(ctx, returns)).toEqual(returns);
+    // Opaque ids are not in creation order (§4.1), so an id-ordered reschedule would scramble them.
+    expect(returns.toSorted(compareIds)).not.toEqual(returns);
+    transferCity(ctx, "c2", "p1");
+    rehomeAll(ctx, "c2", "c6");
+    const sailOn = due + 15000; // + i2 → i3
+    expect(returns.map((m) => movementOf(ctx, m).arriveAt)).toEqual(returns.map(() => sailOn));
+    expect(arrivalOrder(ctx, returns)).toEqual(returns);
+    expect(checkStd(ctx.read())).toEqual([]);
+    advance(ctx, sailOn);
+    expect(ctx.ofType("returned").map((e) => [e.data["movement"], e.data["city"]])).toEqual(
+      returns.map((m) => [m, "c6"]),
+    );
+  });
+
   test("rehomeAll before the transfer parks the home units with the new home directly", () => {
     const ctx = ctxAt(0);
     withSecondCity(ctx);
@@ -225,23 +328,9 @@ describe("transferCity and rehomeAll", () => {
 });
 
 describe("disbandHomed", () => {
-  test("disbands units homed in the city everywhere; unit-less movements keep flying", () => {
+  test("a disbanding capture: units homed in the city die everywhere, and a former owner left without a city loses its unit-less movements too", () => {
     const ctx = ctxAt(0);
-    const ship = launch(
-      ctx,
-      {
-        kind: "shipment",
-        owner: "p2",
-        from: "c2",
-        to: "c4",
-        island: "i2",
-        slot: null,
-        units: {},
-        cargo: res(10, 0, 0),
-        gold: 0,
-      },
-      "p1",
-    );
+    const ship = shipment(ctx, "p2", "c2", "c4", 10);
     const att = launch(
       ctx,
       {
@@ -268,8 +357,63 @@ describe("disbandHomed", () => {
     expect(cityOf(ctx, "c2").units).toEqual({});
     expect(cityOf(ctx, "c3").stationed).toEqual([]);
     expect(ctx.state.movements[att]).toBeUndefined();
-    expect(ctx.state.movements[ship]).toBeDefined();
+    expect(ctx.state.movements[ship]).toBeUndefined(); // p2 has no other city to re-home it to
+    expect(ctx.state.queue).toEqual([]);
     expect(ctx.state.ledger.p2?.gone).toEqual({ pike: 15 });
+    transferCity(ctx, "c2", "p1");
+    expect(checkStd(ctx.read())).toEqual([]);
+    expect(danglingRefs(ctx.state)).toEqual([]);
+    eliminate(ctx, "p2");
+    expect(checkStd(ctx.read())).toEqual([]);
+    expect(danglingRefs(ctx.state)).toEqual([]);
+  });
+
+  test("a former owner with another city keeps its unit-less movements, re-homed there: returns sail on, and the cargo never weighs on the new owner's cap", () => {
+    const ctx = ctxAt(0);
+    withSecondCity(ctx);
+    cityOf(ctx, "c2").buildings["dock"] = 1; // shipment cap 500 + 500 × 1
+    const bounced = shipment(ctx, "p2", "c2", "c4", 50);
+    const flying = shipment(ctx, "p2", "c2", "c4", 600);
+    ctx.setNow(1000);
+    bounce(ctx, bounced, "owner_changed"); // home to c2 at 1000 + 3600
+    expect(inFlightCargo(ctx.read(), "c2")).toBe(650);
+    disbandHomed(ctx, "c2");
+    transferCity(ctx, "c2", "p1");
+    expect(checkStd(ctx.read())).toEqual([]);
+    expect(danglingRefs(ctx.state)).toEqual([]);
+    expect(movementOf(ctx, bounced)).toMatchObject({
+      kind: "return",
+      home: "c6",
+      to: "c6",
+      toIsland: "i3",
+      arriveAt: 4600 + 15000,
+      cargo: res(50, 0, 0),
+    });
+    expect(movementOf(ctx, flying)).toMatchObject({ kind: "shipment", home: "c6", to: "c4" });
+    expect(inFlightCargo(ctx.read(), "c2")).toBe(0);
+    expect(inFlightCargo(ctx.read(), "c6")).toBe(650);
+    // p1's own shipment from c2 sees nothing of p2's cargo (381 wood in stock).
+    const own: DepartureDraft = {
+      kind: "shipment",
+      owner: "p1",
+      from: "c2",
+      to: "c4",
+      island: "i2",
+      slot: null,
+      units: {},
+      cargo: res(360, 0, 0),
+      gold: 0,
+    };
+    expect(defaultDeparture(ctx.read(), own)).toEqual({ ok: true, party: "p1" });
+    advance(ctx, 30000);
+    expect(ctx.ofType("shipment_delivered").map((e) => e.data["movement"])).toEqual([
+      flying,
+      flying,
+    ]);
+    expect(ctx.ofType("returned").map((e) => [e.data["movement"], e.data["city"]])).toEqual([
+      [bounced, "c6"],
+    ]);
+    expect(ctx.state.movements).toEqual({});
     expect(checkStd(ctx.read())).toEqual([]);
     expect(danglingRefs(ctx.state)).toEqual([]);
   });
@@ -337,6 +481,11 @@ describe("eliminate", () => {
     enqueueRecruit(ctx, "c3", "pike", 1);
     expect(() => eliminate(ctx, "p3")).toThrow(StdError);
     transferCity(ctx, "c3", "p1");
+    // Until p3 is eliminated in the same step, its attack and its group are homed in a lost city.
+    expect(homeViolations(ctx)).toEqual([
+      `std.homes: ${m} of p3 is homed in c3, owned by p1`,
+      "std.homes: c2 group p3|c3|support of p3 is homed in c3, owned by p1",
+    ]);
     ctx.events.length = 0;
     eliminate(ctx, "p3");
     expect(ctx.events.map((e) => [e.type, e.public, e.data])).toEqual([

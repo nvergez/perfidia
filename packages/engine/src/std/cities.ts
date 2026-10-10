@@ -1,12 +1,16 @@
 // City lifecycle (docs/architecture.md §5.4; perfidia-1 §7.5, §7.7, §9.7): founding, owner
 // change, re-homing, disbanding and elimination. Each primitive leaves no dangling reference: no
-// queue event without its item, no movement without its event, no unit without its owner.
+// queue event without its item, no movement without its event, no unit without its owner. An owner
+// change is finished in the same step by the caller (`transferCity` plus `rehomeAll`,
+// `disbandHomed` or `eliminate`), so that everything homed in a city belongs to its owner; the
+// `std.homes` invariant checks it.
 
 import {
   compareIds,
   type City,
   type CityId,
   type IslandId,
+  type Movement,
   type PlayerId,
   type Stationed,
   type UnitCounts,
@@ -19,6 +23,7 @@ import { clearQueues } from "./queues.ts";
 import { materialize } from "./stock.ts";
 import { putHome, removeUnits, spawnUnits } from "./units.ts";
 import {
+  cancelIfQueued,
   cleanUnits,
   draftCity,
   emitTo,
@@ -101,6 +106,36 @@ function byId<T extends { readonly id: string }>(items: readonly T[]): T[] {
   return items.toSorted((a, b) => compareIds(a.id, b.id));
 }
 
+/**
+ * Movements in the order of their arrival events' seqs (launch or last reschedule), never in
+ * opaque-id order (§4.1): rescheduling them in this order keeps the order of same-second arrivals
+ * (§1.4 of perfidia-1).
+ */
+function bySeq(items: readonly Movement[]): Movement[] {
+  return items.toSorted((a, b) => a.seq - b.seq);
+}
+
+/**
+ * Re-homes one movement homed in `from` to `to` (§7.7 of perfidia-1): an outbound movement will
+ * return to `to`; a return already heading to `from` sails on, arriving at `old arrival +
+ * travel(from's island, to's island)` with a rescheduled event.
+ */
+function rehomeMovement(ctx: Ctx, m: Movement, from: CityId, to: CityId): void {
+  const src = readCity(ctx.state, from);
+  const dst = readCity(ctx.state, to);
+  m.home = to;
+  if (m.kind !== "return") return;
+  const extra = travel(ctx.read(), src.island, dst.island, {
+    kind: "return",
+    units: { ...m.units },
+  });
+  cancelIfQueued(ctx, m.seq);
+  m.to = to;
+  m.toIsland = dst.island;
+  m.arriveAt += extra;
+  m.seq = ctx.schedule("arrive_return", m.arriveAt, m.id);
+}
+
 function compareGroups(a: Readonly<Stationed>, b: Readonly<Stationed>): number {
   return (
     compareIds(a.owner, b.owner) ||
@@ -132,8 +167,10 @@ function normaliseGroups(ctx: Ctx, city: City): void {
  * the former owner's fallback city (§7.7 of perfidia-1), or are disbanded when there is none (a
  * neutral former owner, or one about to be eliminated); `hold` groups of the new owner become
  * `support`. Buildings, stock, `capitalOf` and the other stationed groups are kept. Units and
- * movements homed in the city elsewhere are the caller's: `rehomeAll`, `disbandHomed` or
- * `eliminate`. Emits nothing: the ruleset emits `city_conquered` with its own audience.
+ * movements homed in the city elsewhere are the caller's, in the same step: `rehomeAll` after the
+ * transfer, `disbandHomed` before it, or `eliminate` (the `std.homes` invariant reports anything
+ * left homed in a city its owner no longer owns). Emits nothing: the ruleset emits
+ * `city_conquered` with its own audience.
  */
 export function transferCity(ctx: Ctx, city: CityId, to: PlayerId | null): void {
   const c = draftCity(ctx, city);
@@ -159,14 +196,13 @@ export function transferCity(ctx: Ctx, city: CityId, to: PlayerId | null): void 
  * stationed groups anywhere keep their place and take the new home (a group stationed in `to`
  * itself is simply at home there); outbound movements continue and will return to `to`; returns
  * already heading to `from` sail on, arriving at `old arrival + travel(from's island, to's
- * island)` with a rescheduled event. That owner's units still at home in `from` become a group
- * stationed in `from` homed in `to`.
+ * island)` with events rescheduled in their previous seq order. That owner's units still at home
+ * in `from` become a group stationed in `from` homed in `to`.
  */
 export function rehomeAll(ctx: Ctx, from: CityId, to: CityId): void {
   if (from === to) return;
   const src = draftCity(ctx, from);
-  const dst = readCity(ctx.state, to);
-  const owner = dst.owner;
+  const owner = readCity(ctx.state, to).owner;
   if (owner === null) fail(`cannot re-home units into the neutral city ${to}`);
   materialize(ctx, from);
   if (src.owner === owner) homeUnitsToGroup(ctx, src, owner, to);
@@ -182,28 +218,23 @@ export function rehomeAll(ctx: Ctx, from: CityId, to: CityId): void {
       normaliseGroups(ctx, c);
     }
   }
-  const movements = Object.values(ctx.state.movements)
-    .filter((m) => m.home === from && m.owner === owner)
-    .toSorted((a, b) => compareIds(a.id, b.id));
-  for (const m of movements) {
-    m.home = to;
-    if (m.kind !== "return") continue;
-    const extra = travel(ctx.read(), src.island, dst.island, {
-      kind: "return",
-      units: { ...m.units },
-    });
-    ctx.cancel(m.seq);
-    m.to = to;
-    m.toIsland = dst.island;
-    m.arriveAt += extra;
-    m.seq = ctx.schedule("arrive_return", m.arriveAt, m.id);
-  }
+  const movements = Object.values(ctx.state.movements).filter(
+    (m) => m.home === from && m.owner === owner,
+  );
+  for (const m of bySeq(movements)) rehomeMovement(ctx, m, from, to);
 }
 
 /**
- * Disbands every unit homed in the city, wherever it is (`ledger.gone`): at home, in stationed
- * groups elsewhere, and in movements, which are deleted with their events and cargo. Movements
- * that carry no units (spies, shipments) keep flying. Call it before putting new units at home.
+ * The counterpart of `rehomeAll` for a city lost with everything homed in it (`sandbox-1`
+ * capture). Disbands every unit homed in the city, wherever it is (`ledger.gone`): at home, in
+ * stationed groups elsewhere, and in movements, which are deleted with their events and cargo.
+ * Movements homed there that carry no units (spies, shipments, returns of bounced shipments) are
+ * re-homed to their owner's lowest-numbered other city as `rehomeAll` does (returns sail on), or
+ * deleted with their cargo when the owner has no other city (it is about to be eliminated).
+ *
+ * Capture sequence, all in one step: `disbandHomed(city)` (before any new unit is put at home
+ * there), `transferCity(city, to)` (which clears the queues without refund), the conqueror's
+ * units at home, then `eliminate(former)` when the former owner has no city left.
  */
 export function disbandHomed(ctx: Ctx, city: CityId): void {
   const c = draftCity(ctx, city);
@@ -221,12 +252,16 @@ export function disbandHomed(ctx: Ctx, city: CityId): void {
       removeUnits(ctx, slot, { ...g.units }, "disbanded");
     }
   }
-  const movements = Object.values(ctx.state.movements)
-    .filter((m) => m.home === city && hasUnits(m.units))
-    .toSorted((a, b) => compareIds(a.id, b.id));
-  for (const m of movements) {
-    removeUnits(ctx, { at: "movement", id: m.id }, { ...m.units }, "disbanded");
-    deleteMovement(ctx, m.id);
+  const movements = Object.values(ctx.state.movements).filter((m) => m.home === city);
+  for (const m of bySeq(movements)) {
+    if (hasUnits(m.units)) {
+      removeUnits(ctx, { at: "movement", id: m.id }, { ...m.units }, "disbanded");
+      deleteMovement(ctx, m.id);
+      continue;
+    }
+    const fallback = citiesOf(ctx.read(), m.owner).find((id) => id !== city);
+    if (fallback === undefined) deleteMovement(ctx, m.id);
+    else rehomeMovement(ctx, m, city, fallback);
   }
 }
 

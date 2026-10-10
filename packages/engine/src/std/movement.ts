@@ -64,6 +64,15 @@ function self(p: PlayerId): Recipient[] {
 }
 
 /**
+ * The city owner's full copy of an arrival (§8.6): addressed as `party` when the owner is the
+ * movement's recorded party, as `launch` addressed it in the incoming notice, else as `target`
+ * (a reinforcement joining a `hold` group, whose recorded party is not the owner).
+ */
+function ownerCopy(mv: Readonly<Movement>, owner: PlayerId): Recipient[] {
+  return [{ p: owner, as: owner === mv.party ? "party" : "target" }];
+}
+
+/**
  * Launches a validated departure: takes the units from home, pays the cargo and the spy gold,
  * creates the movement (party recorded), schedules its arrival after `travel` and emits the
  * incoming notice to its audience (`incoming_attack`, `incoming_support`, `incoming_shipment`;
@@ -221,9 +230,9 @@ export function deleteMovement(ctx: Ctx, m: MovementId): void {
 
 /**
  * Delivers a shipment at its target (the caller checked the target accepts it): the cargo is added
- * capped by the warehouse, the recipient (the city's owner) gets `shipment_delivered` with the
- * amounts and the overflow lost, the sender gets `{movement, to, outcome}` only (§8.6), and the
- * movement is removed.
+ * capped by the warehouse, the recipient (the city's owner, as `party` when it is the recorded
+ * party) gets `shipment_delivered` with the amounts and the overflow lost, the sender gets
+ * `{movement, to, outcome}` only (§8.6), and the movement is removed.
  */
 export function deliverShipment(ctx: Ctx, m: MovementId): void {
   const mv = draftMovement(ctx, m);
@@ -244,7 +253,7 @@ export function deliverShipment(ctx: Ctx, m: MovementId): void {
   if (owner === mv.owner) {
     emitTo(ctx, "shipment_delivered", full, self(mv.owner));
   } else {
-    if (owner !== null) emitTo(ctx, "shipment_delivered", full, [{ p: owner, as: "target" }]);
+    if (owner !== null) emitTo(ctx, "shipment_delivered", full, ownerCopy(mv, owner));
     emitTo(ctx, "shipment_delivered", { movement: m, to, outcome: "delivered" }, self(mv.owner));
   }
   deleteMovement(ctx, m);
@@ -253,8 +262,9 @@ export function deliverShipment(ctx: Ctx, m: MovementId): void {
 /**
  * Stations an arriving group in its target city (the caller checked the target accepts it): its
  * units join the group of (mover, home, `role`) there, the city's owner gets `support_arrived`
- * with the units, the sender gets `{movement, by, to}` only (§8.6: its group is stationed), and
- * the movement is removed. `role: "hold"` is for a ruleset whose reinforcements join a garrison.
+ * with the units (as `party` when it is the recorded party, else as `target`), the sender gets
+ * `{movement, by, to}` only (§8.6: its group is stationed), and the movement is removed.
+ * `role: "hold"` is for a ruleset whose reinforcements join a garrison.
  */
 export function deliverSupport(
   ctx: Ctx,
@@ -272,7 +282,7 @@ export function deliverSupport(
   if (owner === mv.owner) {
     emitTo(ctx, "support_arrived", full, self(mv.owner));
   } else {
-    if (owner !== null) emitTo(ctx, "support_arrived", full, [{ p: owner, as: "target" }]);
+    if (owner !== null) emitTo(ctx, "support_arrived", full, ownerCopy(mv, owner));
     emitTo(ctx, "support_arrived", { movement: m, by: mv.owner, to }, self(mv.owner));
   }
   deleteMovement(ctx, m);
@@ -322,11 +332,17 @@ export function station(ctx: Ctx, city: CityId, g: Readonly<Stationed>): void {
   c.stationed.sort(compareGroups);
 }
 
+/** `support` groups before `hold` groups, so a partial unstation never strips a garrison first. */
+function supportFirst(a: Readonly<Stationed>, b: Readonly<Stationed>): number {
+  return a.role === b.role ? 0 : a.role === "support" ? -1 : 1;
+}
+
 /**
  * Takes units of `owner` homed in `home` out of the city's stationed groups and returns them: all
- * of them when `units` is omitted, otherwise exactly `units`, taken from the matching groups in
- * stored order (a player has one group per home and role). Empty groups are removed. Throws when
- * no group matches or on a shortfall.
+ * of them when `units` is omitted, otherwise exactly `units`. With `role`, only the group of that
+ * role is used (a dismissal passes `"support"`, a garrison recall `"hold"`); without it, the
+ * `support` group is used before the `hold` group (a player has one group per home and role).
+ * Empty groups are removed. Throws when no group matches or on a shortfall.
  */
 export function unstation(
   ctx: Ctx,
@@ -334,16 +350,20 @@ export function unstation(
   owner: PlayerId,
   home: CityId,
   units?: Readonly<UnitCounts>,
+  role?: Stationed["role"],
 ): UnitCounts {
   const c = draftCity(ctx, city);
-  const groups = c.stationed.filter((g) => g.owner === owner && g.home === home);
-  if (groups.length === 0) fail(`no group of ${owner} from ${home} in ${city}`);
+  const groups = c.stationed
+    .filter((g) => g.owner === owner && g.home === home && (role === undefined || g.role === role))
+    .toSorted(supportFirst);
+  const which = role === undefined ? "group" : `${role} group`;
+  if (groups.length === 0) fail(`no ${which} of ${owner} from ${home} in ${city}`);
   const available: UnitCounts = {};
   for (const g of groups) addInto(ctx.rules, available, g.units);
   const want = cleanUnits(ctx.rules, units ?? available, `units unstationed from ${city}`);
   if (!covers(available, want)) {
     fail(
-      `${owner} has ${JSON.stringify(available)} from ${home} in ${city}, not ${JSON.stringify(want)}`,
+      `${owner} has ${JSON.stringify(available)} in its ${which} from ${home} in ${city}, not ${JSON.stringify(want)}`,
     );
   }
   const remaining: UnitCounts = { ...want };

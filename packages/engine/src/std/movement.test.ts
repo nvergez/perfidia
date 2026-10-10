@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import fc from "fast-check";
-import type { MovementId, PlayerId, UnitCounts } from "@perfidia/protocol";
+import type { MovementId, PlayerId, Stationed, UnitCounts } from "@perfidia/protocol";
 import type { DepartureDraft } from "@perfidia/engine/contracts";
 import {
   StdError,
@@ -363,7 +363,8 @@ describe("bounce, startReturn and arrivals", () => {
         t: 6000,
         type: "shipment_delivered",
         public: false,
-        to: [{ p: "p2", as: "target" }],
+        // The recorded party, addressed as in `incoming_shipment` (§8.6).
+        to: [{ p: "p2", as: "party" }],
         data: {
           movement: m,
           to: "c2",
@@ -386,6 +387,23 @@ describe("bounce, startReturn and arrivals", () => {
     expect(ctx.state.movements).toEqual({});
   });
 
+  test("the recipient keeps one role over a shipment's or a support's lifetime: party from launch to arrival", () => {
+    const ctx = ctxAt(0);
+    const ship = launch(ctx, draft({ kind: "shipment", cargo: res(10, 0, 0) }), "p2");
+    const sup = launch(ctx, draft({ kind: "support", units: { pike: 2 } }), "p2");
+    advance(ctx, 10000);
+    expect(ctx.state.movements).toEqual({});
+    const roleOf = (type: string, m: MovementId) =>
+      ctx
+        .ofType(type)
+        .filter((e) => e.data["movement"] === m)
+        .flatMap((e) => e.to.filter((x) => x.p === "p2").map((x) => x.as));
+    expect(roleOf("incoming_shipment", ship)).toEqual(["party"]);
+    expect(roleOf("shipment_delivered", ship)).toEqual(["party"]);
+    expect(roleOf("incoming_support", sup)).toEqual(["party"]);
+    expect(roleOf("support_arrived", sup)).toEqual(["party"]);
+  });
+
   test("a shipment to one's own city is reported once, in full", () => {
     const ctx = ctxAt(0);
     const m = launch(ctx, draft({ kind: "shipment", to: "c4", cargo: res(5, 0, 0) }), "p1");
@@ -397,6 +415,14 @@ describe("bounce, startReturn and arrivals", () => {
     expect(delivered[0]?.data["res"]).toEqual(res(5, 0, 0));
   });
 });
+
+/** A hold group and a support group of p1 from c1, as stationed in c2. */
+function holdAndSupport(): Stationed[] {
+  return [
+    { owner: "p1", home: "c1", role: "hold", units: { pike: 2 } },
+    { owner: "p1", home: "c1", role: "support", units: { pike: 3 } },
+  ];
+}
 
 describe("station and unstation", () => {
   test("groups merge by (owner, home, role) and stay sorted", () => {
@@ -428,19 +454,40 @@ describe("station and unstation", () => {
       { owner: "p1", home: "c1", role: "support", units: { pike: 3 } },
       { owner: "p1", home: "c4", role: "support", units: { pike: 5 } },
     ];
+    // Without a role, the support group gives first: the garrison keeps as much as it can.
     expect(unstation(ctx, "c2", "p1", "c1", { pike: 4 })).toEqual({ pike: 4 });
     expect(c2.stationed).toEqual([
-      { owner: "p1", home: "c1", role: "hold", units: { colonist: 1 } },
-      { owner: "p1", home: "c1", role: "support", units: { pike: 1 } },
+      { owner: "p1", home: "c1", role: "hold", units: { pike: 1, colonist: 1 } },
       { owner: "p1", home: "c4", role: "support", units: { pike: 5 } },
     ]);
     expect(() => unstation(ctx, "c2", "p1", "c4", { pike: 6 })).toThrow(StdError);
-    expect(c2.stationed[2]?.units).toEqual({ pike: 5 }); // a failed unstation changes nothing
+    expect(c2.stationed[1]?.units).toEqual({ pike: 5 }); // a failed unstation changes nothing
     expect(unstation(ctx, "c2", "p1", "c1")).toEqual({ pike: 1, colonist: 1 });
     expect(c2.stationed).toEqual([
       { owner: "p1", home: "c4", role: "support", units: { pike: 5 } },
     ]);
     expect(() => unstation(ctx, "c2", "p3", "c3")).toThrow(StdError);
+  });
+
+  test("unstation with a role uses only the group of that role", () => {
+    const ctx = ctxAt();
+    const c2 = cityOf(ctx, "c2");
+    c2.stationed = holdAndSupport();
+    expect(unstation(ctx, "c2", "p1", "c1", { pike: 3 }, "support")).toEqual({ pike: 3 });
+    expect(c2.stationed).toEqual([{ owner: "p1", home: "c1", role: "hold", units: { pike: 2 } }]);
+    c2.stationed = holdAndSupport();
+    // The hold group's 2 pikes never make up for a short support group.
+    expect(() => unstation(ctx, "c2", "p1", "c1", { pike: 4 }, "support")).toThrow(StdError);
+    expect(c2.stationed).toEqual(holdAndSupport());
+    expect(unstation(ctx, "c2", "p1", "c1", undefined, "hold")).toEqual({ pike: 2 });
+    expect(c2.stationed).toEqual([
+      { owner: "p1", home: "c1", role: "support", units: { pike: 3 } },
+    ]);
+    expect(() => unstation(ctx, "c2", "p1", "c1", undefined, "hold")).toThrow(StdError);
+    expect(unstation(ctx, "c2", "p1", "c1", { pike: 1 }, "support")).toEqual({ pike: 1 });
+    expect(c2.stationed).toEqual([
+      { owner: "p1", home: "c1", role: "support", units: { pike: 2 } },
+    ]);
   });
 });
 
@@ -539,17 +586,26 @@ function apply(ctx: TestCtx, op: Op): void {
     }
     case 6: {
       const groups = Object.values(ctx.state.cities).flatMap((c) =>
-        c.stationed.map((g) => ({ city: c.id, owner: g.owner, home: g.home, units: g.units })),
+        c.stationed.map((g) => ({ city: c.id, ...g })),
       );
       const g = pick(groups, op.b);
       if (g === undefined) return;
       const units = op.c % 2 === 0 ? undefined : partOf(g.units, op.c);
-      const taken = unstation(ctx, g.city, g.owner, g.home, units);
+      const taken = unstation(
+        ctx,
+        g.city,
+        g.owner,
+        g.home,
+        units,
+        op.a % 2 === 0 ? g.role : undefined,
+      );
       if (Object.keys(taken).length === 0) return;
-      if (ctx.state.cities[g.home]?.owner === g.owner) {
+      if (ctx.state.cities[g.home]?.owner === g.owner && op.a % 3 !== 0) {
         startReturn(ctx, { owner: g.owner, home: g.home, from: g.city, units: taken });
       } else {
-        station(ctx, g.city, { owner: g.owner, home: g.home, role: "support", units: taken });
+        // Sometimes back as a hold group, so groups of both roles meet and homes get held.
+        const role = op.a % 3 === 0 ? "hold" : "support";
+        station(ctx, g.city, { owner: g.owner, home: g.home, role, units: taken });
       }
       return;
     }
@@ -606,10 +662,7 @@ describe("deliverSupport", () => {
       { owner: "p1", home: "c1", role: "support", units: { pike: 4, axe: 1 } },
     ]);
     expect(ctx.ofType("support_arrived").map((e) => [e.to, e.data])).toEqual([
-      [
-        [{ p: "p2", as: "target" }],
-        { movement: m, by: "p1", to: "c2", units: { pike: 4, axe: 1 } },
-      ],
+      [[{ p: "p2", as: "party" }], { movement: m, by: "p1", to: "c2", units: { pike: 4, axe: 1 } }],
       [[{ p: "p1", as: "self" }], { movement: m, by: "p1", to: "c2" }],
     ]);
     expect(ctx.state.movements).toEqual({});
@@ -625,6 +678,11 @@ describe("deliverSupport", () => {
     deliverSupport(ctx, hold, "hold");
     expect(cityOf(ctx, "c2").stationed).toEqual([
       { owner: "p1", home: "c1", role: "hold", units: { pike: 3 } },
+    ]);
+    // The recorded party is the mover itself (a besieger reinforcing), so the owner is `target`.
+    expect(ctx.ofType("support_arrived").map((e) => e.to)).toEqual([
+      [{ p: "p2", as: "target" }],
+      [{ p: "p1", as: "self" }],
     ]);
     const own = launch(ctx, draft({ kind: "support", to: "c4", units: { pike: 1 } }), "p1");
     popArrival(ctx, own);

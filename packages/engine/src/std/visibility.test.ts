@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { PlayerId } from "@perfidia/protocol";
-import type { DepartureDraft } from "@perfidia/engine/contracts";
+import type { DepartureDraft, DepartureVerdict } from "@perfidia/engine/contracts";
 import {
   defaultDeparture,
   defaultVisibility,
@@ -203,6 +203,22 @@ describe("defaultDeparture", () => {
       violation: { code: "NO_UNITS", details: { kind: "attack", crossing: false } },
     });
     expect(v({ axe: 1 }, "c5", "i1")).toEqual({ ok: true, party: null });
+  });
+
+  test("the attack's fighter check never depends on the draft's key order, and an unknown id never throws", () => {
+    const r = ctxAt().read();
+    const v = (units: Record<string, number>) =>
+      defaultDeparture(r, draft({ kind: "attack", units }));
+    const noUnits: DepartureVerdict = {
+      ok: false,
+      violation: { code: "NO_UNITS", details: { kind: "attack", crossing: true } },
+    };
+    // A replayed action is parsed from canonical JSON (sorted keys): both orders must agree.
+    expect(v({ dragon: 1, axe: 1 })).toEqual({ ok: true, party: "p2" });
+    expect(v({ axe: 1, dragon: 1 })).toEqual({ ok: true, party: "p2" });
+    expect(v({ dragon: 1 })).toEqual(noUnits);
+    expect(v({ ferry: 1, colonist: 1, galley: 0 })).toEqual(noUnits);
+    expect(v({ galley: 0, colonist: 1, ferry: 1 })).toEqual(noUnits);
   });
 
   test("founding needs a free slot, a valid requested slot and a founding unit", () => {

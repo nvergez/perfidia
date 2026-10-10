@@ -229,6 +229,12 @@ describe("map, movements and relations", () => {
     expect(ctx.state.movements[a]?.kind).toBe("return");
     expect(inFlightCargo(ctx.read(), "c1")).toBe(150);
     expect(inFlightCargo(ctx.read(), "c4")).toBe(0);
+    // Only the current owner's cargo counts: another player's never reaches a cap (or its details).
+    cityOf(ctx, "c1").owner = "p3";
+    expect(inFlightCargo(ctx.read(), "c1")).toBe(0);
+    cityOf(ctx, "c1").owner = null;
+    expect(inFlightCargo(ctx.read(), "c1")).toBe(0);
+    expect(inFlightCargo(ctx.read(), "c99")).toBe(0);
   });
 
   test("relations: the default model, and a fixture hook that replaces it", () => {
