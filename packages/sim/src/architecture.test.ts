@@ -1,15 +1,18 @@
 // Source scan for the purity and layer rules that lint cannot express (docs/architecture.md
-// §2.3, §2.4, §6.1). It reads every non-test source of protocol, engine, gateway and bots and fails
-// on the `**` and `**=` operators, on any `Math` reference other than an allowlisted member, on
-// every forbidden edge of the engine layer matrix (type-only imports included) and on imports that
-// cross package boundaries other than through the declared upstream packages.
+// §2.3, §2.4, §6.1, §6.5). It reads every non-test source of protocol, engine, gateway and bots and
+// fails on the `**` and `**=` operators, on any `Math` reference other than an allowlisted member,
+// on Unicode property escapes (`\p{…}`, `\P{…}`) in regular expressions and in strings that may
+// become one, on every forbidden edge of the engine layer matrix (type-only imports included) and
+// on imports that cross package boundaries other than through the declared upstream packages.
 //
 // It uses a small TypeScript lexer rather than `Bun.Transpiler`: `transformSync` and `scan` strip
-// type-only imports and `export type … from`, which the layer matrix must see.
+// type-only imports and `export type … from`, which the layer matrix must see. Every regular
+// expression literal the lexer finds must compile, so a division misread as a regular expression
+// (which would hide the code between the slashes) fails the scan instead of passing silently.
 
 import { describe, expect, test } from "bun:test";
 import { existsSync, readFileSync, statSync } from "node:fs";
-import { dirname, join, relative, resolve, sep } from "node:path";
+import { dirname, join, posix, relative, resolve, sep } from "node:path";
 
 const REPO_ROOT = resolve(import.meta.dir, "../../..");
 
@@ -92,13 +95,16 @@ const PUNCTUATORS = [
   ">>",
 ];
 
-/** Keywords after which a `/` starts a regular expression rather than a division. */
+/**
+ * Keywords after which a `/` starts a regular expression rather than a division. They count only
+ * when they are not a property name (`obj.in / 2` is a division). `of` is apart: it is a keyword
+ * only in a `for (… of` head, and an ordinary identifier everywhere else.
+ */
 const REGEX_AFTER: ReadonlySet<string> = new Set([
   "return",
   "typeof",
   "instanceof",
   "in",
-  "of",
   "new",
   "delete",
   "void",
@@ -109,6 +115,15 @@ const REGEX_AFTER: ReadonlySet<string> = new Set([
   "yield",
   "await",
 ]);
+
+/** Declaration keywords: in `for (const of of xs)`, the first `of` is the binding. */
+const DECLARATIONS: ReadonlySet<string> = new Set(["const", "let", "var", "using"]);
+
+/** Statements whose parenthesised head is followed by a statement, so `/` after its `)` is a regex. */
+const STATEMENT_HEADS: ReadonlySet<string> = new Set(["if", "while", "with"]);
+
+/** What a `(` opened: a `for` head, another statement head, or an expression (call, group). */
+type Paren = "for" | "head" | "expression";
 
 const SIMPLE_ESCAPES: Readonly<Record<string, string>> = {
   n: "\n",
@@ -128,6 +143,17 @@ function isDigit(c: string | undefined): boolean {
   return c !== undefined && c >= "0" && c <= "9";
 }
 
+/** Whether a regular expression literal (`/body/flags`) compiles. */
+function compiles(literal: string): boolean {
+  const close = literal.lastIndexOf("/");
+  try {
+    RegExp(literal.slice(1, close), literal.slice(close + 1));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Splits TypeScript source into tokens, dropping whitespace and comments. Strings, template text
  * and regular expressions become opaque tokens, so their content never counts as code.
@@ -135,6 +161,7 @@ function isDigit(c: string | undefined): boolean {
 function tokenize(source: string): Token[] {
   const tokens: Token[] = [];
   const braces: ("brace" | "template")[] = [];
+  const parens: Paren[] = [];
   const n = source.length;
   let i = 0;
   // True when the previous token ends an expression, so a `/` is a division.
@@ -143,6 +170,35 @@ function tokenize(source: string): Token[] {
   const push = (kind: TokenKind, value: string, pos: number, endsExpression: boolean): void => {
     tokens.push({ kind, value, pos });
     exprEnd = endsExpression;
+  };
+
+  // The `back`-th token from the end, as a keyword: a name that is not a property name.
+  const keywordBack = (back: number): string | undefined => {
+    const t = tokens[tokens.length - back];
+    return t?.kind === "name" && !isMemberAccess(tokens[tokens.length - back - 1])
+      ? t.value
+      : undefined;
+  };
+
+  // Whether a `/` after the name `value`, about to be pushed, is a division.
+  const nameEndsExpression = (value: string): boolean => {
+    const previous = tokens.at(-1);
+    if (isMemberAccess(previous)) return true;
+    if (value !== "of") return !REGEX_AFTER.has(value);
+    // `of` is the for-of keyword right after the binding of a `for (` head: a name or a pattern.
+    const afterBinding =
+      isPunct(previous, "]") ||
+      isPunct(previous, "}") ||
+      (previous?.kind === "name" &&
+        !REGEX_AFTER.has(previous.value) &&
+        !DECLARATIONS.has(previous.value));
+    return !(parens.at(-1) === "for" && afterBinding);
+  };
+
+  const parenKind = (): Paren => {
+    const previous = keywordBack(1);
+    if (previous === "for" || (previous === "await" && keywordBack(2) === "for")) return "for";
+    return previous !== undefined && STATEMENT_HEADS.has(previous) ? "head" : "expression";
   };
 
   // Scans template text from `i` (just after "`" or after the "}" closing a substitution).
@@ -259,25 +315,36 @@ function tokenize(source: string): Token[] {
     const name = NAME.exec(source);
     if (name !== null) {
       i += name[0].length;
-      push("name", name[0], start, !REGEX_AFTER.has(name[0]));
+      push("name", name[0], start, nameEndsExpression(name[0]));
       continue;
     }
     if (c === "/" && !exprEnd) {
       const end = regexEnd();
       if (end > 0) {
+        const literal = source.slice(start, end);
+        if (!compiles(literal)) {
+          throw new ScanError(
+            "invalid regular expression literal (if this `/` is a division, the scanner misread it: add parentheses)",
+            start,
+          );
+        }
         i = end;
-        push("regex", source.slice(start, end), start, true);
+        push("regex", literal, start, true);
         continue;
       }
     }
     let p = PUNCTUATORS.find((candidate) => source.startsWith(candidate, i)) ?? c;
     if (p === "?." && isDigit(source[i + 2])) p = "?";
+    // A `)` closing a statement head (`if (…)`, `for (…)`) is followed by a statement.
+    let closesHead = false;
+    if (p === "(") parens.push(parenKind());
+    else if (p === ")") closesHead = (parens.pop() ?? "expression") !== "expression";
     i += p.length;
     if (p === "{") braces.push("brace");
     else if (p === "}") braces.pop();
     // A `!`, `++` or `--` right after an expression is postfix (non-null assertion, increment).
     const postfix = (p === "!" || p === "++" || p === "--") && exprEnd;
-    push("punct", p, start, p === ")" || p === "]" || p === "}" || postfix);
+    push("punct", p, start, (p === ")" && !closesHead) || p === "]" || p === "}" || postfix);
   }
   return tokens;
 }
@@ -331,6 +398,34 @@ function mathHits(tokens: readonly Token[]): Hit[] {
     });
   });
   return hits;
+}
+
+/** Whether a regular expression literal holds a `\p{…}` or `\P{…}` escape (not `\\p{`). */
+function hasPropertyEscape(literal: string): boolean {
+  for (let k = 1; k < literal.length; k += 1) {
+    if (literal[k] !== "\\") continue;
+    const next = literal[k + 1];
+    if ((next === "p" || next === "P") && literal[k + 2] === "{") return true;
+    k += 1;
+  }
+  return false;
+}
+
+/** A `\p{` or `\P{` in a string (cooked) or template (raw text) that may become a RegExp source. */
+const PROPERTY_ESCAPE_TEXT = /\\[pP]\{/;
+
+function unicodeHits(tokens: readonly Token[]): Hit[] {
+  return tokens
+    .filter((t) =>
+      t.kind === "regex"
+        ? hasPropertyEscape(t.value)
+        : (t.kind === "string" || t.kind === "template") && PROPERTY_ESCAPE_TEXT.test(t.value),
+    )
+    .map((t) => ({
+      pos: t.pos,
+      message:
+        "Unicode property escapes (\\p{…}, \\P{…}) depend on the runtime's Unicode tables; use ASCII classes (§6.5)",
+    }));
 }
 
 interface ImportRef {
@@ -442,23 +537,27 @@ function layerName(layer: Layer): string {
   return layer;
 }
 
+/** Source extensions: the scan reads all of them, and `SOURCE_FILE` and `isTestFile` accept them. */
+const SOURCE_EXTENSIONS = ["ts", "tsx", "mts", "cts", "js", "jsx", "mjs", "cjs"] as const;
 const SOURCE_FILE = /\.[cm]?[jt]sx?$/;
+const INDEX_FILE = /^index\.[cm]?[jt]sx?$/;
 
 /**
  * The layer of a path inside `packages/engine/src` (forward slashes, "" for `src` itself), or
  * null when it belongs to no layer of §2.3. `isDirectory` tells a directory import from a file.
+ * Only `src/index.*` is the top barrel and only `src/rulesets/index.*` the registry: any other
+ * file directly under `src/` or `src/rulesets/` is in no layer.
  */
 function engineLayer(path: string, isDirectory: boolean): Layer | null {
   const segments = path === "" ? [] : path.split("/");
   const [first, second] = segments;
   if (first === undefined) return "top";
-  if (segments.length === 1 && !isDirectory)
-    return /^index\.[cm]?[jt]sx?$/.test(first) ? "top" : null;
+  if (segments.length === 1 && !isDirectory) return INDEX_FILE.test(first) ? "top" : null;
   const group = asGroup(first);
   if (group !== undefined) return group;
   if (first !== "rulesets") return null;
   if (second === undefined) return "registry";
-  if (segments.length === 2 && !isDirectory) return "registry";
+  if (segments.length === 2 && !isDirectory) return INDEX_FILE.test(second) ? "registry" : null;
   return `ruleset:${second}`;
 }
 
@@ -590,7 +689,7 @@ function scanFile(file: SourceFile, fs: FsView = realFs): string[] {
     throw error;
   }
 
-  const hits = [...operatorHits(tokens), ...mathHits(tokens)];
+  const hits = [...operatorHits(tokens), ...mathHits(tokens), ...unicodeHits(tokens)];
   const upstream = SCANNED_PACKAGES[pkg] ?? [];
   const layer =
     pkg === "engine" ? engineLayer(file.path.slice("packages/engine/src/".length), false) : null;
@@ -628,11 +727,10 @@ function isTestFile(path: string): boolean {
   return /\.test\.[cm]?[jt]sx?$/.test(path);
 }
 
+const SCAN_GLOB = `packages/{${Object.keys(SCANNED_PACKAGES).join(",")}}/src/**/*.{${SOURCE_EXTENSIONS.join(",")}}`;
+
 function scannedFiles(): SourceFile[] {
-  const glob = new Bun.Glob(
-    `packages/{${Object.keys(SCANNED_PACKAGES).join(",")}}/src/**/*.{ts,tsx,mts,cts}`,
-  );
-  return [...glob.scanSync({ cwd: REPO_ROOT })]
+  return [...new Bun.Glob(SCAN_GLOB).scanSync({ cwd: REPO_ROOT, dot: true })]
     .map(toPosix)
     .filter((path) => !isTestFile(path))
     .toSorted((a, b) => (a < b ? -1 : a > b ? 1 : 0))
@@ -650,6 +748,19 @@ describe("architecture source scan", () => {
       expect(files.some((f) => f.path === `packages/${pkg}/src/index.ts`)).toBe(true);
     }
     expect(files.some((f) => isTestFile(f.path))).toBe(false);
+  });
+
+  test("reads every source extension, in every scanned package and only there", () => {
+    const glob = new Bun.Glob(SCAN_GLOB);
+    for (const pkg of Object.keys(SCANNED_PACKAGES)) {
+      for (const extension of SOURCE_EXTENSIONS) {
+        const path = `packages/${pkg}/src/core/p.${extension}`;
+        expect([path, glob.match(path), SOURCE_FILE.test(path)]).toEqual([path, true, true]);
+        expect(isTestFile(`packages/${pkg}/src/core/p.test.${extension}`)).toBe(true);
+      }
+    }
+    expect(glob.match("packages/sim/src/a.ts")).toBe(false);
+    expect(glob.match("packages/engine/a.ts")).toBe(false);
   });
 
   test("no violation of §2.3, §2.4 or §6.1", () => {
@@ -670,6 +781,7 @@ function scanVirtual(path: string, source: string): string[] {
 const CORE_FILE = "packages/engine/src/core/a.ts";
 
 describe("scanner: operators", () => {
+  const OPERATOR = "operator is implementation-approximated";
   const flagged: readonly (readonly [string, number])[] = [
     ["const a = 2 ** 3;", 1],
     ["let x = 2;\nx **= 2;", 1],
@@ -679,10 +791,31 @@ describe("scanner: operators", () => {
     ["const a = b! / 2; const c = 2 ** 3; const d = e / 2;", 1],
     ["const a = (b)[0]! / 2; const c = 2 ** 3; const d = e / 2;", 1],
     ["const r = /x/; const n = 2 ** 2;", 1],
+    // A keyword used as a property name, or `of` outside a for-of head, ends an expression.
+    ["const obj = { in: 8 };\nexport const b = obj.in / 2 ** 4 / 1;", 1],
+    ["o.in / 2; 2 ** 3; o.c / 3;", 1],
+    ["const of = 4;\nexport const a = of / 2 ** 3 / 1;", 1],
+    ["x.of / 2 ** 3 / 1;", 1],
+    ["m.delete / 2 ** 3 / 1;", 1],
+    ["a?.typeof / 2 ** 3 / 1;", 1],
+    ["class A {\n  #in = 1;\n  f(): number {\n    return this.#in / 2 ** 3 / 1;\n  }\n}", 1],
+    ["typeof of / 2 ** 3 / 1;", 1],
+    ["for (let i = 0; i < of / 2 ** 3 / 1; i += 1) {}", 1],
+    ["for (const x of xs.map((y) => of / 2 ** 3 / y)) {}", 1],
+    ["for (const x of [of / 2 ** 3 / 1]) {}", 1],
+    ["for (const x of xs) {}\nconst c = of / 2 ** 3 / 1;", 1],
+    // A `)` that closes a call or a group ends an expression.
+    ["const r = f(a) / 2 ** 3 / 1;", 1],
+    ["const r = (a) / 2 ** 3 / 1;", 1],
+    ["if (f(a) / 2 ** 3 / 1) {}", 1],
+    ["const r = obj.if(a) / 2 ** 3 / 1;", 1],
+    ["const r = x.for(a) / 2 ** 3 / 1;", 1],
   ];
   for (const [source, count] of flagged) {
     test(`flags ${JSON.stringify(source)}`, () => {
-      expect(scanVirtual(CORE_FILE, source)).toHaveLength(count);
+      const findings = scanVirtual(CORE_FILE, source);
+      expect(findings).toHaveLength(count);
+      expect(findings.every((finding) => finding.includes(OPERATOR))).toBe(true);
     });
   }
 
@@ -694,10 +827,63 @@ describe("scanner: operators", () => {
     "const a = '**=';",
     "const a = `2 ** 3`;",
     "const r = /[**]/;",
-    "const r = (/a\\/**/);",
-    "const r = [/[/]**/u];",
+    "const r = (/a\\/[**]/);",
+    "const r = [/[/][**]/u];",
     "const a = 2 * 3 * 4;",
     "let a = 2;\na *= 3;",
+    // After the binding of a for-of head, and after a statement head, a `/` starts a regex.
+    "for (const x of /[**]/g.exec(s) ?? []) {}",
+    "for (const [a] of /[**]/g.exec(s) ?? []) {}",
+    "for (const { a } of /[**]/g.exec(s) ?? []) {}",
+    "for await (const x of /[**]/g.exec(s) ?? []) {}",
+    "for (const of of /[**]/g.exec(s) ?? []) {}",
+    "for (x.y of /[**]/g.exec(s) ?? []) {}",
+    "for (const k in /[**]/) {}",
+    "if (a) /[**]/.test(s);",
+    "if (a) {} else if (b) /[**]/.test(s);",
+    "while (a) /[**]/.test(s);",
+    "for (;;) /[**]/.test(s);",
+  ];
+  for (const source of ignored) {
+    test(`ignores ${JSON.stringify(source)}`, () => {
+      expect(scanVirtual(CORE_FILE, source)).toEqual([]);
+    });
+  }
+
+  // Every regular expression literal must compile, so a misread division fails loudly.
+  const unscannable = ["const r = /a**/;", "const r = /x/gg;", "const r = a in / 2 ** 3 / 1;"];
+  for (const source of unscannable) {
+    test(`cannot scan ${JSON.stringify(source)}`, () => {
+      const findings = scanVirtual(CORE_FILE, source);
+      expect(findings).toHaveLength(1);
+      expect(findings[0]).toContain("cannot scan: invalid regular expression literal");
+    });
+  }
+});
+
+describe("scanner: Unicode property escapes (§6.5)", () => {
+  const flagged = [
+    "const r = /\\p{L}/u;",
+    "const r = /[\\P{ASCII}]/u;",
+    "const r = /^\\p{Script=Greek}+$/u;",
+    'const r = new RegExp("\\\\p{L}", "u");',
+    "const r = new RegExp('[\\\\P{L}]', 'u');",
+    'const r = new RegExp(String.raw`\\p{L}`, "u");',
+  ];
+  for (const source of flagged) {
+    test(`flags ${JSON.stringify(source)}`, () => {
+      const findings = scanVirtual(CORE_FILE, source);
+      expect(findings).toHaveLength(1);
+      expect(findings[0]).toContain("Unicode property escapes");
+    });
+  }
+
+  const ignored = [
+    "const r = /[A-Za-z0-9]/;",
+    "const r = /\\\\p{L}/;",
+    "const r = /p{2}/;",
+    'const s = "p{L}";',
+    "// /\\p{L}/u",
   ];
   for (const source of ignored) {
     test(`ignores ${JSON.stringify(source)}`, () => {
@@ -809,86 +995,188 @@ describe("scanner: module references", () => {
   });
 });
 
-describe("scanner: engine layer matrix (§2.3)", () => {
-  const forbidden: readonly (readonly [string, string])[] = [
-    ["core/a.ts", "@perfidia/protocol"],
-    ["core/a.ts", "@perfidia/engine/contracts"],
-    ["core/a.ts", "../contracts/index.ts"],
-    ["core/a.ts", "zod"],
-    ["contracts/a.ts", "@perfidia/engine/core"],
-    ["contracts/a.ts", "../core/index.ts"],
-    ["contracts/a.ts", "@perfidia/engine/kernel"],
-    ["contracts/a.ts", "../std/index.ts"],
-    ["kernel/a.ts", "@perfidia/engine/std"],
-    ["kernel/a.ts", "../std/index.ts"],
-    ["kernel/a.ts", "@perfidia/engine/domain"],
-    ["kernel/a.ts", "../domain/index.ts"],
-    ["kernel/a.ts", "@perfidia/engine/rulesets"],
-    ["kernel/a.ts", "../rulesets/index.ts"],
-    ["kernel/a.ts", "@perfidia/engine/testing"],
-    ["std/a.ts", "@perfidia/engine/kernel"],
-    ["std/a.ts", "../kernel/index.ts"],
-    ["std/a.ts", "../kernel"],
-    ["std/a.ts", "@perfidia/engine/domain"],
-    ["std/a.ts", "../rulesets/x/index.ts"],
-    ["std/a.ts", "@perfidia/engine/rulesets/x/sub"],
-    ["domain/a.ts", "@perfidia/engine"],
-    ["domain/a.ts", "../index.ts"],
-    ["domain/a.ts", ".."],
-    ["domain/a.ts", "@perfidia/engine/kernel"],
-    ["domain/a.ts", "@perfidia/engine/rulesets/x"],
-    ["rulesets/x/a.ts", "@perfidia/engine/kernel"],
-    ["rulesets/x/a.ts", "../../kernel/index.ts"],
-    ["rulesets/x/a.ts", "@perfidia/engine/testing"],
-    ["rulesets/x/a.ts", "../../testing/index.ts"],
-    ["rulesets/x/a.ts", "@perfidia/engine/rulesets"],
-    ["rulesets/x/a.ts", "../index.ts"],
-    ["rulesets/x/a.ts", "@perfidia/engine/rulesets/y"],
-    ["rulesets/x/a.ts", "../y/index.ts"],
-    ["rulesets/x/a.ts", "@perfidia/engine"],
-    ["rulesets/perfidia-1/a.ts", "../sandbox-1/index.ts"],
-    ["testing/a.ts", "@perfidia/engine"],
-    ["rulesets/index.ts", "../index.ts"],
-    ["index.ts", "@perfidia/engine"],
-    ["kernel/a.ts", "@perfidia/gateway"],
-    ["kernel/a.ts", "@perfidia/engine/src/core/index.ts"],
-    ["kernel/a.ts", "../../../protocol/src/index.ts"],
-    ["utils/a.ts", "./b.ts"],
+describe("scanner: engine layer matrix (§2.3), every edge in every form", () => {
+  const ALL_TARGETS = [
+    "protocol",
+    "core",
+    "contracts",
+    "kernel",
+    "testing",
+    "std",
+    "domain",
+    "registry",
+    "ruleset x",
+    "ruleset y",
+    "top",
+  ] as const;
+  type MatrixTarget = (typeof ALL_TARGETS)[number];
+
+  // Where each target lives under packages/engine/src (null: outside the engine), its public
+  // path, and how a finding names it.
+  const TARGETS: Readonly<
+    Record<
+      MatrixTarget,
+      { readonly dir: string | null; readonly path: string; readonly shown: string }
+    >
+  > = {
+    protocol: { dir: null, path: "@perfidia/protocol", shown: "@perfidia/protocol" },
+    core: { dir: "core", path: "@perfidia/engine/core", shown: "core" },
+    contracts: { dir: "contracts", path: "@perfidia/engine/contracts", shown: "contracts" },
+    kernel: { dir: "kernel", path: "@perfidia/engine/kernel", shown: "kernel" },
+    testing: { dir: "testing", path: "@perfidia/engine/testing", shown: "testing" },
+    std: { dir: "std", path: "@perfidia/engine/std", shown: "std" },
+    domain: { dir: "domain", path: "@perfidia/engine/domain", shown: "domain" },
+    registry: {
+      dir: "rulesets",
+      path: "@perfidia/engine/rulesets",
+      shown: "rulesets/index.ts (registry)",
+    },
+    "ruleset x": { dir: "rulesets/x", path: "@perfidia/engine/rulesets/x", shown: "rulesets/x" },
+    "ruleset y": { dir: "rulesets/y", path: "@perfidia/engine/rulesets/y", shown: "rulesets/y" },
+    top: { dir: "", path: "@perfidia/engine", shown: "the top barrel" },
+  };
+  const ANYTHING_IN_THE_ENGINE = ALL_TARGETS.filter((target) => target !== "top");
+  const RULESET_MAY: readonly MatrixTarget[] = [
+    "ruleset x",
+    "protocol",
+    "core",
+    "contracts",
+    "std",
+    "domain",
   ];
-  for (const [from, specifier] of forbidden) {
-    test(`${from} must not import ${JSON.stringify(specifier)}`, () => {
-      const source = `import type { T } from "${specifier}";`;
-      expect(scanVirtual(`packages/engine/src/${from}`, source).length).toBeGreaterThan(0);
-    });
+
+  // A literal copy of the "May import" column of §2.3, plus each layer's own group. Everything
+  // else is forbidden; nothing imports the top barrel.
+  const FROM: readonly {
+    readonly file: string;
+    readonly shown: string;
+    readonly may: readonly MatrixTarget[];
+  }[] = [
+    { file: "core/a.ts", shown: "core", may: ["core"] },
+    { file: "contracts/a.ts", shown: "contracts", may: ["contracts", "protocol"] },
+    { file: "kernel/a.ts", shown: "kernel", may: ["kernel", "protocol", "core", "contracts"] },
+    { file: "std/a.ts", shown: "std", may: ["std", "protocol", "core", "contracts"] },
+    {
+      file: "domain/a.ts",
+      shown: "domain",
+      may: ["domain", "protocol", "core", "contracts", "std"],
+    },
+    { file: "rulesets/x/a.ts", shown: "rulesets/x", may: RULESET_MAY },
+    { file: "rulesets/x/deep/a.ts", shown: "rulesets/x", may: RULESET_MAY },
+    { file: "rulesets/index.ts", shown: "registry", may: ANYTHING_IN_THE_ENGINE },
+    { file: "testing/a.ts", shown: "testing", may: ANYTHING_IN_THE_ENGINE },
+    { file: "index.ts", shown: "top barrel", may: ANYTHING_IN_THE_ENGINE },
+  ];
+
+  // Package path, relative path to the target's index file and relative directory path.
+  const specifiers = (fromFile: string, target: MatrixTarget): string[] => {
+    const { dir, path } = TARGETS[target];
+    if (dir === null) return [path];
+    const relativeDir = posix.relative(posix.dirname(`src/${fromFile}`), posix.join("src", dir));
+    const directory =
+      relativeDir === "" ? "." : relativeDir.startsWith("..") ? relativeDir : `./${relativeDir}`;
+    return [path, `${directory}/index.ts`, directory];
+  };
+
+  const STATEMENTS: readonly ((specifier: string) => string)[] = [
+    (s) => `import type { T } from "${s}";`,
+    (s) => `import { T } from "${s}";`,
+    (s) => `import "${s}";`,
+    (s) => `export * from "${s}";`,
+    (s) => `export type { T } from "${s}";`,
+    (s) => `const m = await import("${s}");`,
+  ];
+
+  for (const from of FROM) {
+    for (const target of ALL_TARGETS) {
+      const allowed = from.may.includes(target);
+      const expected =
+        target === "top"
+          ? "nothing inside the engine imports the top barrel"
+          : `${from.shown} must not import ${TARGETS[target].shown} (§2.3`;
+      for (const specifier of specifiers(from.file, target)) {
+        // One finding naming this specifier and the expected rule, or none if the edge is allowed.
+        const outcome = (statement: string): string => {
+          const findings = scanVirtual(`packages/engine/src/${from.file}`, statement);
+          if (findings.length === 0) return `${statement} -> allowed`;
+          const [only] = findings;
+          return findings.length === 1 &&
+            only?.includes(`"${specifier}": `) &&
+            only.includes(expected)
+            ? `${statement} -> forbidden`
+            : `${statement} -> unexpected: ${findings.join(" | ")}`;
+        };
+        const verb = allowed ? "may" : "must not";
+        test(`${from.shown} (${from.file}) ${verb} import ${target} as ${JSON.stringify(specifier)}`, () => {
+          const statements = STATEMENTS.map((statement) => statement(specifier));
+          expect(statements.map(outcome)).toEqual(
+            statements.map((statement) => `${statement} -> ${allowed ? "allowed" : "forbidden"}`),
+          );
+        });
+      }
+    }
   }
 
-  const allowed: readonly (readonly [string, string])[] = [
-    ["core/a.ts", "./b.ts"],
-    ["contracts/a.ts", "@perfidia/protocol"],
-    ["kernel/a.ts", "@perfidia/engine/core"],
-    ["kernel/a.ts", "../contracts/index.ts"],
-    ["kernel/a.ts", "./queue.ts"],
-    ["std/a.ts", "@perfidia/engine/contracts"],
-    ["domain/a.ts", "@perfidia/engine/std"],
-    ["domain/a.ts", "../std/index.ts"],
-    ["rulesets/x/a.ts", "@perfidia/engine/domain"],
-    ["rulesets/x/a.ts", "../../std/index.ts"],
-    ["rulesets/x/a.ts", "./combat.ts"],
-    ["rulesets/x/deep/a.ts", "../index.ts"],
-    ["rulesets/x/a.ts", "@perfidia/engine/rulesets/x"],
-    ["rulesets/x/a.ts", "@perfidia/engine/rulesets/x/sub"],
-    ["rulesets/index.ts", "./x/index.ts"],
-    ["rulesets/index.ts", "@perfidia/engine/rulesets/x"],
-    ["testing/a.ts", "@perfidia/engine/kernel"],
-    ["testing/a.ts", "../rulesets/x/index.ts"],
-    ["testing/a.ts", "fast-check"],
-    ["index.ts", "./kernel/index.ts"],
-    ["index.ts", "@perfidia/engine/rulesets"],
+  test("every from-file of the table is in a layer", () => {
+    expect(FROM.map((from) => scanVirtual(`packages/engine/src/${from.file}`, ""))).toEqual(
+      FROM.map(() => []),
+    );
+  });
+});
+
+describe("scanner: engine paths outside the table", () => {
+  const cases: readonly (readonly [string, string, readonly string[]])[] = [
+    ["core/a.ts", "zod", ["core may not import an external package"]],
+    ["kernel/a.ts", "@perfidia/gateway", ["the engine must not import @perfidia/gateway"]],
+    ["kernel/a.ts", "@perfidia/engine/src/core/index.ts", ["not a path of the engine exports map"]],
+    ["kernel/a.ts", "@perfidia/engine/core/int.ts", ["not a path of the engine exports map"]],
+    [
+      "kernel/a.ts",
+      "../../../protocol/src/index.ts",
+      ["relative import leaves packages/engine/src"],
+    ],
+    ["std/a.ts", "@perfidia/engine/rulesets/x/sub", ["std must not import rulesets/x"]],
+    ["std/a.ts", "../rulesets/x/sub/a.ts", ["std must not import rulesets/x"]],
+    [
+      "rulesets/x/a.ts",
+      "@perfidia/engine/rulesets/y/sub",
+      ["rulesets/x must not import rulesets/y"],
+    ],
+    ["rulesets/x/a.ts", "../y/sub/a.ts", ["rulesets/x must not import rulesets/y"]],
+    ["rulesets/perfidia-1/a.ts", "../sandbox-1/index.ts", ["must not import rulesets/sandbox-1"]],
+    // Only rulesets/index.* is the registry; other files directly under rulesets/ are in no layer.
+    ["rulesets/x/a.ts", "../helpers.ts", ['"rulesets/helpers.ts" is in no engine layer']],
+    ["rulesets/index.ts", "./helpers.ts", ['"rulesets/helpers.ts" is in no engine layer']],
+    ["testing/a.ts", "../utils/a.ts", ['"utils/a.ts" is in no engine layer']],
+    ["rulesets/helpers.ts", "@perfidia/engine/kernel", ["this engine file is in no layer"]],
+    ["rulesets/helpers.ts", "../kernel/index.ts", ["this engine file is in no layer"]],
+    ["rulesets/helpers.ts", "./x/index.ts", ["this engine file is in no layer"]],
+    ["a.ts", "./kernel/index.ts", ["this engine file is in no layer"]],
+    [
+      "utils/a.ts",
+      "./b.ts",
+      ["this engine file is in no layer", '"utils/b.ts" is in no engine layer'],
+    ],
+    ["kernel/a.ts", "./queue.ts", []],
+    ["rulesets/x/a.ts", "./combat.ts", []],
+    ["rulesets/x/deep/a.ts", "../combat.ts", []],
+    ["rulesets/x/a.ts", "@perfidia/engine/rulesets/x/sub", []],
+    ["rulesets/index.ts", "./x/sub/a.ts", []],
+    ["testing/a.ts", "fast-check", []],
+    ["index.ts", "zod", []],
   ];
-  for (const [from, specifier] of allowed) {
-    test(`${from} may import ${JSON.stringify(specifier)}`, () => {
-      const source = `import { T } from "${specifier}";`;
-      expect(scanVirtual(`packages/engine/src/${from}`, source)).toEqual([]);
+  for (const [from, specifier, expected] of cases) {
+    const verb = expected.length === 0 ? "may" : "must not";
+    test(`${from} ${verb} import ${JSON.stringify(specifier)}`, () => {
+      for (const statement of [
+        `import type { T } from "${specifier}";`,
+        `import "${specifier}";`,
+        `export * from "${specifier}";`,
+      ]) {
+        const findings = scanVirtual(`packages/engine/src/${from}`, statement);
+        expect(findings).toHaveLength(expected.length);
+        expected.forEach((text, k) => expect(findings[k]).toContain(text));
+      }
     });
   }
 });

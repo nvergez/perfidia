@@ -38,6 +38,11 @@
       }
     ]
   },
+  // The import plugin is enabled per override (docs/architecture.md §2.4), so oxlint builds no
+  // module graph and only the plugin's single-file rules run: no-nodejs-modules, and from the
+  // categories no-unassigned-import, no-absolute-path and no-empty-named-blocks. Cross-module rules
+  // (default, namespace, no-named-as-default, no-named-as-default-member, no-self-import) never
+  // fire, which is why tests keep fast-check's default-import idiom `fc.assert(fc.property(…))`.
   "overrides": [
     {
       "files": [
@@ -315,6 +320,10 @@
           {
             "property": "toExponential",
             "message": "Locale- and Unicode-table-dependent output is not reproducible across runtimes (§6.5). Format integers with core's fmt helpers."
+          },
+          {
+            "property": "normalize",
+            "message": "String.prototype.normalize depends on the runtime's Unicode tables, so results are not reproducible across runtimes (§6.5)."
           }
         ]
       }
@@ -589,9 +598,12 @@
           {
             "property": "toExponential",
             "message": "Locale- and Unicode-table-dependent output is not reproducible across runtimes (§6.5). Format integers with core's fmt helpers."
+          },
+          {
+            "property": "normalize",
+            "message": "String.prototype.normalize depends on the runtime's Unicode tables, so results are not reproducible across runtimes (§6.5)."
           }
         ],
-        "import/no-named-as-default-member": "off",
         "import/no-unassigned-import": "off"
       }
     },
@@ -637,7 +649,6 @@
             ]
           }
         ],
-        "import/no-named-as-default-member": "off",
         "import/no-unassigned-import": "off"
       }
     },
