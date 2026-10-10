@@ -92,4 +92,17 @@ describe("the bound API", () => {
     ]);
     expect(Object.keys(engine.domain.arrivals)).toEqual(["support", "shipment", "found", "return"]);
   });
+
+  test("the domain module holds no mutable shared object (§6.5 rule 6)", () => {
+    const shared: [string, unknown][] = [
+      ["domain", domain],
+      ["domain.actions", domain.actions],
+      ["domain.events", domain.events],
+      ["domain.arrivals", domain.arrivals],
+      ["domain.invariants", domain.invariants],
+      ...Object.entries(domain.actions).map(([k, h]): [string, unknown] => [`actions.${k}`, h]),
+      ...engine.diplomacyInvariants.map((inv): [string, unknown] => [inv.name, inv]),
+    ];
+    expect(shared.filter(([, v]) => !Object.isFrozen(v)).map(([k]) => k)).toEqual([]);
+  });
 });

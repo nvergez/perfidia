@@ -168,8 +168,36 @@ describe("build", () => {
         cap: 1000,
         requiredLevel: 2,
         need_stone: 1250,
+        availableAt: null,
       },
     });
+  });
+
+  test("EXCEEDS_STORAGE is available when a queued storage item reaches the level needed", () => {
+    const { state } = world();
+    cityOf(state, "c1").buildings["rampart"] = 4;
+    const m = load(state);
+    // vault 2 at tower 1: floor(500 × 2 × 10 / 10) = 1000 s.
+    expect(accepted(m.apply("p1", build("c1", "vault")))).toMatchObject({
+      level: 2,
+      end: at(1000),
+    });
+    expect(violation(m.apply("p1", build("c1", "rampart")))).toEqual({
+      code: "EXCEEDS_STORAGE",
+      details: {
+        building: "rampart",
+        level: 5,
+        city: "c1",
+        storage: "vault",
+        storageLevel: 1,
+        cap: 1000,
+        requiredLevel: 2,
+        need_stone: 1250,
+        availableAt: 1000,
+      },
+    });
+    m.advanceTo(1000);
+    expect(violation(m.apply("p1", build("c1", "rampart"))).code).toBe("INSUFFICIENT_RESOURCES");
   });
 
   test("completed requirements wait for the queued item (availableAt)", () => {
@@ -333,6 +361,7 @@ describe("recruit", () => {
         cap: 1000,
         requiredLevel: 2,
         need_gold: 1200,
+        availableAt: null,
       },
     });
   });

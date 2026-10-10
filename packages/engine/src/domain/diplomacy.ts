@@ -7,7 +7,7 @@
 // A ruleset with another relation model replaces `hooks.relations` and these three handlers
 // (`propose`, `answer`, `leave`); the bloc invariants below then switch themselves off.
 
-import type { ActionHandler, Ctx, Invariant, ReadCtx } from "@perfidia/engine/contracts";
+import type { Ctx, Invariant, ReadCtx } from "@perfidia/engine/contracts";
 import {
   endPact,
   leaveAlliance,
@@ -28,15 +28,37 @@ import {
   type Proposal,
   type ProposalId,
 } from "@perfidia/protocol";
-import { DomainError, lookup, need, pair, reject, type Rejection, type Verdict } from "./common.ts";
+import {
+  DomainError,
+  handler,
+  lookup,
+  need,
+  pair,
+  reject,
+  type Rejection,
+  type Verdict,
+} from "./common.ts";
 
-/** A living player other than the seat, or the rejection naming why not. */
-function counterpart(r: ReadCtx, seat: PlayerId, p: PlayerId): Rejection | null {
+/**
+ * A living player other than the seat, or the rejection naming why not. `INVALID_TARGET` names the
+ * `action` it rejects, so that an explanation fits a message as well as a proposal.
+ */
+function counterpart(
+  r: ReadCtx,
+  seat: PlayerId,
+  p: PlayerId,
+  action: "send_message" | "propose",
+): Rejection | null {
   const player = lookup(r.state.players, p);
   if (player === undefined) return reject("UNKNOWN_ID", { player: p });
-  if (p === seat) return reject("INVALID_TARGET", { player: p, reason: "self" });
-  if (!player.alive) return reject("INVALID_TARGET", { player: p, reason: "eliminated" });
+  if (p === seat) return reject("INVALID_TARGET", { player: p, action, reason: "self" });
+  if (!player.alive) return reject("INVALID_TARGET", { player: p, action, reason: "eliminated" });
   return null;
+}
+
+/** `INVALID_ARGS` for an `until` that is not strictly in the future (at propose or acceptance). */
+function untilPast(until: GameTime, now: GameTime): Rejection {
+  return reject("INVALID_ARGS", { field: "until", until, now, reason: "past" });
 }
 
 function pactKey(a: PlayerId, b: PlayerId): string {
@@ -76,7 +98,7 @@ export interface MessagePlan {
  * the text (it is never stored): to the sender as `self` and each recipient as `target`, public for
  * `"all"`. The daily cap is the gateway's.
  */
-export const sendMessage: ActionHandler<ActionOf<"send_message">, MessagePlan> = {
+export const sendMessage = handler<ActionOf<"send_message">, MessagePlan>({
   validate(r, seat, a): Verdict<MessagePlan> {
     const max = r.rules.diplomacy.messageMaxChars;
     if (a.text.length > max) {
@@ -85,7 +107,7 @@ export const sendMessage: ActionHandler<ActionOf<"send_message">, MessagePlan> =
     if (a.to === "all") return { ok: true, plan: { to: "all", text: a.text } };
     const to = [...new Set(a.to)].toSorted(compareIds);
     for (const p of to) {
-      const bad = counterpart(r, seat, p);
+      const bad = counterpart(r, seat, p, "send_message");
       if (bad !== null) return bad;
     }
     return { ok: true, plan: { to, text: a.text } };
@@ -106,7 +128,7 @@ export const sendMessage: ActionHandler<ActionOf<"send_message">, MessagePlan> =
     });
     return { message: id, to: plan.to === "all" ? "all" : [...plan.to] };
   },
-};
+});
 
 // propose -----------------------------------------------------------------------------------------
 
@@ -125,10 +147,16 @@ export interface ProposePlan {
  * a pact and only with `toolOptions.pactUntil`, strictly in the future. At most
  * `maxOpenProposals` open outgoing proposals and one per (from, to, kind). Acceptance conditions
  * (sizes, pact limits) are checked when the proposal is answered. Expires after `proposalTtl`.
+ *
+ * `INVALID_ARGS` says why with `reason`: `unsupported` (an optional field the ruleset does not
+ * accept, §3.7), `wrong_kind` (a field of the other kind) or `past` (an `until` already reached).
+ * `PROPOSAL_LIMIT` says why with `reason`: `duplicate` (an open proposal to `to` of this `kind`,
+ * `availableAt` its expiry) or `max_open` (`availableAt` the first expiry; `null` = never, when
+ * `maxOpenProposals` is 0).
  */
-export const propose: ActionHandler<ActionOf<"propose">, ProposePlan> = {
+export const propose = handler<ActionOf<"propose">, ProposePlan>({
   validate(r, seat, a): Verdict<ProposePlan> {
-    const bad = counterpart(r, seat, a.to);
+    const bad = counterpart(r, seat, a.to, "propose");
     if (bad !== null) return bad;
     const d = r.rules.diplomacy;
     if (a.text.length > d.proposalTextMaxChars) {
@@ -139,7 +167,9 @@ export const propose: ActionHandler<ActionOf<"propose">, ProposePlan> = {
       });
     }
     if (a.name !== null) {
-      if (a.kind !== "alliance") return reject("INVALID_ARGS", { field: "name", kind: a.kind });
+      if (a.kind !== "alliance") {
+        return reject("INVALID_ARGS", { field: "name", kind: a.kind, reason: "wrong_kind" });
+      }
       if (a.name.length > d.allianceNameMaxChars) {
         return reject("TEXT_TOO_LONG", {
           field: "name",
@@ -150,12 +180,16 @@ export const propose: ActionHandler<ActionOf<"propose">, ProposePlan> = {
     }
     if (a.until !== null) {
       if (!r.rules.toolOptions.pactUntil) {
-        return reject("INVALID_ARGS", { field: "until", ruleset: r.rules.ruleset });
+        return reject("INVALID_ARGS", {
+          field: "until",
+          ruleset: r.rules.ruleset,
+          reason: "unsupported",
+        });
       }
-      if (a.kind !== "pact") return reject("INVALID_ARGS", { field: "until", kind: a.kind });
-      if (a.until <= r.now) {
-        return reject("INVALID_ARGS", { field: "until", until: a.until, now: r.now });
+      if (a.kind !== "pact") {
+        return reject("INVALID_ARGS", { field: "until", kind: a.kind, reason: "wrong_kind" });
       }
+      if (a.until <= r.now) return untilPast(a.until, r.now);
     }
     if (relation(r, seat, a.to) === "ally") {
       return reject("ALREADY_ALLIED", { player: a.to, kind: a.kind });
@@ -163,21 +197,30 @@ export const propose: ActionHandler<ActionOf<"propose">, ProposePlan> = {
     const mine = sortedIds(r.state.proposals)
       .map((id) => r.state.proposals[id])
       .filter((p): p is DeepReadonly<Proposal> => p !== undefined && p.from === seat);
+    const max = d.maxOpenProposals;
     const same = mine.find((p) => p.to === a.to && p.kind === a.kind);
     if (same !== undefined) {
       return reject("PROPOSAL_LIMIT", {
-        player: a.to,
+        to: a.to,
         kind: a.kind,
         proposal: same.id,
         reason: "duplicate",
+        open: mine.length,
+        max,
         availableAt: same.expiresAt,
       });
     }
-    if (mine.length >= d.maxOpenProposals) {
+    if (mine.length >= max) {
+      // `mine` is empty only when the limit is 0: no slot ever frees.
+      const first = mine.reduce<GameTime | null>(
+        (t, p) => (t === null || p.expiresAt < t ? p.expiresAt : t),
+        null,
+      );
       return reject("PROPOSAL_LIMIT", {
-        max: d.maxOpenProposals,
+        reason: "max_open",
         open: mine.length,
-        availableAt: Math.min(...mine.map((p) => p.expiresAt)),
+        max,
+        availableAt: first,
       });
     }
     return {
@@ -225,7 +268,7 @@ export const propose: ActionHandler<ActionOf<"propose">, ProposePlan> = {
     });
     return { proposal: id, expires: pair(plan.expiresAt) };
   },
-};
+});
 
 // answer ------------------------------------------------------------------------------------------
 
@@ -276,9 +319,7 @@ function pactOutcome(r: ReadCtx, p: DeepReadonly<Proposal>): Rejection | Outcome
     return reject("ALREADY_ALLIED", { player: p.from, kind: p.kind });
   }
   const d = r.rules.diplomacy;
-  if (p.until !== null && p.until <= r.now) {
-    return reject("INVALID_ARGS", { field: "until", until: p.until, now: r.now });
-  }
+  if (p.until !== null && p.until <= r.now) return untilPast(p.until, r.now);
   const expiresAt = p.until ?? (d.pactDuration === null ? null : r.now + d.pactDuration);
   if (findPact(r, p.from, p.to) !== undefined) return { kind: "pact", renew: true, expiresAt };
   for (const who of [p.to, p.from]) {
@@ -377,14 +418,18 @@ function signPact(
  * - pact: not allies; `until` still ahead; a new pact needs both players below `maxPacts`, while a
  *   renewal (an existing pact) does not count, and restarts its expiry.
  */
-export const answer: ActionHandler<ActionOf<"answer">, AnswerPlan> = {
+export const answer = handler<ActionOf<"answer">, AnswerPlan>({
   validate(r, seat, a): Verdict<AnswerPlan> {
     const p = lookup(r.state.proposals, a.proposal);
     if (p === undefined || (p.to !== seat && p.from !== seat)) {
       return reject("PROPOSAL_NOT_FOUND", { proposal: a.proposal });
     }
     if (p.to !== seat) {
-      return reject("INVALID_TARGET", { proposal: a.proposal, reason: "own_proposal" });
+      return reject("INVALID_TARGET", {
+        proposal: a.proposal,
+        action: "answer",
+        reason: "own_proposal",
+      });
     }
     if (!a.accept)
       return { ok: true, plan: { proposal: a.proposal, accept: false, outcome: null } };
@@ -418,7 +463,7 @@ export const answer: ActionHandler<ActionOf<"answer">, AnswerPlan> = {
     const expires = o.expiresAt === null ? null : pair(o.expiresAt);
     return { proposal: p.id, accept: true, pact: p.from, renewed: o.renew, expires };
   },
-};
+});
 
 // leave -------------------------------------------------------------------------------------------
 
@@ -431,13 +476,15 @@ export type LeavePlan =
  * naming an ally also leaves the alliance; naming a pact partner ends that pact at once (public,
  * cause `left`); anyone else is `PACT_NOT_FOUND`. An alliance left with one member dissolves.
  */
-export const leave: ActionHandler<ActionOf<"leave">, LeavePlan> = {
+export const leave = handler<ActionOf<"leave">, LeavePlan>({
   validate(r, seat, a): Verdict<LeavePlan> {
     if (a.with !== null) {
       if (lookup(r.state.players, a.with) === undefined) {
         return reject("UNKNOWN_ID", { player: a.with });
       }
-      if (a.with === seat) return reject("INVALID_TARGET", { player: a.with, reason: "self" });
+      if (a.with === seat) {
+        return reject("INVALID_TARGET", { player: a.with, action: "leave", reason: "self" });
+      }
       const rel = relation(r, seat, a.with);
       if (rel === "pact") return { ok: true, plan: { leave: "pact", with: a.with } };
       if (rel !== "ally") return reject("PACT_NOT_FOUND", { player: a.with });
@@ -454,7 +501,7 @@ export const leave: ActionHandler<ActionOf<"leave">, LeavePlan> = {
     leaveAlliance(ctx, seat, "left");
     return { left: "alliance", alliance: plan.alliance };
   },
-};
+});
 
 // Scheduled events --------------------------------------------------------------------------------
 
@@ -580,7 +627,7 @@ function whileDefault(check: (r: ReadCtx) => string[]): (r: ReadCtx) => readonly
  * proposals within `maxOpenProposals`, one per (from, to, kind).
  */
 export const diplomacyInvariants: readonly Invariant[] = Object.freeze([
-  { name: "domain.alliances", level: "step", check: whileDefault(checkAlliances) },
-  { name: "domain.pacts", level: "step", check: whileDefault(checkPacts) },
-  { name: "domain.proposals", level: "step", check: whileDefault(checkProposals) },
+  Object.freeze({ name: "domain.alliances", level: "step", check: whileDefault(checkAlliances) }),
+  Object.freeze({ name: "domain.pacts", level: "step", check: whileDefault(checkPacts) }),
+  Object.freeze({ name: "domain.proposals", level: "step", check: whileDefault(checkProposals) }),
 ]);

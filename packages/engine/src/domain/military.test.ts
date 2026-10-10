@@ -7,7 +7,13 @@ import {
   inFlightCargo,
   stockAt,
 } from "@perfidia/engine/std";
-import { addCity, addMovement, addStationed, testStep } from "@perfidia/engine/testing";
+import {
+  addBuildItem,
+  addCity,
+  addMovement,
+  addStationed,
+  testStep,
+} from "@perfidia/engine/testing";
 import {
   MovementIdSchema,
   type Action,
@@ -68,12 +74,15 @@ describe("attack", () => {
     const m = army().m();
     const out = m.apply("p1", attack("c1", "c3", { raider: 5 }));
     const data = accepted(out);
-    expect(data).toMatchObject({
+    expect(data).toEqual({
+      movement: data["movement"] ?? null,
       kind: "attack",
       from: "c1",
       to: "c3",
       island: "i1",
       party: "p3",
+      units: { raider: 5 },
+      paid: res(0, 0, 0),
       depart: at(0),
       arrive: [3600, "D1 01:00"],
     });
@@ -109,7 +118,7 @@ describe("attack", () => {
     const m = army().m();
     expect(violation(m.apply("p1", attack("c1", "c2", { raider: 5 })))).toEqual({
       code: "TRANSPORT_CAPACITY",
-      details: { city: "c1", island: "i2", pop: 5, capacity: 0, missing: 5 },
+      details: { city: "c1", island: "i2", need: 5, capacity: 0, missing: 5 },
     });
     expect(accepted(m.apply("p1", attack("c1", "c2", { raider: 5, ship: 1 })))).toMatchObject({
       arrive: at(5400),
@@ -227,6 +236,30 @@ describe("attack", () => {
       home: 1,
     });
   });
+
+  test("a departure hook's adjusted group is held to the transport rule too", () => {
+    const hooks = RICH.hooks;
+    const swapped: AnyRuleset = {
+      ...RICH,
+      hooks: {
+        ...hooks,
+        departure(r, d) {
+          const v = defaultDeparture(r, d);
+          return v.ok ? { ...v, units: { soldier: 5 } } : v;
+        },
+      },
+    };
+    const m = load(world({ ruleset: swapped, units: { c1: ARMY } }).state, swapped);
+    expect(violation(m.apply("p1", support("c1", "c2", { soldier: 1, ship: 1 })))).toEqual({
+      code: "TRANSPORT_CAPACITY",
+      details: { city: "c1", island: "i2", need: 5, capacity: 0, missing: 5 },
+    });
+    expect(m.read().state.movements).toEqual({});
+    // On one island the rule does not apply: the adjusted group leaves.
+    expect(accepted(m.apply("p1", support("c1", "c3", { soldier: 1 })))).toMatchObject({
+      units: { soldier: 5 },
+    });
+  });
 });
 
 describe("support", () => {
@@ -326,7 +359,13 @@ describe("spy", () => {
   test("pays its gold at departure and tells no one", () => {
     const m = army().m();
     const out = m.apply("p1", spy("c1", "c2", 20));
-    expect(accepted(out)).toMatchObject({ kind: "spy", party: "p2", arrive: at(5400) });
+    expect(accepted(out)).toMatchObject({
+      kind: "spy",
+      party: "p2",
+      units: {},
+      paid: res(0, 0, 20),
+      arrive: at(5400),
+    });
     expect(out.ok && out.events).toEqual([]);
     expect(stockAt(m.read(), "c1").gold).toBe(480);
   });
@@ -348,7 +387,10 @@ describe("spy", () => {
 describe("send_resources", () => {
   test("delivers capped, with the amounts to the recipient and the outcome only to the sender", () => {
     const m = army().m();
-    const id = movementId(accepted(m.apply("p1", ship("c1", "c3", res(50, 0, 0)))));
+    const sent = accepted(m.apply("p1", ship("c1", "c3", res(50, 0, 0))));
+    expect(sent).toMatchObject({ kind: "shipment", units: {}, paid: res(50, 0, 0) });
+    expect(stockAt(m.read(), "c1").wood).toBe(450);
+    const id = movementId(sent);
     const delivered = m.advanceTo(3600).events.filter((e) => e.type === "shipment_delivered");
     expect(delivered).toEqual([
       {
@@ -389,11 +431,12 @@ describe("send_resources", () => {
       arriveAt: 100,
     });
     const m = load(state);
+    // Its recorded party no longer owns the target, so it will bounce: its cargo counts until the
+    // return lands, 5400 s after the bounce.
     expect(violation(m.apply("p1", ship("c1", "c3", res(0, 60, 0))))).toEqual({
       code: "SHIPMENT_CAPACITY",
-      details: { city: "c1", cap: 100, inFlight: 50, requested: 60, availableAt: 100 },
+      details: { city: "c1", cap: 100, inFlight: 50, requested: 60, availableAt: 5500 },
     });
-    // The shipment bounces (its recorded party no longer owns the target) and returns home.
     expect(m.advanceTo(100).events.map((e) => e.type)).toEqual(["bounced"]);
     expect(inFlightCargo(m.read(), "c1")).toBe(50);
     expect(violation(m.apply("p1", ship("c1", "c3", res(0, 60, 0)))).details).toMatchObject({
@@ -405,6 +448,78 @@ describe("send_resources", () => {
     // The shipment lands at 3700, the bounced cargo is home at 5500.
     m.advanceTo(5500);
     expect(inFlightCargo(m.read(), "c1")).toBe(0);
+  });
+
+  test("availableAt: the first second at which landed cargo or a queued level makes room", () => {
+    const { state, rules } = world({ units: { c1: ARMY } });
+    addMovement(state, rules, {
+      kind: "shipment",
+      owner: "p1",
+      from: "c1",
+      to: "c3",
+      party: "p3",
+      cargo: { wood: 80 },
+      arriveAt: 3600,
+    });
+    const plain = load(structuredClone(state));
+    expect(violation(plain.apply("p1", ship("c1", "c3", res(0, 50, 0)))).details).toEqual({
+      city: "c1",
+      cap: 100,
+      inFlight: 80,
+      requested: 50,
+      availableAt: 3600,
+    });
+    // A queued dock level (+100) ending first makes room before the cargo lands.
+    addBuildItem(state, rules, "c1", "dock", { end: 2000 });
+    const m = load(state);
+    expect(violation(m.apply("p1", ship("c1", "c3", res(0, 50, 0)))).details).toMatchObject({
+      cap: 100,
+      availableAt: 2000,
+    });
+    // More than any level the queue reaches: the landing cargo is what makes room.
+    expect(violation(m.apply("p1", ship("c1", "c3", res(0, 150, 0)))).details).toMatchObject({
+      availableAt: 3600,
+    });
+    expect(violation(m.apply("p1", ship("c1", "c3", res(150, 150, 0)))).details).toMatchObject({
+      availableAt: null,
+    });
+    m.advanceTo(2000);
+    accepted(m.apply("p1", ship("c1", "c3", res(0, 50, 0))));
+  });
+
+  test("the domain enforces the load and the cap when the hook does not delegate", () => {
+    const lax: AnyRuleset = {
+      ...RICH,
+      hooks: {
+        ...RICH.hooks,
+        departure(r, d) {
+          if (d.kind !== "shipment") return defaultDeparture(r, d);
+          const target = d.to === null ? undefined : r.state.cities[d.to];
+          return { ok: true, party: target?.owner ?? null };
+        },
+      },
+    };
+    const { state, rules } = world({ ruleset: lax, units: { c1: ARMY } });
+    addMovement(state, rules, {
+      kind: "shipment",
+      owner: "p1",
+      from: "c1",
+      to: "c3",
+      party: "p3",
+      cargo: { wood: 50 },
+      arriveAt: 3600,
+    });
+    const m = load(state, lax);
+    expect(violation(m.apply("p1", ship("c1", "c3", res(0, 60, 0))))).toEqual({
+      code: "SHIPMENT_CAPACITY",
+      details: { city: "c1", cap: 100, inFlight: 50, requested: 60, availableAt: 3600 },
+    });
+    expect(violation(m.apply("p1", ship("c1", "c3", res(0, 0, 0))))).toEqual({
+      code: "INVALID_ARGS",
+      details: { load: 0 },
+    });
+    accepted(m.apply("p1", ship("c1", "c3", res(0, 50, 0))));
+    expect(inFlightCargo(m.read(), "c1")).toBe(100);
   });
 
   test("a load of zero or beyond the stock is rejected", () => {
@@ -452,7 +567,18 @@ describe("found_city", () => {
       ),
     ).toEqual({
       code: "INVALID_ARGS",
-      details: { field: "slot", ruleset: "domain-test@1.0.0" },
+      details: { field: "slot", ruleset: "domain-test@1.0.0", reason: "unsupported" },
+    });
+    // With the option, a slot the island does not have is rejected (std.defaultDeparture).
+    expect(
+      violation(
+        army(RICH_OPTIONS)
+          .m()
+          .apply("p1", found("c1", "i2", { pioneer: 1, ship: 1 }, 4)),
+      ),
+    ).toEqual({
+      code: "INVALID_ARGS",
+      details: { island: "i2", slot: 4, slots: 4 },
     });
     const m = army(RICH_OPTIONS).m();
     accepted(m.apply("p1", found("c1", "i2", { pioneer: 1, ship: 1 }, 3)));

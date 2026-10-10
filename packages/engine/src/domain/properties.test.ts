@@ -1,6 +1,6 @@
 // Properties of the default domain (docs/architecture.md §13.2), on the testing kit's fixture hooks
-// plus the domain defaults: P3 (validation never writes; a rejected action leaves the hash
-// unchanged), P4 (random action intents and time advances never throw and keep the step
+// plus the domain defaults: P3 (validation and the exported derivations never write; a rejected
+// action leaves the hash unchanged), P4 (random action intents and time advances never throw and keep the step
 // invariants), P9 (the insertion order of the state's records changes nothing) and fog-safe
 // violation details (data hidden from a seat never changes its answers).
 
@@ -42,7 +42,7 @@ import {
   type UnitCounts,
 } from "@perfidia/protocol";
 import fc from "fast-check";
-import { domain } from "./index.ts";
+import { domain, recruitMax } from "./index.ts";
 import {
   CAPITAL,
   FIXTURE,
@@ -362,6 +362,12 @@ function step(m: Match, intent: Intent, cov?: Coverage): string {
     handler.validate(m.read(), seat, action);
     expect(m.hash()).toBe(before);
   }
+  const r = m.read();
+  const probed: CityId[] = [...sortedIds(r.state.cities), "c99"];
+  for (const city of probed) {
+    for (const unit of [...r.rules.units.map((u) => u.id), "dragon"]) recruitMax(r, city, unit);
+  }
+  expect(m.hash()).toBe(before);
   const out = m.apply(seat, action);
   if (!out.ok) expect(m.hash()).toBe(before);
   if (cov !== undefined) {

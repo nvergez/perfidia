@@ -4,7 +4,7 @@
 // storage, population, then resources. `apply` enqueues through `std`, which recomputes the same
 // numbers from the same state; a mismatch with the plan is an engine bug.
 
-import type { ActionHandler, ReadCtx } from "@perfidia/engine/contracts";
+import type { ReadCtx } from "@perfidia/engine/contracts";
 import {
   cancelFrom,
   enqueueBuild,
@@ -32,6 +32,7 @@ import {
 import {
   DomainError,
   exceedsStorage,
+  handler,
   level,
   levelReachedAt,
   locateItem,
@@ -115,7 +116,7 @@ export interface BuildPlan {
  * per `queues.build.requiresOn`; the cost of the target level is paid now; the duration is
  * `time[target][build-speed level]`, starting at `max(now, end of the previous item)`.
  */
-export const build: ActionHandler<ActionOf<"build">, BuildPlan> = {
+export const build = handler<ActionOf<"build">, BuildPlan>({
   validate(r, seat, a): Verdict<BuildPlan> {
     const own = ownCity(r, seat, a.city);
     if (!own.ok) return own;
@@ -189,7 +190,7 @@ export const build: ActionHandler<ActionOf<"build">, BuildPlan> = {
       cost: { ...item.cost },
     };
   },
-};
+});
 
 // recruit ----------------------------------------------------------------------------------------
 
@@ -210,7 +211,7 @@ export interface RecruitPlan {
  * the pop of the order must fit the population cap of the completed level. Per-unit time at the
  * completed level of the queue's building; the batch starts at `max(now, end of the previous one)`.
  */
-export const recruit: ActionHandler<ActionOf<"recruit">, RecruitPlan> = {
+export const recruit = handler<ActionOf<"recruit">, RecruitPlan>({
   validate(r, seat, a): Verdict<RecruitPlan> {
     const own = ownCity(r, seat, a.city);
     if (!own.ok) return own;
@@ -297,7 +298,7 @@ export const recruit: ActionHandler<ActionOf<"recruit">, RecruitPlan> = {
       cost,
     };
   },
-};
+});
 
 /**
  * The largest count a `recruit` of `unit` in `city` could have now (the gateway's `"max"`, §7.4):
@@ -333,7 +334,7 @@ export interface CancelPlan {
  * in no queue (already completed, cancelled or never issued) is `QUEUE_ITEM`. Emits nothing, not
  * even `queue_empty`.
  */
-export const cancelQueue: ActionHandler<ActionOf<"cancel_queue">, CancelPlan> = {
+export const cancelQueue = handler<ActionOf<"cancel_queue">, CancelPlan>({
   validate(r, seat, a): Verdict<CancelPlan> {
     const own = ownCity(r, seat, a.city);
     if (!own.ok) return own;
@@ -354,4 +355,4 @@ export const cancelQueue: ActionHandler<ActionOf<"cancel_queue">, CancelPlan> = 
     const refund = cancelFrom(ctx, plan.city, plan.item);
     return { city: plan.city, queue: plan.queue, removed: [...plan.removed], refund };
   },
-};
+});

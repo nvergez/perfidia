@@ -4,7 +4,7 @@
 // (fog-safe, §7.2), and never writes.
 
 import { fmtTime } from "@perfidia/engine/core";
-import type { ReadCtx } from "@perfidia/engine/contracts";
+import type { ActionHandler, ReadCtx } from "@perfidia/engine/contracts";
 import {
   BUILD_QUEUE,
   insufficientResources,
@@ -14,6 +14,7 @@ import {
 } from "@perfidia/engine/std";
 import {
   RESOURCE_IDS,
+  type Action,
   type BuildingId,
   type City,
   type CityId,
@@ -32,6 +33,17 @@ export type Verdict<P> =
 
 /** A rejection. */
 export type Rejection = { ok: false; violation: Violation };
+
+/**
+ * `h`, frozen: handler objects live at module level and every match of the process shares them, so
+ * none may be mutable (§6.5 rule 6).
+ */
+export function handler<A extends Action, P>(h: ActionHandler<A, P>): ActionHandler<A, P> {
+  return Object.freeze(h);
+}
+
+/** No resources (frozen, shared). */
+export const NO_RES: Readonly<Res> = Object.freeze({ wood: 0, stone: 0, gold: 0 });
 
 export function reject(code: string, details: Violation["details"]): Rejection {
   return { ok: false, violation: { code, details } };
@@ -107,7 +119,8 @@ export function levelReachedAt(
  * `EXCEEDS_STORAGE` when some resource of `cost` is above the city's storage cap, so it can never be
  * paid from this city as it is: names the storage building (`storage`), its level
  * (`storageLevel`) and cap, the lowest level whose cap holds the cost (`requiredLevel`, `null` when
- * none does) and every `need_<r>` above the cap.
+ * none does), every `need_<r>` above the cap, and `availableAt`: the end of the queued storage item
+ * that reaches `requiredLevel`, `null` when the queue never gets there (§7.3).
  */
 export function exceedsStorage(
   r: ReadCtx,
@@ -137,6 +150,7 @@ export function exceedsStorage(
     storageLevel: current,
     cap,
     requiredLevel,
+    availableAt: requiredLevel === null ? null : levelReachedAt(city, storage, requiredLevel),
   };
   for (const id of over) details[`need_${id}`] = cost[id];
   return { code: "EXCEEDS_STORAGE", details };

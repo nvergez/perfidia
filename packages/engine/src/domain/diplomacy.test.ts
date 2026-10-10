@@ -51,6 +51,20 @@ function proposalOf(data: Record<string, unknown>): ProposalId {
   return ProposalIdSchema.parse(data["proposal"]);
 }
 
+/** `base` with some diplomacy rules replaced: a config its compile step could produce. */
+function withDiplomacy(
+  d: Partial<CompiledRules["diplomacy"]>,
+  base: AnyRuleset = RICH,
+): AnyRuleset {
+  return {
+    ...base,
+    compile(config, players) {
+      const rules = base.compile(config, players);
+      return { ...rules, diplomacy: { ...rules.diplomacy, ...d } };
+    },
+  };
+}
+
 /** The seq of the match's only pending `pact_expire` event. */
 function pactSeq(m: Match): number {
   const pending = m.read().state.queue.filter((e) => e.kind === "pact_expire");
@@ -108,11 +122,11 @@ describe("send_message", () => {
     });
     expect(violation(m.apply("p1", message(["p1"], "x")))).toEqual({
       code: "INVALID_TARGET",
-      details: { player: "p1", reason: "self" },
+      details: { player: "p1", action: "send_message", reason: "self" },
     });
     expect(violation(m.apply("p1", message(["p2", "p3"], "x")))).toEqual({
       code: "INVALID_TARGET",
-      details: { player: "p3", reason: "eliminated" },
+      details: { player: "p3", action: "send_message", reason: "eliminated" },
     });
   });
 });
@@ -167,20 +181,35 @@ describe("propose", () => {
     expect(violation(m.apply("p1", propose("p2", "alliance")))).toEqual({
       code: "PROPOSAL_LIMIT",
       details: {
-        player: "p2",
+        to: "p2",
         kind: "alliance",
         proposal: id,
         reason: "duplicate",
+        open: 1,
+        max: 2,
         availableAt: 3600,
       },
     });
+    m.advanceTo(100);
     accepted(m.apply("p1", propose("p3", "pact")));
     expect(violation(m.apply("p1", propose("p2", "pact")))).toEqual({
       code: "PROPOSAL_LIMIT",
-      details: { max: 2, open: 2, availableAt: 3600 },
+      details: { reason: "max_open", max: 2, open: 2, availableAt: 3600 },
     });
     // Another player's limits are its own.
     accepted(m.apply("p2", propose("p1", "alliance")));
+  });
+
+  test("with maxOpenProposals 0, a proposal is PROPOSAL_LIMIT and never available", () => {
+    const zero = withDiplomacy({ maxOpenProposals: 0 });
+    const m = load(world({ ruleset: zero }).state, zero);
+    for (const kind of ["pact", "alliance"] as const) {
+      expect(violation(m.apply("p1", propose("p2", kind)))).toEqual({
+        code: "PROPOSAL_LIMIT",
+        details: { reason: "max_open", max: 0, open: 0, availableAt: null },
+      });
+    }
+    expect(m.read().state.proposals).toEqual({});
   });
 
   test("violations carry their numbers; until needs toolOptions.pactUntil", () => {
@@ -193,7 +222,7 @@ describe("propose", () => {
     });
     expect(violation(m.apply("p1", propose("p1", "pact")))).toEqual({
       code: "INVALID_TARGET",
-      details: { player: "p1", reason: "self" },
+      details: { player: "p1", action: "propose", reason: "self" },
     });
     expect(violation(m.apply("p1", propose("p3", "pact", { text: "x".repeat(31) })))).toEqual({
       code: "TEXT_TOO_LONG",
@@ -205,11 +234,11 @@ describe("propose", () => {
     });
     expect(violation(m.apply("p1", propose("p3", "pact", { name: "Pact" })))).toEqual({
       code: "INVALID_ARGS",
-      details: { field: "name", kind: "pact" },
+      details: { field: "name", kind: "pact", reason: "wrong_kind" },
     });
     expect(violation(m.apply("p1", propose("p3", "pact", { until: 5000 })))).toEqual({
       code: "INVALID_ARGS",
-      details: { field: "until", ruleset: "domain-test@1.0.0" },
+      details: { field: "until", ruleset: "domain-test@1.0.0", reason: "unsupported" },
     });
     expect(violation(m.apply("p1", propose("p2", "pact")))).toEqual({
       code: "ALREADY_ALLIED",
@@ -222,11 +251,11 @@ describe("propose", () => {
     const m = load(world({ ruleset: RICH_OPTIONS }).state, RICH_OPTIONS);
     expect(violation(m.apply("p1", propose("p2", "alliance", { until: 5000 })))).toEqual({
       code: "INVALID_ARGS",
-      details: { field: "until", kind: "alliance" },
+      details: { field: "until", kind: "alliance", reason: "wrong_kind" },
     });
     expect(violation(m.apply("p1", propose("p2", "pact", { until: 0 })))).toEqual({
       code: "INVALID_ARGS",
-      details: { field: "until", until: 0, now: 0 },
+      details: { field: "until", until: 0, now: 0, reason: "past" },
     });
     const id = proposalOf(accepted(m.apply("p1", propose("p2", "pact", { until: 5000 }))));
     expect(accepted(m.apply("p2", answer(id, true)))).toMatchObject({ expires: at(5000) });
@@ -306,7 +335,7 @@ describe("answer", () => {
     });
     expect(violation(m.apply("p1", answer(id, true)))).toEqual({
       code: "INVALID_TARGET",
-      details: { proposal: id, reason: "own_proposal" },
+      details: { proposal: id, action: "answer", reason: "own_proposal" },
     });
   });
 
@@ -402,6 +431,7 @@ describe("answer", () => {
     const { state, rules } = world();
     addPact(state, rules, "p1", "p2", { expiresAt: 7200 });
     const m = load(state);
+    // p1, the proposer, holds its only pact slot; it frees when that pact expires.
     const q = proposalOf(accepted(m.apply("p1", propose("p3", "pact"))));
     expect(violation(m.apply("p3", answer(q, true)))).toEqual({
       code: "PACT_LIMIT",
@@ -430,6 +460,47 @@ describe("answer", () => {
         .state.queue.filter((e) => e.kind === "pact_expire")
         .map((e) => e.at),
     ).toEqual([8200]);
+  });
+
+  test("PACT_LIMIT on the accepting side; pacts without expiry free no slot (null)", () => {
+    const { state, rules } = world();
+    addPact(state, rules, "p2", "p3");
+    const m = load(state);
+    const q = proposalOf(accepted(m.apply("p1", propose("p3", "pact"))));
+    expect(violation(m.apply("p3", answer(q, true)))).toEqual({
+      code: "PACT_LIMIT",
+      details: { player: "p3", max: 1, pacts: 1, availableAt: null },
+    });
+    expect(Object.keys(m.read().state.proposals)).toEqual([q]);
+    expect(m.read().state.pacts.map((p) => [p.a, p.b])).toEqual([["p2", "p3"]]);
+  });
+
+  test("a pact proposal answered after the players became allies is ALREADY_ALLIED, still open", () => {
+    const m = load(world().state);
+    const pact = proposalOf(accepted(m.apply("p1", propose("p2", "pact"))));
+    const ally = proposalOf(accepted(m.apply("p2", propose("p1", "alliance"))));
+    accepted(m.apply("p1", answer(ally, true)));
+    expect(violation(m.apply("p2", answer(pact, true)))).toEqual({
+      code: "ALREADY_ALLIED",
+      details: { player: "p1", kind: "pact" },
+    });
+    expect(Object.keys(m.read().state.proposals)).toEqual([pact]);
+    expect(m.read().state.pacts).toEqual([]);
+  });
+
+  test("a pact whose until has passed by acceptance is INVALID_ARGS (past), still open", () => {
+    const m = load(world({ ruleset: RICH_OPTIONS }).state, RICH_OPTIONS);
+    const id = proposalOf(accepted(m.apply("p1", propose("p2", "pact", { until: 1000 }))));
+    m.advanceTo(1000);
+    expect(violation(m.apply("p2", answer(id, true)))).toEqual({
+      code: "INVALID_ARGS",
+      details: { field: "until", until: 1000, now: 1000, reason: "past" },
+    });
+    expect(Object.keys(m.read().state.proposals)).toEqual([id]);
+    expect(m.read().state.pacts).toEqual([]);
+    // A refusal still closes it.
+    accepted(m.apply("p2", answer(id, false)));
+    expect(m.read().state.proposals).toEqual({});
   });
 
   test("a new pact is public and expires after pactDuration", () => {
@@ -502,7 +573,7 @@ describe("leave", () => {
     });
     expect(violation(m.apply("p1", leave("p1")))).toEqual({
       code: "INVALID_TARGET",
-      details: { player: "p1", reason: "self" },
+      details: { player: "p1", action: "leave", reason: "self" },
     });
     expect(violation(m.apply("p1", leave("p9")))).toEqual({
       code: "UNKNOWN_ID",

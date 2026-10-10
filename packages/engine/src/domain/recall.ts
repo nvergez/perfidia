@@ -4,7 +4,7 @@
 // of several groups) and `dismiss` of another player's support groups. Every group travels home as
 // its own return.
 
-import type { ActionHandler, Ctx, ReadCtx } from "@perfidia/engine/contracts";
+import type { Ctx, ReadCtx } from "@perfidia/engine/contracts";
 import { startReturn, turnBack, unstation } from "@perfidia/engine/std";
 import {
   compareIds,
@@ -18,6 +18,7 @@ import {
 } from "@perfidia/protocol";
 import {
   canonicalUnits,
+  handler,
   lookup,
   need,
   ownCity,
@@ -97,7 +98,7 @@ export interface RecallPlan {
  * home at `now + max(1, now − departAt)`, or `max(minTravel, …)` into a held home). Another
  * player's movement answers exactly like a missing one (`UNKNOWN_ID`).
  */
-export const recall: ActionHandler<ActionOf<"recall">, RecallPlan> = {
+export const recall = handler<ActionOf<"recall">, RecallPlan>({
   validate(r, seat, a): Verdict<RecallPlan> {
     const m = lookup(r.state.movements, a.movement);
     if (m === undefined || m.owner !== seat) return reject("UNKNOWN_ID", { movement: a.movement });
@@ -119,7 +120,7 @@ export const recall: ActionHandler<ActionOf<"recall">, RecallPlan> = {
     turnBack(ctx, plan.movement);
     return { returns: returnData(ctx, [plan.movement]) };
   },
-};
+});
 
 // recall_stationed -------------------------------------------------------------------------------
 
@@ -135,7 +136,7 @@ export interface RecallStationedPlan {
  * "partial"` and, when the seat has groups from several homes there, `home` (`AMBIGUOUS_GROUP`
  * otherwise, listing the homes).
  */
-export const recallStationed: ActionHandler<ActionOf<"recall_stationed">, RecallStationedPlan> = {
+export const recallStationed = handler<ActionOf<"recall_stationed">, RecallStationedPlan>({
   validate(r, seat, a): Verdict<RecallStationedPlan> {
     const city = lookup(r.state.cities, a.at);
     if (city === undefined) return reject("UNKNOWN_ID", { city: a.at });
@@ -172,12 +173,15 @@ export const recallStationed: ActionHandler<ActionOf<"recall_stationed">, Recall
       const requested = units[u.id] ?? 0;
       const stationed = group.units[u.id] ?? 0;
       if (requested > stationed) {
+        // §7.3 shape: `home` is the count that can leave (here, stationed in `city`), `where` says
+        // so, and `from` is the group's home city.
         return reject("INSUFFICIENT_UNITS", {
           city: a.at,
           from: group.home,
           unit: u.id,
           requested,
-          stationed,
+          home: stationed,
+          where: "stationed",
         });
       }
     }
@@ -186,7 +190,7 @@ export const recallStationed: ActionHandler<ActionOf<"recall_stationed">, Recall
   apply(ctx, seat, plan) {
     return { returns: returnData(ctx, sendGroupsHome(ctx, plan.at, seat, plan.groups)) };
   },
-};
+});
 
 // dismiss ----------------------------------------------------------------------------------------
 
@@ -202,7 +206,7 @@ export interface DismissPlan {
  * (siege garrisons) cannot be dismissed. The dismissed player is told with `movement_recalled`
  * (`dismissed: true`) for each return.
  */
-export const dismiss: ActionHandler<ActionOf<"dismiss">, DismissPlan> = {
+export const dismiss = handler<ActionOf<"dismiss">, DismissPlan>({
   validate(r, seat, a): Verdict<DismissPlan> {
     if (!r.rules.movement.recall.dismiss) {
       return reject("NOT_RECALLABLE", { city: a.city, player: a.player, dismiss: false });
@@ -212,7 +216,14 @@ export const dismiss: ActionHandler<ActionOf<"dismiss">, DismissPlan> = {
     if (lookup(r.state.players, a.player) === undefined) {
       return reject("UNKNOWN_ID", { player: a.player });
     }
-    if (a.player === seat) return reject("INVALID_TARGET", { player: a.player, city: a.city });
+    if (a.player === seat) {
+      return reject("INVALID_TARGET", {
+        player: a.player,
+        city: a.city,
+        action: "dismiss",
+        reason: "self",
+      });
+    }
     const groups = groupsByHome(r, own.city.stationed, a.player, "support");
     if (groups.length === 0) {
       return reject("NOTHING_STATIONED", { city: a.city, player: a.player });
@@ -240,4 +251,4 @@ export const dismiss: ActionHandler<ActionOf<"dismiss">, DismissPlan> = {
     }
     return { returns: returnData(ctx, ids) };
   },
-};
+});

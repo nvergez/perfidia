@@ -194,7 +194,14 @@ describe("recall_stationed", () => {
     });
     expect(violation(m.apply("p1", recallAt("c2", "c4", { soldier: 9 })))).toEqual({
       code: "INSUFFICIENT_UNITS",
-      details: { city: "c2", from: "c4", unit: "soldier", requested: 9, stationed: 4 },
+      details: {
+        city: "c2",
+        from: "c4",
+        unit: "soldier",
+        requested: 9,
+        home: 4,
+        where: "stationed",
+      },
     });
     expect(violation(m.apply("p1", recallAt("c2", "c4", {})))).toEqual({
       code: "NO_UNITS",
@@ -264,7 +271,7 @@ describe("dismiss", () => {
     });
     expect(violation(m.apply("p2", dismiss("c2", "p2")))).toEqual({
       code: "INVALID_TARGET",
-      details: { player: "p2", city: "c2" },
+      details: { player: "p2", city: "c2", action: "dismiss", reason: "self" },
     });
     expect(violation(m.apply("p2", dismiss("c2", "p9")))).toEqual({
       code: "UNKNOWN_ID",

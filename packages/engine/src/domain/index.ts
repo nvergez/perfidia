@@ -34,7 +34,7 @@ export {
   type ProposePlan,
 } from "./diplomacy.ts";
 export { recruitMax, type BuildPlan, type CancelPlan, type RecruitPlan } from "./economy.ts";
-export { validateDeparture, type LaunchPlan } from "./military.ts";
+export { validateDeparture, type DepartureInput, type LaunchPlan } from "./military.ts";
 export type { DismissPlan, GroupReturn, RecallPlan, RecallStationedPlan } from "./recall.ts";
 
 /**
