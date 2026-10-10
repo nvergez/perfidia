@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import fc from "fast-check";
-import { fnv1a32, fnv1a64, sha256Hex, sha256Words, utf8Encode } from "./hash.ts";
+import { fnv1a64, sha256Hex, sha256Words, utf8Encode } from "./hash.ts";
 
 /** Any UTF-16 string, lone surrogates included. */
 const anyString = fc
@@ -86,30 +86,6 @@ describe("fnv1a64", () => {
       fc.property(anyString, (s) => {
         expect(fnv1a64(s)).toMatch(/^[0-9a-f]{16}$/);
       }),
-    );
-  });
-});
-
-describe("fnv1a32", () => {
-  test("matches the standard vectors", () => {
-    expect(fnv1a32("")).toBe(0x811c9dc5);
-    expect(fnv1a32("a")).toBe(0xe40c292c);
-    expect(fnv1a32("foobar")).toBe(0xbf9cf968);
-    expect(fnv1a32("héllo € \u{1f600}")).toBe(0x746efaad);
-    expect(fnv1a32("�")).toBe(0x03479c4a);
-  });
-
-  test("agrees with a BigInt reference and returns a uint32", () => {
-    fc.assert(
-      fc.property(anyString, (s) => {
-        let h = 0x811c9dc5n;
-        for (const byte of new TextEncoder().encode(s))
-          h = ((h ^ BigInt(byte)) * 16777619n) & 0xffffffffn;
-        const got = fnv1a32(s);
-        expect(got).toBe(Number(h));
-        expect(Number.isInteger(got) && got >= 0 && got <= 0xffffffff).toBe(true);
-      }),
-      { numRuns: 2000 },
     );
   });
 });

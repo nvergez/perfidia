@@ -51,6 +51,34 @@ describe("insertSorted", () => {
     }
     expect(queue.map((ev) => ev.seq)).toEqual([4, 5, 1, 3]);
   });
+
+  test("leaves the array untouched when the comparator throws", () => {
+    fc.assert(
+      fc.property(
+        fc.array(fc.integer({ min: 0, max: 50 }), { minLength: 1, maxLength: 40 }),
+        fc.integer({ min: 0, max: 50 }),
+        fc.nat(),
+        (values, item, k) => {
+          const arr = values.toSorted(byNumber);
+          const before = arr.slice();
+          let total = 0;
+          insertSorted(arr.slice(), item, (a, b) => {
+            total += 1;
+            return byNumber(a, b);
+          });
+          let calls = 0;
+          const failAt = k % total;
+          const cmp = (a: number, b: number): number => {
+            if (calls++ === failAt) throw new Error("boom");
+            return byNumber(a, b);
+          };
+          expect(() => insertSorted(arr, item, cmp)).toThrow("boom");
+          expect(arr).toEqual(before);
+        },
+      ),
+      { numRuns: 500 },
+    );
+  });
 });
 
 describe("removeWhere", () => {
@@ -79,5 +107,56 @@ describe("removeWhere", () => {
     expect(arr).toEqual([1, 2, 3]);
     expect(removeWhere(arr, () => true)).toEqual([1, 2, 3]);
     expect(arr).toEqual([]);
+  });
+
+  test("calls pred once per item, in order, on the untouched array", () => {
+    const arr = [5, 6, 7, 8];
+    const seen: [number, number[]][] = [];
+    const removed = removeWhere(arr, (x) => {
+      seen.push([x, arr.slice()]);
+      return x % 2 === 0;
+    });
+    expect(seen).toEqual([
+      [5, [5, 6, 7, 8]],
+      [6, [5, 6, 7, 8]],
+      [7, [5, 6, 7, 8]],
+      [8, [5, 6, 7, 8]],
+    ]);
+    expect(removed).toEqual([6, 8]);
+    expect(arr).toEqual([5, 7]);
+  });
+
+  test("is atomic: a throwing pred leaves the array exactly as it was", () => {
+    const q = [1, 2, 3, 4, 5];
+    const same = q;
+    expect(() =>
+      removeWhere(q, (x) => {
+        if (x === 3) throw new Error("boom");
+        return x === 1;
+      }),
+    ).toThrow("boom");
+    expect(q).toBe(same);
+    expect(q).toEqual([1, 2, 3, 4, 5]);
+
+    fc.assert(
+      fc.property(
+        fc.array(fc.integer({ min: -50, max: 50 }), { minLength: 1 }),
+        fc.nat(),
+        fc.integer({ min: 2, max: 5 }),
+        (values, k, m) => {
+          const arr = values.slice();
+          const failAt = k % values.length;
+          let calls = 0;
+          expect(() =>
+            removeWhere(arr, (x) => {
+              if (calls++ === failAt) throw new Error("boom");
+              return x % m === 0;
+            }),
+          ).toThrow("boom");
+          expect(arr).toEqual(values);
+        },
+      ),
+      { numRuns: 1000 },
+    );
   });
 });

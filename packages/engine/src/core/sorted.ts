@@ -20,12 +20,22 @@ export function insertSorted<T>(arr: T[], item: T, cmp: (a: T, b: T) => number):
 /**
  * Removes in place every element of `arr` matching `pred`, keeping the order of the others, and
  * returns the removed elements in their original order (empty when nothing matched).
+ *
+ * Atomic: `pred` runs once per element, in order, on the untouched array, and `arr` changes only
+ * after every call returned. If `pred` throws, `arr` is left exactly as it was. `pred` must not
+ * modify `arr`.
  */
 export function removeWhere<T>(arr: T[], pred: (item: T) => boolean): T[] {
+  const n = arr.length;
+  const matches: boolean[] = [];
+  for (let i = 0; i < n; i += 1) matches.push(pred(arr[i]!));
   const removed: T[] = [];
-  for (const item of arr.splice(0)) {
-    if (pred(item)) removed.push(item);
-    else arr.push(item);
+  let w = 0;
+  for (let i = 0; i < n; i += 1) {
+    const item = arr[i]!;
+    if (matches[i]) removed.push(item);
+    else arr[w++] = item;
   }
+  arr.length = w;
   return removed;
 }

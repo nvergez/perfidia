@@ -1,7 +1,8 @@
-// Seeded randomness (docs/architecture.md §6.2, perfidia-1 §1.3): mulberry32 on named streams.
+// Seeded randomness (docs/architecture.md §6.2, perfidia-1 §1.3): mulberry32 on named streams,
+// each seeded with the FNV-1a 32 of the match seed and the stream name.
 // No PRNG state lives in the game state; a stream is rebuilt from the match seed and its name.
 
-import { fnv1a32 } from "./hash.ts";
+import { utf8Encode } from "./hash.ts";
 import { assertSafeInt } from "./int.ts";
 
 /** A source of uint32 values (structurally identical to the `Rng` of `contracts`). */
@@ -17,6 +18,16 @@ function assertUint32(n: number, what: string): void {
   if (!Number.isInteger(n) || n < 0 || n >= UINT32_RANGE) {
     throw new RangeError(`${what} must be a uint32, got ${n}`);
   }
+}
+
+/** FNV-1a 32 of the UTF-8 bytes of `s` (offset 2166136261, prime 16777619), as a uint32. */
+export function fnv1a32(s: string): number {
+  const bytes = utf8Encode(s);
+  let h = 0x811c9dc5;
+  for (let i = 0; i < bytes.length; i += 1) {
+    h = Math.imul(h ^ (bytes[i] ?? 0), 16777619);
+  }
+  return h >>> 0;
 }
 
 /** mulberry32 seeded with the uint32 `seed`, exactly as perfidia-1 §1.3. */

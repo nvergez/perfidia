@@ -42,16 +42,6 @@ function hex8(word: number): string {
   return (word >>> 0).toString(16).padStart(8, "0");
 }
 
-/** FNV-1a 32 of the UTF-8 bytes of `s` (offset 2166136261, prime 16777619), as a uint32. */
-export function fnv1a32(s: string): number {
-  const bytes = utf8Encode(s);
-  let h = 0x811c9dc5;
-  for (let i = 0; i < bytes.length; i += 1) {
-    h = Math.imul(h ^ (bytes[i] ?? 0), 16777619);
-  }
-  return h >>> 0;
-}
-
 /**
  * FNV-1a 64 of the UTF-8 bytes of `s`, as 16 lowercase hex characters (offset 0xcbf29ce484222325,
  * prime 2^40 + 435). The 64-bit state is kept in two uint32 halves, as §6.3 specifies:

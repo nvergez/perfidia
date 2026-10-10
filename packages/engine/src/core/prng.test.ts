@@ -1,7 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import fc from "fast-check";
-import { fnv1a32 } from "./hash.ts";
-import { mulberry32, randInt, type Rng, shuffle, streamRng } from "./prng.ts";
+import { fnv1a32, mulberry32, randInt, type Rng, shuffle, streamRng } from "./prng.ts";
 
 const MASK32 = 0xffffffffn;
 
@@ -35,6 +34,42 @@ function scripted(values: readonly number[]): Rng & { drawn: number } {
 
 const uint32 = fc.integer({ min: 0, max: 0xffffffff });
 const byValue = (a: number, b: number): number => a - b;
+
+/** Any UTF-16 string, lone surrogates included. */
+const anyString = fc
+  .array(
+    fc.oneof(
+      fc.string({ unit: "binary", maxLength: 4 }),
+      fc.integer({ min: 0xd800, max: 0xdfff }).map((c) => String.fromCharCode(c)),
+      fc.string({ maxLength: 8 }),
+    ),
+    { maxLength: 12 },
+  )
+  .map((parts) => parts.join(""));
+
+describe("fnv1a32", () => {
+  test("matches the standard vectors", () => {
+    expect(fnv1a32("")).toBe(0x811c9dc5);
+    expect(fnv1a32("a")).toBe(0xe40c292c);
+    expect(fnv1a32("foobar")).toBe(0xbf9cf968);
+    expect(fnv1a32("héllo € \u{1f600}")).toBe(0x746efaad);
+    expect(fnv1a32("�")).toBe(0x03479c4a);
+  });
+
+  test("agrees with a BigInt reference and returns a uint32", () => {
+    fc.assert(
+      fc.property(anyString, (s) => {
+        let h = 0x811c9dc5n;
+        for (const byte of new TextEncoder().encode(s))
+          h = ((h ^ BigInt(byte)) * 16777619n) & 0xffffffffn;
+        const got = fnv1a32(s);
+        expect(got).toBe(Number(h));
+        expect(Number.isInteger(got) && got >= 0 && got <= 0xffffffff).toBe(true);
+      }),
+      { numRuns: 2000 },
+    );
+  });
+});
 
 describe("mulberry32", () => {
   test("golden outputs (computed independently in Python and by the reference below)", () => {
