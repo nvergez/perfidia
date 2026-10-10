@@ -1,2 +1,11 @@
-// Placeholder until the real bots code lands.
+// @perfidia/bots: scripted players that play exclusively through the `SeatAgent` contract the
+// gateway drives (docs/architecture.md §11). Bots import only `protocol` at runtime.
+
+export { BotAgent, type BotOptions } from "./agent.ts";
+export { hintsFor, NO_HINTS, RULESET_HINTS, type StrategyHints } from "./hints.ts";
+export { botFromLabel, botLabel, createBot, isBotStrategy, parseBotLabel } from "./registry.ts";
+export { BOT_STRATEGIES, type BotStrategy } from "./strategies/strategy.ts";
+export { thinkLatencyMs, withThinkTime, type ThinkTimeOptions } from "./think.ts";
+
+// Placeholder kept until T17 removes it (§15.1); new code never imports it.
 export const BOTS_PACKAGE = "@perfidia/bots";
