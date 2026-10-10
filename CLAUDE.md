@@ -34,6 +34,17 @@ Dependency direction: `protocol` ← `engine` ← `gateway` ← `bots` ← `sim`
 - Tests live next to code as `*.test.ts` and use `bun:test`; use `fast-check` for invariants. Determinism tests compare state hashes across runs.
 - Keep comments sparse and meaningful; no commented-out code.
 
+## Resource safety (mandatory)
+
+On 2026-10-10 a test that ran `oxlint --type-aware` in a repo mirror, again and again, reached 36 GB + 7 GB per run and crashed the machine (kernel panic). The machine is shared with many other sessions; memory is the scarce resource.
+
+- Never spawn `bun run lint`, `oxlint`, `tsgolint`, `tsc`, `bun run check` or `bun test` from inside a test, or from code a test runs. Tooling probes are manual (plant, run once, revert) or live in a standalone script run explicitly, never in `bun test` or `check`.
+- Never lint or type-check a copy or mirror of the repo (copied tsconfigs + symlinked `node_modules`).
+- Before running a heavy command, or one you will repeat, measure one run with `/usr/bin/time -l <cmd>` ("maximum resident set size"). Above about 4 GB, stop and find out why instead of repeating it.
+- Every subprocess spawned from code has a hard timeout and is killed with its whole process group. Cache failures as well as successes, so a failing setup never re-runs.
+- Never leave a command running in the background unattended. To stop one, kill its process group (`kill -- -<pgid>`) or `pkill -f <unique path>`, not just the parent.
+- Check `memory_pressure` before long or parallel runs; if it is not "normal", wait or run less in parallel.
+
 ## Working rules for agents
 
 - Stay inside the files/packages your task owns. Do not edit root config, lockfile or another package unless your task says so.
