@@ -1182,7 +1182,8 @@ export class FakeGame {
 /**
  * Moves the fake to game time `to`: production (capped by storage), completed build items and
  * recruit batches, and arrived movements (foundings create a city in the lowest free slot; returns
- * bring their units home; everything else simply ends).
+ * bring their units home; a spy always succeeds and files a spy report of the units at home;
+ * everything else simply ends).
  */
 export function advance(game: FakeGame, to: number): void {
   const dt = Math.max(0, to - game.t);
@@ -1214,6 +1215,15 @@ export function advance(game: FakeGame, to: number): void {
   }
   for (const m of game.moves.filter((x) => x.arrive <= to)) {
     const home = game.city(m.from);
+    if (m.kind === "spy" && m.to !== null) {
+      const target = game.city(m.to);
+      game.intel.set(`${m.owner}|${m.to}`, {
+        type: "spy_report",
+        at: m.arrive,
+        data: { report: "r00000", city: m.to, units: { home: { ...target.units } } },
+      });
+      continue;
+    }
     if (m.kind === "found") {
       const isl = game.island(m.island);
       const used = new Set(game.cities.filter((c) => c.island === isl.id).map((c) => c.slot));
@@ -1393,6 +1403,11 @@ export interface TurnOptions {
   readonly maxCalls?: number;
   readonly perWake?: number | null;
   readonly notes?: string;
+  /**
+   * Game seconds that pass while the bot thinks in each round, before its calls are applied (real
+   * time with think time, §9.3); 0 (lockstep) by default.
+   */
+  readonly thinkSeconds?: number;
 }
 
 /**
@@ -1441,6 +1456,7 @@ export async function playTurn(
     }
     results = [];
     let ended = false;
+    if ((o.thinkSeconds ?? 0) > 0) advance(game, game.t + (o.thinkSeconds ?? 0));
     for (const c of out.calls) {
       all.push(c);
       const schema = (TOOL_ARGS as Record<string, (typeof TOOL_ARGS)[ToolName]>)[c.tool];

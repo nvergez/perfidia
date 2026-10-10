@@ -3,10 +3,15 @@
 // records "ally pX since D1" in its notes. From a seeded day (3 to 5), if it ranks in the top 2
 // and an ally's city is weaker than its army, it messages that ally "we remain friends" and attacks
 // the city, keeping the relation until the betrayal lands.
+//
+// Only alliance members share full vision: a pact partner's city is a public view, known only
+// through reports. So from the day before the betrayal, while it ranks in the top 2 and has an
+// army that can reach them, it spies its friends' cities whose intel is missing or stale (nearest
+// first, one spy at a time) and betrays on the report.
 
-import { compareIds, type PlayerId, type ToolCall } from "@perfidia/protocol";
-import { call, res } from "../kit.ts";
-import { estimateDefense, mainCity, nearby, type Planner } from "../plan.ts";
+import { compareIds, type CityView, type PlayerId, type ToolCall } from "@perfidia/protocol";
+import { call, landPop, res, unitsInReport } from "../kit.ts";
+import { estimateDefense, intelAge, mainCity, nearby, type Planner } from "../plan.ts";
 import { randInt, type BotRng } from "../rng.ts";
 import type { OtherCity, OwnCity, World } from "../world.ts";
 import type { StrategyDef } from "./strategy.ts";
@@ -22,6 +27,10 @@ export interface OpportunistParams {
   readonly allianceFirst: boolean;
   /** Neighbours approached on day 1. */
   readonly neighbours: number;
+  /** Intel about a friend's city older than this is refreshed by a spy before betraying. */
+  readonly stale: number;
+  /** Spy gold = spyMinGold × spyMult + the land pop last seen in the city. */
+  readonly spyMult: number;
 }
 
 export function opportunistParams(rng: BotRng): OpportunistParams {
@@ -31,8 +40,13 @@ export function opportunistParams(rng: BotRng): OpportunistParams {
     tribute: randInt(rng, 50, 150),
     allianceFirst: randInt(rng, 0, 1) === 1,
     neighbours: 3,
+    stale: randInt(rng, 14400, 28800),
+    spyMult: randInt(rng, 2, 4),
   };
 }
+
+/** Friend cities read (and so weighed for a betrayal) per turn. */
+const FRIEND_SCAN = 3;
 
 /** The seat's capital (or its first city). */
 function home(w: World): OwnCity | null {
@@ -59,6 +73,24 @@ function friendCities(w: World): OtherCity[] {
   const from = mainCity(w);
   if (from === null) return [];
   return nearby(w, from, (o) => o.owner !== null && w.relations.has(o.owner));
+}
+
+/** True when the seat ranks in the top 2 of the leaderboard read this turn. */
+function topTwo(w: World): boolean {
+  const me = w.board?.standings.find((s) => s.player === w.seat);
+  return me !== undefined && me.rank <= 2;
+}
+
+/** True when the view was read and its city is not one bots leave alone (hints). */
+function weighable(w: World, view: CityView | undefined): view is CityView {
+  return view !== undefined && (view.tag === null || !w.hints.avoidTags.includes(view.tag));
+}
+
+/** The estimated defense of a friend's city, or null when unknown or older than `stale`. */
+function freshDefense(w: World, view: CityView, prm: OpportunistParams): number | null {
+  const est = estimateDefense(w, view);
+  const age = intelAge(w, view);
+  return est === null || age === null || age > prm.stale ? null : est;
 }
 
 function remember(p: Planner): void {
@@ -120,15 +152,15 @@ function tribute(p: Planner, prm: OpportunistParams): void {
 
 function betray(p: Planner, prm: OpportunistParams): void {
   const { w } = p;
-  if (w.day < prm.betrayDay || p.flag("bt") !== null || w.board === null) return;
+  if (w.day < prm.betrayDay || p.flag("bt") !== null || !topTwo(w)) return;
   if (w.t < w.kit.rules.time.attackFrom || p.attacksLeft <= 0) return;
-  const me = w.board.standings.find((s) => s.player === w.seat);
-  if (me === undefined || me.rank > 2) return;
   const main = mainCity(w);
   if (main === null) return;
-  for (const target of friendCities(w)) {
-    const est = estimateDefense(w, w.views.get(target.id));
-    if (est === null || target.owner === null) continue;
+  for (const target of friendCities(w).slice(0, FRIEND_SCAN)) {
+    const view = w.views.get(target.id);
+    if (!weighable(w, view) || target.owner === null) continue;
+    const est = freshDefense(w, view, prm);
+    if (est === null) continue;
     const group = p.attackGroup(main, target.island, 0);
     if (group === null || group.strength * 1000 <= est * prm.marginPm) continue;
     p.message([target.owner], "we remain friends");
@@ -136,6 +168,34 @@ function betray(p: Planner, prm: OpportunistParams): void {
       p.setFlag("bt", w.day + 1);
       p.memo(`betray ${target.owner} D${w.day + 1}`);
     }
+    return;
+  }
+}
+
+/**
+ * Spies the nearest friend city known only through reports whose intel is missing or stale, from
+ * the day before the betrayal on: one spy at a time per city, and none while the army could not
+ * reach it anyway.
+ */
+function scout(p: Planner, prm: OpportunistParams): void {
+  const { w } = p;
+  if (w.day < prm.betrayDay - 1 || p.flag("bt") !== null || !topTwo(w)) return;
+  const main = mainCity(w);
+  if (main === null) return;
+  const kit = w.kit;
+  for (const target of friendCities(w).slice(0, FRIEND_SCAN)) {
+    const view = w.views.get(target.id);
+    if (!weighable(w, view) || view.access !== "public") continue;
+    if (freshDefense(w, view, prm) !== null || p.inFlight("spy", target.id)) continue;
+    const flag = `s${target.id}`;
+    const last = p.flag(flag);
+    if (last !== null && w.t - last < prm.stale) continue;
+    if (p.attackGroup(main, target.island, 0) === null) continue;
+    const seen = view.intel === null ? null : landPop(kit, unitsInReport(kit, view.intel.data));
+    const gold = p.spyGold(main, prm.spyMult, seen);
+    if (gold === null) return;
+    p.spy(main, target.id, gold);
+    p.setFlag(flag, w.t);
     return;
   }
 }
@@ -164,8 +224,10 @@ export const opportunist: StrategyDef = Object.freeze<StrategyDef>({
       knobs,
       reads(w: World): ToolCall[] {
         const out: ToolCall[] = [call("leaderboard", {})];
-        if (w.day >= prm.betrayDay) {
-          for (const o of friendCities(w).slice(0, 3)) out.push(call("view_city", { city: o.id }));
+        if (w.day >= prm.betrayDay - 1) {
+          for (const o of friendCities(w).slice(0, FRIEND_SCAN)) {
+            out.push(call("view_city", { city: o.id }));
+          }
         }
         return out;
       },
@@ -174,6 +236,7 @@ export const opportunist: StrategyDef = Object.freeze<StrategyDef>({
         p.answer(() => !betrayed);
         remember(p);
         betray(p, prm);
+        scout(p, prm);
         court(p, prm);
         tribute(p, prm);
         p.supportThreatened();

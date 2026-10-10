@@ -21,7 +21,6 @@ import {
 import type { StrategyHints } from "./hints.ts";
 import { dayOf, pickTravel, resOfTriple, type Kit } from "./kit.ts";
 import type { Memory } from "./memory.ts";
-import type { BotRng } from "./rng.ts";
 
 export interface QueuedBuild {
   readonly item: number;
@@ -79,8 +78,6 @@ export interface World {
   readonly kit: Kit;
   readonly hints: StrategyHints;
   readonly memory: Memory;
-  /** The round's random stream (seeded by match seed, seat, t, turn and round). */
-  readonly rng: BotRng;
   /** Own cities, by id. */
   readonly cities: readonly OwnCity[];
   /** `view_player` on itself, when read. */
@@ -120,7 +117,6 @@ export interface WorldInput {
   readonly kit: Kit;
   readonly hints: StrategyHints;
   readonly memory: Memory;
-  readonly rng: BotRng;
   readonly reads: Reads;
   /** Cached travel rows: own city → island → seconds per probe. */
   readonly travel: ReadonlyMap<CityId, Readonly<Record<string, readonly number[]>>>;
@@ -198,7 +194,6 @@ export function buildWorld(i: WorldInput): World {
     kit,
     hints,
     memory: i.memory,
-    rng: i.rng,
     cities,
     self: reads.self,
     map: reads.map,

@@ -40,7 +40,7 @@ import {
   ZERO,
   type Kit,
 } from "./kit.ts";
-import type { Memory } from "./memory.ts";
+import { handledId, isCount, isFlagName, memoLine, type Memory } from "./memory.ts";
 import { freeSlots, type OtherCity, type OwnCity, type World } from "./world.ts";
 
 /** "Raise `building` to `level`" (a projected level: completed plus queued). */
@@ -193,7 +193,17 @@ export function economyWishes(p: Planner, c: OwnCity, extra: readonly Wish[]): W
     out.push({ building: kit.population, level: at(kit.population) + 1 });
   }
   out.push(...extra);
-  if (k.militaryFirst) out.push(...unlockWishes(kit, kit.roles.attacker));
+  // Attackers come with the carriers that ship them, when the strategy sends them across water:
+  // every other player's city may be on another island, so waiting for a founding to need the
+  // carriers' building could mean never getting it.
+  const military = (): Wish[] => {
+    const wishes = unlockWishes(kit, kit.roles.attacker);
+    if (k.carriers && kit.rules.movement.transportRule) {
+      wishes.push(...unlockWishes(kit, kit.roles.carrier));
+    }
+    return wishes;
+  };
+  if (k.militaryFirst) out.push(...military());
 
   // Producers, balanced: the lowest projected level first (resource order breaks ties).
   const producers = [...new Set(Object.values(kit.producers))];
@@ -214,7 +224,7 @@ export function economyWishes(p: Planner, c: OwnCity, extra: readonly Wish[]): W
   }
 
   if (k.mix.defender > 0) out.push(...unlockWishes(kit, kit.roles.defender));
-  if (k.mix.attacker > 0) out.push(...unlockWishes(kit, kit.roles.attacker));
+  if (k.mix.attacker > 0) out.push(...military());
   out.push({ building: kit.population, level: Math.min(max(kit.population), 3 + w.day) });
   out.push({ building: kit.storage, level: Math.min(max(kit.storage), 2 + w.day) });
   if (kit.wall !== null && k.wallPerDay > 0) {
@@ -226,7 +236,15 @@ export function economyWishes(p: Planner, c: OwnCity, extra: readonly Wish[]): W
   return out;
 }
 
-/** The latest intel about a city, as an estimated land defense (null: nothing known). */
+/**
+ * The latest intel about a city, as an estimated land defense (null: nothing usable is known).
+ *
+ * A spy report is a snapshot of the units present, so its unit counts are added up. A battle report
+ * is ruleset-shaped (perfidia-1 §8.10 lists both sides, per phase, before / lost / survived), so
+ * adding up its counts would mix the attacker's stacks with the defender's and count each several
+ * times: the only battle report read is the seat's own won attack (the defenders are gone); any
+ * other one is "unknown", and the caller spies for a fresh snapshot instead.
+ */
 export function estimateDefense(w: World, view: CityView | undefined): number | null {
   if (view === undefined) return null;
   const kit = w.kit;
@@ -237,9 +255,8 @@ export function estimateDefense(w: World, view: CityView | undefined): number | 
   }
   if (view.intel === null) return null;
   const data = view.intel.data;
-  if (view.intel.type === "battle_report" && data["winner"] === "attacker") {
-    const attacker = data["attacker"];
-    if (attacker === w.seat) return 0;
+  if (view.intel.type === "battle_report") {
+    return data["winner"] === "attacker" && data["attacker"] === w.seat ? 0 : null;
   }
   return power(kit, unitsInReport(kit, data), "defense", true);
 }
@@ -281,7 +298,11 @@ export class Planner {
   readonly k: Knobs;
   readonly calls: ToolCall[] = [];
   readonly summary: string[] = [];
+  /** The estimated arrival of each `found_city` call planned this turn. */
+  readonly foundEtas = new Map<ToolCall, number>();
   memory: Memory;
+  /** Foundings in flight when the turn began (arrivals still ahead), before this turn's own. */
+  readonly startFoundings: Readonly<Record<string, readonly number[]>>;
   attacksLeft: number;
   messagesLeft: number;
   private readonly stock = new Map<CityId, Res>();
@@ -298,8 +319,12 @@ export class Planner {
   constructor(w: World, k: Knobs) {
     this.w = w;
     this.k = k;
-    const f: Record<string, number> = {};
-    for (const [island, at] of Object.entries(w.memory.f)) if (at >= w.t) f[island] = at;
+    const f: Record<string, number[]> = {};
+    for (const [island, etas] of Object.entries(w.memory.f)) {
+      const ahead = etas.filter((at) => at >= w.t);
+      if (ahead.length > 0) f[island] = ahead;
+    }
+    this.startFoundings = f;
     this.memory = { ...w.memory, f };
     this.attacksLeft = w.briefing.budget.attacksLeft;
     this.messagesLeft = w.briefing.budget.messagesLeft;
@@ -348,21 +373,28 @@ export class Planner {
   wish(id: CityId, ...wishes: Wish[]): void {
     this.extra.set(id, [...(this.extra.get(id) ?? []), ...wishes]);
   }
+  // Memory writers keep every entry within the notebook format (memory.ts), so one bad value can
+  // never make the notebook unreadable: long ids and lines are cut, an invalid flag is not stored.
   handled(id: string): boolean {
-    return this.memory.k.includes(id);
+    return this.memory.k.includes(handledId(id));
   }
   markHandled(id: string): void {
-    if (!this.handled(id)) this.memory = { ...this.memory, k: [...this.memory.k, id] };
+    const key = handledId(id);
+    if (!this.memory.k.includes(key)) this.memory = { ...this.memory, k: [...this.memory.k, key] };
   }
   flag(name: string): number | null {
     return this.memory.x[name] ?? null;
   }
-  setFlag(name: string, value: number): void {
+  /** Stores a flag; returns false (and stores nothing) when the name or value is not storable. */
+  setFlag(name: string, value: number): boolean {
+    if (!isFlagName(name) || !isCount(value)) return false;
     this.memory = { ...this.memory, x: { ...this.memory.x, [name]: value } };
+    return true;
   }
   memo(line: string): void {
-    if (!this.memory.m.includes(line))
-      this.memory = { ...this.memory, m: [...this.memory.m, line] };
+    const text = memoLine(line);
+    if (!this.memory.m.includes(text))
+      this.memory = { ...this.memory, m: [...this.memory.m, text] };
   }
   private push(c: ToolCall, note: string): void {
     this.calls.push(c);
@@ -465,9 +497,12 @@ export class Planner {
       slot !== null && this.w.kit.rules.toolOptions.foundSlot
         ? { from: c.id, island, units, slot }
         : { from: c.id, island, units };
-    this.push(call("found_city", args), `found ${island} from ${c.id}`);
+    const founding = call("found_city", args);
+    this.push(founding, `found ${island} from ${c.id}`);
+    this.foundEtas.set(founding, eta);
     this.take(c.id, units);
-    this.memory = { ...this.memory, f: { ...this.memory.f, [island]: eta } };
+    const etas = [...(this.memory.f[island] ?? []), eta].toSorted((a, b) => a - b);
+    this.memory = { ...this.memory, f: { ...this.memory.f, [island]: etas } };
   }
 
   attack(c: OwnCity, to: CityId, units: UnitCounts): boolean {
@@ -573,11 +608,13 @@ export class Planner {
   }
 
   private pendingFoundings(): number {
-    return Object.keys(this.memory.f).length;
+    let n = 0;
+    for (const etas of Object.values(this.memory.f)) n += etas.length;
+    return n;
   }
 
   private pendingOn(island: IslandId): number {
-    return this.memory.f[island] !== undefined ? 1 : 0;
+    return this.memory.f[island]?.length ?? 0;
   }
 
   /** The land pop of a founder and its escort, and the escort size, for a founding from `c`. */
@@ -838,8 +875,8 @@ export class Planner {
 
   /**
    * The attack group `from` can send to `island`: its attackers at home (all of them, or as many as
-   * its carriers lift), its warships when crossing water, `founders` founders if any fit. Returns
-   * the land attack strength too.
+   * its carriers lift), its warships when crossing water, and exactly `founders` founders when that
+   * many are at home and fit (otherwise none). Returns the land attack strength too.
    */
   attackGroup(
     from: OwnCity,
@@ -853,8 +890,10 @@ export class Planner {
     const apop = Math.max(1, kit.units.get(attacker)?.pop ?? 1);
     const fpop = kit.units.get(kit.roles.founder)?.pop ?? 0;
     const lift = this.liftCapacity(from, island);
-    let f = Math.min(founders, countOf(home, kit.roles.founder));
-    if (f * fpop > lift) f = 0;
+    const f =
+      founders > 0 && countOf(home, kit.roles.founder) >= founders && founders * fpop <= lift
+        ? founders
+        : 0;
     const n = Math.min(countOf(home, attacker), Math.floor((lift - f * fpop) / apop));
     if (n <= 0) return null;
     const land: Record<string, number> = { [attacker]: n };

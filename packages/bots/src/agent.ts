@@ -3,7 +3,8 @@
 // cities, then strategy reads), act (the strategy's calls, in priority order), end (`write_note`
 // and `end_turn` with a self-wake). It respects the round and call caps of `RoundInput` and of
 // `rules.gateway`, never throws on `{ok: false}`, and keeps no state across turns other than caches
-// of data it could fetch again (the rules and travel times), held in the instance.
+// of data it could fetch again (the rules and travel times), held in the instance. Its only random
+// draws are its strategy parameters, once per match (rng.ts).
 
 import {
   CityViewSchema,
@@ -11,6 +12,7 @@ import {
   MapViewSchema,
   PlayerViewSchema,
   RulesInfoSchema,
+  TOOL_RESULT_DATA,
   compareIds,
   type Briefing,
   type CityId,
@@ -23,11 +25,12 @@ import {
   z,
 } from "@perfidia/protocol";
 import { hintsFor, NO_HINTS, type StrategyHints } from "./hints.ts";
-import { DAY, call, fmtTime, makeKit, type Kit } from "./kit.ts";
+import { call, fmtTime, makeKit, type Kit } from "./kit.ts";
 import { encodeMemory, parseMemory, type Memory } from "./memory.ts";
 import { Planner } from "./plan.ts";
 import { streamOf } from "./rng.ts";
 import type { Brain, StrategyDef } from "./strategies/strategy.ts";
+import { chooseWake } from "./wake.ts";
 import { buildWorld, emptyReads, type Reads, type World } from "./world.ts";
 
 export interface BotOptions {
@@ -40,7 +43,10 @@ export interface BotOptions {
    * so the bot plays from structured data alone.
    */
   readonly hints?: StrategyHints | null;
-  /** Rethrow internal errors instead of ending the turn safely (tests). */
+  /**
+   * Rethrow internal errors instead of ending the turn safely, and throw on a successful read
+   * whose data does not parse with its protocol schema (tests: protocol drift must fail loudly).
+   */
   readonly strict?: boolean;
 }
 
@@ -55,6 +61,10 @@ interface Act {
 interface Plan {
   readonly calls: readonly ToolCall[];
   readonly memory: Memory;
+  /** Foundings in flight when the turn began; this turn's own are added from their results. */
+  readonly foundings: Memory["f"];
+  /** The estimated arrival of each planned `found_city` call. */
+  readonly etas: ReadonlyMap<ToolCall, number>;
   readonly cadence: number;
   readonly summary: readonly string[];
 }
@@ -64,6 +74,8 @@ interface TurnState {
   readonly briefing: Briefing;
   /** The latest game time seen (briefing, then results). */
   t: number;
+  /** The longest game-time step between two rounds of this turn (0 in lockstep). */
+  step: number;
   memory: Memory;
   kit: Kit | null;
   readonly reads: Reads;
@@ -137,6 +149,7 @@ export class BotAgent implements SeatAgent {
       turn: input.turn,
       briefing: input.briefing,
       t: input.briefing.t,
+      step: 0,
       memory,
       kit,
       reads: emptyReads(),
@@ -171,7 +184,7 @@ export class BotAgent implements SeatAgent {
     if (s.finished) {
       // The previous round's `end_turn` was rejected: ask again, nothing else.
       const plan = s.plan!;
-      const wakeAt = this.wakeAt(s, plan, this.settleMemory(s, plan.memory));
+      const wakeAt = this.wakeAt(s, plan, this.settleMemory(s, plan, []));
       return this.emit(s, [call("end_turn", { wakeAt })], undefined);
     }
     const room = Math.min(input.maxCalls, wakeLeft - 2);
@@ -180,7 +193,7 @@ export class BotAgent implements SeatAgent {
       const reads = this.missingReads(s, input);
       if (reads.length > 0) return this.emit(s, reads.slice(0, room), undefined);
     }
-    s.plan ??= this.makePlan(s, input);
+    s.plan ??= this.makePlan(s);
     if (roundsLeft >= 2 && room > 0 && s.sent < s.plan.calls.length) {
       const chunk = s.plan.calls.slice(s.sent, s.sent + room);
       s.sent += chunk.length;
@@ -200,11 +213,12 @@ export class BotAgent implements SeatAgent {
 
   private absorb(s: TurnState, results: readonly ToolResult[]): void {
     const n = Math.min(s.pending.length, results.length);
+    let latest = s.t;
     for (let i = 0; i < n; i += 1) {
       const c = s.pending[i]!;
       const r = results[i]!;
       if (typeof r !== "object" || r === null) continue;
-      if (Number.isSafeInteger(r.t) && r.t > s.t) s.t = r.t;
+      if (Number.isSafeInteger(r.t) && r.t > latest) latest = r.t;
       if (!READ_TOOLS.includes(c.tool)) {
         s.acts.push({ call: c, result: r });
         continue;
@@ -212,14 +226,23 @@ export class BotAgent implements SeatAgent {
       if (!r.ok) continue;
       this.absorbRead(s, c, r.data);
     }
+    s.step = Math.max(s.step, latest - s.t);
+    s.t = latest;
     s.pending = [];
+  }
+
+  /** A successful read whose data does not parse: ignored, or an error in strict mode. */
+  private malformed(c: ToolCall, error: z.ZodError): void {
+    if (this.o.strict === true) {
+      throw new Error(`${c.tool} result does not parse: ${error.message}`);
+    }
   }
 
   private absorbRead(s: TurnState, c: ToolCall, data: unknown): void {
     switch (c.tool) {
       case "rules": {
         const parsed = RulesInfoSchema.safeParse(data);
-        if (!parsed.success) return;
+        if (!parsed.success) return this.malformed(c, parsed.error);
         const kit = makeKit(parsed.data);
         this.kits.set(kit.key, kit);
         s.kit = kit;
@@ -228,12 +251,13 @@ export class BotAgent implements SeatAgent {
       }
       case "view_player": {
         const parsed = PlayerViewSchema.safeParse(data);
-        if (parsed.success && parsed.data.id === this.o.seat) s.reads.self = parsed.data;
+        if (!parsed.success) return this.malformed(c, parsed.error);
+        if (parsed.data.id === this.o.seat) s.reads.self = parsed.data;
         return;
       }
       case "view_map": {
         const parsed = MapViewSchema.safeParse(data);
-        if (!parsed.success) return;
+        if (!parsed.success) return this.malformed(c, parsed.error);
         s.reads.map = parsed.data;
         const { from, travel } = parsed.data;
         if (from !== undefined && travel !== undefined && s.kit !== null) {
@@ -246,12 +270,14 @@ export class BotAgent implements SeatAgent {
       }
       case "view_city": {
         const parsed = CityViewSchema.safeParse(data);
-        if (parsed.success) s.reads.views.set(parsed.data.id, parsed.data);
+        if (!parsed.success) return this.malformed(c, parsed.error);
+        s.reads.views.set(parsed.data.id, parsed.data);
         return;
       }
       case "leaderboard": {
         const parsed = LeaderboardViewSchema.safeParse(data);
-        if (parsed.success) s.reads.board = parsed.data;
+        if (!parsed.success) return this.malformed(c, parsed.error);
+        s.reads.board = parsed.data;
         return;
       }
       default:
@@ -273,8 +299,9 @@ export class BotAgent implements SeatAgent {
   /**
    * The turn's base reads, fixed when the turn begins: the rules (unless cached), its own player
    * view, the map (from a city whose travel times are not cached yet), and its cities' full views.
-   * City views are capped at about a third of the turn's call budget: cities whose build queue has
-   * room come first (they need planning), the others in an order that rotates with the turn.
+   * City views are capped at about a third of the turn's call budget: cities under attack come
+   * first (they need defending), then cities whose build queue has room (they need planning), the
+   * others in an order that rotates with the turn.
    */
   private baseReads(s: TurnState, input: RoundInput): ToolCall[] {
     const own = s.briefing.cities.map((c) => c.id).toSorted(compareIds);
@@ -290,11 +317,19 @@ export class BotAgent implements SeatAgent {
     const turnCalls = Math.min(perWake ?? Number.MAX_SAFE_INTEGER, input.maxRounds * perRound);
     const views = Math.max(1, Math.floor(turnCalls / 3) - base.length);
     const queueLength = new Map(s.briefing.cities.map((c) => [c.id, c.build.length]));
+    const threatened = new Set<string>(
+      s.briefing.incoming.filter((inc) => inc.kind === "attack").map((inc) => inc.to),
+    );
     const shift = own.length === 0 ? 0 : s.turn % own.length;
     const rotated = [...own.slice(shift), ...own.slice(0, shift)];
     const order = rotated
-      .map((id, i) => ({ id, i, queued: queueLength.get(id) ?? 0 }))
-      .toSorted((a, b) => a.queued - b.queued || a.i - b.i)
+      .map((id, i) => ({
+        id,
+        i,
+        safe: threatened.has(id) ? 0 : 1,
+        queued: queueLength.get(id) ?? 0,
+      }))
+      .toSorted((a, b) => a.safe - b.safe || a.queued - b.queued || a.i - b.i)
       .slice(0, views)
       .map((x) => x.id)
       .toSorted(compareIds);
@@ -312,7 +347,7 @@ export class BotAgent implements SeatAgent {
       const extra: ToolCall[] = [];
       const lacking = own.filter((id) => !this.travelRows(s.kit!).has(id)).slice(0, 2);
       for (const id of lacking) extra.push(call("view_map", { fromCity: id }));
-      extra.push(...this.brain.reads(this.world(s, input)));
+      extra.push(...this.brain.reads(this.world(s)));
       const seen = new Set<string>();
       s.extra = extra.filter((c) => {
         const k = keyOf(c);
@@ -324,7 +359,7 @@ export class BotAgent implements SeatAgent {
     return s.extra.filter((c) => !s.issued.has(keyOf(c)));
   }
 
-  private world(s: TurnState, input: RoundInput): World {
+  private world(s: TurnState): World {
     const kit = s.kit!;
     return buildWorld({
       seat: this.o.seat,
@@ -334,7 +369,6 @@ export class BotAgent implements SeatAgent {
       kit,
       hints: this.hints(s.briefing),
       memory: s.memory,
-      rng: streamOf(this.o.seed, this.o.seat, s.briefing.t, s.turn, input.round),
       reads: s.reads,
       travel: this.travelRows(kit),
     });
@@ -342,29 +376,47 @@ export class BotAgent implements SeatAgent {
 
   // Planning.
 
-  private makePlan(s: TurnState, input: RoundInput): Plan {
+  private makePlan(s: TurnState): Plan {
     const cadence = this.brain.knobs.cadence;
-    if (s.kit === null) return { calls: [], memory: s.memory, cadence, summary: ["no rules"] };
-    const p = new Planner(this.world(s, input), this.brain.knobs);
+    if (s.kit === null) {
+      const none = new Map<ToolCall, number>();
+      const summary = ["no rules"];
+      return { calls: [], memory: s.memory, foundings: s.memory.f, etas: none, cadence, summary };
+    }
+    const p = new Planner(this.world(s), this.brain.knobs);
     this.brain.plan(p);
-    return { calls: p.calls, memory: p.memory, cadence, summary: p.summary };
+    return {
+      calls: p.calls,
+      memory: p.memory,
+      foundings: p.startFoundings,
+      etas: p.foundEtas,
+      cadence,
+      summary: p.summary,
+    };
   }
 
   // Ending.
 
   private finish(s: TurnState, cap: number): RoundOutput {
     const plan = s.plan!;
-    const memory = this.settleMemory(s, plan.memory);
-    const end = call("end_turn", { wakeAt: this.wakeAt(s, plan, memory) });
-    const calls: ToolCall[] = [];
+    // The last plan calls ride with `end_turn` (and `write_note` when the notes change): the memory
+    // written must count the foundings among them, whose results the bot will never see.
+    const rest = (fixed: number): ToolCall[] =>
+      plan.calls.slice(s.sent, s.sent + Math.max(0, cap - fixed));
+    let tail = rest(1);
+    let memory = this.settleMemory(s, plan, tail);
     let note: ToolCall | null = null;
     if (s.kit !== null && cap >= 2) {
-      const text = encodeMemory(memory, s.kit.gateway.notesMaxChars);
-      if (text !== s.briefing.notes) note = call("write_note", { text, mode: "replace" });
+      const max = s.kit.gateway.notesMaxChars;
+      if (encodeMemory(memory, max) !== s.briefing.notes) {
+        tail = rest(2);
+        memory = this.settleMemory(s, plan, tail);
+        note = call("write_note", { text: encodeMemory(memory, max), mode: "replace" });
+      }
     }
-    const fixed = note === null ? 1 : 2;
-    calls.push(...plan.calls.slice(s.sent, s.sent + Math.max(0, cap - fixed)));
-    s.sent += calls.length;
+    const end = call("end_turn", { wakeAt: this.wakeAt(s, plan, memory) });
+    const calls: ToolCall[] = [...tail];
+    s.sent += tail.length;
     if (note !== null) calls.push(note);
     calls.push(end);
     const done = plan.summary.length === 0 ? "nothing to do" : plan.summary.join("; ");
@@ -373,36 +425,42 @@ export class BotAgent implements SeatAgent {
     return this.emit(s, calls, thought);
   }
 
-  /** Founding results replace the planned arrival estimates; failed ones are forgotten. */
-  private settleMemory(s: TurnState, memory: Memory): Memory {
-    const f: Record<string, number> = { ...memory.f };
+  /**
+   * The memory to write: the plan's, with the foundings in flight rebuilt from the ones known when
+   * the turn began, the arrivals of this turn's accepted `found_city` calls, and the planned
+   * arrivals of those in `unanswered` (sent with `end_turn`, so without a result). Planned foundings
+   * that were rejected or never sent are not counted.
+   */
+  private settleMemory(s: TurnState, plan: Plan, unanswered: readonly ToolCall[]): Memory {
+    const f: Record<string, number[]> = {};
+    const add = (island: string | undefined, at: unknown): void => {
+      if (typeof island !== "string" || typeof at !== "number") return;
+      f[island] = [...(f[island] ?? []), at].toSorted((x, y) => x - y);
+    };
+    for (const [island, etas] of Object.entries(plan.foundings)) f[island] = [...etas];
     for (const a of s.acts) {
-      if (a.call.tool !== "found_city") continue;
-      const island = argOf(a.call, "island");
-      if (typeof island !== "string") continue;
-      if (a.result.ok) {
-        const arrive = a.result.data["arrive"];
-        if (Array.isArray(arrive) && typeof arrive[0] === "number") f[island] = arrive[0];
-      } else {
-        delete f[island];
-      }
+      if (a.call.tool !== "found_city" || !a.result.ok) continue;
+      const arrive = a.result.data["arrive"];
+      if (Array.isArray(arrive)) add(argOf(a.call, "island"), arrive[0]);
     }
-    return { ...memory, f };
+    for (const c of unanswered) add(argOf(c, "island"), plan.etas.get(c));
+    return { ...plan.memory, f };
   }
 
   /**
-   * The self-wake: the strategy's cadence, or earlier when a queue empties, a rejected call becomes
-   * possible (`availableAt`) or a founding lands; never earlier than the wake budget allows (the
-   * rest of the game day spread over the own wakes left) and always within `selfWake`.
+   * The self-wake (`chooseWake`), from what the bot waits for: the end of each of its queues (the
+   * briefing's, then this turn's accepted items), the `availableAt` of every time-gated rejection
+   * (a whole call, or one item of a `build`/`recruit` batch) and each founding's arrival.
    */
   private wakeAt(s: TurnState, plan: Plan, memory: Memory): number {
-    const now = s.t;
-    const gw = s.kit?.gateway;
-    if (gw === undefined) return now + plan.cadence;
     const events: number[] = [];
     const lastEnd = new Map<string, number>();
     const bump = (key: string, end: number): void => {
       lastEnd.set(key, Math.max(lastEnd.get(key) ?? 0, end));
+    };
+    const retry = (details: Readonly<Record<string, unknown>> | undefined): void => {
+      const at = details?.["availableAt"];
+      if (typeof at === "number") events.push(at);
     };
     for (const c of s.briefing.cities) {
       for (const b of c.build) bump(`${c.id}/build`, b.end[0]);
@@ -411,37 +469,40 @@ export class BotAgent implements SeatAgent {
       }
     }
     for (const a of s.acts) {
-      const city = argOf(a.call, "city");
       if (!a.result.ok) {
-        const at = a.result.details?.["availableAt"];
-        if (typeof at === "number") events.push(at);
+        retry(a.result.details);
         continue;
       }
-      if ((a.call.tool !== "build" && a.call.tool !== "recruit") || typeof city !== "string") {
-        continue;
-      }
-      const items = a.result.data["items"];
-      if (!Array.isArray(items)) continue;
-      for (const item of items) {
-        if (typeof item !== "object" || item === null || Array.isArray(item)) continue;
-        const end = item["end"];
-        if (item["ok"] !== true || !Array.isArray(end) || typeof end[0] !== "number") continue;
-        const unit = item["unit"];
-        const queue =
-          typeof unit === "string" ? (s.kit?.units.get(unit)?.queue ?? "units") : "build";
-        bump(`${city}/${queue}`, end[0]);
+      const city = argOf(a.call, "city");
+      if (typeof city !== "string") continue;
+      if (a.call.tool === "build") {
+        const data = TOOL_RESULT_DATA.build.safeParse(a.result.data);
+        for (const item of data.success ? data.data.items : []) {
+          if (item.ok) bump(`${city}/build`, item.end[0]);
+          else retry(item.details);
+        }
+      } else if (a.call.tool === "recruit") {
+        const data = TOOL_RESULT_DATA.recruit.safeParse(a.result.data);
+        for (const item of data.success ? data.data.items : []) {
+          if (!item.ok) {
+            retry(item.details);
+            continue;
+          }
+          const queue = s.kit?.units.get(item.unit)?.queue ?? "units";
+          bump(`${city}/${queue}`, item.end[0]);
+        }
       }
     }
     events.push(...lastEnd.values());
-    for (const at of Object.values(memory.f)) events.push(at + 60);
-
-    let want = now + plan.cadence;
-    for (const e of events) if (e > now && e < want) want = e;
-    const own = s.briefing.budget.ownWakesLeft;
-    const gap = Math.ceil((DAY - (now % DAY)) / Math.max(1, own));
-    const lo = now + Math.max(gw.selfWake.min, Math.min(gap, gw.selfWake.max));
-    const hi = now + gw.selfWake.max;
-    return Math.min(hi, Math.max(lo, want));
+    for (const etas of Object.values(memory.f)) for (const at of etas) events.push(at + 60);
+    return chooseWake({
+      now: s.t,
+      step: s.step,
+      cadence: plan.cadence,
+      selfWake: s.kit?.gateway.selfWake ?? null,
+      ownWakesLeft: s.briefing.budget.ownWakesLeft,
+      events,
+    });
   }
 }
 

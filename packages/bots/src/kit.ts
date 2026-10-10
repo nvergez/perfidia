@@ -249,9 +249,10 @@ export function countOf(units: Readonly<Record<string, number>>, id: UnitId | nu
 
 /**
  * Unit counts found anywhere in a report's data: every object whose keys are all unit ids of the
- * rules and whose values are non-negative integers is added up. Reports are ruleset-shaped (spy
- * snapshots list units by owner and role; battle reports list before, lost and survived), so the
- * sum may over-count, which errs on the side of caution when it estimates a defense.
+ * rules and whose values are non-negative integers is added up. Meant for spy snapshots, which list
+ * the units present by owner and role (disjoint groups, so the sum is the garrison). A battle
+ * report lists both sides and several counts per stack, so its sum over-counts: `estimateDefense`
+ * does not read battle reports this way.
  */
 export function unitsInReport(kit: Kit, data: Json): UnitCounts {
   const sum: Record<string, number> = {};

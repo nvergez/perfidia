@@ -1,7 +1,10 @@
 // Bot randomness (docs/architecture.md §11.1): the same algorithms as the engine's `core/prng.ts`
 // (mulberry32 seeded by FNV-1a 32 over UTF-8, perfidia-1 §1.3), re-implemented here because bots
-// import only `protocol` at runtime. A bot is a pure function of its inputs: every draw comes from a
-// stream named by the match seed, the seat and the round being played.
+// import only `protocol` at runtime. A bot is a pure function of its inputs. It draws in two places
+// only: its strategy parameters, once per match from the stream `(matchSeed, seat, strategy,
+// "params")` (agent.ts), and its think time from `(matchSeed, seat, "think", t, turn, round)`
+// (think.ts). Every per-turn choice is a deterministic function of the turn's inputs and of those
+// parameters, so no per-round stream is needed.
 
 /** A source of uint32 values. */
 export interface BotRng {

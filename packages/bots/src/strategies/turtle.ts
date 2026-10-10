@@ -1,7 +1,10 @@
 // `turtle` (docs/architecture.md §11.2): economy, wall (when the ruleset has one) and defenders;
 // accepts every alliance and pact; never attacks. On an incoming attack it recruits `max` defenders
 // in the threatened city (cancelling its newest queued build item when not even one defender is
-// affordable) and asks its allies for support by message.
+// affordable) and asks its allies (alliance members, not pact partners) for support by message.
+// Each part is remembered once done (`t<id>` for the recruit, `m<id>` for the message), so a part
+// that could not be done (the city was not read, its queue was full, no message left, no ally yet)
+// is tried again on the next wake before the attack lands.
 
 import { compareIds } from "@perfidia/protocol";
 import { covers } from "../kit.ts";
@@ -12,26 +15,35 @@ import type { StrategyDef } from "./strategy.ts";
 function brace(p: Planner): void {
   const { w } = p;
   const defender = w.kit.roles.defender;
-  const friends = [...w.relations.keys()].toSorted(compareIds);
+  const allies = [...w.relations.entries()]
+    .filter(([, kind]) => kind === "ally")
+    .map(([player]) => player)
+    .toSorted(compareIds);
   for (const inc of w.briefing.incoming) {
-    if (inc.kind !== "attack" || inc.arrive[0] <= w.t || p.handled(`t${inc.id}`)) continue;
+    if (inc.kind !== "attack" || inc.arrive[0] <= w.t) continue;
+    // A relief of an own besieged city fights the besieger, not the seat: nothing to brace for.
+    if (inc.foe !== undefined && inc.foe !== null && inc.foe !== w.seat) continue;
     const c = p.city(inc.to);
     if (c === undefined) continue;
-    if (defender !== null && p.canRecruit(c, defender)) {
-      const cost = w.kit.units.get(defender)?.cost;
-      const last = c.build.at(-1);
-      if (cost !== undefined && !covers(p.stockOf(c.id), cost) && c.build.length > 1 && last) {
-        p.cancel(c, last.item);
+    const recruitKey = `t${inc.id}`;
+    if (!p.handled(recruitKey)) {
+      if (defender === null) {
+        p.markHandled(recruitKey);
+      } else if (p.canRecruit(c, defender)) {
+        const cost = w.kit.units.get(defender)?.cost;
+        const last = c.build.at(-1);
+        if (cost !== undefined && !covers(p.stockOf(c.id), cost) && c.build.length > 1 && last) {
+          p.cancel(c, last.item);
+        }
+        p.recruit(c, [{ unit: defender, count: "max" }]);
+        p.markHandled(recruitKey);
       }
-      p.recruit(c, [{ unit: defender, count: "max" }]);
     }
-    if (friends.length > 0) {
-      p.message(
-        friends,
-        `Attack on ${inc.to} by ${inc.by}, landing ${inc.arrive[1]}. Please send support to ${inc.to}.`,
-      );
+    const messageKey = `m${inc.id}`;
+    if (allies.length > 0 && !p.handled(messageKey)) {
+      const text = `Attack on ${inc.to} by ${inc.by}, landing ${inc.arrive[1]}. Please send support to ${inc.to}.`;
+      if (p.message(allies, text)) p.markHandled(messageKey);
     }
-    p.markHandled(`t${inc.id}`);
   }
 }
 

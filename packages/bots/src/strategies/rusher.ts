@@ -1,7 +1,14 @@
 // `rusher` (docs/architecture.md §11.2): early attack-unit building, attackers and carriers; spies the
 // nearest non-allied cities; raids when its attack exceeds the estimated defense by a seeded margin
-// (at least 1.5×); brings 2 founders against weak colonies (a conquest attempt); recalls an attack
-// within the window when a fresher report shows a stronger defense.
+// (at least 1.5×); brings exactly 2 founders against weak colonies (a conquest attempt); recalls an
+// attack within the window when a fresher report shows a stronger defense.
+//
+// The recall needs a wake inside the attack's recall window, with a report newer than the launch.
+// The rusher does not schedule one: its next own wake is at least `selfWake.min` after the launch,
+// which in perfidia-1 is the whole window (600 s), and in real time `end_turn` lands later still.
+// So the recall fires only on a wake that happens to fall inside the window (an urgent or social
+// wake) after a report landed there, such as a spy sent earlier. Battle reports never trigger it:
+// they are not read as intel (`estimateDefense`).
 
 import type { ToolCall } from "@perfidia/protocol";
 import { call, countOf, covers, landPop, power, unitsInReport } from "../kit.ts";
@@ -16,6 +23,9 @@ import {
 import { randInt, type BotRng } from "../rng.ts";
 import type { OtherCity, OwnCity, World } from "../world.ts";
 import type { StrategyDef } from "./strategy.ts";
+
+/** Founders sent with a conquest attempt. */
+const CONQUEST_FOUNDERS = 2;
 
 /** Other players' cities whose owner has no relation with the seat, nearest first. */
 function strangers(w: World, from: OwnCity): OtherCity[] {
@@ -77,7 +87,9 @@ function offense(p: Planner, prm: RusherParams): void {
   let spied = false;
   for (const target of strangers(w, main).slice(0, prm.scan)) {
     const view = w.views.get(target.id);
-    if (view !== undefined && view.tag !== null && w.hints.avoidTags.includes(view.tag)) continue;
+    // Not read this turn (call caps): its tag, and so whether bots avoid it, is unknown.
+    if (view === undefined) continue;
+    if (view.tag !== null && w.hints.avoidTags.includes(view.tag)) continue;
     const est = estimateDefense(w, view);
     const age = intelAge(w, view);
     if (est === null || age === null || age > prm.stale) {
@@ -85,7 +97,7 @@ function offense(p: Planner, prm: RusherParams): void {
       const last = p.flag(flag);
       if (!ready || spied || p.inFlight("spy", target.id)) continue;
       if (last !== null && w.t - last < prm.stale) continue;
-      const seen = view?.access === "public" && view.intel !== null ? view.intel.data : null;
+      const seen = view.access === "public" && view.intel !== null ? view.intel.data : null;
       const gold = p.spyGold(
         main,
         prm.spyMult,
@@ -101,9 +113,15 @@ function offense(p: Planner, prm: RusherParams): void {
     if (w.t < kit.rules.time.attackFrom || p.attacksLeft <= 0) continue;
     const raid = p.attackGroup(main, target.island, 0);
     if (raid === null) continue;
-    // A colony this weak is worth a conquest attempt: two founders ride along when they fit.
-    const weakColony = target.capitalOf === null && raid.strength * 1000 >= est * prm.marginPm * 2;
-    const group = weakColony ? (p.attackGroup(main, target.island, 2) ?? raid) : raid;
+    // A colony this weak is worth a conquest attempt, with exactly two founders when both are at
+    // home and fit in the carriers; otherwise the plain raid.
+    let group = raid;
+    if (target.capitalOf === null && raid.strength * 1000 >= est * prm.marginPm * 2) {
+      const conquest = p.attackGroup(main, target.island, CONQUEST_FOUNDERS);
+      if (conquest !== null && countOf(conquest.units, kit.roles.founder) === CONQUEST_FOUNDERS) {
+        group = conquest;
+      }
+    }
     if (countOf(group.units, attacker) < prm.minAttackers) continue;
     if (group.strength * 1000 >= est * prm.marginPm) {
       p.attack(main, target.id, group.units);
@@ -112,14 +130,14 @@ function offense(p: Planner, prm: RusherParams): void {
   }
 }
 
-/** Keeps two founders ready in the main city for conquest attempts once the economy allows. */
+/** Keeps the conquest founders ready in the main city once the economy allows. */
 function conquestFounders(p: Planner): void {
   const { w } = p;
   const kit = w.kit;
   const main = mainCity(w);
   const founder = kit.roles.founder;
   if (main === null || w.day < 1 || !p.canRecruit(main, founder)) return;
-  if (countOf(p.homeOf(main.id), founder) + p.queued(main, founder) >= 2) return;
+  if (countOf(p.homeOf(main.id), founder) + p.queued(main, founder) >= CONQUEST_FOUNDERS) return;
   const cost = w.self?.private?.settler.cost;
   if (cost !== undefined && covers(p.stockOf(main.id), cost)) {
     p.recruit(main, [{ unit: founder, count: 1 }], cost);

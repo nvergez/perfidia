@@ -3,8 +3,14 @@
 
 import { describe, expect, test } from "bun:test";
 import fc from "fast-check";
-import { RulesInfoSchema } from "@perfidia/protocol";
-import { perfidiaRules, res, rulesInfo, sandboxRules } from "./fixtures.test.ts";
+import {
+  CityViewSchema,
+  RulesInfoSchema,
+  type CityView,
+  type JsonObject,
+} from "@perfidia/protocol";
+import { perfidiaGame, perfidiaRules, res, rulesInfo, sandboxRules } from "./fixtures.test.ts";
+import { NO_HINTS } from "./hints.ts";
 import {
   etaAfford,
   fmtTime,
@@ -16,11 +22,32 @@ import {
   timesAffordable,
   unitsInReport,
 } from "./kit.ts";
-import { planBuilds, unlockWishes } from "./plan.ts";
+import { emptyMemory } from "./memory.ts";
+import { estimateDefense, planBuilds, Planner, unlockWishes, type Knobs } from "./plan.ts";
+import { buildWorld, emptyReads } from "./world.ts";
 
 const pKit = makeKit(RulesInfoSchema.parse(rulesInfo(perfidiaRules(6))));
 const sKit = makeKit(RulesInfoSchema.parse(rulesInfo(sandboxRules(6))));
 const ZERO = res(0, 0, 0);
+
+/** A two-sided report as perfidia-1 §8.10 shapes it: per owner and unit, before / lost / survived. */
+function battle(attacker: string, winner: "attacker" | "defender"): JsonObject {
+  return {
+    attacker,
+    foe: "p2",
+    winner,
+    land: {
+      stacks: {
+        [attacker]: {
+          before: { raider: 60 },
+          lost: { raider: 20 },
+          survived: { raider: 40 },
+        },
+        p2: { before: { guard: 30 }, lost: { guard: 30 }, survived: {} },
+      },
+    },
+  };
+}
 
 describe("roles from unit stats", () => {
   test("perfidia shape: wall, warships, settler", () => {
@@ -95,6 +122,58 @@ describe("reports and travel", () => {
     expect(unitsInReport(sKit, data)).toEqual({});
   });
 
+  describe("estimateDefense", () => {
+    const game = perfidiaGame(6);
+    game.t = 50000;
+    const world = buildWorld({
+      seat: "p1",
+      turn: 1,
+      t: game.t,
+      briefing: game.briefing("p1"),
+      kit: pKit,
+      hints: NO_HINTS,
+      memory: emptyMemory("rusher"),
+      reads: emptyReads(),
+      travel: new Map(),
+    });
+    const view = (type: "spy_report" | "battle_report", data: JsonObject): CityView =>
+      CityViewSchema.parse({
+        access: "public",
+        id: "c2",
+        name: "c2",
+        owner: "p2",
+        island: "i6",
+        slot: 0,
+        capitalOf: "p2",
+        tag: null,
+        ext: {},
+        intel: {
+          report: "r00001",
+          type,
+          at: [game.t - 600, "x"],
+          age: [600, "600s"],
+          data,
+        },
+      });
+
+    test("a spy report: the units present, added up", () => {
+      const data = { units: { home: { guard: 5 }, stationed: { p3: { guard: 3 } } } };
+      // 8 guards of 20 defense.
+      expect(estimateDefense(world, view("spy_report", data))).toBe(160);
+    });
+
+    test("the seat's own won attack: nothing left to defend", () => {
+      expect(estimateDefense(world, view("battle_report", battle("p1", "attacker")))).toBe(0);
+    });
+
+    test("any other battle report is unknown, not a sum of both sides and every phase", () => {
+      // Summed, this report would read as 60 + 20 + 40 raiders and 30 + 30 guards of defense.
+      expect(estimateDefense(world, view("battle_report", battle("p1", "defender")))).toBeNull();
+      expect(estimateDefense(world, view("battle_report", battle("p3", "attacker")))).toBeNull();
+      expect(estimateDefense(world, view("battle_report", battle("p3", "defender")))).toBeNull();
+    });
+  });
+
   test("pickTravel: the spy probe for spies, the slowest group probe otherwise", () => {
     expect(pickTravel(pKit, [5400, 4050, 2700], true)).toBe(2700);
     expect(pickTravel(pKit, [5400, 4050, 2700], false)).toBe(5400);
@@ -106,6 +185,52 @@ describe("reports and travel", () => {
     expect(fmtTime(0)).toBe("D1 00:00");
     expect(fmtTime(604800)).toBe("D8 00:00");
     expect(fmtTime(223370)).toBe("D3 14:02:50");
+  });
+});
+
+describe("attack groups", () => {
+  const knobs: Knobs = {
+    cadence: 3600,
+    settle: false,
+    maxCities: 1,
+    producerBase: 0,
+    producerPerDay: 0,
+    wallBase: 0,
+    wallPerDay: 0,
+    spendPm: 0,
+    mix: { defender: 0, attacker: 1, navy: 0 },
+    carriers: true,
+    supportOwn: false,
+    escort: 0,
+    militaryFirst: false,
+  };
+  /** The group c1 sends across water to c2's island asking for 2 founders, `settlers` at home. */
+  function groupWith(settlers: number): Record<string, number> | undefined {
+    const game = perfidiaGame(6);
+    game.t = 50000;
+    const c1 = game.city("c1");
+    c1.units = { raider: 40, transport: 5 };
+    if (settlers > 0) c1.units["settler"] = settlers;
+    const world = buildWorld({
+      seat: "p1",
+      turn: 1,
+      t: game.t,
+      briefing: game.briefing("p1"),
+      kit: pKit,
+      hints: NO_HINTS,
+      memory: emptyMemory("rusher"),
+      reads: emptyReads(),
+      travel: new Map(),
+    });
+    const planner = new Planner(world, knobs);
+    return planner.attackGroup(world.cities[0]!, game.city("c2").island, 2)?.units;
+  }
+
+  test("takes exactly the founders asked for, or none, with the carriers they need", () => {
+    expect(groupWith(2)).toEqual({ raider: 40, settler: 2, transport: 3 });
+    expect(groupWith(3)).toEqual({ raider: 40, settler: 2, transport: 3 });
+    expect(groupWith(1)).toEqual({ raider: 40, transport: 2 });
+    expect(groupWith(0)).toEqual({ raider: 40, transport: 2 });
   });
 });
 
