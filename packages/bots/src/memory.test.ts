@@ -109,11 +109,23 @@ describe("memory", () => {
     );
   });
 
+  test("-0 is stored as 0, in flags and in arrival times", () => {
+    const signed: Memory = { ...emptyMemory("rusher"), f: { i3: [-0, 5] }, x: { a: -0, b: 2 } };
+    const clean = normalizeMemory(signed);
+    expect(clean.x).toEqual({ a: 0, b: 2 });
+    expect(clean.f).toEqual({ i3: [0, 5] });
+    const back = parseMemory(encodeMemory(signed, 4000), "rusher");
+    expect(back).toEqual(clean);
+    expect(Object.is(back.x.a, 0)).toBe(true);
+    expect(Object.is(back.f.i3?.[0], 0)).toBe(true);
+  });
+
   test("whatever the writers put in, the text parses back and keeps every valid entry", () => {
-    // Anything a buggy writer could produce: long lines and ids, bad flag names and values, bad
-    // island keys and arrival times, a long rules key.
+    // Anything a buggy writer could produce: long lines and ids, bad flag names and values (-0
+    // among them), bad island keys and arrival times, a long rules key.
     const anyNumber = fc.oneof(
       fc.nat(),
+      fc.constant(-0),
       fc.integer({ min: -1000, max: -1 }),
       fc.double({ noNaN: false }),
       fc.constant(Number.MAX_SAFE_INTEGER + 2),
@@ -141,10 +153,10 @@ describe("memory", () => {
         expect(back).toEqual({ ...clean, m: clean.m.slice(-24), k: clean.k.slice(-32) });
         for (const line of back.m) expect(line.length).toBeLessThanOrEqual(MEMO_MAX_CHARS);
         for (const id of back.k) expect(id.length).toBeLessThanOrEqual(HANDLED_MAX_CHARS);
-        // Every storable flag survives.
+        // Every storable flag survives, -0 as 0 (JSON has no -0).
         for (const [name, value] of Object.entries(mem.x)) {
           if (/^[a-z][a-z0-9]*$/.test(name) && Number.isSafeInteger(value) && value >= 0) {
-            expect(back.x[name]).toBe(value);
+            expect(back.x[name]).toBe(value === 0 ? 0 : value);
           }
         }
       }),
