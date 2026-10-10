@@ -20,6 +20,7 @@ const ext: PerfidiaExt = {
   tiebreak: ["p3", "p1", "p2"],
   sieges: { c14: { by: "p2", startedAt: 100, endsAt: 21700, seq: 12 } },
   battlePoints: { p1: 0, p2: 234, p3: 0 },
+  frozenScores: { p3: { cityPoints: 105, battleScore: 7 } },
   related: ["p1|p3"],
   relationEnds: { "p1|p2": 5000 },
   domination: {
@@ -42,6 +43,11 @@ describe("PerfidiaExtSchema", () => {
     expect(firstIssuePath({ ...ext, sieges: { x1: ext.sieges["c14"] } })).toEqual(["sieges", "x1"]);
     expect(firstIssuePath({ ...ext, related: ["p1-p3"] })).toEqual(["related", 0]);
     expect(firstIssuePath({ ...ext, battlePoints: { p1: -1 } })).toEqual(["battlePoints", "p1"]);
+    expect(firstIssuePath({ ...ext, frozenScores: { p3: { cityPoints: 105 } } })).toEqual([
+      "frozenScores",
+      "p3",
+      "battleScore",
+    ]);
     expect(
       firstIssuePath({ ...ext, domination: { open: true, countdowns: [{ bloc: "x" }] } })?.slice(
         0,
@@ -57,6 +63,7 @@ describe("PerfidiaExtSchema", () => {
       tiebreak: ["p2", "p1"],
       sieges: {},
       battlePoints: { p1: 0, p2: 0 },
+      frozenScores: {},
       related: [],
       relationEnds: {},
       domination: { open: false, countdowns: [] },

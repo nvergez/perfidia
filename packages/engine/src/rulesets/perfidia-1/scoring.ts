@@ -52,7 +52,10 @@ export interface ScoreRow extends RankRow {
   readonly battleScore: number;
 }
 
-/** The score of every player of the state (§13.1), in player order. */
+/**
+ * The score of every player of the state (§13.1), in player order: computed live, except for an
+ * eliminated player whose score was frozen at its elimination (§9.7).
+ */
 export function scoreRows(
   config: DeepReadonly<PerfidiaConfig>,
   state: DeepReadonly<GameState>,
@@ -73,15 +76,20 @@ export function scoreRows(
     .map((player) => {
       const own = cities[player.id] ?? { count: 0, points: 0 };
       const bp = battlePointsOf(ext, player.id);
-      const bs = battleScore(config, bp, own.points);
+      const frozen =
+        !player.alive && Object.hasOwn(ext.frozenScores, player.id)
+          ? ext.frozenScores[player.id]
+          : undefined;
+      const points = frozen?.cityPoints ?? own.points;
+      const bs = frozen?.battleScore ?? battleScore(config, bp, own.points);
       return {
         player: player.id,
         alive: player.alive,
         eliminatedAt: player.eliminatedAt,
-        score: own.points + bs,
+        score: points + bs,
         cities: own.count,
         battlePoints: bp,
-        cityPoints: own.points,
+        cityPoints: points,
         battleScore: bs,
       };
     });
