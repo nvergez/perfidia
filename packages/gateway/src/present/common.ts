@@ -203,6 +203,16 @@ export function stripControl(s: string): string {
   return out;
 }
 
+/**
+ * The first `n` UTF-16 code units of `s`, one fewer when the last one kept would be the first half
+ * of a surrogate pair, so a cut never leaves a lone surrogate (an emoji is kept whole or dropped).
+ */
+export function cutText(s: string, n: number): string {
+  if (s.length <= n) return s;
+  const last = s.charCodeAt(n - 1);
+  return s.slice(0, last >= 0xd800 && last <= 0xdbff ? n - 1 : n);
+}
+
 /** `["a"]` → `a`; `["a", "b"]` → `a and b`; `["a", "b", "c"]` → `a, b and c`. */
 export function joinAnd(items: readonly string[]): string {
   return joinWith(items, "and");

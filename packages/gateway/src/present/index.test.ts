@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import * as present from "@perfidia/gateway/present";
+import { cutText } from "./common.ts";
 import { durationPair, isTimeKey, renderData, renderEvent, timePair } from "./index.ts";
 import { P1, event, fixtureMatch } from "./testkit.test.ts";
 
@@ -48,8 +49,10 @@ describe("@perfidia/gateway/present", () => {
       arriveAt: 3700,
       homecoming: false,
     });
+    // The event's own time comes first, as a pair (`at`).
     expect(renderEvent(ev)).toEqual({
       type: "incoming_attack",
+      at: [100, "D1 00:01:40"],
       movement: "m00001",
       from: "c5",
       by: "p3",
@@ -66,6 +69,28 @@ describe("@perfidia/gateway/present", () => {
       cut: true,
       nested: { endsAt: [86400, "D2 00:00"], list: [{ at: [60, "D1 00:01"] }] },
     });
+    // A data field named `at` (a ruleset's) keeps its own value.
+    expect(renderEvent(event(500, "hill_taken", [[P1, "self"]], { at: 400 }))).toEqual({
+      type: "hill_taken",
+      at: [400, "D1 00:06:40"],
+    });
+  });
+
+  test("a cut never splits a surrogate pair", () => {
+    const shield = "\u{1F6E1}";
+    const lone = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])/;
+    // The 300th code unit is the first half of the emoji: the cut keeps 299 units.
+    const across = renderData({ text: `${"x".repeat(299)}${shield}${"y".repeat(20)}` });
+    expect(across).toEqual({ text: "x".repeat(299), cut: true });
+    // The emoji ends at the 300th code unit: it is kept whole.
+    const before = renderData({ text: `${"x".repeat(298)}${shield}${"y".repeat(20)}` });
+    expect(before).toEqual({ text: `${"x".repeat(298)}${shield}`, cut: true });
+    for (const v of [across["text"], before["text"]]) {
+      expect(typeof v === "string" && !lone.test(v)).toBe(true);
+    }
+    expect(cutText("ab", 5)).toBe("ab");
+    expect(cutText(`a${shield}`, 2)).toBe("a");
+    expect(cutText(`a${shield}`, 3)).toBe(`a${shield}`);
   });
 
   test("a match's read context is all the views need", () => {

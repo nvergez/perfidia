@@ -1,4 +1,6 @@
 import { describe, expect, test } from "bun:test";
+import type { AnyRuleset } from "@perfidia/engine/contracts";
+import { defaultVisibility } from "@perfidia/engine/std";
 import { matchFromState } from "@perfidia/engine/testing";
 import { fixtureRuleset } from "@perfidia/engine/testing";
 import {
@@ -44,11 +46,16 @@ import {
 const SEATS = [P1, P2, P3, P4] as const;
 const CITIES = ["c1", "c2", "c3", "c4", "c5", "c6", "c99"];
 
-function world(ruleset = fixtureRuleset): { match: Match; gw: GatewayState } {
+function world(ruleset: AnyRuleset = fixtureRuleset): { match: Match; gw: GatewayState } {
   const match = fixtureMatch([], ruleset);
   const { gw, wake } = gatewayFor(match);
   feedP1(gw, wake, match.read());
   return { match, gw };
+}
+
+/** Any value, typed loosely so that `toEqual` compares it with plain values. */
+function loose(value: unknown): unknown {
+  return value;
 }
 
 function full(view: ReturnType<typeof viewCity>): CityViewFull {
@@ -181,6 +188,35 @@ describe("view_city", () => {
       to: "c6",
       units: { soldier: 4 },
     });
+  });
+
+  test("the seat's own movements show in full, whatever movementAccess says of them", () => {
+    for (const own of [null, "incoming", "full"] as const) {
+      const denying: AnyRuleset = {
+        ...fixtureRuleset,
+        hooks: {
+          ...fixtureRuleset.hooks,
+          visibility: {
+            ...fixtureRuleset.hooks.visibility,
+            movementAccess: (r, viewer, m) =>
+              r.state.movements[m]?.owner === viewer
+                ? own
+                : defaultVisibility.movementAccess(r, viewer, m),
+          },
+        },
+      };
+      const { match, gw } = world(denying);
+      const r = match.read();
+      const support = full(viewCity(r, P1, "c4", gw)).incoming.find((m) => m.owner === P1);
+      expect(support).toMatchObject({
+        kind: "support",
+        access: "own",
+        units: { soldier: 2 },
+        recallableUntil: [7700, "D1 02:08:20"],
+      });
+      expect(loose(outgoingOf(full(viewCity(r, P1, "c2", gw))))).toEqual([support]);
+      expect(loose(viewPlayer(r, P1, P1, gw)?.private?.movements)).toEqual([support]);
+    }
   });
 
   test("another player's city: public fields, extras and the latest intel snapshot", () => {

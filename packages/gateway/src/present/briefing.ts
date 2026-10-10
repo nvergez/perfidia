@@ -1,7 +1,6 @@
 import type { ReadCtx } from "@perfidia/engine/contracts";
 import {
   citiesOf,
-  isHeldAgainst,
   popCap,
   popUsed,
   queueEtas,
@@ -16,10 +15,13 @@ import {
   unreadNews,
   type Delivered,
   type GatewayState,
+  type SeatState,
   type WakeRecord,
 } from "@perfidia/gateway/seat";
 import {
+  BriefingIncomingSchema,
   BriefingMessageSchema,
+  compareIds,
   type Briefing,
   type BriefingCity,
   type BriefingIncoming,
@@ -30,6 +32,8 @@ import {
   type PlayerId,
 } from "@perfidia/protocol";
 import {
+  byCodeUnit,
+  cutText,
   durationPair,
   lookup,
   orderedUnits,
@@ -39,16 +43,25 @@ import {
   type SeatVisibility,
 } from "./common.ts";
 import { renderData, renderEvent } from "./events.ts";
-import { byArrival, ownMovements, seenMovements, type SeenMovement } from "./movements.ts";
+import {
+  byArrival,
+  homecomingFoe,
+  ownMovements,
+  partyOf,
+  seenMovements,
+  type SeenMovement,
+} from "./movements.ts";
 import { gatewayRulesCopy } from "./rules.ts";
 import { openProposals } from "./views.ts";
 
 // The briefing (docs/architecture.md §8.2): compact, deterministic JSON built at every wake, after
 // the scheduler's `begin` and before `briefed`. It stays within `BRIEFING_TARGET_CHARS` excluding
 // the notes, which are always included verbatim (bounded by `notesMaxChars`). Every incoming attack
-// and every open proposal is always listed; the other lists (`news`, `moves`, `events`, `msgs`, in
-// that order) give way, oldest entries first (latest arrivals first for `moves`), and a `more` entry
-// names the exact call that lists what was left out.
+// (those turned back since the last briefing included) and every open proposal is always listed;
+// the other lists (`news`, `moves`, `events`, `msgs`, in that order) give way, oldest entries first
+// (latest arrivals first for `moves`), and a `more` entry names the call that lists what was left
+// out. Cities, `incoming` and `proposals` never give way, so a seat with full queues in every city,
+// several attacks and several open proposals can exceed the target (measured in the tests).
 
 /** The briefing's size target in characters of compact JSON, excluding `notes` (≈ 600 tokens). */
 export const BRIEFING_TARGET_CHARS = 2400;
@@ -113,14 +126,14 @@ function briefingCity(
 
 /**
  * Whether a movement the seat can see, and does not own, belongs in `incoming`: the seat is its
- * recorded foe or party, or it heads to one of the seat's cities; and for an attack (or a return
- * heading into a held city, a coming homecoming battle), also when it heads to a city the seat
- * sees in full (an ally's) or where the seat has a stationed group.
+ * recorded foe or party (as `partyOf` shows it), or it heads to one of the seat's cities; and for
+ * an attack (or a return heading into a held city, a coming homecoming battle), also when it heads
+ * to a city the seat sees in full (an ally's) or where the seat has a stationed group.
  */
 function concerns(r: ReadCtx, vis: SeatVisibility, seat: PlayerId, s: SeenMovement): boolean {
   const { m } = s;
   if (m.owner === seat || m.to === null) return false;
-  if (m.party === seat) return true;
+  if (partyOf(r, m, s.access, seat) === seat) return true;
   const to = lookup(r.state.cities, m.to);
   if (to === undefined) return false;
   if (to.owner === seat) return true;
@@ -129,7 +142,7 @@ function concerns(r: ReadCtx, vis: SeatVisibility, seat: PlayerId, s: SeenMoveme
   return vis.cityAccess(seat, to.id) === "full";
 }
 
-function incomingEntry(r: ReadCtx, s: SeenMovement): BriefingIncoming | null {
+function incomingEntry(r: ReadCtx, seat: PlayerId, s: SeenMovement): BriefingIncoming | null {
   const { m } = s;
   if (m.to === null) return null;
   const entry: BriefingIncoming = {
@@ -141,10 +154,55 @@ function incomingEntry(r: ReadCtx, s: SeenMovement): BriefingIncoming | null {
     depart: timePair(m.departAt),
     arrive: timePair(m.arriveAt),
   };
-  if (m.kind === "attack" || m.kind === "return") entry.foe = m.party;
-  if (m.back !== null) entry.turnedBack = timePair(m.back.at);
-  if (m.kind === "return" && isHeldAgainst(r, m.home, m.owner)) entry.homecoming = true;
+  if (m.kind === "attack" || m.kind === "return") entry.foe = partyOf(r, m, s.access, seat);
+  if (m.back !== null && s.access !== "incoming") entry.turnedBack = timePair(m.back.at);
+  if (homecomingFoe(r, m, seat) !== null) entry.homecoming = true;
   return entry;
+}
+
+/**
+ * The attacks the seat was told about and that were turned back since its last briefing, which it
+ * no longer sees (perfidia-1 §7.4: "the target's incoming list drops it and shows 'turned back at
+ * t'"): one entry per `movement_recalled` of an attack in the inbox, rendered from the attack's
+ * last `incoming_attack` notice in the archive, with `turnedBack` at the recall's time. Taken from
+ * the seat's own archive only; an attack still in `visible` or without a notice is left out.
+ */
+function recalledAttacks(s: SeatState, visible: ReadonlySet<string>): BriefingIncoming[] {
+  const out: BriefingIncoming[] = [];
+  const done = new Set<string>();
+  for (const d of s.inbox) {
+    const ev = d.event;
+    const id = ev.data["movement"];
+    if (ev.type !== "movement_recalled" || ev.data["kind"] !== "attack") continue;
+    if (typeof id !== "string" || visible.has(id) || done.has(id)) continue;
+    const notice = s.archive.findLast(
+      (x) =>
+        x.e < d.e &&
+        x.event.type === "incoming_attack" &&
+        x.event.data["movement"] === id &&
+        x.event.data["homecoming"] !== true,
+    )?.event.data;
+    const departAt = notice?.["departAt"];
+    const arriveAt = notice?.["arriveAt"];
+    if (notice === undefined || typeof departAt !== "number" || typeof arriveAt !== "number") {
+      continue;
+    }
+    const entry = BriefingIncomingSchema.safeParse({
+      id,
+      kind: "attack",
+      from: notice["from"],
+      by: notice["by"],
+      foe: notice["foe"] ?? null,
+      to: notice["to"],
+      depart: timePair(departAt),
+      arrive: timePair(arriveAt),
+      turnedBack: timePair(ev.t),
+    });
+    if (!entry.success) continue;
+    out.push(entry.data);
+    done.add(id);
+  }
+  return out;
 }
 
 /** A message the seat received, for `msgs`: typed fields, control characters stripped, body cut. */
@@ -175,16 +233,22 @@ interface Lists {
 }
 
 /**
- * The exact call that lists the entries left out of a list (§8.2): `view_player` on oneself for
- * `moves`; `read_notes` searches since the last briefing for the others (newest first).
+ * The call that lists the entries left out of a list (§8.2): `view_player` on oneself for `moves`;
+ * for the others a `read_notes` search since the last briefing, newest first: of the messages
+ * (`msgs`), of the event types left out (`events`, an addition to §8.2, whose calls cover `moves`,
+ * `msgs` and `news` only), or of the public feed (`news`). The search also returns the entries the
+ * briefing kept and, for `msgs`, the seat's own messages, so it can list more than `count`.
  */
-function moreCall(name: ListName, seat: PlayerId, since: GameTime): BriefingMore["call"] {
+function moreCall(
+  name: ListName,
+  seat: PlayerId,
+  since: GameTime,
+  leftTypes: readonly string[],
+): BriefingMore["call"] {
   if (name === "moves") return { tool: "view_player", args: { player: seat } };
-  const search: JsonObject =
-    name === "msgs"
-      ? { scope: "mine", kinds: ["message"], since }
-      : { scope: name === "events" ? "mine" : "public", since };
-  return { tool: "read_notes", args: { search } };
+  if (name === "news") return { tool: "read_notes", args: { search: { scope: "public", since } } };
+  const kinds = name === "msgs" ? ["message"] : [...new Set(leftTypes)].toSorted(byCodeUnit);
+  return { tool: "read_notes", args: { search: { scope: "mine", kinds, since } } };
 }
 
 /** How many entries of each list are kept. */
@@ -204,11 +268,17 @@ function moreOf(
   since: GameTime,
 ): Record<string, BriefingMore> | null {
   const more: Record<string, BriefingMore> = {};
+  // Entries left out: the latest arrivals of `moves`, the oldest entries of the other lists.
+  const leftTypes = all.events.slice(0, all.events.length - keep.events).map((x) => x.value.type);
   for (const name of ["moves", "msgs", "events", "news"] as const) {
     const count = all[name].length - keep[name];
-    if (count > 0) more[name] = { count, call: moreCall(name, seat, since) };
+    if (count > 0) more[name] = { count, call: moreCall(name, seat, since, leftTypes) };
   }
   return Object.keys(more).length === 0 ? null : more;
+}
+
+function byArrive(a: BriefingIncoming, b: BriefingIncoming): number {
+  return a.arrive[0] - b.arrive[0] || compareIds(a.id, b.id);
 }
 
 /**
@@ -216,8 +286,8 @@ function moreOf(
  * (its reasons and urgency). Pure: it reads the match and the gateway state and builds fresh
  * objects. The inbox gives `msgs` (messages from others) and `events` (everything else addressed
  * to the seat, except proposals, which `proposals` lists from the state with their texts, and the
- * incoming notices of movements `incoming` lists); `news` is the public feed since the last
- * briefing, minus what the inbox holds.
+ * incoming and recall notices of the attacks `incoming` lists); `news` is the public feed since the
+ * last briefing, minus what the inbox holds.
  */
 export function buildBriefing(
   r: ReadCtx,
@@ -236,13 +306,16 @@ export function buildBriefing(
   }
 
   const seen = seenMovements(r, vis, seat).toSorted(byArrival);
-  const incoming = seen
+  const visible = seen
     .filter((x) => concerns(r, vis, seat, x))
     .flatMap((x) => {
-      const entry = incomingEntry(r, x);
+      const entry = incomingEntry(r, seat, x);
       return entry === null ? [] : [entry];
     });
-  const listed = new Set<string>(incoming.map((x) => x.id));
+  const visibleIds = new Set<string>(visible.map((x) => x.id));
+  const recalled = recalledAttacks(s, visibleIds);
+  const recalledIds = new Set<string>(recalled.map((x) => x.id));
+  const incoming = [...visible, ...recalled].toSorted(byArrive);
   const moves: Item<MoveEntry>[] = ownMovements(r, seat)
     .toSorted(byArrival)
     .map((x) => ({
@@ -261,10 +334,12 @@ export function buildBriefing(
     }
     if (ev.type === "proposal") continue;
     const movement = ev.data["movement"];
-    if (ev.type.startsWith("incoming_") && typeof movement === "string" && listed.has(movement)) {
-      continue;
-    }
-    events.push({ t: ev.t, value: renderEvent(ev) });
+    const listed =
+      typeof movement === "string" &&
+      (ev.type.startsWith("incoming_")
+        ? visibleIds.has(movement) || recalledIds.has(movement)
+        : ev.type === "movement_recalled" && recalledIds.has(movement));
+    if (!listed) events.push({ t: ev.t, value: renderEvent(ev) });
   }
   const news: Item<EventEntry>[] = unreadNews(gw, seat).map((d) => ({
     t: d.event.t,
@@ -384,7 +459,7 @@ function withShortenedMessage(
   const newest = msgs.at(-1)?.value;
   if (newest === undefined || newest.text.length <= MESSAGE_MIN_CUT) return null;
   const at = (length: number): Briefing =>
-    assemble({ ...keep, msgs: 1 }, { ...newest, text: newest.text.slice(0, length), cut: true });
+    assemble({ ...keep, msgs: 1 }, { ...newest, text: cutText(newest.text, length), cut: true });
   let lo = MESSAGE_MIN_CUT;
   let hi = newest.text.length - 1;
   let best: Briefing | null = null;

@@ -1,16 +1,20 @@
 import { describe, expect, test } from "bun:test";
 import { canonicalJson } from "@perfidia/engine/core";
-import { ENGINE_VERSION } from "@perfidia/engine/kernel";
+import { ENGINE_VERSION, type Match } from "@perfidia/engine/kernel";
 import * as p1 from "@perfidia/engine/rulesets/perfidia-1";
-import { fixtureRuleset } from "@perfidia/engine/testing";
+import { freeSlots, sortedIds } from "@perfidia/engine/std";
+import { addCity, fixtureRuleset, matchFromState } from "@perfidia/engine/testing";
 import {
   AgentRulesSchema,
+  GameStateSchema,
   GatewayRulesSchema,
+  IslandIdSchema,
   MapViewSchema,
+  PlayerIdSchema,
   RulesInfoSchema,
 } from "@perfidia/protocol";
 import { agentRules, interfaceText, rulesInfo, viewMap } from "./index.ts";
-import { P1, fixtureMatch, perfidiaMatch, scribble } from "./testkit.test.ts";
+import { P1, fixtureMatch, perfidiaMatch, perfidiaRuleset, scribble } from "./testkit.test.ts";
 
 // The `rules` payload (§8.1): the interface block (a snapshot: agent-visible text versioned with
 // ENGINE_VERSION), the trimmed rules with `rules.gateway` whole, and the size budgets.
@@ -19,7 +23,7 @@ import { P1, fixtureMatch, perfidiaMatch, scribble } from "./testkit.test.ts";
 const PERFIDIA_INTERFACE = [
   "INTERFACE (gateway 0.1.0; the same in every ruleset; the numbers are in rules.gateway)",
   'TIME: game-seconds since the start; a game day is 86400 s. Times are pairs [223320, "D3 14:02"] (D1 starts at 0), durations [4800, "1h20m"]. Every result has t, the second it was applied at.',
-  "TURNS: a wake is one turn of up to 8 round trips of up to 10 calls each, run in order; calls beyond get CALLS_CAP. A turn ends with end_turn, an empty round trip, the last round trip, a timeout or an error; calls after end_turn in its round trip get TURN_OVER. The next briefing's lastTurn says how it ended, lists the failures you did not see and gives your next wake.",
+  "TURNS: a wake is one turn of up to 8 round trips of up to 10 calls each, run in order; calls beyond get CALLS_CAP. A turn ends with end_turn, an empty round trip, the last round trip, a timeout, an error or the end of the match; calls after end_turn in its round trip get TURN_OVER. The next briefing's lastTurn says how it ended, lists the failures you did not see and gives your next wake.",
   "WAKES: all seats wake at t = 0. Urgent wakes use no budget; at most one starts per 10m (a trigger inside that gap waits for its end). Own wakes (your self-wakes, your own activity): 12 a game day. Social wakes (caused by others): 8 a game day; others can never spend your own budget. Triggers of one class within 10m make one wake, which delivers everything pending. A wake over its budget moves to the next game day. A safety wake comes 12h after your last turn. A turn is never interrupted: events wait for its end.",
   "TRIGGERS (event type: your role): Urgent: betrayal (target), city_conquered (target), domination_started (public, once a game day per data.key), incoming_attack (party), siege_started (target, ally). Own: battle_report (self), queue_empty (self), spy_failed (self), spy_report (self). Social: battle_report (party, target, stationed), incoming_attack (target, stationed, ally), message (target), proposal (target), proposal_answered (target), spy_detected (target). Other events only reach your briefing; public messages wake nobody.",
   "SELF-WAKE: end_turn {nextWakeIn: seconds} or {wakeAt: time} asks for a wake 10m to 12h ahead; outside that range it is clamped (warning WAKE_CLAMPED). It is an own wake. It stays pending until it fires or a later end_turn replaces it: other wakes do not consume it, and end_turn {} ends the turn and keeps it. Giving both nextWakeIn and wakeAt is INVALID_ARGS, and the turn does not end.",
@@ -129,35 +133,111 @@ describe("rulesInfo", () => {
   });
 });
 
-// Size budgets (§8.1), for perfidia-1 at N = 12. `view_map` with `fromCity` meets its 9,000. The
-// whole `rules` payload does not meet 12,000 (the gap is reported, as §8.1 asks): its parts as the
-// protocol fixes them already exceed it (the agent rules, whose cost tables are required, about
-// 7,800; the effective config about 4,300; the cheat sheet about 2,200; the interface block about
-// 3,100). The test pins the measured sizes so that any growth shows.
+// Size budgets (§8.1), for perfidia-1 at N = 12, with perfidia-1's visibility extras (city points,
+// sieges). Neither is met in every case; the gaps are reported (present/index.ts), as §8.1 asks,
+// and the measured sizes are pinned so that any growth shows:
+// - `view_map` with `fromCity` meets 9,000 at the start (12 capitals and the Crown) but not in a
+//   mid-game world with three cities a player (37 cities): every city row costs about 70
+//   characters, and the protocol fixes the row and travel shapes.
+// - The whole `rules` payload does not meet 12,000: its parts as the protocol fixes them already
+//   exceed it (the agent rules, whose cost tables are required, 7,801; the effective config 4,277;
+//   the cheat sheet 2,203; the interface block 3,166).
 function size(v: unknown): number {
   return canonicalJson(v).length;
 }
 
+/** Mid-game levels: 100 + 41 city points. */
+const MID_LEVELS = {
+  hall: 8,
+  lumber: 7,
+  quarry: 7,
+  mine: 6,
+  warehouse: 6,
+  barracks: 4,
+  harbor: 2,
+  wall: 1,
+};
+
+/**
+ * A mid-game world at N = 12: the start world (seed `seed`), every city at mid-game levels, two
+ * more cities a player on the first islands with free slots (37 cities with the Crown), and three
+ * sieges in the ruleset's state.
+ */
+function midGame(seed: number): Match {
+  const start = perfidiaMatch(12, seed);
+  const state = GameStateSchema.parse(start.read().state);
+  const rules = start.rules;
+  const r = start.read();
+  for (const c of Object.values(state.cities)) Object.assign(c.buildings, MID_LEVELS);
+  let next = 0;
+  const islands = sortedIds(state.islands).flatMap((i) => freeSlots(r, i).map((slot) => [i, slot]));
+  for (let n = 0; n < 2; n += 1) {
+    for (let p = 1; p <= 12; p += 1) {
+      const spot = islands[next];
+      if (spot === undefined) throw new Error("no free slot left");
+      next += 1;
+      const [island, slot] = spot;
+      addCity(state, rules, {
+        owner: PlayerIdSchema.parse(`p${p}`),
+        island: IslandIdSchema.parse(island),
+        slot: Number(slot),
+        buildings: MID_LEVELS,
+      });
+    }
+  }
+  const ext = p1.PerfidiaExtSchema.parse(state.ext);
+  for (const [city, by] of [
+    ["c14", "p5"],
+    ["c20", "p9"],
+    ["c31", "p2"],
+  ] as const) {
+    ext.sieges[city] = { by, startedAt: 200000, endsAt: 286400, seq: 0 };
+  }
+  state.ext = ext;
+  return matchFromState(state, perfidiaRuleset);
+}
+
 describe("size budgets, perfidia-1 at N = 12", () => {
-  test("view_map with fromCity ≤ 9,000 characters, from every capital, for several seeds", () => {
+  test("view_map with fromCity ≤ 9,000 characters at the start, from every capital, several seeds", () => {
+    let largest = 0;
     for (const seed of [1, 42, 4242]) {
       const match = perfidiaMatch(12, seed);
       const r = match.read();
       for (let i = 1; i <= 12; i += 1) {
         const view = MapViewSchema.parse(viewMap(r, P1, `c${i}`));
         expect(Object.keys(view.travel ?? {})).toHaveLength(49);
-        expect(canonicalJson(view).length).toBeLessThanOrEqual(9000);
+        expect(view.cities.every((c) => c.ext?.["points"] !== undefined)).toBe(true);
+        largest = Math.max(largest, canonicalJson(view).length);
       }
     }
+    expect(largest).toBeLessThanOrEqual(9000);
+    expect(largest).toBe(START_MAP_MAX_CHARS);
   });
 
-  test("rules: the agent rules ≤ 12,000; the whole payload measured (over budget, reported)", () => {
+  test("view_map with fromCity in a mid-game world (37 cities, 3 sieges): over 9,000, measured", () => {
+    const sizes = [1, 42, 4242].map((seed) => {
+      const r = midGame(seed).read();
+      const view = MapViewSchema.parse(viewMap(r, P1, "c1"));
+      expect(view.cities).toHaveLength(37);
+      expect(view.cities.filter((c) => c.ext?.["siege"] !== undefined)).toHaveLength(3);
+      return canonicalJson(view).length;
+    });
+    expect(sizes).toEqual(MID_GAME_MAP_CHARS);
+  });
+
+  test("rules: the whole payload over 12,000, measured (the agent rules alone fit)", () => {
     const info = rulesInfo(perfidiaMatch(12));
     expect(size(info.rules)).toBeLessThanOrEqual(12000);
     expect(size(info.rules)).toBe(7801);
     expect(size(info.config)).toBe(4277);
     expect(info.cheatSheet.length).toBe(2203);
-    expect(info.interface.length).toBe(3144);
-    expect(size(info)).toBe(17740);
+    expect(info.interface.length).toBe(3166);
+    expect(size(info)).toBe(17762);
   });
 });
+
+/** `view_map` from c1 in the mid-game world, seeds 1, 42 and 4242. */
+const MID_GAME_MAP_CHARS = [10579, 10571, 10531];
+
+/** The largest start-of-match `view_map` from a capital, over the seeds above. */
+const START_MAP_MAX_CHARS = 8325;

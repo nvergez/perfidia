@@ -212,11 +212,11 @@ export function viewCity(
     recruit,
     units: orderedUnits(r.rules.units, unitsAtHome(r, c.id)),
     stationed: stationedViews(r, c),
-    incoming: seen.filter((s) => s.m.to === c.id).map((s) => movementView(r, s.m, s.access)),
+    incoming: seen.filter((s) => s.m.to === c.id).map((s) => movementView(r, s.m, s.access, seat)),
   };
   view["outgoing"] = seen
     .filter((s) => s.m.from === c.id && s.m.to !== c.id)
-    .map((s) => movementView(r, s.m, s.access));
+    .map((s) => movementView(r, s.m, s.access, seat));
   return view;
 }
 
@@ -343,7 +343,7 @@ function settlerCost(r: ReadCtx, k: number): Res {
 function privateSection(r: ReadCtx, seat: PlayerId, gw: GatewayState): PlayerView["private"] {
   const movements = ownMovements(r, seat)
     .toSorted(byArrival)
-    .map((s) => movementView(r, s.m, s.access));
+    .map((s) => movementView(r, s.m, s.access, seat));
   const stationed: NonNullable<PlayerView["private"]>["stationed"] = [];
   for (const id of sortedIds(r.state.cities)) {
     for (const g of r.state.cities[id]?.stationed ?? []) {

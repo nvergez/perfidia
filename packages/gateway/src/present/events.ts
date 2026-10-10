@@ -5,13 +5,14 @@ import {
   type Json,
   type JsonObject,
 } from "@perfidia/protocol";
-import { byCodeUnit, isJsonArray, setOwn, stripControl, timePair } from "./common.ts";
+import { byCodeUnit, cutText, isJsonArray, setOwn, stripControl, timePair } from "./common.ts";
 
 // Events as agents read them in a briefing (docs/architecture.md §8.2, §8.6). Each copy the seat
 // received is already its own audience's payload (the engine emits one copy per audience), so the
-// rendering only shapes it: the type and the data fields, flattened; times as pairs; player-authored
-// text as a typed field with control characters stripped and a message body cut at 300 characters.
-// The recipient list is never shown: it is routing metadata the engine may compute from hidden data.
+// rendering only shapes it: the type, the time it happened at and the data fields, flattened; times
+// as pairs; player-authored text as a typed field with control characters stripped and a message
+// body cut at 300 characters. The recipient list is never shown: it is routing metadata the engine
+// may compute from hidden data.
 
 /** A message body in a briefing is cut at this many characters (`cut: true`). */
 export const MESSAGE_CUT = 300;
@@ -51,7 +52,7 @@ export function renderData(data: DeepReadonly<JsonObject>): JsonObject {
     rendered !== null && typeof rendered === "object" && !Array.isArray(rendered) ? rendered : {};
   const text = out["text"];
   if (typeof text === "string" && text.length > MESSAGE_CUT) {
-    out["text"] = text.slice(0, MESSAGE_CUT);
+    out["text"] = cutText(text, MESSAGE_CUT);
     out["cut"] = true;
   }
   return out;
@@ -66,7 +67,11 @@ const SUMMARISED: Readonly<Record<string, readonly string[]>> = {
   spy_report: Object.keys(STANDARD_EVENT_DATA.spy_report.shape),
 };
 
-/** One briefing entry of `events` or `news`: `{type, ...data}`. */
+/**
+ * One briefing entry of `events` or `news`: `{type, at, ...data}`, where `at` is the time the event
+ * happened, as a pair (an addition to §8.2: a `movement_recalled` is "turned back at" its `t`, and
+ * no standard data field carries that time). A ruleset event whose data has its own `at` keeps it.
+ */
 export function renderEvent(ev: DeepReadonly<DomainEvent>): JsonObject & { type: string } {
   const keep = Object.hasOwn(SUMMARISED, ev.type) ? SUMMARISED[ev.type] : undefined;
   const source: DeepReadonly<JsonObject> =
@@ -74,7 +79,7 @@ export function renderEvent(ev: DeepReadonly<DomainEvent>): JsonObject & { type:
       ? ev.data
       : Object.fromEntries(Object.entries(ev.data).filter(([k]) => keep.includes(k)));
   const data = renderData(source);
-  const out: JsonObject & { type: string } = { type: ev.type };
+  const out: JsonObject & { type: string } = { type: ev.type, at: timePair(ev.t) };
   for (const [k, v] of Object.entries(data)) {
     if (k !== "type") setOwn(out, k, v);
   }

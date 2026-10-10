@@ -1,12 +1,13 @@
 // Shared fixtures for the presentation tests (no tests here): a hand-built fixture-ruleset world
-// with four players, a perfidia-1 test descriptor assembled from the wave-3 modules (the real
-// descriptor is T11's), gateway states fed with events, and helpers to compare outputs.
+// with four players, a perfidia-1 test descriptor assembled from the wave-3 modules with T11's
+// visibility extras emulated (the real descriptor is T11's), gateway states fed with events, and
+// helpers to compare outputs.
 
-import { canonicalJson, idKeyFromSeed } from "@perfidia/engine/core";
-import type { AnyRuleset, ReadCtx, Ruleset } from "@perfidia/engine/contracts";
+import { canonicalJson, fmtTime, idKeyFromSeed } from "@perfidia/engine/core";
+import type { AnyRuleset, ReadCtx, Ruleset, Visibility } from "@perfidia/engine/contracts";
 import { createMatch, type Match } from "@perfidia/engine/kernel";
 import * as p1 from "@perfidia/engine/rulesets/perfidia-1";
-import { relation } from "@perfidia/engine/std";
+import { defaultVisibility, relation, sortedIds } from "@perfidia/engine/std";
 import {
   addAlliance,
   addBuildItem,
@@ -109,16 +110,25 @@ export const grantingRuleset: Ruleset<FixtureConfig, FixtureExt> = {
   },
 };
 
-/** Edits of data hidden from p1 (property P10), applied after every entity p1 can see exists. */
+/**
+ * Edits of the fixture world for property P10, applied in order after every entity of the base
+ * world exists. All but `pact` and `homecoming` edit data hidden from p1. A `homecoming` adds a
+ * return into a held city (c3, held by p4: p1's return; c5, held by p1: p3's return), coming from
+ * the city next door; its besieger sees it, but not its recorded party (the target of the attack it
+ * was) nor whether it was turned back (`back`).
+ */
 export type Perturbation =
   | { kind: "stock"; city: "c5" | "c6"; amount: number }
   | { kind: "units"; city: "c5" | "c6"; soldiers: number }
   | { kind: "attack"; soldiers: number; arriveIn: number }
   | { kind: "support"; soldiers: number; arriveIn: number }
+  | { kind: "spy"; gold: number; arriveIn: number }
+  | { kind: "found"; arriveIn: number }
   | { kind: "proposal" }
-  | { kind: "counters"; m: number; r: number; q: number; g: number }
+  | { kind: "counters"; owner: "p3" | "p4"; m: number; r: number; q: number; g: number }
   | { kind: "queue" }
-  | { kind: "pact" };
+  | { kind: "pact" }
+  | { kind: "homecoming"; city: "c3" | "c5"; party: PlayerId | null; back: boolean };
 
 export const NOW = 7200;
 
@@ -285,11 +295,49 @@ function applyPerturbation(
         arriveAt: NOW + p.arriveIn,
       });
       return;
+    case "spy":
+      addMovement(state, rules, {
+        kind: "spy",
+        owner: P3,
+        from: "c5",
+        to: "c1",
+        party: P1,
+        gold: p.gold,
+        arriveAt: NOW + p.arriveIn,
+      });
+      return;
+    case "found":
+      addMovement(state, rules, {
+        kind: "found",
+        owner: P4,
+        from: "c6",
+        to: null,
+        toIsland: "i1",
+        units: { pioneer: 1, soldier: 2 },
+        arriveAt: NOW + p.arriveIn,
+      });
+      return;
+    case "homecoming": {
+      const c3 = p.city === "c3";
+      addMovement(state, rules, {
+        kind: "return",
+        owner: c3 ? P1 : P3,
+        from: c3 ? "c4" : "c6",
+        to: c3 ? "c3" : "c5",
+        home: c3 ? "c3" : "c5",
+        party: p.party,
+        units: { soldier: 6 },
+        departAt: NOW - 100,
+        arriveAt: NOW + 3500,
+        back: p.back ? { kind: "attack", at: NOW - 100 } : null,
+      });
+      return;
+    }
     case "proposal":
       addProposal(state, rules, { from: P4, to: P3, kind: "alliance", name: "Secret" });
       return;
     case "counters": {
-      const own = state.ids.own[P4];
+      const own = state.ids.own[p.owner];
       if (own !== undefined) {
         own.m += p.m;
         own.r += p.r;
@@ -306,6 +354,33 @@ function applyPerturbation(
       addPact(state, rules, P2, P4);
       return;
   }
+}
+
+/** Edits of the other seats' gateway state, all hidden from p1 (property P10). */
+export type GwEdit =
+  | { kind: "note"; seat: "p2" | "p3" | "p4"; text: string }
+  | { kind: "message"; from: "p3" | "p4"; to: "p2" | "p3" | "p4"; n: number }
+  | { kind: "day"; seat: "p2" | "p3" | "p4"; attacks: number; messages: number };
+
+export function applyGwEdit(gw: GatewayState, wake: WakeScheduler, e: GwEdit): void {
+  if (e.kind === "message") {
+    if (e.from === e.to) return;
+    const data = { message: oid("g", 900 + e.n), from: e.from, to: [e.to], text: "secret" };
+    const to: [PlayerId, Role][] = [
+      [e.from, "self"],
+      [e.to, "target"],
+    ];
+    deliver(gw, [event(NOW - 50, "message", to, data)], wake);
+    return;
+  }
+  const s = gw.seats[e.seat];
+  if (s === undefined) return;
+  if (e.kind === "note") {
+    s.notes = e.text;
+    return;
+  }
+  s.day.attacks = e.attacks;
+  s.day.messages = e.messages;
 }
 
 /** The fixture world as a match (fake domain, step invariants). */
@@ -388,7 +463,71 @@ const unimplemented = (): never => {
   throw new Error("a wave-4 hook (T11)");
 };
 
-/** A test-only perfidia-1 descriptor from the wave-3 modules (the real one is T11's). */
+type PerfidiaRead = ReadCtx<p1.PerfidiaConfig, p1.PerfidiaExt>;
+
+function pair(t: number): [number, string] {
+  return [t, fmtTime(t)];
+}
+
+/** perfidia-1 §13.2: every running countdown with the bloc's cities against the threshold. */
+function countdowns(r: PerfidiaRead): JsonObject[] {
+  const need = p1.dominationThreshold(r.config, r.rules.players, p1.totalCities(r.state));
+  return r.ext().domination.countdowns.map((c) => ({
+    key: c.bloc,
+    members: [...c.members],
+    cities: p1.blocCities(r.state, c.members),
+    need,
+    ends: pair(c.endsAt),
+  }));
+}
+
+/**
+ * perfidia-1's visibility extras (§12), as T11's descriptor renders them: city points, the Crown
+ * flag and the siege on every city; the tie-break position of every player; the tie-break order
+ * and the domination state of the match; and, in the briefing, the sieges the seat holds and every
+ * running countdown. The budget tests measure the briefing with them (they count in §8.2's 2,400).
+ */
+const perfidiaVisibility: Visibility<p1.PerfidiaConfig, p1.PerfidiaExt> = {
+  cityAccess: (r, viewer, city) => defaultVisibility.cityAccess(r, viewer, city),
+  movementAccess: (r, viewer, m) => defaultVisibility.movementAccess(r, viewer, m),
+  publicCity(r, _viewer, city) {
+    const c = r.state.cities[city];
+    if (c === undefined) return {};
+    let levels = 0;
+    for (const b of p1.BUILDING_IDS) levels += c.buildings[b] ?? 0;
+    const crown = c.tag === p1.CROWN_TAG;
+    const out: JsonObject = { points: p1.cityPoints(r.config, levels, crown) };
+    if (crown) out["crown"] = true;
+    const siege = p1.siegeOf(r.ext(), city);
+    if (siege !== null) out["siege"] = { by: siege.by, ends: pair(siege.endsAt) };
+    return out;
+  },
+  publicPlayer: (r, p) => ({ tiebreak: p1.tiebreakPosition(r.ext(), p) + 1 }),
+  publicMatch(r) {
+    const x = r.ext();
+    return {
+      tiebreak: [...x.tiebreak],
+      domination: {
+        open: x.domination.open,
+        need: p1.dominationThreshold(r.config, r.rules.players, p1.totalCities(r.state)),
+        countdowns: countdowns(r),
+      },
+    };
+  },
+  briefing(r, viewer) {
+    const holding = sortedIds(r.ext().sieges).flatMap((city) => {
+      const siege = p1.siegeOf(r.ext(), city);
+      if (siege === null || siege.by !== viewer) return [];
+      return [{ city, owner: r.state.cities[city]?.owner ?? null, ends: pair(siege.endsAt) }];
+    });
+    return { holding, countdowns: countdowns(r) };
+  },
+};
+
+/**
+ * A test-only perfidia-1 descriptor from the wave-3 modules, with T11's visibility extras emulated
+ * (the real descriptor is T11's `perfidia1_1_0_0`; T14 should point the tests at it).
+ */
 export const perfidiaRuleset: Ruleset<p1.PerfidiaConfig, p1.PerfidiaExt> = {
   id: p1.PERFIDIA_1_ID,
   version: p1.PERFIDIA_1_VERSION,
@@ -409,6 +548,7 @@ export const perfidiaRuleset: Ruleset<p1.PerfidiaConfig, p1.PerfidiaExt> = {
     on: { siege_end: noop, domination_open: noop, domination_end: noop },
     standings: (r) => p1.computeStandings(r.config, r.state, r.ext()),
     finish: unimplemented,
+    visibility: perfidiaVisibility,
   },
   errors: p1.PERFIDIA_1_ERRORS,
   errorSamples: p1.PERFIDIA_1_ERROR_SAMPLES,

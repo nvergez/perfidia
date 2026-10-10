@@ -46,10 +46,12 @@ import {
 // seat logic raises (`DAILY_CAP`, `CALLS_CAP`, `ROUND_TRIP_CAP`, `NOTE_TOO_LONG`) are worded by
 // `seatErrorText`, so the live host and the rebuild (§10.5) produce the same text.
 //
-// Details are the facts (§7.3: numbers and ids, no prose). Where they leave a number out, the
-// explanation computes it from the state, but only from the seat's own cities, movements, groups
-// and archive, or from public data: an explanation never reveals hidden data (property P10), and a
-// hidden id reads exactly like a missing one.
+// Details are the facts (§7.3: numbers and ids, no prose). Each explainer reads the detail shapes
+// that `std` and the default domain handlers emit (and branches on their `reason`, `field`,
+// `stationed` or `dismiss` keys); `explain.test.ts` pins one case per shape. Where the details leave
+// a number out, the explanation computes it from the state, but only from the seat's own cities,
+// movements, groups and archive, or from public data: an explanation never reveals hidden data
+// (property P10), and a hidden id reads exactly like a missing one.
 
 export interface ExplainEnv {
   /** The match at the time of the call (`match.read()`). */
@@ -142,6 +144,11 @@ function needsOf(d: Details): { id: ResourceId; need: number }[] {
   });
 }
 
+/** `an alliance`, `a pact`: the indefinite article by the first letter (ids and kinds are ASCII). */
+function withArticle(word: string): string {
+  return `${/^[aeiou]/.test(word) ? "an" : "a"} ${word}`;
+}
+
 // Domain codes ------------------------------------------------------------------------------------
 
 /** Optional tool fields a ruleset may refuse (§3.7), with what the ruleset does instead. */
@@ -150,14 +157,59 @@ const OPTION_REASONS: Readonly<Record<string, string>> = {
   until: "gives every pact its fixed duration",
 };
 
-const invalidArgs: Explainer = (d, { r }) => {
-  const ref = str(d, "ruleset") ?? r.ruleset.ref;
-  const field = str(d, "field");
-  if (field !== null) {
+/**
+ * `INVALID_ARGS` naming a `field` of a call: an option the ruleset refuses (`ruleset` in the
+ * details), a proposal field given for the wrong kind (`kind`), or a pact end that is not in the
+ * future (`until`, `now`).
+ */
+function invalidField(d: Details, field: string, ref: string, now: number): Explanation {
+  if (Object.hasOwn(d, "ruleset") || str(d, "reason") === "unsupported") {
     const why = lookup(OPTION_REASONS, field);
     return {
       message: `${ref} does not accept ${field}${why === undefined ? "" : `: it ${why}`}.`,
       hint: `Remove ${field} and send the call again.`,
+    };
+  }
+  const kind = str(d, "kind");
+  const owner = field === "name" ? "alliance" : field === "until" ? "pact" : null;
+  if (kind !== null && owner !== null && kind !== owner) {
+    return {
+      message: `${field} is only for ${withArticle(owner)} proposal; this is ${withArticle(kind)} proposal.`,
+      hint: `Remove ${field}, or propose ${withArticle(owner)}.`,
+    };
+  }
+  const until = when(d, "until");
+  if (field === "until" && until !== null) {
+    const at = when(d, "now") ?? now;
+    return {
+      message: `The pact end ${fmtTime(until)} is not in the future: it is ${fmtTime(at)}.`,
+      hint: "Give a later until, or none for the ruleset's pact duration; a proposal whose until has passed can only be refused.",
+    };
+  }
+  const rest = Object.fromEntries(Object.entries(d).filter(([k]) => k !== "field"));
+  return {
+    message: `Invalid ${field}${detailsText(rest)}.`,
+    hint: "Check the call against the tool's description.",
+  };
+}
+
+const invalidArgs: Explainer = (d, { r }) => {
+  const ref = str(d, "ruleset") ?? r.ruleset.ref;
+  const field = str(d, "field");
+  if (field !== null) return invalidField(d, field, ref, r.now);
+  const island = str(d, "island");
+  const slot = num(d, "slot");
+  const slots = num(d, "slots");
+  if (island !== null && slot !== null && slots !== null) {
+    return {
+      message: `${island} has no slot ${slot}: its slots are 0 to ${Math.max(0, slots - 1)}.`,
+      hint: `Leave out slot, or pick a free one (view_island ${island} lists them).`,
+    };
+  }
+  if (num(d, "load") !== null) {
+    return {
+      message: "A shipment must carry at least 1 resource.",
+      hint: "Give cargo with at least one of wood, stone or gold above 0.",
     };
   }
   const building = str(d, "building");
@@ -359,7 +411,7 @@ function storageLevelFor(r: ReadCtx, need: number): number | null {
 const exceedsStorage: Explainer = (d, { r, seat }) => {
   const cityId = str(d, "city");
   const own = cityId === null ? undefined : ownCity(r, seat, cityId);
-  const storage = r.rules.roles.storage;
+  const storage = str(d, "storage") ?? r.rules.roles.storage;
   const cap = num(d, "cap") ?? (own === undefined ? null : storageCap(r, own.id));
   const level = num(d, "storageLevel") ?? (own === undefined ? null : levelOf(own, storage));
   const needs = needsOf(d);
@@ -376,14 +428,23 @@ const exceedsStorage: Explainer = (d, { r, seat }) => {
       : `at most ${cap} of each resource${level === null ? "" : ` (${storage} ${level})`}`;
   const costText = joinAnd(needs.map((x) => `${x.need} ${x.id}`));
   const maxNeed = needs.reduce((m, x) => Math.max(m, x.need), 0);
-  const target = num(d, "needLevel") ?? storageLevelFor(r, maxNeed);
+  // `requiredLevel` (`null`: no level holds it) when the domain gives it, else from the levels.
+  const target = Object.hasOwn(d, "requiredLevel")
+    ? num(d, "requiredLevel")
+    : (num(d, "needLevel") ?? storageLevelFor(r, maxNeed));
   const holds = target === null ? undefined : r.rules.levels.storage[target];
+  // `availableAt`: when the queued storage levels reach that level.
+  const ready = when(d, "availableAt");
+  const queued =
+    ready === null || target === null
+      ? ""
+      : ` Your queued ${storage} ${target} completes at ${timeAndWait(ready, r.now)}.`;
   return {
     message: `${where} stores ${capText}, and ${whatOf(d)} costs ${costText}.`,
     hint:
       target === null || holds === undefined
         ? `No ${storage} level holds ${maxNeed}.`
-        : `Raise ${storage} to level ${target} (it holds ${holds}).`,
+        : `Raise ${storage} to level ${target} (it holds ${holds}).${queued}`,
   };
 };
 
@@ -409,12 +470,18 @@ const insufficientPopulation: Explainer = (d, { r, seat }) => {
   const building = r.rules.roles.population;
   const level = own === undefined ? null : levelOf(own, building);
   const next = level === null ? undefined : r.rules.levels.population[level + 1];
+  // `availableAt`: when the queued levels of the population building make room for it.
+  const room = when(d, "availableAt");
+  const queued =
+    room === null
+      ? ""
+      : ` Your queued ${building} levels make room at ${timeAndWait(room, r.now)}.`;
   return {
     message,
     hint:
       next === undefined
-        ? `Recruit fewer: every unit homed in the city counts, wherever it is.`
-        : `Raise ${building} (level ${(level ?? 0) + 1} allows ${next}), or recruit fewer: every unit homed in the city counts, wherever it is.`,
+        ? `Recruit fewer: every unit homed in the city counts, wherever it is.${queued}`
+        : `Raise ${building} (level ${(level ?? 0) + 1} allows ${next}), or recruit fewer: every unit homed in the city counts, wherever it is.${queued}`,
   };
 };
 
@@ -455,11 +522,21 @@ const requirementMissing: Explainer = (d, { r, seat }) => {
   }
   const list = missing.map((x) => `${x.b} ${x.need} (now ${x.have})`);
   const firstMissing = missing[0];
+  const on = str(d, "on");
+  const queuedCount = on === null ? projected : on === "projected";
+  // `availableAt`: when the queued levels complete the requirement the details name.
+  const ready = when(d, "availableAt");
+  const req = str(d, "requires");
+  const level = num(d, "need");
+  const completes =
+    ready === null || req === null || level === null
+      ? ""
+      : ` ${req} ${level} completes at ${timeAndWait(ready, r.now)}.`;
   return {
     message: `${target} needs ${joinAnd(list)}${cityId === null ? "" : ` in ${cityId}`}.`,
-    hint: projected
+    hint: queuedCount
       ? `Queue ${firstMissing?.b ?? "it"} first: queued levels count for building requirements.`
-      : `Build ${firstMissing?.b ?? "it"} first: only completed levels count.`,
+      : `Build ${firstMissing?.b ?? "it"} first: only completed levels count.${completes}`,
   };
 };
 
@@ -486,12 +563,15 @@ const queueFull: Explainer = (d, { r, seat }) => {
   const message = `${cityId === null ? "The" : `${cityId}'s`} ${queueLabel(queue)} is full${max === null ? "" : ` (${max} items)`}.`;
   const etas = own === undefined ? [] : queueEtas(r, own.id);
   const head = etas.find((e) => queue === null || e.queue === queue);
+  const free = when(d, "availableAt");
   return {
     message,
     hint:
-      head === undefined
-        ? "Wait until an item completes, or cancel one with cancel_queue."
-        : `Its first item (#${head.item}) ends at ${timeAndWait(head.end, r.now)}; queue more after that.`,
+      head !== undefined
+        ? `Its first item (#${head.item}) ends at ${timeAndWait(head.end, r.now)}; queue more after that.`
+        : free === null
+          ? "Wait until an item completes, or cancel one with cancel_queue."
+          : `Its first item ends at ${timeAndWait(free, r.now)}; queue more after that.`,
   };
 };
 
@@ -534,7 +614,9 @@ const queueItem: Explainer = (d, { r, seat, gw }) => {
       : queued.length === 0
         ? "; nothing is queued"
         : `; queued: ${queued.join(", ")}`;
-  return { message: `${cityId} has no item #${item}${now}.`, hint };
+  // `issued: false`: the number is above every item the city ever queued (own data only).
+  const never = own !== undefined && lookup(d, "issued") === false ? " (it was never queued)" : "";
+  return { message: `${cityId} has no item #${item}${never}${now}.`, hint };
 };
 
 const batchLimit: Explainer = (d) => {
@@ -559,6 +641,20 @@ const insufficientUnits: Explainer = (d, { r, seat }) => {
   const unit = str(d, "unit");
   const requested = num(d, "requested");
   const home = num(d, "home");
+  // A stationed group's count: `stationed`, or `home` with `where: "stationed"` (§7.3's key).
+  const stationed = num(d, "stationed") ?? (str(d, "where") === "stationed" ? home : null);
+  if (unit !== null && requested !== null && stationed !== null) {
+    // A partial recall of a stationed group (`recall_troops {stationedAt, home, units}`).
+    const from = str(d, "from");
+    const group = from === null ? "your group" : `your group from ${from}`;
+    return {
+      message: `${cityId === null ? "" : `${cityId}: `}${requested} ${unit} requested, ${stationed} in ${group}.`,
+      hint:
+        stationed > 0
+          ? `Recall at most ${stationed} ${unit} from it, or leave out units to recall the whole group.`
+          : `That group has no ${unit}; leave out units to recall the whole group.`,
+    };
+  }
   if (unit !== null && requested !== null && home !== null) {
     const back = timeOrNever(d, "backAt");
     return {
@@ -582,7 +678,8 @@ const insufficientUnits: Explainer = (d, { r, seat }) => {
 const noUnits: Explainer = (d) => {
   const kind = str(d, "kind");
   const crossing = lookup(d, "crossing") === true;
-  if (kind === "attack") {
+  // With `crossing`, the departure rule found no fighter; without it, no unit was given at all.
+  if (kind === "attack" && Object.hasOwn(d, "crossing")) {
     return {
       message: `This attack has no unit that can fight${crossing ? " across water" : ""}.`,
       hint: "Send a land unit with attack above 0 or, across water, a naval unit with naval strength above 0.",
@@ -595,16 +692,19 @@ const noUnits: Explainer = (d) => {
 };
 
 const transportCapacity: Explainer = (d, { r }) => {
-  const need = num(d, "need") ?? num(d, "required");
+  // The land units' population (`pop`) is what carriers must hold (perfidia-1 §6.4).
+  const need = num(d, "pop") ?? num(d, "need") ?? num(d, "required");
   const have = num(d, "capacity") ?? num(d, "have") ?? num(d, "available");
+  const missing = num(d, "missing") ?? (need !== null && have !== null ? need - have : null);
   const carriers = r.rules.units
     .filter((u) => u.capacity > 0)
     .map((u) => `${u.id}, ${u.capacity} each`);
+  const short = missing === null || missing <= 0 ? "" : `: ${missing} short`;
   return {
     message:
       need === null || have === null
         ? "The land units in this group cannot all be carried across water."
-        : `The land units need ${need} carrier capacity to cross water; the group carries ${have}.`,
+        : `The land units need ${need} carrier capacity to cross water; the group carries ${have}${short}.`,
     hint:
       carriers.length === 0
         ? "Send fewer land units across water."
@@ -619,15 +719,17 @@ const shipmentCapacity: Explainer = (d, { r }) => {
   const requested = num(d, "requested");
   const rule = r.rules.movement.shipment;
   const raise = rule === null ? "" : `, or raise ${rule.building} (+${rule.perLevel} per level)`;
+  const room = when(d, "availableAt");
+  const wait = room === null ? "" : ` There is room for it at ${timeAndWait(room, r.now)}.`;
   if (cap === null || inFlight === null) {
     return {
       message: `${city} cannot have that much cargo in flight.`,
-      hint: `Send less${raise}; cargo counts until it arrives.`,
+      hint: `Send less${raise}; cargo counts until it arrives.${wait}`,
     };
   }
   return {
     message: `${city} can have ${cap} resources in flight; ${inFlight} already are${requested === null ? "" : `, and ${requested} were requested`}.`,
-    hint: `Send at most ${Math.max(0, cap - inFlight)} now${raise}; cargo counts until it arrives.`,
+    hint: `Send at most ${Math.max(0, cap - inFlight)} now${raise}; cargo counts until it arrives.${wait}`,
   };
 };
 
@@ -639,9 +741,45 @@ const attackProtection: Explainer = (d, { r }) => {
   };
 };
 
-const invalidTarget: Explainer = (d) => {
+/** What a seat cannot do with itself, by the rejected action (`INVALID_TARGET` `reason: self`). */
+const SELF_TARGET: Readonly<Record<string, string>> = {
+  send_message: "send your messages to other players",
+  propose: "propose to another player",
+  leave: "name the partner whose pact you end, or leave out with to leave your alliance",
+};
+
+const invalidTarget: Explainer = (d, { seat }) => {
   const kind = str(d, "kind");
   const player = str(d, "player");
+  const reason = str(d, "reason");
+  const proposal = str(d, "proposal");
+  if (reason === "own_proposal" || (proposal !== null && player === null)) {
+    return {
+      message: `${proposal ?? "This proposal"} is your own proposal: only the player it is addressed to can answer it.`,
+      hint: "Wait for the answer, or let it expire.",
+    };
+  }
+  const action = str(d, "action");
+  if (player !== null && (reason === "self" || player === seat)) {
+    const city = str(d, "city");
+    if (action === "dismiss" || (action === null && city !== null)) {
+      return {
+        message: `${player} is you: dismissing sends another player's units in ${city ?? "your city"} home.`,
+        hint: "Name the player whose support you want to send home; your own units in your city are already home.",
+      };
+    }
+    return {
+      message: `${player} is you: ${(action === null ? undefined : lookup(SELF_TARGET, action)) ?? "name another player"}.`,
+      hint: "Messages, proposals and leave_alliance {with} name another player.",
+    };
+  }
+  if (player !== null && reason === "eliminated") {
+    const what = action === "send_message" ? "messages" : action === "propose" ? "proposals" : null;
+    return {
+      message: `${player} was eliminated: it receives no ${what ?? "messages or proposals"} any more.`,
+      hint: "Name a player still in the game; leaderboard shows who is alive.",
+    };
+  }
   if (player !== null && str(d, "city") === null) {
     return {
       message: `${player} cannot receive this proposal.`,
@@ -683,19 +821,52 @@ const spyGold: Explainer = (d, { r }) => {
   };
 };
 
+/** `NOT_RECALLABLE` for stationed units (`stationed`, the ruleset's mode) or a dismissal. */
+function stationedNotRecallable(d: Details, ref: string): Explanation | null {
+  const city = str(d, "city") ?? "this city";
+  if (lookup(d, "dismiss") === false) {
+    const player = str(d, "player");
+    return {
+      message: `${ref} does not let a city's owner dismiss the units stationed in it.`,
+      hint: `${player === null ? "Their owner" : player} can recall them; send a message to ask.`,
+    };
+  }
+  const mode = str(d, "stationed");
+  if (mode === "none") {
+    return {
+      message: `Units stationed away cannot be recalled in ${ref}.`,
+      hint: `Your units in ${city} stay there until the game sends them home.`,
+    };
+  }
+  if (mode === "whole" || str(d, "reason") === "whole_only") {
+    return {
+      message: `${ref} recalls a stationed group whole only: a unit list for ${city} is refused.`,
+      hint: "Leave out units to recall the whole group (name home to pick one group).",
+    };
+  }
+  return null;
+}
+
 const notRecallable: Explainer = (d, { r, seat }) => {
+  const stationed = stationedNotRecallable(d, r.ruleset.ref);
+  if (stationed !== null) return stationed;
   const id = str(d, "movement");
   const recall = r.rules.movement.recall;
   const own = id === null ? undefined : lookup(r.state.movements, id);
+  const ownMovement = own !== undefined && own.owner === seat ? own : undefined;
+  const kind = str(d, "kind") ?? ownMovement?.kind ?? null;
+  const notKind = kind !== null && (kind === "return" || !recall.kinds.some((k) => k === kind));
   const until =
+    when(d, "recallableUntil") ??
     when(d, "until") ??
-    (own !== undefined && own.owner === seat && own.kind !== "return"
-      ? own.departAt + recall.window
-      : null);
-  const closed =
-    until !== null && until < r.now ? `: its recall window closed at ${fmtTime(until)}` : "";
+    (ownMovement !== undefined && !notKind ? ownMovement.departAt + recall.window : null);
+  const why = notKind
+    ? `: it is ${withArticle(kind)}`
+    : until !== null && until < r.now
+      ? `: its recall window closed at ${fmtTime(until)}`
+      : "";
   return {
-    message: `${id ?? "This movement"} cannot be recalled${closed}.`,
+    message: `${id ?? "This movement"} cannot be recalled${why}.`,
     hint:
       recall.kinds.length === 0
         ? "Movements cannot be recalled in this ruleset."
@@ -703,8 +874,21 @@ const notRecallable: Explainer = (d, { r, seat }) => {
   };
 };
 
-const nothingStationed: Explainer = (d) => {
-  const city = str(d, "city") ?? "this city";
+const nothingStationed: Explainer = (d, { r, seat }) => {
+  const cityId = str(d, "city");
+  const city = cityId ?? "this city";
+  const player = str(d, "player");
+  if (player !== null && player !== seat) {
+    // A dismissal: the city is the seat's own, so its stationed groups are the seat's to see.
+    const own = cityId === null ? undefined : ownCity(r, seat, cityId);
+    const holds = own?.stationed.some((g) => g.owner === player && g.role === "hold") ?? false;
+    return {
+      message: holds
+        ? `${player}'s units in ${city} are a siege garrison: it cannot be dismissed.`
+        : `${player} has no support stationed in ${city}.`,
+      hint: `view_city ${city} lists the groups stationed there.`,
+    };
+  }
   const home = str(d, "home");
   return {
     message: `You have no units stationed in ${city}${home === null ? "" : ` from ${home}`}.`,
@@ -717,9 +901,11 @@ const ambiguousGroup: Explainer = (d, { r, seat }) => {
   const city = lookup(r.state.cities, cityId);
   const groups = (city?.stationed ?? []).filter((g) => g.owner === seat);
   if (groups.length < 2) {
+    // The details' `homes` (comma-separated) when the state does not show the groups.
+    const homes = (str(d, "homes") ?? "").split(",").filter((h) => h !== "");
     return {
-      message: `You have several groups in ${cityId}.`,
-      hint: "Add home to say which group, or leave out units to recall them all.",
+      message: `You have ${homes.length > 1 ? `${homes.length} groups` : "several groups"} in ${cityId}${homes.length > 1 ? `, from ${joinAnd(homes)}` : ""}.`,
+      hint: `Add home${homes.length > 1 ? ` (${joinOr(homes)})` : ""} to say which group, or leave out units to recall them all.`,
     };
   }
   const list = groups.map(
@@ -735,29 +921,43 @@ const ambiguousGroup: Explainer = (d, { r, seat }) => {
 const textTooLong: Explainer = (d) => {
   const max = num(d, "max");
   const length = num(d, "length");
+  const field = str(d, "field") ?? "text";
   if (max === null || length === null) {
-    return { message: "The text is too long.", hint: "Shorten it." };
+    return { message: `The ${field} is too long.`, hint: "Shorten it." };
   }
   return {
-    message: `The text has ${length} characters; the limit is ${max}.`,
+    message: `The ${field} has ${length} characters; the limit is ${max}.`,
     hint: `Shorten it by ${Math.max(0, length - max)} characters.`,
   };
 };
 
+/** ` It expires at D4 01:00 (in 11h).`-style sentence for an `availableAt`, or empty. */
+function expiresText(d: Details, now: number, what: string): string {
+  const at = when(d, "availableAt");
+  return at === null
+    ? ""
+    : ` ${what} ${at > now ? "expires" : "expired"} at ${timeAndWait(at, now)}.`;
+}
+
 const proposalLimit: Explainer = (d, { r }) => {
-  const to = str(d, "to");
+  const to = str(d, "player") ?? str(d, "to");
   const kind = str(d, "kind");
-  if (to !== null && kind !== null) {
+  if ((to !== null && kind !== null) || str(d, "reason") === "duplicate") {
+    const proposal = str(d, "proposal");
+    const kindText = kind === null ? "" : `${kind} `;
+    const target = to === null ? "" : ` to ${to}`;
+    const id = proposal === null ? "" : ` (${proposal})`;
     return {
-      message: `You already have an open ${kind} proposal to ${to}.`,
-      hint: "Wait for its answer or its expiry before proposing again.",
+      message: `You already have an open ${kindText}proposal${target}${id}.`,
+      hint: `Wait for its answer or its expiry before proposing again.${expiresText(d, r.now, "It")}`,
     };
   }
   const max = num(d, "max") ?? r.rules.diplomacy.maxOpenProposals;
   const open = num(d, "open") ?? max;
+  const first = expiresText(d, r.now, "The first one");
   return {
     message: `You already have ${open} open proposals; the limit is ${max}.`,
-    hint: `Wait until one is answered or expires (proposals last ${fmtDuration(r.rules.diplomacy.proposalTtl)}).`,
+    hint: `Wait until one is answered or expires (proposals last ${fmtDuration(r.rules.diplomacy.proposalTtl)}).${first}`,
   };
 };
 
@@ -772,6 +972,14 @@ const proposalNotFound: Explainer = (d) => {
 const alreadyAllied: Explainer = (d, { r, seat }) => {
   const player = str(d, "player");
   const other = player === null ? undefined : lookup(r.state.players, player);
+  const theirs = str(d, "alliance");
+  const yours = str(d, "yours");
+  if (player !== null && theirs !== null && yours !== null) {
+    return {
+      message: `You and ${player} are both in alliances (${yours} and ${theirs}).`,
+      hint: "One of you must leave_alliance before you can ally.",
+    };
+  }
   if (other !== undefined && relation(r, seat, other.id) === "ally") {
     return {
       message: `You and ${other.id} are already allies.`,
@@ -793,8 +1001,15 @@ const alreadyAllied: Explainer = (d, { r, seat }) => {
 
 const allianceFull: Explainer = (d, { r }) => {
   const max = num(d, "max") ?? r.rules.diplomacy.allianceMax;
+  const alliance = str(d, "alliance");
+  if (alliance === null && Object.hasOwn(d, "alliance") && max < 2) {
+    return {
+      message: `Alliances hold at most ${max} member in ${r.ruleset.ref}: none can be formed.`,
+      hint: "Propose a pact instead.",
+    };
+  }
   return {
-    message: `${str(d, "alliance") ?? "The alliance"} is full: ${max} members at most.`,
+    message: `${alliance ?? "The alliance"} is full: ${max} members at most.`,
     hint: "A member must leave before anyone else can join.",
   };
 };
@@ -804,12 +1019,22 @@ const notInAlliance: Explainer = () => ({
   hint: "To end a pact, name the partner: leave_alliance {with: player}.",
 });
 
-const pactLimit: Explainer = (d, { r }) => {
+const pactLimit: Explainer = (d, { r, seat }) => {
   const max = num(d, "max") ?? r.rules.diplomacy.maxPacts;
   const player = str(d, "player");
+  const held = num(d, "pacts") ?? max;
+  const you = player === null || player === seat;
+  const at = timeOrNever(d, "availableAt");
+  // Pacts and their ends are public (leaderboard), so the time a slot frees is no secret.
+  const free =
+    typeof at === "number"
+      ? ` The first of ${you ? "your" : "their"} pacts expires at ${timeAndWait(at, r.now)}.`
+      : at === null
+        ? ` None of ${you ? "your" : "their"} pacts expires on its own.`
+        : "";
   return {
-    message: `${player === null ? "You already hold" : `${player} already holds`} ${max} pacts, the limit.`,
-    hint: "A pact must end or expire first; renewing an existing pact does not count.",
+    message: `${you ? "You already hold" : `${player} already holds`} ${held} pacts; the limit is ${max}.`,
+    hint: `A pact must end or expire first; renewing an existing pact does not count.${free}`,
   };
 };
 
