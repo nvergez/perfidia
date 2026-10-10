@@ -19,6 +19,8 @@
     "format": "oxfmt",
     "format:check": "oxfmt --check",
     "test": "bun test",
+    "test:exit": "PERFIDIA_EXIT=1 bun test packages/sim/src/exit",
+    "sim": "bun packages/sim/src/cli.ts",
     "check": "bun run typecheck && bun run lint && bun run format:check && bun run test"
   },
   "devDependencies": {

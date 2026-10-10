@@ -4,7 +4,15 @@
   "private": true,
   "type": "module",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./core": "./src/core/index.ts",
+    "./contracts": "./src/contracts/index.ts",
+    "./kernel": "./src/kernel/index.ts",
+    "./testing": "./src/testing/index.ts",
+    "./std": "./src/std/index.ts",
+    "./domain": "./src/domain/index.ts",
+    "./rulesets": "./src/rulesets/index.ts",
+    "./rulesets/*": "./src/rulesets/*/index.ts"
   },
   "dependencies": {
     "@perfidia/protocol": "workspace:*"
