@@ -1,7 +1,7 @@
 import { z } from "@perfidia/protocol";
 import type { RoundInput, RoundOutput, SeatAgent, Sleep, TimeSource } from "@perfidia/protocol";
 import { describeError } from "./errors.ts";
-import type { TurnFailure } from "./types.ts";
+import type { AgentFailure } from "./types.ts";
 
 // One agent round as the drivers see it (§9.2, §9.3): it never rejects, so one failing agent
 // cannot crash a driver or hide the other seats' outputs.
@@ -14,15 +14,23 @@ const RoundOutputShape = z.looseObject({
 
 export type RoundSettlement =
   | { readonly ok: true; readonly out: RoundOutput }
-  | { readonly ok: false; readonly error: string; readonly cause: TurnFailure };
+  | ({ readonly ok: false } & AgentFailure);
 
 export interface RoundTimeout {
   readonly time: TimeSource;
   readonly ms: number;
 }
 
+const failed = (error: string): RoundSettlement => ({ ok: false, error, cause: "error" });
+
 function checkOutput(out: unknown): RoundSettlement {
-  const parsed = RoundOutputShape.safeParse(out);
+  let parsed: ReturnType<typeof RoundOutputShape.safeParse>;
+  try {
+    parsed = RoundOutputShape.safeParse(out);
+  } catch (e) {
+    // `safeParse` reports a bad shape as issues, but lets a throwing getter or Proxy trap through.
+    return failed(`invalid round output: ${describeError(e)}`);
+  }
   if (parsed.success) {
     const { calls, thought } = parsed.data;
     return { ok: true, out: thought === undefined ? { calls } : { calls, thought } };
@@ -30,38 +38,31 @@ function checkOutput(out: unknown): RoundSettlement {
   const issue = parsed.error.issues[0];
   const where =
     issue === undefined || issue.path.length === 0 ? "" : `${issue.path.map(String).join(".")}: `;
-  return {
-    ok: false,
-    error: `invalid round output: ${where}${issue?.message ?? "expected {calls: [...]}"}`,
-    cause: "error",
-  };
+  return failed(`invalid round output: ${where}${issue?.message ?? "expected {calls: [...]}"}`);
 }
 
 /**
- * Asks `agent` for one round. Settles with the agent's output, or with the failure that closes
- * the turn: no agent for the seat, a throw or rejection, an answer that is not a `RoundOutput`, or
- * no answer before `timeout.ms` of `timeout.time` (a late answer is then ignored). The timeout
- * timer is cancelled as soon as the round settles; `timers` (optional) holds it meanwhile, so a
- * driver that stops early can cancel it.
+ * One entry of `Promise.allSettled` over `playRound`s, as a settlement. `playRound` never rejects,
+ * so a rejected entry would be a bug of this module; it still closes only that seat's turn (§9.2).
  */
-export async function playRound(
+export function settlementOf(result: PromiseSettledResult<RoundSettlement>): RoundSettlement {
+  return result.status === "fulfilled" ? result.value : failed(describeError(result.reason));
+}
+
+async function settle(
   agent: SeatAgent | undefined,
   input: RoundInput,
-  timeout?: RoundTimeout,
-  timers?: Set<Sleep>,
+  timeout: RoundTimeout | undefined,
+  timers: Set<Sleep> | undefined,
 ): Promise<RoundSettlement> {
-  if (agent === undefined) {
-    return { ok: false, error: `no agent for seat ${input.seat}`, cause: "error" };
-  }
+  if (agent === undefined) return failed(`no agent for seat ${input.seat}`);
   let answer: Promise<RoundSettlement>;
   try {
-    answer = Promise.resolve(agent.round(input)).then(checkOutput, (e: unknown) => ({
-      ok: false,
-      error: describeError(e),
-      cause: "error",
-    }));
+    answer = Promise.resolve(agent.round(input)).then(checkOutput, (e: unknown) =>
+      failed(describeError(e)),
+    );
   } catch (e) {
-    return { ok: false, error: describeError(e), cause: "error" };
+    return failed(describeError(e));
   }
   if (timeout === undefined) return answer;
   const sleep = timeout.time.sleepUntil(timeout.time.nowMs() + timeout.ms);
@@ -77,4 +78,21 @@ export async function playRound(
     sleep.cancel();
     timers?.delete(sleep);
   }
+}
+
+/**
+ * Asks `agent` for one round. Settles with the agent's output, or with the failure that closes
+ * the turn: no agent for the seat, a throw or rejection (whatever value it carries), an answer that
+ * is not a `RoundOutput`, or no answer before `timeout.ms` of `timeout.time` (a late answer is then
+ * ignored). The timeout timer is cancelled as soon as the round settles; `timers` (optional) holds
+ * it meanwhile, so a driver that stops early can cancel it. Never rejects: anything else that goes
+ * wrong while the round is asked also becomes a failure of that turn alone.
+ */
+export function playRound(
+  agent: SeatAgent | undefined,
+  input: RoundInput,
+  timeout?: RoundTimeout,
+  timers?: Set<Sleep>,
+): Promise<RoundSettlement> {
+  return settle(agent, input, timeout, timers).catch((e: unknown) => failed(describeError(e)));
 }

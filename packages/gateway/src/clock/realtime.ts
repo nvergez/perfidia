@@ -10,7 +10,7 @@ import type {
 import { AgentRoundError, ClockError } from "./errors.ts";
 import { playRound, type RoundTimeout } from "./round.ts";
 import { Signal } from "./signal.ts";
-import type { ClockDriver, ClockHost, TurnFailure, TurnHandle } from "./types.ts";
+import type { AgentFailure, ClockDriver, ClockHost, TurnHandle } from "./types.ts";
 
 // The real-time driver (docs/architecture.md §9.3): game time follows wall time at `num/den`
 // game-seconds per wall-second, seats play asynchronously, and an action takes effect at the game
@@ -28,9 +28,11 @@ export interface SpeedMapping {
   /** `min(endsAt, floor((ms − wall0) · num / (1000 · den)))`: the game second at wall time `ms`. */
   gameAt(ms: number): GameTime;
   /**
-   * `wall0 + ceilDiv(g · 1000 · den, num)`: the first wall ms at which `gameAt` reaches `g`. When
-   * the speed is at most 1000 (every game second lasts ≥ 1 ms), `gameAt(wallAt(g)) = g`; faster,
-   * one ms spans several game seconds and `gameAt(wallAt(g))` may exceed `g`.
+   * `wall0 + ceilDiv(g · 1000 · den, num)`: the first wall ms at which `gameAt` reaches `g`. In
+   * general `g ≤ gameAt(wallAt(g)) < g + num / (1000 · den)`. So when the speed is at most 1000
+   * (every game second lasts ≥ 1 ms), `gameAt(wallAt(g)) = g` (§9.4); faster, one ms spans several
+   * game seconds, `gameAt(wallAt(g))` may exceed `g`, and a wake can open up to that many game
+   * seconds late even without lag (at 100800×, up to 100).
    */
   wallAt(g: GameTime): number;
 }
@@ -127,43 +129,50 @@ export function createRealtimeDriver(options: RealtimeOptions): RealtimeDriver {
       if (!host.ended()) host.advanceTo(Math.max(host.now(), mapping.gameAt(time.nowMs())));
     };
 
-    const closeTurn = (h: TurnHandle, error?: string, cause?: TurnFailure): void => {
-      if (error === undefined) h.close();
-      else h.close(error, cause);
+    const closeTurn = (h: TurnHandle, agentFailure?: AgentFailure): void => {
+      h.close(agentFailure);
       inTurn.delete(h.seat);
       kick.notify();
     };
 
-    const runTurn = async (seat: PlayerId): Promise<void> => {
-      const h = host.openTurn(seat);
-      while (!h.done) {
-        // oxlint-disable-next-line no-await-in-loop -- a turn's rounds are sequential: each sees the previous results
-        const r = await playRound(agents.get(seat), h.input(), timeout, timers);
-        if (failure !== null) return;
-        // The answer, or the failure, takes effect at the game second when it is received.
-        catchUp();
-        if (!r.ok) {
-          closeTurn(h, r.error, r.cause);
-          if (strict) throw new AgentRoundError(seat, r.cause, r.error);
-          return;
+    /**
+     * Plays an open turn to its end. A failure (a host call that throws, or a strict agent error)
+     * is recorded in the same synchronous step, before any other turn resumes, so no turn calls the
+     * host after it; the main loop rethrows it when the turn's settlement kicks it.
+     */
+    const playTurn = async (h: TurnHandle): Promise<void> => {
+      try {
+        while (!h.done) {
+          // oxlint-disable-next-line no-await-in-loop -- a turn's rounds are sequential: each sees the previous results
+          const r = await playRound(agents.get(h.seat), h.input(), timeout, timers);
+          if (failure !== null) return;
+          // The answer, or the failure, takes effect at the game second when it is received.
+          catchUp();
+          if (!r.ok) {
+            closeTurn(h, { error: r.error, cause: r.cause });
+            if (strict) throw new AgentRoundError(h.seat, r.cause, r.error);
+            return;
+          }
+          // `done` may have become true while the agent thought (match end, elimination): the
+          // answered round is still executed, and the host answers its calls (§9.1).
+          h.execute(r.out);
+          kick.notify();
         }
-        h.execute(r.out);
-        kick.notify();
+        closeTurn(h);
+      } catch (e) {
+        failure ??= { error: e };
       }
-      closeTurn(h);
     };
 
     const startTurn = (seat: PlayerId): void => {
+      // Opened synchronously: a host failure here leaves the main loop before any other host call.
+      const h = host.openTurn(seat);
       inTurn.add(seat);
       stats.turns += 1;
-      const turn: Promise<void> = runTurn(seat)
-        .catch((e: unknown) => {
-          failure ??= { error: e };
-        })
-        .finally(() => {
-          inflight.delete(turn);
-          kick.notify();
-        });
+      const turn: Promise<void> = playTurn(h).finally(() => {
+        inflight.delete(turn);
+        kick.notify();
+      });
       inflight.add(turn);
     };
 
@@ -176,6 +185,8 @@ export function createRealtimeDriver(options: RealtimeOptions): RealtimeDriver {
         if (host.ended()) break;
         for (const seat of host.dueSeats(host.now())) {
           if (!inTurn.has(seat)) startTurn(seat);
+          // A turn's first steps run synchronously; one may have failed already.
+          if (failure !== null) rethrow(failure);
         }
         const next = host.nextTime();
         if (next === null && inflight.size === 0) {

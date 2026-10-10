@@ -4,16 +4,21 @@ import type { PlayerId, RoundInput, RoundOutput, SeatAgent, TimeSource } from "@
 import fc from "fast-check";
 import { AgentRoundError, ClockError } from "./errors.ts";
 import {
+  answering,
   call,
+  CallLogHost,
   describeRecord,
   FakeHost,
   type FakeHostOptions,
+  hostileAnswer,
   playRounds,
   rejectionOf,
+  revokedError,
   type Script,
   scriptedAgent,
   thinkingAgent,
   traceViolations,
+  unprintableError,
 } from "./fake-host.ts";
 import {
   createRealtimeDriver,
@@ -177,7 +182,7 @@ describe("speedMapping", () => {
     );
   });
 
-  test("gameAt(wallAt(g)) = g up to 1000 game-seconds per wall-second (property)", () => {
+  test("gameAt(wallAt(g)) = g up to 1000 game-seconds per wall-second (§9.4, property)", () => {
     fc.assert(
       fc.property(
         mapping.filter((s) => s.num <= 1000 * s.den),
@@ -188,6 +193,20 @@ describe("speedMapping", () => {
           expect(m.gameAt(m.wallAt(g))).toBe(g);
         },
       ),
+    );
+  });
+
+  test("at any speed, gameAt(wallAt(g)) overshoots g by less than the game seconds of one wall ms (property)", () => {
+    // Faster than 1000 game-seconds per wall-second the identity cannot hold with integer ms; this
+    // bound is what holds instead, and it gives the identity back when num ≤ 1000 · den.
+    fc.assert(
+      fc.property(mapping, fc.nat({ max: 1_000_000 }), (s, g0) => {
+        const g = g0 % (s.endsAt + 1);
+        const m = speedMapping(s.wall0, { num: s.num, den: s.den }, s.endsAt);
+        const over = m.gameAt(m.wallAt(g)) - g;
+        expect(over).toBeGreaterThanOrEqual(0);
+        expect(over * 1000 * s.den).toBeLessThan(s.num);
+      }),
     );
   });
 
@@ -456,6 +475,133 @@ describe("real-time driver", () => {
     expect(host.trace.map(describeRecord)).toContain("turn p2#1 @0 error: Error: boom");
     expect(host.finished).toBe(false);
   });
+
+  const unprintable: [string, SeatAgent, string][] = [
+    [
+      "rejects with an Error whose message getter throws",
+      { label: "test:failing@1", round: () => Promise.reject(unprintableError()) },
+      "unprintable error",
+    ],
+    [
+      "throws a revoked Proxy",
+      {
+        label: "test:failing@1",
+        round: () => {
+          throw revokedError();
+        },
+      },
+      "unprintable error",
+    ],
+    [
+      "answers an object whose getter throws",
+      answering(hostileAnswer()),
+      "invalid round output: Error: calls getter",
+    ],
+  ];
+  test.each(unprintable)(
+    "an agent that %s closes only its turn; the run goes on",
+    async (_kind, agent, error) => {
+      const { lines } = await play({ seed: 1, endsAt: 100, seats: 2 }, (seat, time) =>
+        seat === "p2" ? agent : thinkingAgent(time, 10 * S, playRounds(2)),
+      );
+      expect(lines.slice(0, 4)).toEqual([
+        "start",
+        "wake p1#1 @0",
+        "wake p2#1 @0",
+        `turn p2#1 @0 error: ${error}`,
+      ]);
+      expect(lines.slice(-3)).toEqual(["advance 100", "ended @100", "end @100"]);
+      expect(lines).toContain("turn p1#1 @20 end_turn");
+    },
+  );
+
+  test("a seat eliminated while it thinks: its answered round is executed, then its turn closes", async () => {
+    const { lines } = await play(
+      {
+        seed: 1,
+        endsAt: 1000,
+        seats: 2,
+        onCall: (h, _seat, c) => {
+          if (c.tool === "purge") h.eliminate("p2");
+        },
+      },
+      seats(
+        (_seat, time) =>
+          thinkingAgent(time, 10 * S, () => ({ calls: [call("purge"), call("end_turn")] })),
+        (_seat, time) => thinkingAgent(time, 50 * S, playRounds(3)),
+      ),
+    );
+    expect(lines).toEqual([
+      "start",
+      "wake p1#1 @0",
+      "wake p2#1 @0",
+      "advance 10",
+      "eliminated p2 @10",
+      "exec p1#1.0 @10 purge,end_turn",
+      "turn p1#1 @10 end_turn",
+      "advance 50",
+      "exec p2#1.0 @50 view_city!ELIMINATED",
+      "turn p2#1 @50 eliminated",
+      "advance 1000",
+      "ended @1000",
+      "end @1000",
+    ]);
+  });
+
+  test("fails loudly when the host's nextTime() is null before the end with no turn in flight", async () => {
+    class EarlyNullHost extends FakeHost {
+      override nextTime(): number | null {
+        return this.now() >= 50 ? null : super.nextTime();
+      }
+    }
+    const vt = new VirtualTime({ yieldMacrotask: tick });
+    const host = new EarlyNullHost({ seed: 1, endsAt: 100, seats: 1 });
+    const driver = createRealtimeDriver({ speed: SPEED_1, time: vt });
+    const agents = new Map<PlayerId, SeatAgent>([
+      [
+        "p1",
+        scriptedAgent(
+          playRounds(
+            1,
+            () => [],
+            () => 50,
+          ),
+        ),
+      ],
+    ]);
+    const error = await rejectionOf(vt.run(() => driver.run(host, agents)));
+    expect(error).toBeInstanceOf(ClockError);
+    expect(messageOf(error)).toBe(
+      "host.nextTime() is null before the match ended, with no turn in flight",
+    );
+    expect(host.finished).toBe(false);
+    expect(vt.pending).toBe(0);
+  });
+
+  // `input p2` fails inside the first, synchronous step of p2's turn, before its agent is asked.
+  test.each(["openTurn p2", "input p2"])(
+    "a host failure while turns open (%s) stops the run at once: it rejects and calls the host no more",
+    async (failOn) => {
+      const vt = new VirtualTime({ yieldMacrotask: tick });
+      const host = new CallLogHost({ seed: 1, endsAt: 1000, seats: 3 }, failOn);
+      const driver = createRealtimeDriver({ speed: SPEED_1, time: vt, turnTimeoutMs: 500 * S });
+      const agents = new Map(
+        host.seats.map((seat) => [seat, thinkingAgent(vt, 10 * S, playRounds(1))]),
+      );
+      expect(messageOf(await rejectionOf(vt.run(() => driver.run(host, agents))))).toBe(
+        `host failure in ${failOn}`,
+      );
+      const calls = [...host.calls];
+      expect(calls.at(-1)).toBe(failOn);
+      expect(calls).not.toContain("openTurn p3");
+      expect(host.finished).toBe(false);
+      // p1's agent still answers; neither its turn nor the main loop may touch the host again.
+      await vt.run(() => vt.sleepUntil(vt.nowMs() + 1000 * S).done);
+      expect(host.calls).toEqual(calls);
+      // The driver's round timeouts were cancelled: only p1's own think timer was left, and it fired.
+      expect(vt.pending).toBe(0);
+    },
+  );
 
   test("turnTimeoutMs closes a hung agent's turn at the second it expires, and leaves no timer behind", async () => {
     const { lines } = await play(

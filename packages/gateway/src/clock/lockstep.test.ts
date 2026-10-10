@@ -6,16 +6,20 @@ import { AgentRoundError, ClockError } from "./errors.ts";
 import {
   answering,
   call,
+  CallLogHost,
   describeRecord,
   FakeHost,
   type FakeHostOptions,
+  hostileAnswer,
   playRounds,
   rejectionOf,
   replayFakeTrace,
+  revokedError,
   type Script,
   scriptedAgent,
   thinkingAgent,
   traceViolations,
+  unprintableError,
 } from "./fake-host.ts";
 import { createLockstepDriver, lockstepOrder, type LockstepOptions } from "./lockstep.ts";
 import { VirtualTime, VirtualTimeDeadlock } from "./virtual.ts";
@@ -283,6 +287,26 @@ describe("lockstep driver", () => {
       "Error: boom",
     ],
     ["answers garbage", answering({ calls: "attack" }), "invalid round output: calls: "],
+    [
+      "rejects with an Error whose message getter throws",
+      { label: "test:failing@1", round: () => Promise.reject(unprintableError()) },
+      "unprintable error",
+    ],
+    [
+      "throws a revoked Proxy",
+      {
+        label: "test:failing@1",
+        round: () => {
+          throw revokedError();
+        },
+      },
+      "unprintable error",
+    ],
+    [
+      "answers an object whose getter throws",
+      answering(hostileAnswer()),
+      "invalid round output: Error: calls getter",
+    ],
   ];
   test.each(failing)(
     "closes only the turn of an agent that fails, and applies the others' outputs (agent %s)",
@@ -384,6 +408,96 @@ describe("lockstep driver", () => {
       "host.nextTime() returned 0 after second 0 was played: lockstep needs strictly increasing times",
     );
   });
+
+  test("fails loudly instead of ending the match early when nextTime() is null before the end", async () => {
+    class EarlyNullHost extends FakeHost {
+      override nextTime(): number | null {
+        return this.now() >= 50 ? null : super.nextTime();
+      }
+    }
+    const host = new EarlyNullHost({ seed: 1, endsAt: 100, seats: 1 });
+    const run = createLockstepDriver().run(
+      host,
+      agentsOf(host, () =>
+        scriptedAgent(
+          playRounds(
+            1,
+            () => [],
+            () => 50,
+          ),
+        ),
+      ),
+    );
+    const error = await rejectionOf(run);
+    expect(error).toBeInstanceOf(ClockError);
+    expect(messageOf(error)).toBe("host.nextTime() is null before the match ended");
+    expect(host.trace.map(describeRecord).slice(-2)).toEqual([
+      "exec p1#2.0 @50 end_turn",
+      "turn p1#2 @50 end_turn",
+    ]);
+    expect(host.finished).toBe(false);
+  });
+
+  test("a host failure stops the run at once: it rejects and calls the host no more", async () => {
+    const host = new CallLogHost({ seed: 42, endsAt: 100, seats: 3 }, "openTurn p2");
+    const run = createLockstepDriver().run(
+      host,
+      agentsOf(host, () => scriptedAgent(playRounds(2))),
+    );
+    expect(messageOf(await rejectionOf(run))).toBe("host failure in openTurn p2");
+    expect(host.calls.slice(-5)).toEqual([
+      "dueSeats 0",
+      "openTurn p1",
+      "done p1",
+      "ended",
+      "openTurn p2",
+    ]);
+  });
+
+  // Seed 42 orders batch 0 at t = 0 as [p1, p3, p2], seed 3 as [p2, p1, p3].
+  const purge: [number, string][] = [
+    [42, "view_city!ELIMINATED"],
+    [3, "view_city"],
+  ];
+  test.each(purge)(
+    "a seat eliminated by an earlier seat of its batch still has its round executed, then its turn closes (seed %p)",
+    async (seed, p2Exec) => {
+      const order = lockstepOrder(seed, 0, 0, seats(3));
+      const { lines } = await play(
+        {
+          seed,
+          endsAt: 100,
+          seats: 3,
+          onCall: (h, _seat, c) => {
+            if (c.tool === "purge") h.eliminate("p2");
+          },
+        },
+        bySeat([
+          () => ({ calls: [call("purge"), call("end_turn")] }),
+          playRounds(2),
+          playRounds(2),
+        ]),
+      );
+      const exec: Record<string, string[]> = {
+        p1: ["eliminated p2 @0", "exec p1#1.0 @0 purge,end_turn"],
+        p2: [`exec p2#1.0 @0 ${p2Exec}`],
+        p3: ["exec p3#1.0 @0 view_city"],
+      };
+      expect(from(lines, "batch 0")).toEqual([
+        `batch 0 @0 [${order.join(",")}]`,
+        ...order.flatMap((p) => exec[p] ?? []),
+        "turn p1#1 @0 end_turn",
+        "turn p2#1 @0 eliminated",
+        "batch 1 @0 [p3]",
+        "exec p3#1.1 @0 view_city,end_turn",
+        "turn p3#1 @0 end_turn",
+        "advance 100",
+        "ended @100",
+        "end @100",
+      ]);
+      expect(lines.filter((l) => l.startsWith("wake p2"))).toEqual(["wake p2#1 @0"]);
+    },
+  );
 
   test("random scenarios: strictly increasing times, the turn cap, determinism and replay (property)", async () => {
     await fc.assert(

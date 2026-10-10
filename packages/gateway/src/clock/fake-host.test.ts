@@ -7,6 +7,7 @@ import {
   replayFakeTrace,
   traceViolations,
 } from "./fake-host.ts";
+import type { TurnHandle } from "./types.ts";
 
 // The driver tests rest on this double, so its wake model and its contract checks are tested too.
 
@@ -15,6 +16,9 @@ function started(options: Partial<ConstructorParameters<typeof FakeHost>[0]> = {
   host.start();
   return host;
 }
+
+/** `TurnHandle.close` as §9.1 writes it. */
+const legacyClose = (error?: string): void => void error;
 
 describe("FakeHost", () => {
   test("every seat starts due at 0; a seat in a turn has no wake time", () => {
@@ -91,6 +95,19 @@ describe("FakeHost", () => {
       "exec p2#1.0 @50 attack!MATCH_ENDED",
       "exec p2#1.1 @50 end_turn!MATCH_ENDED",
     ]);
+  });
+
+  test("close(failure) logs the failure's cause as why; a §9.1-style close(error?: string) does not type-check", () => {
+    const host = started();
+    host.openTurn("p1").close({ error: "no answer within 5000 ms", cause: "timeout" });
+    host.openTurn("p2").close({ error: "Error: boom", cause: "error" });
+    expect(host.trace.map(describeRecord).filter((l) => l.startsWith("turn"))).toEqual([
+      "turn p1#1 @0 timeout: no answer within 5000 ms",
+      "turn p2#1 @0 error: Error: boom",
+    ]);
+    // @ts-expect-error -- a host written to the §9.1 signature would log every timeout as "error"
+    const close: TurnHandle["close"] = legacyClose;
+    expect(typeof close).toBe("function");
   });
 
   test("a trace replays to itself, and the invariant checker catches a broken one", () => {

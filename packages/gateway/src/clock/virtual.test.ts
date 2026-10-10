@@ -42,6 +42,33 @@ describe("VirtualTime", () => {
     expect(vt.pending).toBe(0);
   });
 
+  test("fires one timer per macrotask yield: a timer's microtasks drain before the next timer, even at the same deadline", async () => {
+    const vt = virtualTime();
+    const log: string[] = [];
+    const at = (name: string): void => void log.push(`${name}@${vt.nowMs()}`);
+    await vt.run(() =>
+      Promise.all([
+        (async () => {
+          await vt.sleepUntil(100).done;
+          at("a0");
+          await Promise.resolve();
+          at("a1");
+          await Promise.resolve();
+          at("a2");
+          await vt.sleepUntil(vt.nowMs()).done;
+          at("a3");
+        })(),
+        (async () => {
+          await vt.sleepUntil(100).done;
+          at("b0");
+        })(),
+      ]),
+    );
+    // Firing every timer due at 100 in one step would give a0, b0, a1, a2, a3 instead.
+    expect(log).toEqual(["a0@100", "a1@100", "a2@100", "b0@100", "a3@100"]);
+    expect(vt.pending).toBe(0);
+  });
+
   test("drops cancelled timers: time never jumps to a dead deadline", async () => {
     const vt = virtualTime();
     const dead = vt.sleepUntil(10_000);

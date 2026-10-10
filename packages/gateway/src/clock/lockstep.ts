@@ -9,7 +9,7 @@ import type {
   TimeSource,
 } from "@perfidia/protocol";
 import { AgentRoundError, ClockError } from "./errors.ts";
-import { playRound, type RoundTimeout } from "./round.ts";
+import { playRound, type RoundTimeout, settlementOf } from "./round.ts";
 import type { ClockDriver, ClockHost, TurnHandle } from "./types.ts";
 
 // The lockstep driver (docs/architecture.md §9.2): game time jumps from one due time to the next
@@ -88,7 +88,7 @@ export function createLockstepDriver(options: LockstepOptions = {}): ClockDriver
       if (open.length === 0) break;
 
       // oxlint-disable-next-line no-await-in-loop -- batch b + 1 must see every write of batch b
-      const settled = await Promise.all(
+      const settled = await Promise.allSettled(
         open.map((h) => playRound(agents.get(h.seat), h.input(), timeout)),
       );
       const answered: {
@@ -97,13 +97,14 @@ export function createLockstepDriver(options: LockstepOptions = {}): ClockDriver
         readonly out: RoundOutput;
       }[] = [];
       for (const [i, h] of open.entries()) {
-        const r = settled[i];
-        if (r === undefined) throw new ClockError(`no settlement for ${h.seat}'s round`);
+        const result = settled[i];
+        if (result === undefined) throw new ClockError(`no settlement for ${h.seat}'s round`);
+        const r = settlementOf(result);
         if (r.ok) {
           answered.push({ seat: h.seat, h, out: r.out });
           continue;
         }
-        h.close(r.error, r.cause);
+        h.close({ error: r.error, cause: r.cause });
         if (strict) throw new AgentRoundError(h.seat, r.cause, r.error);
       }
 
@@ -141,7 +142,11 @@ export function createLockstepDriver(options: LockstepOptions = {}): ClockDriver
       let last = -1;
       while (!host.ended()) {
         const t = host.nextTime();
-        if (t === null) break;
+        if (t === null) {
+          if (host.ended()) break;
+          // §9.1: null only once the match has ended. Stopping here would end the match early.
+          throw new ClockError("host.nextTime() is null before the match ended");
+        }
         if (t <= last) {
           throw new ClockError(
             `host.nextTime() returned ${t} after second ${last} was played: lockstep needs strictly increasing times`,

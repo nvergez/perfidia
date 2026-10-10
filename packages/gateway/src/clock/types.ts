@@ -19,6 +19,13 @@ import type {
  */
 export type TurnFailure = "error" | "timeout";
 
+/** The agent failure that closes a turn: the host writes `error` and `cause` as the `turn` line's `error` and `why`. */
+export interface AgentFailure {
+  /** One deterministic line, no stack (`describeError`). */
+  readonly error: string;
+  readonly cause: TurnFailure;
+}
+
 export interface ClockHost {
   /** The match seed (uint32): lockstep batch orders are drawn from its `lockstep:<t>:<b>` streams. */
   readonly seed: number;
@@ -49,15 +56,22 @@ export interface TurnHandle {
   /** `end_turn`, an empty round, the round cap, the end of the match, or the seat eliminated. */
   readonly done: boolean;
   input(): RoundInput;
-  /** Synchronous: applies the round's calls at `host.now()`, in order. */
+  /**
+   * Synchronous: applies the round's calls at `host.now()`, in order. `done` may have become true
+   * while the agent was thinking, because the match ended or the seat was eliminated (in lockstep,
+   * by a seat applied earlier in the same batch): a driver still executes that one answered round,
+   * so it is logged, and the host must accept it and answer each call `MATCH_ENDED` or
+   * `ELIMINATED`. A driver never executes a round after `end_turn`, an empty round or the round cap.
+   */
   execute(out: RoundOutput): void;
   /**
-   * `turn` line, then the scheduler's `end` (which clears `inTurn` synchronously). `error` is the
-   * agent failure that closed the turn and `cause` its kind (default `"error"` when `error` is
-   * given). `cause` extends §9.1, whose signature is `close(error?: string)`: a host written to
-   * that signature still satisfies this interface.
+   * `turn` line, then the scheduler's `end` (which clears `inTurn` synchronously). `failure` is the
+   * agent failure that closed the turn; without it, the host derives `why` from the turn's state.
+   * Deviation from §9.1, whose signature is `close(error?: string)`: the failure carries its cause,
+   * so a timed-out round is logged as `why: "timeout"`. A host written to the §9.1 signature does
+   * not compile against this one, on purpose: it would log every timeout as `why: "error"`.
    */
-  close(error?: string, cause?: TurnFailure): void;
+  close(failure?: AgentFailure): void;
 }
 
 export interface ClockDriver {

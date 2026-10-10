@@ -12,7 +12,7 @@ import type {
   ToolResult,
   TurnEnd,
 } from "@perfidia/protocol";
-import type { ClockHost, TurnFailure, TurnHandle } from "./types.ts";
+import type { AgentFailure, ClockHost, TurnHandle } from "./types.ts";
 
 // A scripted `ClockHost` for driver tests (§9.4: "Driver tests use a scripted FakeHost"). It is a
 // test double, not exported by the package barrel. It models just enough of the wake scheduler of
@@ -529,10 +529,10 @@ export class FakeTurn implements TurnHandle {
     this.#endTurn = true;
   }
 
-  close(error?: string, cause?: TurnFailure): void {
+  close(failure?: AgentFailure): void {
     if (this.#closed) throw new FakeHostError(`${this.seat}: close() called twice`);
     let why: TurnEnd;
-    if (error !== undefined) why = cause ?? "error";
+    if (failure !== undefined) why = failure.cause;
     else if (this.#endTurn) why = "end_turn";
     else if (this.#emptyRound) why = "empty_round";
     else if (this.#round >= this.#maxRounds) why = "round_cap";
@@ -540,7 +540,97 @@ export class FakeTurn implements TurnHandle {
     else if (this.#host.ended()) why = "match_ended";
     else throw new FakeHostError(`${this.seat}: close() on a turn that is not done`);
     this.#closed = true;
-    this.#host.closeTurn(this, why, error);
+    this.#host.closeTurn(this, why, failure?.error);
+  }
+}
+
+/**
+ * A `FakeHost` that logs every call a driver makes to it or to its turn handles (`openTurn p2`,
+ * `nextTime`, `execute p1`, …; a handle's `done` also reads `ended`), and throws
+ * `Error("host failure in <call>")` on the call named `failOn`, as an engine bug would.
+ */
+export class CallLogHost extends FakeHost {
+  readonly calls: string[] = [];
+  readonly #failOn: string | undefined;
+
+  constructor(options: FakeHostOptions, failOn?: string) {
+    super(options);
+    this.#failOn = failOn;
+  }
+
+  #log(c: string): void {
+    this.calls.push(c);
+    if (c === this.#failOn) throw new Error(`host failure in ${c}`);
+  }
+
+  override now(): GameTime {
+    this.#log("now");
+    return super.now();
+  }
+
+  override ended(): boolean {
+    this.#log("ended");
+    return super.ended();
+  }
+
+  override start(): void {
+    this.#log("start");
+    super.start();
+  }
+
+  override advanceTo(t: GameTime): void {
+    this.#log(`advanceTo ${t}`);
+    super.advanceTo(t);
+  }
+
+  override nextTime(): GameTime | null {
+    this.#log("nextTime");
+    return super.nextTime();
+  }
+
+  override dueSeats(t: GameTime): PlayerId[] {
+    this.#log(`dueSeats ${t}`);
+    return super.dueSeats(t);
+  }
+
+  override openTurn(seat: PlayerId): TurnHandle {
+    this.#log(`openTurn ${seat}`);
+    const h = super.openTurn(seat);
+    const log = (c: string): void => this.#log(`${c} ${seat}`);
+    return {
+      seat,
+      get done(): boolean {
+        log("done");
+        return h.done;
+      },
+      input: () => {
+        log("input");
+        return h.input();
+      },
+      execute: (out) => {
+        log("execute");
+        h.execute(out);
+      },
+      close: (failure) => {
+        log("close");
+        h.close(failure);
+      },
+    };
+  }
+
+  override logBatch(t: GameTime, b: number, order: readonly PlayerId[]): void {
+    this.#log(`logBatch ${t} ${b}`);
+    super.logBatch(t, b, order);
+  }
+
+  override defer(seat: PlayerId, to: GameTime): void {
+    this.#log(`defer ${seat}`);
+    super.defer(seat, to);
+  }
+
+  override finish(): MatchResult {
+    this.#log("finish");
+    return super.finish();
   }
 }
 
@@ -582,7 +672,11 @@ export function replayFakeTrace(options: FakeHostOptions, trace: readonly FakeRe
         break;
       case "turn":
         if (r.error === undefined) handle(r.seat).close();
-        else handle(r.seat).close(r.error, r.why === "timeout" ? "timeout" : "error");
+        else
+          handle(r.seat).close({
+            error: r.error,
+            cause: r.why === "timeout" ? "timeout" : "error",
+          });
         turns.delete(r.seat);
         break;
       case "defer":
@@ -682,6 +776,35 @@ export async function rejectionOf(p: Promise<unknown>): Promise<unknown> {
     return e;
   }
   throw new Error("expected a rejection, got a fulfilment");
+}
+
+// Values an agent controls that cannot be printed or parsed without throwing.
+
+/** An `Error` whose `message` getter throws. */
+export function unprintableError(): Error {
+  const e = new Error("hidden");
+  Object.defineProperty(e, "message", {
+    get(): never {
+      throw new Error("message getter");
+    },
+  });
+  return e;
+}
+
+/** A revoked Proxy of an `Error`: even `instanceof` on it throws. */
+export function revokedError(): Error {
+  const { proxy, revoke } = Proxy.revocable(new Error("revoked"), {});
+  revoke();
+  return proxy;
+}
+
+/** A round answer whose `calls` getter throws (schema parsing lets the throw through). */
+export function hostileAnswer(): unknown {
+  return {
+    get calls(): never {
+      throw new Error("calls getter");
+    },
+  };
 }
 
 // Agents for driver tests.

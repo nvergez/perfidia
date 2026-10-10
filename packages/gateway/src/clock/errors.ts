@@ -22,13 +22,20 @@ export class AgentRoundError extends Error {
   }
 }
 
-/** A thrown value as one deterministic line for the `turn` line's `error` (no stack, no address). */
+/** What `describeError` answers for a value it cannot turn into a string. */
+export const UNPRINTABLE_ERROR = "unprintable error";
+
+/**
+ * A thrown value as one deterministic line for the `turn` line's `error` (no stack, no address).
+ * Total: an agent controls what it throws, so a value that cannot be printed (a throwing `message`
+ * getter, a Symbol `name`, a revoked Proxy) gives `UNPRINTABLE_ERROR` instead of a second throw.
+ */
 export function describeError(e: unknown): string {
-  if (e instanceof Error) return `${e.name}: ${e.message}`;
-  if (typeof e === "string") return e;
   try {
+    if (e instanceof Error) return `${e.name}: ${e.message}`;
+    if (typeof e === "string") return e;
     return `non-Error thrown: ${String(e)}`;
   } catch {
-    return "non-Error thrown";
+    return UNPRINTABLE_ERROR;
   }
 }

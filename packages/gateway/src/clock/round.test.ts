@@ -1,7 +1,8 @@
 import { describe, expect, test } from "bun:test";
-import type { RoundInput, SeatAgent, Sleep } from "@perfidia/protocol";
-import { answering, FakeHost } from "./fake-host.ts";
-import { playRound } from "./round.ts";
+import type { RoundInput, SeatAgent, Sleep, TimeSource } from "@perfidia/protocol";
+import { describeError, UNPRINTABLE_ERROR } from "./errors.ts";
+import { answering, FakeHost, hostileAnswer, revokedError, unprintableError } from "./fake-host.ts";
+import { playRound, type RoundSettlement, settlementOf } from "./round.ts";
 import { VirtualTime } from "./virtual.ts";
 
 const tick = (): Promise<void> => new Promise((resolve) => setImmediate(resolve));
@@ -13,6 +14,48 @@ function sampleInput(): RoundInput {
 }
 
 const agent = (round: SeatAgent["round"]): SeatAgent => ({ label: "test:round@1", round });
+
+const failure = (error: string): RoundSettlement => ({ ok: false, error, cause: "error" });
+
+/** An object whose every property read throws, `then` included only when `then` is true. */
+const trap = (then: boolean): object =>
+  new Proxy(
+    {},
+    {
+      get: (_target, key): undefined => {
+        if (key === "then" && !then) return undefined;
+        throw new Error(`get trap: ${String(key)}`);
+      },
+    },
+  );
+
+describe("describeError", () => {
+  test("one line per thrown value: Error name and message, a string, anything else", () => {
+    expect(describeError(new TypeError("bad"))).toBe("TypeError: bad");
+    expect(describeError("plain")).toBe("plain");
+    expect(describeError(42)).toBe("non-Error thrown: 42");
+    expect(describeError(undefined)).toBe("non-Error thrown: undefined");
+  });
+
+  test("is total: a value it cannot print gives a fixed line instead of a throw", () => {
+    const symbolName = new Error("x");
+    Object.defineProperty(symbolName, "name", { value: Symbol("weird") });
+    const noToString = {
+      toString: (): never => {
+        throw new Error("toString");
+      },
+    };
+    for (const e of [
+      unprintableError(),
+      symbolName,
+      revokedError(),
+      noToString,
+      Object.create(null),
+    ]) {
+      expect(describeError(e)).toBe(UNPRINTABLE_ERROR);
+    }
+  });
+});
 
 describe("playRound", () => {
   test("passes a valid output through", async () => {
@@ -58,6 +101,59 @@ describe("playRound", () => {
       error: "plain",
       cause: "error",
     });
+  });
+
+  test("never rejects, whatever the agent throws or answers", async () => {
+    const input = sampleInput();
+    expect(
+      await playRound(
+        agent(() => Promise.reject(unprintableError())),
+        input,
+      ),
+    ).toEqual(failure(UNPRINTABLE_ERROR));
+    const throwsRevoked = agent(() => {
+      throw revokedError();
+    });
+    expect(await playRound(throwsRevoked, input)).toEqual(failure(UNPRINTABLE_ERROR));
+    expect(await playRound(answering(hostileAnswer()), input)).toEqual(
+      failure("invalid round output: Error: calls getter"),
+    );
+    // Resolving the answer reads its `then`: a throw there is a rejection; any other key, a parse failure.
+    expect(await playRound(answering(trap(true)), input)).toEqual(failure("Error: get trap: then"));
+    expect(await playRound(answering(trap(false)), input)).toEqual(
+      failure("invalid round output: Error: get trap: calls"),
+    );
+    const noRound: SeatAgent = {
+      label: "test:no-round@1",
+      get round(): SeatAgent["round"] {
+        throw new Error("round getter");
+      },
+    };
+    expect(await playRound(noRound, input)).toEqual(failure("Error: round getter"));
+  });
+
+  test("a time source that fails while the round timeout is set up fails that round only", async () => {
+    const broken: TimeSource = {
+      nowMs: () => 0,
+      sleepUntil: (): never => {
+        throw new RangeError("no timers");
+      },
+    };
+    const quick = agent(() => Promise.resolve({ calls: [] }));
+    expect(await playRound(quick, sampleInput(), { time: broken, ms: 5000 })).toEqual(
+      failure("RangeError: no timers"),
+    );
+  });
+
+  test("settlementOf: a fulfilled entry passes through, a rejected one becomes an error", () => {
+    const ok: RoundSettlement = { ok: true, out: { calls: [] } };
+    expect(settlementOf({ status: "fulfilled", value: ok })).toBe(ok);
+    expect(settlementOf({ status: "rejected", reason: new Error("bug") })).toEqual(
+      failure("Error: bug"),
+    );
+    expect(settlementOf({ status: "rejected", reason: unprintableError() })).toEqual(
+      failure(UNPRINTABLE_ERROR),
+    );
   });
 
   test("rejects an answer that is not a RoundOutput, naming the path", async () => {
