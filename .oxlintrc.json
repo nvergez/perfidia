@@ -15,7 +15,7 @@
     "builtin": true,
     "es2024": true
   },
-  "ignorePatterns": ["runs/**", "coverage/**"],
+  "ignorePatterns": ["runs/**", "coverage/**", ".claude/**"],
   "rules": {
     "typescript/await-thenable": "error",
     "typescript/no-deprecated": "error",
@@ -45,7 +45,10 @@
                 "name": "bun",
                 "message": "Pure package: no Bun APIs (it must run unchanged in a browser)."
               },
-              { "name": "elysia", "message": "Pure package: HTTP lives in the server package." }
+              {
+                "name": "elysia",
+                "message": "Pure package: HTTP lives in the server package."
+              }
             ],
             "patterns": [
               {
@@ -91,15 +94,24 @@
           "error",
           {
             "paths": [
-              { "name": "bun", "message": "Pure package tests: only bun:test is allowed." },
-              { "name": "elysia", "message": "Pure package: HTTP lives in the server package." }
+              {
+                "name": "bun",
+                "message": "Pure package tests: only bun:test is allowed."
+              },
+              {
+                "name": "elysia",
+                "message": "Pure package: HTTP lives in the server package."
+              }
             ],
             "patterns": [
               {
                 "group": ["bun:*", "!bun:test"],
                 "message": "Pure package tests: only bun:test is allowed."
               },
-              { "group": ["node:*"], "message": "Pure package: no Node APIs." },
+              {
+                "group": ["node:*"],
+                "message": "Pure package: no Node APIs."
+              },
               {
                 "group": ["@elysiajs/*"],
                 "message": "Pure package: HTTP lives in the server package."
