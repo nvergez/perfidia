@@ -5,6 +5,11 @@
 // every allowed N, and every registered ruleset id), so a renamed or added id is covered without
 // editing this test. Literals are found by a small lexer that skips comments and regular
 // expressions and reads the static parts of template literals.
+//
+// Deviation from §13.4, which excepts only `build`: the `read_notes` scope literal "mine" (§8.4)
+// collides with the perfidia-1 building id `mine`, so it is allowed in exactly the files that use
+// it as a scope (`ALLOWED`, file by file); the same literal anywhere else still fails, and a test
+// fails when an allowed literal is gone, so the list cannot go stale.
 
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";

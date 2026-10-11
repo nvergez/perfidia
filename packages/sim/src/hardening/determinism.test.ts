@@ -1,13 +1,14 @@
 // Determinism across processes (docs/architecture.md §13.4): the same 1-game-day bot matches of
 // both rulesets, under lockstep and real time with `VirtualTime`, give the same normalised log and
 // final state hash in this process and in two separate `bun` processes, which run them in another
-// order (a hidden module-level state would show as a difference). The children run
-// `determinism-child.ts`, a plain script: no test runner, linter or type checker is spawned.
+// order (a hidden module-level state would show as a difference). Every one of these logs, in this
+// process and in the children, passes Level E. The children run `determinism-child.ts`, a plain
+// script: no test runner, linter or type checker is spawned.
 
 import { expect, test } from "bun:test";
 import { join } from "node:path";
 import { z } from "@perfidia/protocol";
-import { caseHashes } from "./determinism-child.ts";
+import { caseHashes, type CaseHashes } from "./determinism-child.ts";
 
 const CASES = [
   "perfidia-1@1.0.0:lockstep:31",
@@ -18,11 +19,12 @@ const CASES = [
 
 const CHILD = join(import.meta.dir, "determinism-child.ts");
 
-const HashesSchema = z.record(z.string(), z.strictObject({ log: z.string(), state: z.string() }));
+const HashesSchema = z.record(
+  z.string(),
+  z.strictObject({ log: z.string(), state: z.string(), levelE: z.boolean() }),
+);
 
-async function child(
-  args: readonly string[],
-): Promise<Record<string, { log: string; state: string }>> {
+async function child(args: readonly string[]): Promise<Record<string, CaseHashes>> {
   const proc = Bun.spawn([process.execPath, CHILD, ...args], {
     stdout: "pipe",
     stderr: "pipe",
@@ -42,6 +44,7 @@ test("two separate bun processes give the same logs and hashes as this one", asy
   for (const c of CASES) {
     // oxlint-disable-next-line no-await-in-loop -- the in-process reference runs, one at a time
     const here = await caseHashes(c);
+    expect([c, here.levelE]).toEqual([c, true]);
     expect([c, forward[c]]).toEqual([c, here]);
     expect([c, backward[c]]).toEqual([c, here]);
   }

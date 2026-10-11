@@ -904,6 +904,10 @@ describe("boundary copies to the sink (§6.6, P16)", () => {
         sink,
         strict: true,
       });
+      const report = verifyLog(memory.parsed(), (ref) =>
+        ref === SANDBOX.ref ? SANDBOX : undefined,
+      );
+      expect(report.ok).toBe(true);
       return { text: memory.text(), gw: JSON.stringify(out.gateway) };
     };
     const clean = await play(false);

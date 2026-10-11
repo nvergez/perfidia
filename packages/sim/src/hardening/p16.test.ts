@@ -3,14 +3,15 @@
 // object the gateway hands them (round inputs: briefings and tool results) is vandalised once the
 // bot has read its own copy, and again a round later; and the log sink vandalises every line and
 // snapshot it receives once it has stored them. The log, the snapshots, the final hash, the final
-// gateway state and every seat's inputs are byte-identical to the same match without vandalism.
+// gateway state and every seat's inputs are byte-identical to the same match without vandalism, and
+// both logs pass Level E.
 
 import { describe, expect, test } from "bun:test";
 import { canonicalJson } from "@perfidia/engine/core";
 import { MemorySink, copyOf, type GatewayState, type LogSink } from "@perfidia/gateway";
 import type { LogLine, PlayerId, RoundInput, SeatAgent, Snapshot } from "@perfidia/protocol";
 import { normalisedText, prepareBotRun, runPrepared, type ClockChoice } from "../harness/index.ts";
-import { LOCKSTEP, REFS, VIRTUAL, daySpec } from "./kit.ts";
+import { LOCKSTEP, REFS, VIRTUAL, daySpec, levelE } from "./kit.ts";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -75,6 +76,8 @@ function vandalSink(inner: MemorySink): LogSink {
 
 interface Outcome {
   log: string;
+  /** The stored log passes Level E (§13.4). */
+  levelE: boolean;
   snapshots: string[];
   hash: string;
   gateway: GatewayState;
@@ -94,8 +97,10 @@ async function play(ref: string, clock: ClockChoice, destroy: boolean): Promise<
   const memory = new MemorySink();
   const sink = destroy ? vandalSink(memory) : memory;
   const run = await runPrepared({ ...prepared, options: { ...prepared.options, agents } }, sink);
+  const lines = memory.parsed();
   return {
-    log: normalisedText(memory.parsed()),
+    log: normalisedText(lines),
+    levelE: levelE(lines).ok,
     snapshots: [...memory.snapshots],
     hash: run.finalHash,
     gateway: run.gateway,
@@ -109,6 +114,8 @@ describe("P16 at match scale: vandalising what the gateway hands out changes not
       test(`${ref}, ${clock.kind}`, async () => {
         const clean = await play(ref, clock, false);
         const vandalised = await play(ref, clock, true);
+        expect(clean.levelE).toBe(true);
+        expect(vandalised.levelE).toBe(true);
         expect(vandalised.log).toBe(clean.log);
         expect(vandalised.snapshots).toEqual(clean.snapshots);
         expect(vandalised.hash).toBe(clean.hash);

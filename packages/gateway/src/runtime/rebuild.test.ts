@@ -1,8 +1,9 @@
 // The gateway state rebuild (docs/architecture.md §10.5) with scripted test agents: the rebuilt
 // state equals the live one `runMatch` returns, under lockstep and real time, with every line kind
 // that drives the gateway (notes, accepted and rejected actions, gateway rejections of every layer,
-// batch items, INTERNAL, end_turn, deferred turns, messages, public messages); and a log with a
-// line removed or changed is rebuilt to another state or reported as a drift, never a throw.
+// the daily message cap included, batch items, INTERNAL, end_turn, deferred turns, messages, public
+// messages); and a log with a line removed or changed is rebuilt to another state or reported as a
+// drift, never a throw.
 
 import { describe, expect, test } from "bun:test";
 import { createMatch, type AnyRuleset } from "@perfidia/engine";
@@ -126,6 +127,26 @@ function chatty(): Scripted {
   });
 }
 
+/**
+ * p4 posts seven public messages a turn (they wake nobody), so from its third turn on it is over
+ * the daily message cap of both rulesets: `DAILY_CAP`, whose message the rebuild regenerates from
+ * the line's details.
+ */
+function spammer(): Scripted {
+  return new Scripted("test:spammer", (input) =>
+    input.round > 0
+      ? { calls: [] }
+      : {
+          calls: [
+            ...Array.from({ length: 7 }, (_, i) =>
+              call("send_message", { to: "all", text: `turn ${input.turn}, news ${i + 1}` }),
+            ),
+            call("end_turn", { nextWakeIn: 2400 }),
+          ],
+        },
+  );
+}
+
 /** p3 calls the broken view_map (INTERNAL) and recruits. */
 function mapper(unit: string): Scripted {
   return new Scripted("test:mapper", (input) =>
@@ -173,6 +194,7 @@ function scenario(ruleset: AnyRuleset, time: TimeSource | null): Scenario {
     p1: busy(unit, [...before, ...needs]),
     p2: chatty(),
     p3: mapper(unit),
+    p4: spammer(),
   };
   const agents = new Map<PlayerId, SeatAgent>(
     setup.seats.map((s, i) => {
@@ -229,6 +251,7 @@ describe("the rebuilt gateway state equals the live one", () => {
           "NOTE_TOO_LONG",
           "TURN_OVER",
           "CALLS_CAP",
+          "DAILY_CAP",
           "UNKNOWN_ID",
           "INVALID_ARGS",
           "INTERNAL",
@@ -238,6 +261,11 @@ describe("the rebuilt gateway state equals the live one", () => {
         expect(linesOf(lines, "act").some((l) => l.r.ok)).toBe(true);
         expect(linesOf(lines, "act").some((l) => !l.r.ok)).toBe(true);
         expect(linesOf(lines, "note").length).toBeGreaterThan(3);
+        // p4's last turn ended over the message cap: lastTurn keeps the regenerated wording.
+        const capped = seatOf(rebuilt.gw, "p4").lastTurn?.unseen.find(
+          (u) => u.code === "DAILY_CAP",
+        );
+        expect(capped?.message).toContain("message");
         const p1 = seatOf(rebuilt.gw, "p1");
         expect(p1.notes.startsWith("plan: grow\nturn 3")).toBe(true);
         expect(p1.archive.some((d) => d.event.type === "message")).toBe(true);

@@ -65,24 +65,36 @@ export function daySpec(
 
 const runs = new Map<string, Promise<BotRun>>();
 
-/** `runBots(spec)`, run once per spec in this process (the runs are deterministic). */
-export function cachedRun(spec: BotRunSpec): Promise<BotRun> {
-  const ruleset = typeof spec.ruleset === "string" ? spec.ruleset : spec.ruleset.ref;
-  const key = canonicalJson({ ...spec, ruleset });
-  let run = runs.get(key);
-  if (run === undefined) {
-    run = runBots(spec);
-    runs.set(key, run);
-  }
-  return run;
-}
-
 /** Level E through the registry. */
 export function levelE(
   lines: readonly LogLine[],
   opts: { invariants?: InvariantLevel } = {},
 ): ReplayReport {
   return verifyLog(lines, resolve, opts);
+}
+
+/** The run, once its whole log has passed Level E (§13.4: every log a test produces does). */
+export function verified(run: BotRun): BotRun {
+  const report = levelE(run.lines);
+  if (!report.ok) {
+    throw new Error(`the run's log fails Level E: ${canonicalJson(report.divergence ?? null)}`);
+  }
+  return run;
+}
+
+/**
+ * `runBots(spec)`, run once per spec in this process (the runs are deterministic), its whole log
+ * checked at Level E once.
+ */
+export function cachedRun(spec: BotRunSpec): Promise<BotRun> {
+  const ruleset = typeof spec.ruleset === "string" ? spec.ruleset : spec.ruleset.ref;
+  const key = canonicalJson({ ...spec, ruleset });
+  let run = runs.get(key);
+  if (run === undefined) {
+    run = runBots(spec).then(verified);
+    runs.set(key, run);
+  }
+  return run;
 }
 
 /** The run's snapshot of game hour `hour`. */

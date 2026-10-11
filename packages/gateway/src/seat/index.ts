@@ -45,6 +45,15 @@
 // - `seatErrorText` words `DAILY_CAP`, `CALLS_CAP`, `ROUND_TRIP_CAP` and `NOTE_TOO_LONG` from the
 //   details a `gw` line keeps, so the rebuild regenerates the `lastTurn` messages; §7.3 puts all
 //   wording in `present/explain.ts`, which should delegate to it for these codes.
+// - `ArchiveHit.e` and `ArchiveEntry.e` (`read_notes`) number only the entries the seat can read
+//   (its archive and the public feed, in delivery order from 1), not the gateway's delivery number
+//   of §8.4: that one counts every delivered event, other seats' private events included, so a seat
+//   could count hidden activity between two of its entries (P15, found by T16). Search order is
+//   unchanged, newest first by `(t, delivery number)`. Pinned in `archive.test.ts`.
+// - §10.5 says a regenerated `gw` message is "the bare code when the explainer throws, as in the
+//   live host"; the live host words an `INTERNAL` whose explainer throws with the fixed
+//   `INTERNAL_FALLBACK` text (`runtime/tools.ts`), so `rebuildGatewayState` does the same for
+//   `INTERNAL` and keeps the bare code for the other codes (a batch item's rejection).
 
 export type {
   ArchiveQuery,
