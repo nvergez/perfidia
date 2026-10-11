@@ -347,3 +347,38 @@ describe("relation history and the kill-credit cooldown (§8.8)", () => {
     expect(extOf(match).relationEnds).toEqual({ "p1|p2": arrival });
   });
 });
+
+/** Six players with one city each and equal scores, with the given raw battle points. */
+function tied(bp: Readonly<Record<PlayerId, number>>, overrides: Record<string, number> = {}) {
+  const w = world({ now: 100000, overrides });
+  for (const p of ["p1", "p2", "p3", "p4", "p5", "p6"] as const) {
+    cities(w, p, 10 * Number(p.slice(1)), 1);
+  }
+  // Below 10 points the battle score is 0: the scores stay equal, only the raw points differ.
+  Object.assign(w.ext.battlePoints, bp);
+  return { w, match: load(w, overrides) };
+}
+const tiedOrder = (bp: Readonly<Record<PlayerId, number>>): PlayerId[] => {
+  const { match } = tied(bp);
+  return match.ruleset.hooks.standings(match.read()).map((s) => s.player);
+};
+
+describe("live standings: raw battle points never show through the order of tied players", () => {
+  test("while the match runs, ties follow cities, then the public tie-break order", () => {
+    const { w } = tied({});
+    expect(tiedOrder({})).toEqual([...w.ext.tiebreak]);
+    expect(tiedOrder({ p6: 9, p5: 8 })).toEqual([...w.ext.tiebreak]);
+    expect(tiedOrder({ [w.ext.tiebreak.at(-1) ?? "p1"]: 9 })).toEqual([...w.ext.tiebreak]);
+  });
+
+  test("once the match is over, the final ranking (§13.4) breaks ties by battle points", () => {
+    const { w } = tied({});
+    const last = w.ext.tiebreak.at(-1) ?? "p1";
+    const { match } = tied({ [last]: 9 }, { "time.matchEnd": 100001 });
+    match.advanceTo(100001);
+    expect(match.ended).toBe(true);
+    const final = match.ruleset.hooks.standings(match.read()).map((s) => s.player);
+    expect(final[0]).toBe(last);
+    expect(match.result?.standings.map((s) => s.player)).toEqual(final);
+  });
+});

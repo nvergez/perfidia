@@ -226,7 +226,9 @@ export class MatchHost implements ClockHost {
 
   private write(line: LogLine): void {
     try {
-      this.sink.write(line);
+      // The sink gets its own copy (§6.6, P16): the host goes on using the line's objects (the
+      // events it delivers, the act and gw lines it records), which a sink must not be able to change.
+      this.sink.write(copyOf(line));
     } catch (e) {
       throw new HostFailure(`the log sink failed on a ${line.k} line`, e);
     }
