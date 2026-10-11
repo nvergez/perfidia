@@ -223,6 +223,7 @@ const perturbation = (ref: Ref): fc.Arbitrary<Perturbation> => {
         pick,
         arriveIn: fc.integer({ min: 900, max: 30000 }),
       }),
+      fc.record({ kind: fc.constant("returnOrigin" as const), pick }),
     );
   }
   return fc.oneof(...list);

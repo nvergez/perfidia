@@ -13,12 +13,14 @@ import { lookup, orderedUnits, resCopy, timePair, type SeatVisibility } from "./
 // `incoming` without composition (origin city and owner, recorded foe, launch and arrival times).
 // Launch and arrival together reveal the pace; rulesets say so in their cheat sheets.
 //
-// A return is the one movement whose recorded party is history: after a recall or a bounce it still
-// names the target of the movement it was, which the besieger of its home (the only other player
-// shown a return by default, perfidia-1 §12) was never told about. Under `incoming` access a return
-// therefore shows as its party the besieger it will fight (the homecoming battle's foe, perfidia-1
-// §9.3), or `null`, and no `turnedBack`: perfidia-1 §12 gives the besieger its id, owner, launch
-// and arrival times.
+// A return is the one movement whose recorded party and origin are history: after a recall or a
+// bounce its party still names the target of the movement it was, and its origin is that target
+// (a bounce) or a city where its owner had troops stationed (a stationed recall, a dismissal), all
+// of which the besieger of its home (the only other player shown a return by default, perfidia-1
+// §12) was never told about. Under `incoming` access a return therefore shows as its party the
+// besieger it will fight (the homecoming battle's foe, perfidia-1 §9.3), or `null`, no origin
+// (`from: null`) and no `turnedBack`: perfidia-1 §12 gives the besieger its id, owner, launch and
+// arrival times.
 
 export type MovementAccess = "own" | "full" | "incoming";
 
@@ -104,6 +106,14 @@ function recallableUntil(r: ReadCtx, m: DeepReadonly<Movement>): number | null {
   return r.now <= until ? until : null;
 }
 
+/** Where `m` comes from as `access` shows it: `null` for a return seen with `incoming` access. */
+export function originOf(
+  m: DeepReadonly<Movement>,
+  access: MovementAccess,
+): Movement["from"] | null {
+  return m.kind === "return" && access === "incoming" ? null : m.from;
+}
+
 /** A fresh view of `m` for `viewer` at the given access. */
 export function movementView(
   r: ReadCtx,
@@ -116,7 +126,7 @@ export function movementView(
     kind: m.kind,
     access,
     owner: m.owner,
-    from: m.from,
+    from: originOf(m, access),
     to: m.to,
     party: partyOf(r, m, access, viewer),
     depart: timePair(m.departAt),

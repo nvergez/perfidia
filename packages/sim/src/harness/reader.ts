@@ -1,8 +1,8 @@
 import { closeSync, openSync, readFileSync, readSync } from "node:fs";
 import { LogLineSchema, type LogLine } from "@perfidia/protocol";
-import { JsonlError, isGzip } from "../harness/index.ts";
 
-// The streaming log reader (docs/architecture.md §10.1, §12.1): a run's `match.jsonl` is read in
+// The log reader (docs/architecture.md §10.1, §12.1), the only one: `sim verify`, `summary`,
+// `trace` and the freeze guard's golden check all read logs here. A run's `match.jsonl` is read in
 // chunks and yielded line by line, each validated with the log schema, so `verify` replays a log of
 // any size without holding it whole. Lines are split on the byte 0x0A, which never occurs inside a
 // multi-byte UTF-8 sequence, and each line is decoded on its own with a fatal decoder: invalid
@@ -16,6 +16,22 @@ import { JsonlError, isGzip } from "../harness/index.ts";
 
 const CHUNK = 1 << 16;
 const NEWLINE = 0x0a;
+
+/** Whether `path` names a gzip-compressed log. */
+export function isGzip(path: string): boolean {
+  return path.endsWith(".gz");
+}
+
+/** A line of a JSONL text that is not a valid log line, with its 1-based line number. */
+export class JsonlError extends Error {
+  readonly line: number;
+
+  constructor(line: number, message: string) {
+    super(`line ${line}: ${message}`);
+    this.name = "JsonlError";
+    this.line = line;
+  }
+}
 
 /** A log file that cannot be read as a whole, such as a corrupt gzip stream: no line to name. */
 export class LogFileError extends Error {
@@ -32,7 +48,7 @@ export function isCorruptLog(error: unknown): error is JsonlError | LogFileError
 
 const reason = (error: unknown): string => (error instanceof Error ? error.message : String(error));
 
-/** One row of a log file, validated; throws `JsonlError` naming `lineNo`. */
+/** One row of a log file, validated; throws `JsonlError` naming `lineNo`. The only row parser. */
 export function parseLogLine(row: string, lineNo: number): LogLine {
   let value: unknown;
   try {

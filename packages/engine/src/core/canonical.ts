@@ -132,3 +132,18 @@ export function canonicalJson(value: unknown): string {
   writer.write(value);
   return writer.parts.join("");
 }
+
+/**
+ * `value` serialised once as canonical JSON and its parsed copy: a deep copy that aliases nothing
+ * (§6.6). Throws `CanonicalJsonError` on non-JSON data (a float, `undefined` in an array, a `Map`).
+ */
+export function canonicalCopy<T>(value: T): { text: string; copy: T } {
+  const text = canonicalJson(value);
+  // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- parsing the canonical text of `value` rebuilds a deep copy of `value`
+  return { text, copy: JSON.parse(text) as T };
+}
+
+/** A canonical deep copy of `value` (see `canonicalCopy`), the one every layer uses. */
+export function jsonCopy<T>(value: T): T {
+  return canonicalCopy(value).copy;
+}

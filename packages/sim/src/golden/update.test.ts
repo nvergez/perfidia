@@ -48,6 +48,7 @@ describe("sim golden", () => {
     ).toEqual([
       ["perfidia-1@1.0.0/lockstep-6p-4d", 4, "lockstep"],
       ["perfidia-1@1.0.0/rt-virtual-6p-1d", 1, "virtual"],
+      ["perfidia-1@1.0.0/lockstep-12p-1d", 1, "lockstep"],
       ["perfidia-1@1.0.0/scenario-late", "scenario", "lockstep"],
       ["sandbox-1@1.0.0/lockstep-6p-3d", 3, "lockstep"],
       ["sandbox-1@1.0.0/rt-virtual-6p-1d", 1, "virtual"],
@@ -91,6 +92,31 @@ describe("sim golden", () => {
       for (const n of names) expect(check.out).toContain(`${n}: Level E `);
       expect(check.out).toContain(" · Level G pass");
       expect(check.out).toContain("golden check: ok (2 golden(s))");
+
+      // Append-only against an older fingerprints file: unchanged passes, a rewritten entry fails.
+      const older = join(dir, "older-fingerprints.json");
+      writeFileSync(older, readFileSync(join(dir, FINGERPRINTS_FILE), "utf8"));
+      const same = await cli("golden", "--check", "--no-resim", "--fixtures", dir, "--base", older);
+      expect(same.code).toBe(EXIT.ok);
+      const base = readFingerprints(dir);
+      const entry = base["sandbox-1@1.0.0"];
+      if (entry === undefined) throw new Error("no sandbox-1 entry");
+      writeFileSync(
+        older,
+        JSON.stringify({ ...base, "sandbox-1@1.0.0": { ...entry, artefacts: "0".repeat(64) } }),
+      );
+      const rewritten = await cli(
+        "golden",
+        "--check",
+        "--no-resim",
+        "--fixtures",
+        dir,
+        "--base",
+        older,
+      );
+      expect(rewritten.code).toBe(EXIT.divergence);
+      expect(rewritten.out).toContain("sandbox-1@1.0.0's artefacts were rewritten");
+      rmSync(older);
 
       // A tampered golden fails the check, and an update without names keeps it as it is.
       const g = listGoldens(dir).find((x) => `${x.ref}/${x.name}` === name);

@@ -42,7 +42,7 @@ import {
   normalisedHash,
   normalisedText,
   prepareBotRun,
-  readJsonl,
+  readLog,
   resimulate,
   runBots,
   runPrepared,
@@ -703,8 +703,8 @@ describe("extra tools, snapshots and sinks", () => {
       expect(jsonlText(memory.parsed())).toBe(memory.text());
       const gz = join(dir, "copy.jsonl.gz");
       writeJsonl(gz, memory.parsed());
-      expect(jsonlText(readJsonl(gz))).toBe(memory.text());
-      expect(readJsonl(path)).toEqual(memory.parsed());
+      expect(jsonlText(readLog(gz))).toBe(memory.text());
+      expect(readLog(path)).toEqual(memory.parsed());
       const snapshot = readFileSync(join(dir, "run", "snapshots", "h0012.json"), "utf8");
       expect(snapshot).toBe(memory.snapshots[0] ?? "");
       expect(readFileSync(join(dir, "run", "snapshots", "final.json"), "utf8")).toBe(

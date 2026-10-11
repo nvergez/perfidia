@@ -885,7 +885,7 @@ const CASES: Record<string, Case> = {
   },
   BriefingLastTurnSchema: {
     schema: protocol.BriefingLastTurnSchema,
-    valid: [briefing.lastTurn, { ended: "timeout", unseen: [], nextWake: null }],
+    valid: [briefing.lastTurn, { ended: "timeout", unseen: [], warnings: [], nextWake: null }],
     invalid: [bad(briefing.lastTurn, ["unseen", 0, "code"], "oops")],
   },
   BriefingCitySchema: {

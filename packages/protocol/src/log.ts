@@ -145,6 +145,11 @@ export const TurnLineSchema = z.strictObject({
   calls: Int,
   why: TurnEndSchema,
   selfAt: GameTimeSchema.nullable(),
+  /**
+   * The turn's `end_turn` asked for a self-wake outside the self-wake range: the time it asked for
+   * and the time it got (`WAKE_CLAMPED`, listed in the next briefing's `lastTurn.warnings`).
+   */
+  clamp: z.strictObject({ requested: Int, at: GameTimeSchema }).optional(),
   /** `null` when the seat has no next wake (eliminated, or the match ended). */
   next: z.strictObject({ at: GameTimeSchema, kind: WakeKindSchema }).nullable(),
   /** The agent's last short text: its public thought. */

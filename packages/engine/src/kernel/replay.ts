@@ -1,4 +1,4 @@
-import { canonicalJson } from "@perfidia/engine/core";
+import { canonicalJson, HOUR } from "@perfidia/engine/core";
 import type { AnyRuleset, DomainModule, ReadCtx } from "@perfidia/engine/contracts";
 import type {
   CkptLine,
@@ -15,7 +15,6 @@ import { resolveConfigFull, rulesHashOf } from "./config.ts";
 import { errorMessage } from "./errors.ts";
 import type { InvariantLevel } from "./invariants.ts";
 import { createMatch, loadMatch, type ApplyOutput, type Match } from "./match.ts";
-import { HOUR } from "./snapshot.ts";
 import { ENGINE_VERSION } from "./version.ts";
 
 // Level E replay verification (docs/architecture.md §10.4): re-runs the logged actions on a fresh
@@ -210,12 +209,14 @@ class Replayer {
         );
       }
       if (n !== undefined) {
-        if (n <= prevN) {
+        // The host numbers act, gw, obs and note lines without gaps (§10.2): a missing one, which
+        // changes no engine state and so no hash, would otherwise go unnoticed.
+        if (n !== prevN + 1) {
           diverge({
             kind: "order",
             t: line.t,
             n,
-            expected: `n > ${prevN}`,
+            expected: `n = ${prevN + 1}`,
             actual: `a ${line.k} line with n = ${n}`,
           });
         }
@@ -402,7 +403,18 @@ class Replayer {
     for (let next = it.next(); next.done !== true; next = it.next()) {
       const line = next.value;
       const n = lineN(line);
-      if (n !== undefined) lastN = n;
+      if (n !== undefined) {
+        if (n !== lastN + 1) {
+          diverge({
+            kind: "order",
+            t: line.k === "header" ? 0 : line.t,
+            n,
+            expected: `n = ${lastN + 1}`,
+            actual: `a ${line.k} line with n = ${n}`,
+          });
+        }
+        lastN = n;
+      }
       if (line.k === "ckpt" && line.hour === from.hour) {
         if (line.h !== from.hash) {
           diverge({

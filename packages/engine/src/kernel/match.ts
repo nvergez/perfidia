@@ -1,4 +1,9 @@
-import { CanonicalJsonError, canonicalJson, createOpaqueIdMinter } from "@perfidia/engine/core";
+import {
+  canonicalJson,
+  CanonicalJsonError,
+  createOpaqueIdMinter,
+  HOUR,
+} from "@perfidia/engine/core";
 import type {
   ActionHandler,
   AnyRuleset,
@@ -29,6 +34,7 @@ import {
   type Sha256,
   type Snapshot,
   type Violation,
+  MovementIdSchema,
 } from "@perfidia/protocol";
 import { MatchConfigError } from "./checks.ts";
 import { jsonCopy } from "./copy.ts";
@@ -44,7 +50,7 @@ import {
   runInvariants,
   type InvariantLevel,
 } from "./invariants.ts";
-import { HOUR, checkEnvelope, checkRef, copyState, makeSnapshot, stateHash } from "./snapshot.ts";
+import { checkEnvelope, checkRef, copyState, makeSnapshot, stateHash } from "./snapshot.ts";
 import { arrivalKind, buildInitialState, checkEventKinds } from "./world.ts";
 
 // The match lifecycle (docs/architecture.md §5.3): creation, loading, `advanceTo` with hourly
@@ -140,10 +146,8 @@ function copyViolation(v: Violation, what: string): Violation {
   return parsed.data;
 }
 
-const MOVEMENT_ID = /^m[0-9a-hjkmnp-tv-z]{5}$/;
-
 function isMovementId(s: string): s is MovementId {
-  return MOVEMENT_ID.test(s);
+  return MovementIdSchema.safeParse(s).success;
 }
 
 class KernelMatch implements Match {

@@ -7,4 +7,5 @@ export * from "./hash.ts";
 export * from "./int.ts";
 export * from "./opaque.ts";
 export * from "./prng.ts";
+export * from "./record.ts";
 export * from "./sorted.ts";

@@ -1,5 +1,5 @@
 import type { Ctx, ReadCtx } from "@perfidia/engine/contracts";
-import { fmtTime } from "@perfidia/engine/core";
+import { fmtTime, own } from "@perfidia/engine/core";
 import type {
   City,
   CityId,
@@ -36,10 +36,8 @@ export function fail(message: string): never {
   throw new PerfidiaError(message);
 }
 
-/** The own value of `key` in a record keyed by ids, or undefined (never a prototype key). */
-export function own<V>(rec: Readonly<Record<string, V>>, key: string): V | undefined {
-  return Object.hasOwn(rec, key) ? rec[key] : undefined;
-}
+/** `core.own`: the own value of `key` in a record keyed by ids, never a prototype member. */
+export { own };
 
 export function cityOf(state: State, id: CityId): DeepReadonly<City> {
   return own(state.cities, id) ?? fail(`city ${id} does not exist`);

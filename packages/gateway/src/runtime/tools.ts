@@ -1,10 +1,11 @@
-import { canonicalJson, utf8Encode } from "@perfidia/engine/core";
+import { canonicalJson, jsonCopy, own as lookup, utf8Encode } from "@perfidia/engine/core";
 import type { AnyRuleset, ExtraTool, ReadCtx } from "@perfidia/engine/contracts";
 import { recruitMax } from "@perfidia/engine/domain";
 import { EngineBug, EngineMisuse, type ApplyOutput, type Match } from "@perfidia/engine/kernel";
 import { describeError } from "@perfidia/gateway/clock";
 import {
   leaderboard,
+  renderEntryData,
   rulesInfo,
   timePair,
   toolError,
@@ -126,18 +127,13 @@ export class HostFailure extends Error {
 
 // Helpers ---------------------------------------------------------------------------------------
 
-function lookup<V>(rec: Readonly<Record<string, V>>, key: string): V | undefined {
-  return Object.hasOwn(rec, key) ? rec[key] : undefined;
-}
-
 /**
- * A deep copy of `value` through its canonical text (§6.3, §6.6): nothing in it aliases the engine,
- * the gateway state or an agent's objects, and a value that is not canonical JSON (a stray float,
- * a `Map`, …) throws.
+ * A deep copy of `value` through its canonical text (§6.3, §6.6), the kernel's `jsonCopy`: nothing
+ * in it aliases the engine, the gateway state or an agent's objects, and a value that is not
+ * canonical JSON (a stray float, a `Map`, …) throws.
  */
 export function copyOf<T>(value: T): T {
-  // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- parsing the canonical text of `value` rebuilds a deep copy of `value`
-  return JSON.parse(canonicalJson(value)) as T;
+  return jsonCopy(value);
 }
 
 function isJsonObject(value: unknown): value is JsonObject {
@@ -197,14 +193,30 @@ function rejection(env: ToolEnv, v: Violation): ToolError {
   }
 }
 
-/** A warning on an accepted call (always after a change of state): the bare code if its explainer throws. */
-function warning(env: ToolEnv, w: Violation): ToolWarning {
+/**
+ * A warning on an accepted call (always after a change of state), worded as the agent reads it:
+ * the bare code if its explainer throws. The host records the same text for `lastTurn.warnings`,
+ * and the rebuild regenerates it.
+ */
+export function warningText(w: Violation, env: ExplainEnv): ToolWarning {
   try {
-    return toolWarning(w, explainEnv(env));
+    return toolWarning(w, env);
   } catch (e) {
     if (isFatal(e)) throw e;
     return { code: w.code, message: w.code };
   }
+}
+
+function warning(env: ToolEnv, w: Violation): ToolWarning {
+  return warningText(w, explainEnv(env));
+}
+
+/** The `WAKE_CLAMPED` warning of an `end_turn` whose self-wake was moved into the range. */
+export function clampWarning(clamp: {
+  readonly requested: number;
+  readonly at: number;
+}): Violation {
+  return violation("WAKE_CLAMPED", { requested: clamp.requested, at: clamp.at });
 }
 
 function ok(env: ToolEnv, data: unknown, warnings: readonly Violation[] = []): ToolResult {
@@ -365,7 +377,9 @@ const readTools = {
         const key = a.open.startsWith("g") ? "message" : "report";
         return fail(env, violation("UNKNOWN_ID", { [key]: a.open }));
       }
-      data["entry"] = entry;
+      // The entry whole, rendered as every view renders events: player text stripped of control
+      // characters (§8.2), times as pairs (§7.3).
+      data["entry"] = { ...entry, data: renderEntryData(entry.data) };
     }
     return ok(env, data);
   }),
@@ -390,12 +404,7 @@ const gatewayTools = {
     const set = env.endTurn(requested);
     if (set === null) throw new Error("end_turn: the host set no self-wake");
     const warnings = set.clamped
-      ? [
-          violation("WAKE_CLAMPED", {
-            requested: Math.min(requested, Number.MAX_SAFE_INTEGER),
-            at: set.at,
-          }),
-        ]
+      ? [clampWarning({ requested: Math.min(requested, Number.MAX_SAFE_INTEGER), at: set.at })]
       : [];
     return ok(env, { wakeAt: timePair(set.at), clamped: set.clamped }, warnings);
   }),

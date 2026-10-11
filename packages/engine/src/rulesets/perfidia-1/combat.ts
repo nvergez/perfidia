@@ -1,10 +1,12 @@
 import { cas, clamp, lossPm, mulDiv } from "@perfidia/engine/core";
+import { allocateLosses } from "@perfidia/engine/std";
 import { compareIds, type DeepReadonly, type Res } from "@perfidia/protocol";
 import { type PerfidiaConfig, quad } from "./config.ts";
 
 // Combat maths of perfidia-1 §8 as pure functions over numbers: morale, the naval phase, the land
-// phase, losses (split stacks included), loot and the battle-point split. No state is read or
-// written here: the `arrive.attack` hook gathers the participants and applies the result.
+// phase, losses (split stacks allocated by `std.allocateLosses`), loot and the battle-point split.
+// No state is read or written here: the `arrive.attack` hook gathers the participants and applies
+// the result.
 
 /** The owner label of the Crown's neutral garrison in combat stacks. */
 export const NEUTRAL = "neutral";
@@ -166,30 +168,6 @@ function sum(xs: readonly number[]): number {
   return s;
 }
 
-/**
- * Splits `loss` units over groups of `sizes` by largest remainder (§8.3): group i first loses
- * `floor(loss · g_i / n)`, then the remaining losses go one per group in descending order of
- * `(loss · g_i) mod n`, ties to the earlier group. Needs 0 ≤ loss ≤ n = Σ sizes.
- */
-export function splitLosses(sizes: readonly number[], loss: number): number[] {
-  const n = sum(sizes);
-  if (!Number.isSafeInteger(loss) || loss < 0 || loss > n) {
-    throw new RangeError(`cannot lose ${loss} units out of ${n}`);
-  }
-  if (n === 0) return sizes.map(() => 0);
-  const out = sizes.map((g) => mulDiv(loss, g, n));
-  let left = loss - sum(out);
-  const order = sizes
-    .map((g, i) => ({ i, rem: (loss * g) % n }))
-    .toSorted((a, b) => b.rem - a.rem || a.i - b.i);
-  for (const { i } of order) {
-    if (left === 0) break;
-    out[i] = (out[i] ?? 0) + 1;
-    left -= 1;
-  }
-  return out;
-}
-
 /** Mutable working copy of a stack during a battle. */
 interface Working {
   readonly owner: string;
@@ -220,9 +198,9 @@ function working(stats: StatsTable, stacks: readonly CombatStack[]): Working[] {
 
 const size = (w: Working): number => sum(w.alive);
 
-/** The stack loses `cas(n, q)` units, allocated over its groups. */
+/** The stack loses `cas(n, q)` units, allocated over its groups by largest remainder (§8.3). */
 function takeCasualties(w: Working, q: number): void {
-  kill(w, splitLosses(w.alive, cas(size(w), q)));
+  kill(w, allocateLosses(w.alive, cas(size(w), q)));
 }
 
 function wipe(w: Working): void {

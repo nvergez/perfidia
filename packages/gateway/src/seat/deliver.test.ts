@@ -141,4 +141,13 @@ describe("briefing cursor", () => {
     expect(es(unreadNews(gw, P1))).toEqual([3]);
     expect(es(unreadNews(gw, P2))).toEqual([1]);
   });
+
+  test("a public event delivered last before the briefing is not news again after it", () => {
+    const { gw, wake } = fresh();
+    deliver(gw, [message(100, P2, [P1], 1), publicMessage(150, P3, 2)], wake);
+    expect(es(unreadNews(gw, P1))).toEqual([2]);
+    briefed(gw, P1, 200);
+    expect(seatOf(gw, P1).lastBriefingE).toBe(2);
+    expect(unreadNews(gw, P1)).toEqual([]);
+  });
 });

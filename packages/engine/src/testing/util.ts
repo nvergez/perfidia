@@ -1,3 +1,4 @@
+import { own } from "@perfidia/engine/core";
 import type { Ctx } from "@perfidia/engine/contracts";
 import type { UnitCounts } from "@perfidia/protocol";
 
@@ -21,10 +22,8 @@ export function sendHome(ctx: Ctx, id: string): void {
   m.seq = ctx.schedule("arrive_return", m.arriveAt, m.id);
 }
 
-/** The own value of `key` in a record keyed by an id kind, or undefined (never a prototype key). */
-export function own<V>(rec: Readonly<Record<string, V>>, key: string): V | undefined {
-  return Object.hasOwn(rec, key) ? rec[key] : undefined;
-}
+/** `core.own`: the own value of `key` in a record keyed by ids, never a prototype member. */
+export { own };
 
 /** Like `own`, but throws when the record has no such key. */
 export function must<V>(rec: Readonly<Record<string, V>>, key: string, what: string): V {

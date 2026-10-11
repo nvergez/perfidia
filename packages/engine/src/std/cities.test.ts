@@ -313,6 +313,46 @@ describe("transferCity and rehomeAll", () => {
     expect(() => rehomeAll(ctx, "c3", "c5")).toThrow(StdError);
   });
 
+  test("rehomeAll merges a re-homed group into the group the fallback already has in that city", () => {
+    const ctx = ctxAt(0);
+    withSecondCity(ctx);
+    const c2 = cityOf(ctx, "c2");
+    const c6 = cityOf(ctx, "c6");
+    c2.units.pike = 12;
+    delete c6.units.pike;
+    cityOf(ctx, "c3").stationed.push(
+      { owner: "p2", home: "c2", role: "support", units: { pike: 1 } },
+      { owner: "p2", home: "c6", role: "support", units: { pike: 2 } },
+    );
+    expect(checkStd(ctx.read())).toEqual([]);
+    transferCity(ctx, "c2", "p1");
+    rehomeAll(ctx, "c2", "c6");
+    expect(cityOf(ctx, "c3").stationed).toEqual([
+      { owner: "p2", home: "c6", role: "support", units: { pike: 3 } },
+    ]);
+    expect(cityOf(ctx, "c2").stationed).toEqual([
+      { owner: "p2", home: "c6", role: "support", units: { pike: 12 } },
+    ]);
+    expect(checkStd(ctx.read())).toEqual([]);
+    expect(danglingRefs(ctx.state)).toEqual([]);
+  });
+
+  test("a hold group that becomes support merges with the support group of the same home", () => {
+    const ctx = ctxAt(0);
+    cityOf(ctx, "c3").stationed.push(
+      { owner: "p1", home: "c1", role: "hold", units: { axe: 5 } },
+      { owner: "p1", home: "c1", role: "support", units: { pike: 4 } },
+    );
+    cityOf(ctx, "c1").units.axe = 25;
+    cityOf(ctx, "c1").units.pike = 16;
+    expect(checkStd(ctx.read())).toEqual([]);
+    transferCity(ctx, "c3", "p1");
+    expect(cityOf(ctx, "c3").stationed).toEqual([
+      { owner: "p1", home: "c1", role: "support", units: { axe: 5, pike: 4 } },
+    ]);
+    expect(checkStd(ctx.read())).toEqual([]);
+  });
+
   test("a hold group of the new owner becomes a support group; a neutral city's garrison is disbanded", () => {
     const ctx = ctxAt(0);
     cityOf(ctx, "c5").stationed.push({ owner: "p1", home: "c1", role: "hold", units: { axe: 5 } });

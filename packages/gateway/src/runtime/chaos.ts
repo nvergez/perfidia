@@ -380,8 +380,3 @@ export class ChaosAgent implements SeatAgent {
     }
   }
 }
-
-/** A chaos agent for one seat of one match. */
-export function createChaosAgent(o: ChaosOptions): SeatAgent {
-  return new ChaosAgent(o);
-}

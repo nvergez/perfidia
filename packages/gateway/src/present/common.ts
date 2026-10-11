@@ -1,6 +1,7 @@
-import { fmtDuration, fmtTime } from "@perfidia/engine/core";
+import { fmtDuration, fmtTime, own as lookup } from "@perfidia/engine/core";
 import type { ReadCtx } from "@perfidia/engine/contracts";
 import { defaultVisibility } from "@perfidia/engine/std";
+import { copyJson, copyObject, isJsonArray, setOwn, stripControl } from "@perfidia/gateway/seat";
 import {
   RESOURCE_IDS,
   type City,
@@ -84,37 +85,12 @@ function isCityKey(r: ReadCtx, id: string): id is City["id"] {
   return Object.hasOwn(r.state.cities, id);
 }
 
-/** The own value of `key` in a record keyed by ids, or `undefined` (never a prototype key). */
-export function lookup<V>(rec: Readonly<Record<string, V>>, key: string): V | undefined {
-  return Object.hasOwn(rec, key) ? rec[key] : undefined;
-}
+/** `core.own` under the presentation's name: the own value of `key`, never a prototype member. */
+export { lookup };
 
-/** `out[key] = value`, keeping a `__proto__` key as plain data instead of changing the prototype. */
-export function setOwn(out: JsonObject, key: string, value: Json): void {
-  Object.defineProperty(out, key, { value, enumerable: true, writable: true, configurable: true });
-}
-
-/** `Array.isArray` for read-only JSON (the built-in guard does not narrow read-only arrays). */
-export function isJsonArray(value: DeepReadonly<Json>): value is readonly DeepReadonly<Json>[] {
-  return Array.isArray(value);
-}
-
-/** A deep copy of a JSON value (own keys only). */
-export function copyJson(value: DeepReadonly<Json>): Json {
-  if (value === null || typeof value !== "object") return value;
-  if (isJsonArray(value)) return value.map((v) => copyJson(v));
-  return copyObject(value);
-}
-
-/** A deep copy of a JSON object (own keys only). */
-export function copyObject(value: DeepReadonly<JsonObject>): JsonObject {
-  const out: JsonObject = {};
-  for (const key of Object.keys(value)) {
-    const v = value[key];
-    if (v !== undefined) setOwn(out, key, copyJson(v));
-  }
-  return out;
-}
+// The JSON copies and the control-character stripping are the seat module's (`seat/clean.ts`), so
+// the archive summaries and every view strip player text alike.
+export { copyJson, copyObject, isJsonArray, setOwn, stripControl };
 
 /**
  * Any JSON-safe value (a validated config, a JSON Schema) as a fresh `Json`. Throws on anything
@@ -186,21 +162,6 @@ export function ownCity(r: ReadCtx, seat: PlayerId, id: string): DeepReadonly<Ci
 /** Total order on strings by UTF-16 code unit (no locale, §6.5). */
 export function byCodeUnit(a: string, b: string): number {
   return a < b ? -1 : a > b ? 1 : 0;
-}
-
-/** A control character or line break: C0, DEL, C1, and the line and paragraph separators. */
-function isControl(c: number): boolean {
-  return c < 32 || (c >= 127 && c < 160) || c === 0x2028 || c === 0x2029;
-}
-
-/**
- * Replaces control characters and line breaks with a space, so player-authored text stays one
- * typed line (§8.2). Fixed code ranges, no Unicode tables (§6.5).
- */
-export function stripControl(s: string): string {
-  let out = "";
-  for (let i = 0; i < s.length; i += 1) out += isControl(s.charCodeAt(i)) ? " " : s[i];
-  return out;
 }
 
 /**

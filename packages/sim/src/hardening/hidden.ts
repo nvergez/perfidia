@@ -1,3 +1,4 @@
+import { own } from "@perfidia/engine/core";
 import { relation, sortedIds, storageCap } from "@perfidia/engine";
 import type { ReadCtx } from "@perfidia/engine/contracts";
 import type { Match } from "@perfidia/engine/kernel";
@@ -25,11 +26,13 @@ import { editSnapshot } from "./kit.ts";
 
 // Data hidden from a seat, for the fog properties P10 and P15 (docs/architecture.md §13.2): a
 // staged world around an observer X (an ally, an attack heading to X, and for perfidia-1 a siege
-// between two other players, an open domination with a running countdown, and the Crown), and
+// between two other players, a siege by X with a return of the besieged owner heading home into
+// it, an open domination with a running countdown, and the Crown), and
 // perturbations of data X cannot see: other players' stock, units at home and queues in cities X
 // sees only publicly, movements and proposals between others, other owners' id counters, raw battle
 // points within the same public battle score, a siege garrison, the Crown's garrison and stock, an
-// ally's outgoing movement where the ruleset hides it, and the other seats' gateway state. Each
+// ally's outgoing movement where the ruleset hides it, where a return into a city X besieges comes
+// from (a stationed recall or a bounce, perfidia-1 §12), and the other seats' gateway state. Each
 // perturbation is a plain edit of the snapshot state that keeps every invariant (the testing kit's
 // builders count units in the ledger and schedule events), applied after the staging, so no id X
 // can see changes.
@@ -39,10 +42,6 @@ type Rules = DeepReadonly<CompiledRules>;
 const PERFIDIA = "perfidia-1@1.0.0";
 
 const byText = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
-
-function own<V>(rec: Readonly<Record<string, V>>, key: string): V | undefined {
-  return Object.hasOwn(rec, key) ? rec[key] : undefined;
-}
 
 function must<V>(rec: Readonly<Record<string, V>>, key: string): V {
   const v = own(rec, key);
@@ -89,6 +88,11 @@ export interface Staged {
   readonly siege: { city: CityId; owner: PlayerId; by: PlayerId } | null;
   /** A support of X's ally, made of units from the ally's home, to a city X sees only publicly. */
   readonly allyMovement: MovementId | null;
+  /**
+   * perfidia-1: a stranger's capital that X besieges, and a return of that stranger heading home
+   * into it (a coming homecoming battle, announced to X: X is its party).
+   */
+  readonly xSiege: { city: CityId; owner: PlayerId; returning: MovementId } | null;
 }
 
 /**
@@ -142,6 +146,7 @@ export function stage(
   let attackOnX: MovementId | null = null;
   let siege: Staged["siege"] = null;
   let allyMovement: MovementId | null = null;
+  let xSiege: Staged["xSiege"] = null;
   const idKey = snap.setup.idKey;
   const staged = editSnapshot(snap, (state) => {
     const players = alive(state);
@@ -204,9 +209,9 @@ export function stage(
       });
     }
     if (snap.setup.ruleset !== PERFIDIA) return;
-    // A siege of the capital of one stranger by another, outside X's alliance.
-    const [owner, by] = [strangers[1], strangers[2]];
-    if (owner !== undefined && by !== undefined) {
+    const fighter = rules.units.find((u) => u.domain === "land" && u.attack > 0)?.id ?? "x";
+    /** A siege of `owner`'s capital by `by`, held from `by`'s capital; returns the city. */
+    const besiege = (owner: PlayerId, by: PlayerId): City => {
       const city = must(state.cities, capitalOf(state, owner)?.id ?? "");
       const home = must(state.cities, capitalOf(state, by)?.id ?? "");
       const seqs = new Set([
@@ -216,7 +221,6 @@ export function stage(
       state.queue = state.queue.filter((ev) => !seqs.has(ev.seq));
       city.build = [];
       for (const q of Object.keys(city.recruit)) city.recruit[q] = [];
-      const fighter = rules.units.find((u) => u.domain === "land" && u.attack > 0)?.id ?? "x";
       addStationed(state, city.id, {
         owner: by,
         home: home.id,
@@ -226,7 +230,43 @@ export function stage(
       const endsAt = state.now + 21600;
       const seq = scheduleAt(state, rules, "siege_end", endsAt, city.id);
       pext(state).sieges[city.id] = { by, startedAt: state.now, endsAt, seq };
-      siege = { city: city.id, owner, by };
+      return city;
+    };
+    // A siege of the capital of one stranger by another, outside X's alliance.
+    const [owner, by] = [strangers[1], strangers[2]];
+    if (owner !== undefined && by !== undefined) {
+      siege = { city: besiege(owner, by).id, owner, by };
+    }
+    // A siege by X of a fourth stranger's capital, with a return of that stranger heading home
+    // into it from a city X sees only publicly: X sees it coming, never where from.
+    const held = strangers[3];
+    if (held !== undefined && held !== target && xCap !== undefined) {
+      const city = besiege(held, x);
+      const origin = Object.values(state.cities)
+        .filter(
+          (c) =>
+            c.owner !== null &&
+            !friends.has(c.owner) &&
+            c.id !== city.id &&
+            c.id !== siege?.city &&
+            c.island !== city.island,
+        )
+        .toSorted((a, b) => byText(a.id, b.id))[0];
+      if (origin !== undefined) {
+        const m = addMovement(state, rules, {
+          kind: "return",
+          owner: held,
+          from: origin.id,
+          to: city.id,
+          home: city.id,
+          party: x,
+          units: { [fighter]: 4 },
+          departAt: state.now - 100,
+          arriveAt: state.now + Math.max(rules.time.minTravel, 9000),
+          idKey,
+        });
+        xSiege = { city: city.id, owner: held, returning: m.id };
+      }
     }
     // An open domination with a countdown for a lone player.
     const d = pext(state).domination;
@@ -244,7 +284,7 @@ export function stage(
       d.countdowns.sort((a, b) => byText(a.bloc, b.bloc));
     }
   });
-  return { snap: staged, x, ally, attackOnX, siege, allyMovement };
+  return { snap: staged, x, ally, attackOnX, siege, allyMovement, xSiege };
 }
 
 /** One perturbation of data hidden from X; `pick` selects among the eligible targets. */
@@ -272,7 +312,8 @@ export type Perturbation =
   | { readonly kind: "garrison"; readonly count: number }
   | { readonly kind: "crown"; readonly amount: number; readonly count: number }
   | { readonly kind: "reschedule" }
-  | { readonly kind: "allyOutgoing"; readonly pick: number; readonly arriveIn: number };
+  | { readonly kind: "allyOutgoing"; readonly pick: number; readonly arriveIn: number }
+  | { readonly kind: "returnOrigin"; readonly pick: number };
 
 /** Edits of the other seats' gateway state. */
 export type GwEdit =
@@ -285,11 +326,13 @@ export type GwEdit =
     }
   | { readonly kind: "archive"; readonly pick: number; readonly n: number };
 
-/** Cities X sees only publicly (the Crown included), other than the staged siege's. */
+/** Cities X sees only publicly (the Crown included), other than the staged sieges'. */
 function hiddenCities(r: ReadCtx, s: Staged): DeepReadonly<City>[] {
   const vis = visibilityOf(r);
   return sortedIds(r.state.cities)
-    .filter((c) => vis.cityAccess(s.x, c) === "public" && c !== s.siege?.city)
+    .filter(
+      (c) => vis.cityAccess(s.x, c) === "public" && c !== s.siege?.city && c !== s.xSiege?.city,
+    )
     .map((c) => must(r.state.cities, c));
 }
 
@@ -326,6 +369,7 @@ export function perturb(
   const siege =
     s.siege !== null && (spared.has(s.siege.by) || spared.has(s.siege.owner)) ? null : s.siege;
   const ally = s.ally !== null && spared.has(s.ally) ? null : s.ally;
+  const xSiege = s.xSiege !== null && spared.has(s.xSiege.owner) ? null : s.xSiege;
   let allyMove = s.allyMovement;
   const scale = rules.resourceScale;
   let applied = 0;
@@ -371,7 +415,14 @@ export function perturb(
           break;
         }
         case "support": {
-          const mover = at(strangers, p.pick);
+          // Nothing leaves a besieged city (perfidia-1 §9.2): its owner sends no support from it.
+          const besieged = (q: PlayerId): boolean =>
+            s.snap.setup.ruleset === PERFIDIA &&
+            Object.hasOwn(pext(state).sieges, capitalOf(state, q)?.id ?? "");
+          const mover = at(
+            strangers.filter((q) => !besieged(q)),
+            p.pick,
+          );
           const target = at(
             hidden.filter((x) => x.owner !== null && x.owner !== mover),
             p.pick + 1,
@@ -524,6 +575,22 @@ export function perturb(
             arriveAt: state.now + p.arriveIn,
             idKey,
           });
+          applied += 1;
+          break;
+        }
+        case "returnOrigin": {
+          // Where the return into the city X besieges comes from: a city where its owner had troops
+          // stationed (a stationed recall, a dismissal) or the target of a movement that bounced.
+          // Its id, owner, party and times stay: perfidia-1 §12 shows the besieger only those.
+          if (xSiege === null) break;
+          const m = must(state.movements, xSiege.returning);
+          const from = at(
+            hidden.filter((c) => c.id !== m.from && c.island !== m.toIsland),
+            p.pick,
+          );
+          if (from === undefined) break;
+          m.from = from.id;
+          m.fromIsland = from.island;
           applied += 1;
           break;
         }

@@ -19,11 +19,18 @@ export const MESSAGE_CUT = 300;
 
 /**
  * Whether a data key holds a game time, which agents see as a pair: `at`, `t`, `until`, `since`,
- * and every camelCase key ending in `At` (`arriveAt`, `expiresAt`, `endsAt`, …).
+ * `start` and `end` (queue items in spy reports), and every camelCase key ending in `At`
+ * (`arriveAt`, `expiresAt`, `endsAt`, …).
  */
 export function isTimeKey(key: string): boolean {
   return (
-    key === "at" || key === "t" || key === "until" || key === "since" || /^[a-z]\w*At$/.test(key)
+    key === "at" ||
+    key === "t" ||
+    key === "until" ||
+    key === "since" ||
+    key === "start" ||
+    key === "end" ||
+    /^[a-z]\w*At$/.test(key)
   );
 }
 
@@ -43,13 +50,23 @@ function renderValue(key: string | null, value: DeepReadonly<Json>): Json {
 }
 
 /**
+ * An archived event's data whole, as `read_notes {open}` returns it: strings stripped of control
+ * characters and times as pairs, like every rendering, but nothing cut (`open` is how an agent
+ * reads a long message whole). A fresh object.
+ */
+export function renderEntryData(data: DeepReadonly<JsonObject>): JsonObject {
+  const rendered = renderValue(null, data);
+  return rendered !== null && typeof rendered === "object" && !Array.isArray(rendered)
+    ? rendered
+    : {};
+}
+
+/**
  * An event's data as agents see it: strings stripped of control characters, times as pairs, and a
  * `text` field longer than `MESSAGE_CUT` cut with `cut: true`. A fresh object.
  */
 export function renderData(data: DeepReadonly<JsonObject>): JsonObject {
-  const rendered = renderValue(null, data);
-  const out: JsonObject =
-    rendered !== null && typeof rendered === "object" && !Array.isArray(rendered) ? rendered : {};
+  const out = renderEntryData(data);
   const text = out["text"];
   if (typeof text === "string" && text.length > MESSAGE_CUT) {
     out["text"] = cutText(text, MESSAGE_CUT);

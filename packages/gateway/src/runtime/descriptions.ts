@@ -47,7 +47,7 @@ export const TOOL_DESCRIPTIONS: Readonly<Record<ToolName, string>> = Object.free
   write_note:
     "Write your notebook, which every briefing shows verbatim: mode append adds a line, mode replace rewrites it. At most rules.gateway.notesMaxChars characters.",
   read_notes:
-    "Without arguments: your notebook. search looks through your archive (scope mine), the public feed (public) or both (all, the default), filtered by case-insensitive text, event kinds, a counterpart player and a time range, newest first, at most 20 hits. open returns one full message or report by its id.",
+    "Without arguments: your notebook. search looks through your archive (scope mine), the public feed (public) or both (all, the default), filtered by case-insensitive text, event kinds, a counterpart player and a time range, newest first, at most 20 hits; when more is true, repeat the search with before set to the last hit's e to read the next page. open returns one full message or report by its id.",
   end_turn:
-    "End your turn. nextWakeIn (seconds ahead) or wakeAt (a game time), at most one, sets your self-wake: it is clamped into rules.gateway.selfWake (warning WAKE_CLAMPED) and stays pending until it fires or a later end_turn replaces it. end_turn {} keeps any pending self-wake. Calls after end_turn in the same round trip are not run.",
+    "End your turn. nextWakeIn (seconds ahead) or wakeAt (a game time), at most one, sets your self-wake: it is clamped into rules.gateway.selfWake and stays pending until it fires or a later end_turn replaces it. end_turn {} keeps any pending self-wake. Calls after end_turn in the same round trip are not run, and that round trip's results are not returned: your next briefing's lastTurn lists its failures and warnings (WAKE_CLAMPED when the wake was clamped).",
 });

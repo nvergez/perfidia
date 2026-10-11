@@ -142,8 +142,6 @@ export const FIXTURE_BUILDINGS = [
   "vault",
   "drill",
 ] as const;
-/** Units in canonical order: a soldier, a settler and a carrier. */
-export const FIXTURE_UNITS = ["soldier", "pioneer", "ship"] as const;
 const MAX_LEVEL = 3;
 
 function res(n: number): Res {

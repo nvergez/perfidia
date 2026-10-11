@@ -394,6 +394,39 @@ describe("P7: replay of recorded logs", () => {
     for (const k of expected) expect(kinds.has(k)).toBe(true);
     expect(verify(rec.lines).ok).toBe(true);
   });
+
+  test("a deleted gw, obs or note line, or a rejected act line, is an order divergence at the next n", () => {
+    const rec = record(1, 3, [
+      { k: "line", what: 2, seat: 0 },
+      { k: "line", what: 3, seat: 1 },
+      { k: "line", what: 1, seat: 2 },
+      { k: "line", what: 4, seat: 0 },
+      { k: "line", what: 5, seat: 0 },
+      { k: "line", what: 6, seat: 0 },
+      { k: "wait", dt: 3600 },
+      { k: "line", what: 7, seat: 1 },
+      { k: "act", seat: 1, what: 11, x: 0 },
+      { k: "line", what: 4, seat: 2 },
+    ]);
+    const picks: [string, (l: LogLine) => boolean][] = [
+      ["gw", (l) => l.k === "gw"],
+      ["obs", (l) => l.k === "obs"],
+      ["note", (l) => l.k === "note"],
+      ["rejected act", (l) => l.k === "act" && !l.r.ok],
+    ];
+    for (const [what, pick] of picks) {
+      const i = rec.lines.findIndex(pick);
+      const line = rec.lines[i];
+      if (line === undefined || !("n" in line)) throw new Error(`the record has no ${what} line`);
+      const next = rec.lines.slice(i + 1).find((l) => "n" in l);
+      if (next === undefined || !("n" in next)) throw new Error(`no numbered line after ${what}`);
+      const d = verify(rec.lines.toSpliced(i, 1)).divergence;
+      expect([what, d]).toMatchObject([
+        what,
+        { kind: "order", n: next.n, expected: `n = ${line.n}` },
+      ]);
+    }
+  });
 });
 
 function sample(): LogRecorder {

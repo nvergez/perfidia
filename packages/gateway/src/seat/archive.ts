@@ -8,7 +8,8 @@ import {
   type PlayerId,
 } from "@perfidia/protocol";
 import { seatOf } from "./state.ts";
-import { copyEvent, cut, foldAscii, stripControl } from "./text.ts";
+import { stripControl } from "./clean.ts";
+import { copyEvent, cut, foldAscii } from "./text.ts";
 import type { ArchiveQuery, Delivered, GatewayState } from "./types.ts";
 
 // `read_notes` over the seat's archive and the public feed (§8.4): search with scopes and filters,
@@ -101,12 +102,13 @@ function pool(gw: GatewayState, seat: PlayerId, scope: "mine" | "public" | "all"
 }
 
 /**
- * The number each entry the seat can read (its archive and the public feed) shows as `e`: its
- * position among those entries in delivery order, from 1. The gateway's own delivery number counts
- * every delivered event, the private events of other seats included, so showing it would let a
- * seat count hidden activity between two of its entries (P15, found by the T16 hardening).
+ * The number each entry the seat can read (its archive and the public feed) shows as `e`, by
+ * delivery number: its position among those entries in delivery order, from 1. The gateway's own
+ * delivery number counts every delivered event, the private events of other seats included, so
+ * showing it would let a seat count hidden activity between two of its entries (P15, found by the
+ * T16 hardening).
  */
-function readableNumbers(gw: GatewayState, seat: PlayerId): Map<number, number> {
+export function readableNumbers(gw: GatewayState, seat: PlayerId): Map<number, number> {
   const numbers = new Map<number, number>();
   for (const [i, d] of pool(gw, seat, "all").entries()) numbers.set(d.e, i + 1);
   return numbers;
@@ -142,8 +144,10 @@ export interface ArchiveSearch {
  * event both public and addressed to the seat appears once). `text` is an ASCII case-insensitive
  * substring of the event's `text` field or of its summary; `kinds` filters by type (an empty list
  * filters nothing); `with` keeps events that visibly involve that player (`involves`); `since`
- * and `until` bound `t`, inclusive. Returns the hits and whether more matched (an addition to
- * §8.4, for the `more` of the `read_notes` result; `searchArchive` keeps §8.4's signature).
+ * and `until` bound `t`, inclusive; `before` keeps the entries numbered below it (the cursor of a
+ * next page, an addition to §8.4: one second can hold more than a page of entries, which time
+ * bounds cannot split). Returns the hits and whether more matched (an addition to §8.4, for the
+ * `more` of the `read_notes` result; `searchArchive` keeps §8.4's signature).
  */
 export function searchArchivePage(
   gw: GatewayState,
@@ -153,7 +157,11 @@ export function searchArchivePage(
   const needle = q.text === undefined ? null : foldAscii(q.text);
   const kinds = q.kinds !== undefined && q.kinds.length > 0 ? q.kinds : null;
   const limit = Math.min(READ_NOTES_MAX_HITS, Math.max(1, q.limit ?? READ_NOTES_MAX_HITS));
-  const matches = pool(gw, seat, q.scope ?? "all").filter(({ event: ev }) => {
+  const numbers = readableNumbers(gw, seat);
+  const before = q.before;
+  const matches = pool(gw, seat, q.scope ?? "all").filter((d) => {
+    const ev = d.event;
+    if (before !== undefined && numberOf(numbers, d) >= before) return false;
     if (q.since !== undefined && ev.t < q.since) return false;
     if (q.until !== undefined && ev.t > q.until) return false;
     if (kinds !== null && !kinds.includes(ev.type)) return false;
@@ -166,7 +174,6 @@ export function searchArchivePage(
     return true;
   });
   matches.sort((a, b) => b.event.t - a.event.t || b.e - a.e);
-  const numbers = readableNumbers(gw, seat);
   return {
     hits: matches.slice(0, limit).map((d) => toHit(d, numbers)),
     more: matches.length > limit,

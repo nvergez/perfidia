@@ -58,6 +58,7 @@ describe("createGatewayState", () => {
       turns: 0,
       lastTurn: null,
       turnFailures: [],
+      turnWarnings: [],
     });
     expect(gw.feed).toEqual([]);
     expect(gw.onceKeys).toEqual({});

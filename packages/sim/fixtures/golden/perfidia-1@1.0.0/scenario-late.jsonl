@@ -78,7 +78,7 @@
 {"a":{"from":"c8","to":"c4","type":"attack","units":{"raider":5}},"i":0,"k":"act","n":12,"r":{"ok":true},"rt":0,"seat":"p4","t":4200,"tool":"attack","turn":3}
 {"e":{"data":{"arriveAt":7800,"by":"p4","departAt":4200,"foe":"p1","from":"c8","homecoming":false,"movement":"mahy02","to":"c4"},"public":false,"t":4200,"to":[{"as":"party","p":"p1"}],"type":"incoming_attack"},"k":"ev","t":4200}
 {"a":{"at":"c3","home":"c4","type":"recall_stationed","units":{"raider":5}},"i":0,"k":"act","n":13,"r":{"ok":true},"rt":0,"seat":"p4","t":4200,"tool":"recall_troops","turn":3}
-{"e":{"data":{"arriveAt":7812,"by":"p4","departAt":4200,"foe":"p1","from":"c3","homecoming":true,"movement":"m6g1mj","to":"c4"},"public":false,"t":4200,"to":[{"as":"party","p":"p1"}],"type":"incoming_attack"},"k":"ev","t":4200}
+{"e":{"data":{"arriveAt":7812,"by":"p4","departAt":4200,"foe":"p1","from":null,"homecoming":true,"movement":"m6g1mj","to":"c4"},"public":false,"t":4200,"to":[{"as":"party","p":"p1"}],"type":"incoming_attack"},"k":"ev","t":4200}
 {"charge":null,"day":0,"k":"wake","reasons":["incoming_attack mahy02","incoming_attack m6g1mj","battle_report ren46h"],"seat":"p1","t":4200,"turn":5,"urgent":true,"used":{"own":2,"social":1}}
 {"b":1,"k":"batch","order":["p1","p4"],"t":4200}
 {"calls":1,"k":"turn","next":{"at":47400,"kind":"safety"},"rounds":1,"seat":"p1","selfAt":null,"t":4200,"turn":5,"why":"end_turn"}
@@ -93,12 +93,12 @@
 {"charge":"own","day":0,"k":"wake","reasons":["battle_report r0rtad"],"seat":"p1","t":4810,"turn":6,"urgent":false,"used":{"own":3,"social":1}}
 {"b":0,"k":"batch","order":["p1"],"t":4810}
 {"calls":1,"k":"turn","next":{"at":48010,"kind":"safety"},"rounds":1,"seat":"p1","selfAt":null,"t":4810,"turn":6,"why":"end_turn"}
-{"h":"2d736beaaacb519f","hour":2,"k":"ckpt","t":7200}
+{"h":"11cda81536bab932","hour":2,"k":"ckpt","t":7200}
 {"e":{"data":{"attacker":"p4","city":"c4","defender":"p1","kind":"relief","lost":{"raider":5},"phase":"land","report":"rej3h4","winner":"defender"},"public":false,"t":7800,"to":[{"as":"self","p":"p4"}],"type":"battle_report"},"k":"ev","t":7800}
 {"e":{"data":{"attacker":"p4","city":"c4","defender":"p1","island":"i17","kind":"relief","land":{"A":90,"D":550,"baseDefense":70,"q":26,"sumDefense":480,"wall":0,"wallPm":1000,"winner":"defender"},"loot":{"gold":0,"stone":0,"wood":0},"moralePm":900,"naval":null,"points":[{"player":"p1","points":5},{"player":"p4","points":2}],"report":"r572k4","siege":"holds","stacks":[{"before":5,"lost":5,"owner":"p4","side":"attacker","survived":0,"unit":"raider"},{"before":96,"lost":2,"owner":"p1","side":"defender","survived":94,"unit":"raider"},{"before":3,"lost":0,"owner":"p1","side":"defender","survived":3,"unit":"settler"},{"before":7,"lost":0,"owner":"p1","side":"defender","survived":7,"unit":"transport"}],"wall":{"after":0,"before":0},"winner":"defender"},"public":false,"t":7800,"to":[{"as":"party","p":"p1"}],"type":"battle_report"},"k":"ev","t":7800}
 {"e":{"data":{"attacker":"p4","city":"c4","defender":"p1","kind":"relief","winner":"defender"},"public":true,"t":7800,"to":[],"type":"battle"},"k":"ev","t":7800}
 {"e":{"data":{"a":"p3","b":"p5"},"public":true,"t":7800,"to":[{"as":"self","p":"p3"},{"as":"target","p":"p5"}],"type":"pact_expired"},"k":"ev","t":7800}
-{"e":{"data":{"attacker":"p4","city":"c4","defender":"p1","kind":"homecoming","lost":{"raider":5},"phase":"land","report":"r6w8w8","winner":"defender"},"public":false,"t":7812,"to":[{"as":"self","p":"p4"}],"type":"battle_report"},"k":"ev","t":7812}
+{"e":{"data":{"attacker":"p4","city":"c4","defender":"p1","kind":"homecoming","lost":{"raider":5},"phase":"land","report":"r6w8w8","winner":"defender"},"public":false,"t":7812,"to":[{"as":"target","p":"p4"}],"type":"battle_report"},"k":"ev","t":7812}
 {"e":{"data":{"attacker":"p4","city":"c4","defender":"p1","island":"i17","kind":"homecoming","land":{"A":90,"D":540,"baseDefense":70,"q":27,"sumDefense":470,"wall":0,"wallPm":1000,"winner":"defender"},"loot":{"gold":0,"stone":0,"wood":0},"moralePm":900,"naval":null,"points":[{"player":"p1","points":5},{"player":"p4","points":3}],"report":"r3dqtd","siege":"holds","stacks":[{"before":5,"lost":5,"owner":"p4","side":"attacker","survived":0,"unit":"raider"},{"before":94,"lost":3,"owner":"p1","side":"defender","survived":91,"unit":"raider"},{"before":3,"lost":0,"owner":"p1","side":"defender","survived":3,"unit":"settler"},{"before":7,"lost":0,"owner":"p1","side":"defender","survived":7,"unit":"transport"}],"wall":{"after":0,"before":0},"winner":"defender"},"public":false,"t":7812,"to":[{"as":"party","p":"p1"}],"type":"battle_report"},"k":"ev","t":7812}
 {"e":{"data":{"attacker":"p4","city":"c4","defender":"p1","kind":"homecoming","winner":"defender"},"public":true,"t":7812,"to":[],"type":"battle"},"k":"ev","t":7812}
 {"charge":"social","day":0,"k":"wake","reasons":["battle_report r572k4","battle_report r3dqtd"],"seat":"p1","t":8400,"turn":7,"urgent":false,"used":{"own":3,"social":2}}
@@ -106,7 +106,7 @@
 {"b":0,"k":"batch","order":["p1","p4"],"t":8400}
 {"calls":1,"k":"turn","next":{"at":51600,"kind":"safety"},"rounds":1,"seat":"p1","selfAt":null,"t":8400,"turn":7,"why":"end_turn"}
 {"calls":1,"k":"turn","next":{"at":51600,"kind":"safety"},"rounds":1,"seat":"p4","selfAt":null,"t":8400,"turn":4,"why":"end_turn"}
-{"h":"37562b8d8d9a6abf","hour":3,"k":"ckpt","t":10800}
+{"h":"80f9b232470a789e","hour":3,"k":"ckpt","t":10800}
 {"e":{"data":{"city":"c4","from":"p4","to":"p1"},"public":true,"t":11400,"to":[{"as":"self","p":"p1"},{"as":"target","p":"p4"}],"type":"city_conquered"},"k":"ev","t":11400}
 {"e":{"data":{"cities":3,"endsAt":15000,"key":"a1","members":["p1","p2"],"threshold":3},"public":true,"t":11400,"to":[],"type":"domination_started"},"k":"ev","t":11400}
 {"charge":null,"day":0,"k":"wake","reasons":["domination_started a1"],"seat":"p1","t":11400,"turn":8,"urgent":true,"used":{"own":3,"social":2}}
@@ -144,6 +144,6 @@
 {"charge":null,"day":0,"k":"wake","reasons":["domination_started p1"],"seat":"p2","t":12000,"turn":6,"urgent":true,"used":{"own":1,"social":2}}
 {"b":2,"k":"batch","order":["p2"],"t":12000}
 {"calls":1,"k":"turn","next":{"at":55200,"kind":"safety"},"rounds":1,"seat":"p2","selfAt":null,"t":12000,"turn":6,"why":"end_turn"}
-{"h":"16dd6a3b8dca4b88","hour":4,"k":"ckpt","t":14400}
+{"h":"242119284de47418","hour":4,"k":"ckpt","t":14400}
 {"e":{"data":{"reason":"domination","winners":["p1"]},"public":true,"t":15600,"to":[],"type":"match_ended"},"k":"ev","t":15600}
-{"h":"9fc3d52c00047efc","k":"end","result":{"endedAt":15600,"reason":"domination","standings":[{"alive":true,"cities":3,"parts":{"battleScore":17,"cityPoints":315},"player":"p1","rank":1,"score":332},{"alive":true,"cities":1,"parts":{"battleScore":0,"cityPoints":105},"player":"p4","rank":2,"score":105},{"alive":true,"cities":1,"parts":{"battleScore":0,"cityPoints":105},"player":"p2","rank":3,"score":105},{"alive":true,"cities":1,"parts":{"battleScore":0,"cityPoints":105},"player":"p5","rank":4,"score":105},{"alive":true,"cities":1,"parts":{"battleScore":0,"cityPoints":105},"player":"p3","rank":5,"score":105},{"alive":false,"cities":0,"parts":{"battleScore":0,"cityPoints":105},"player":"p6","rank":6,"score":105}],"winners":["p1"]},"t":15600}
+{"h":"add278fb5f7e1e85","k":"end","result":{"endedAt":15600,"reason":"domination","standings":[{"alive":true,"cities":3,"parts":{"battleScore":17,"cityPoints":315},"player":"p1","rank":1,"score":332},{"alive":true,"cities":1,"parts":{"battleScore":0,"cityPoints":105},"player":"p4","rank":2,"score":105},{"alive":true,"cities":1,"parts":{"battleScore":0,"cityPoints":105},"player":"p2","rank":3,"score":105},{"alive":true,"cities":1,"parts":{"battleScore":0,"cityPoints":105},"player":"p5","rank":4,"score":105},{"alive":true,"cities":1,"parts":{"battleScore":0,"cityPoints":105},"player":"p3","rank":5,"score":105},{"alive":false,"cities":0,"parts":{"battleScore":0,"cityPoints":105},"player":"p6","rank":6,"score":105}],"winners":["p1"]},"t":15600}

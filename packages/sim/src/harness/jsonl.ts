@@ -1,70 +1,25 @@
-import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { canonicalJson } from "@perfidia/engine/core";
 import type { LogSink } from "@perfidia/gateway";
-import { LogLineSchema, type LogLine, type Snapshot } from "@perfidia/protocol";
+import type { LogLine, Snapshot } from "@perfidia/protocol";
+import { isGzip, parseLogLine } from "./reader.ts";
 
-// The canonical JSONL reader and writer of the harness (docs/architecture.md §10.1, §12.1): one
-// canonical JSON object per line, `\n` after each, gzip for `.jsonl.gz`. A file written here is
-// byte-identical to a `MemorySink`'s `text()` for the same lines.
-
-/** Whether `path` names a gzip-compressed log. */
-export function isGzip(path: string): boolean {
-  return path.endsWith(".gz");
-}
+// The canonical JSONL writer of the harness (docs/architecture.md §10.1, §12.1): one canonical
+// JSON object per line, `\n` after each, gzip for `.jsonl.gz`. A file written here is
+// byte-identical to a `MemorySink`'s `text()` for the same lines. Files are read back with
+// `reader.ts` (`readLog`).
 
 /** The JSONL text of `lines`: each line's canonical JSON (a string is taken as already canonical), then `\n`. */
 export function jsonlText(lines: readonly (LogLine | string)[]): string {
   return lines.map((l) => `${typeof l === "string" ? l : canonicalJson(l)}\n`).join("");
 }
 
-/** A line of a JSONL text that is not a valid log line, with its 1-based line number. */
-export class JsonlError extends Error {
-  readonly line: number;
-
-  constructor(line: number, message: string) {
-    super(`line ${line}: ${message}`);
-    this.name = "JsonlError";
-    this.line = line;
-  }
-}
-
 /** Parses a JSONL text into validated log lines; throws `JsonlError` naming the first bad line. */
 export function parseJsonl(text: string): LogLine[] {
   const rows = text.split("\n");
   if (rows.at(-1) === "") rows.pop();
-  return rows.map((row, i) => {
-    let value: unknown;
-    try {
-      value = JSON.parse(row);
-    } catch (error) {
-      throw new JsonlError(
-        i + 1,
-        `not JSON (${error instanceof Error ? error.message : String(error)})`,
-      );
-    }
-    const parsed = LogLineSchema.safeParse(value);
-    if (!parsed.success) {
-      const issue = parsed.error.issues[0];
-      const path = issue?.path.map(String).join(".") ?? "";
-      throw new JsonlError(
-        i + 1,
-        `${path === "" ? "" : `${path}: `}${issue?.message ?? "invalid line"}`,
-      );
-    }
-    return parsed.data;
-  });
-}
-
-/** The raw text of a log file (decompressed for `.jsonl.gz`). */
-export function readJsonlText(path: string): string {
-  const bytes = readFileSync(path);
-  return isGzip(path) ? new TextDecoder().decode(Bun.gunzipSync(bytes)) : bytes.toString("utf8");
-}
-
-/** Reads and validates a log file. */
-export function readJsonl(path: string): LogLine[] {
-  return parseJsonl(readJsonlText(path));
+  return rows.map((row, i) => parseLogLine(row, i + 1));
 }
 
 /** Writes `lines` as a whole file (gzip for `.jsonl.gz`), creating its directory. */

@@ -6,7 +6,7 @@ import { canonicalJson, idKeyFromSeed } from "@perfidia/engine/core";
 import type { AnyRuleset, ReadCtx, Ruleset } from "@perfidia/engine/contracts";
 import { createMatch, type Match } from "@perfidia/engine/kernel";
 import * as p1 from "@perfidia/engine/rulesets/perfidia-1";
-import { relation } from "@perfidia/engine/std";
+import { defaultVisibility, relation } from "@perfidia/engine/std";
 import {
   addAlliance,
   addBuildItem,
@@ -90,7 +90,9 @@ export function wakeRecord(reasons: string[], urgent = false): WakeRecord {
 
 /**
  * The fixture ruleset with allies granted full access to each other's movements (as `sandbox-1`
- * does), the other visibility hooks unchanged.
+ * does), the other visibility hooks unchanged. Every other movement keeps the access the gateway
+ * gives it by default, `std.defaultVisibility` (the fixture ruleset declares no `movementAccess`),
+ * so a seat still sees the attacks on its own cities.
  */
 export const grantingRuleset: Ruleset<FixtureConfig, FixtureExt> = {
   ...fixtureRuleset,
@@ -103,7 +105,7 @@ export const grantingRuleset: Ruleset<FixtureConfig, FixtureExt> = {
         if (mv === undefined) return null;
         if (mv.owner === viewer) return "own";
         if (relation(r, viewer, mv.owner) === "ally") return "full";
-        return fixtureRuleset.hooks.visibility?.movementAccess?.(r, viewer, m) ?? null;
+        return defaultVisibility.movementAccess(r, viewer, m);
       },
     },
   },

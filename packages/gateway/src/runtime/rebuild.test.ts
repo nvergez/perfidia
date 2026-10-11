@@ -359,16 +359,22 @@ describe("a damaged log rebuilds to another state, or reports where the fold sto
     expect(next.drift).toMatchObject({ index: c, k: "turn", seat: "p1" });
   }, 30000);
 
-  test("a missing note or gw line changes the notes or lastTurn; Level E alone does not see it", async () => {
+  test("a missing note or gw line, which changes no engine hash, is an order divergence at its n", async () => {
     const live = await run(SANDBOX, "lockstep");
     const note = live.lines.findIndex((l) => l.k === "note" && l.seat === "p1");
     // p3's last INTERNAL: a failure of its last turn, which its lastTurn lists.
     const gw = live.lines.findLastIndex((l) => l.k === "gw" && l.r.code === "INTERNAL");
     for (const i of [note, gw]) {
       expect(i).toBeGreaterThan(0);
+      const missing = live.lines[i];
+      if (missing?.k !== "note" && missing?.k !== "gw") throw new Error("not a numbered line");
       const rebuilt = rebuildGatewayState(live.lines.toSpliced(i, 1), resolveOf(SANDBOX));
-      expect(rebuilt.report.ok).toBe(true);
-      expect(text(rebuilt.gw)).not.toBe(text(live.gw));
+      expect(rebuilt.ok).toBe(false);
+      expect(rebuilt.report.divergence).toMatchObject({
+        kind: "order",
+        n: missing.n + 1,
+        expected: `n = ${missing.n}`,
+      });
     }
   }, 30000);
 

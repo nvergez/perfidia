@@ -123,10 +123,13 @@ export const STANDARD_EVENT_DATA = {
   }),
   /** Emitted only by a completion that empties its queue (§5.4). */
   queue_empty: z.looseObject({ city: CityIdSchema, queue: QueueIdSchema }),
-  /** No composition. `foe` is the recorded foe (`null`: neutral). */
+  /**
+   * No composition. `foe` is the recorded foe (`null`: neutral). `from` is `null` on a homecoming
+   * notice: the besieger is not told where a return comes from (perfidia-1 §9.3, §12).
+   */
   incoming_attack: z.looseObject({
     movement: MovementIdSchema,
-    from: CityIdSchema,
+    from: CityIdSchema.nullable(),
     by: PlayerIdSchema,
     foe: PlayerOrNull,
     to: CityIdSchema,

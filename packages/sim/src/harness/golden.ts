@@ -10,16 +10,18 @@ import {
   type LogLine,
   type Sha256,
 } from "@perfidia/protocol";
-import { rulesetFingerprint } from "./fingerprint.ts";
-import { jsonlText, readJsonl, writeJsonl } from "./jsonl.ts";
+import { ViewHasher, rulesetFingerprint } from "./fingerprint.ts";
+import { jsonlText, writeJsonl } from "./jsonl.ts";
+import { readLog } from "./reader.ts";
 import { resimProblem, resimulate } from "./match.ts";
 import { normalisedText } from "./normalise.ts";
 
 // The freeze guard's files (docs/architecture.md §13.5, §13.6): golden logs under
 // `<fixtures>/golden/<ref>/<name>.jsonl` (gzip as `.jsonl.gz` above 1 MB) and `fingerprints.json`,
-// mapping each ref to its artefact fingerprint and the final hash of each of its goldens. The check
-// replays every golden at Level E (and Level G when its controllers are bots of this build) and
-// recomputes the fingerprints; the writers only ever add files and entries. Both take the fixtures
+// mapping each ref to its artefact fingerprint, and for each of its goldens the final hash and the
+// fingerprint of what the ruleset's hooks showed every seat at every checkpoint (`views`). The
+// check replays every golden at Level E (and Level G when its controllers are bots of this build)
+// and recomputes the fingerprints; the writers only ever add files and entries. Both take the fixtures
 // directory and the ruleset list as arguments, so a test can run them on a tampered copy or a
 // modified descriptor.
 
@@ -39,6 +41,8 @@ export const FingerprintEntrySchema = z.strictObject({
   artefacts: Sha256Schema,
   /** Golden name → final hash at Level E. */
   goldens: z.record(z.string(), Hash64Schema),
+  /** Golden name → fingerprint of the hooks' views at its checkpoints (`ViewHasher`). */
+  views: z.record(z.string(), Sha256Schema),
 });
 export type FingerprintEntry = z.infer<typeof FingerprintEntrySchema>;
 export const FingerprintsSchema = z.record(z.string(), FingerprintEntrySchema);
@@ -119,16 +123,27 @@ export function addGolden(
   return path;
 }
 
-/** Final hash of a golden at Level E, or the divergence that stopped it. */
+/**
+ * Final hash of a golden at Level E and the fingerprint of the hooks' views at its checkpoints, or
+ * the divergence that stopped it.
+ */
 function levelE(
   lines: readonly LogLine[],
   rulesets: readonly AnyRuleset[],
-): { readonly hash: Hash64 | null; readonly problem: string | null } {
-  const report = verifyLog(lines, (ref) => rulesets.find((rs) => rs.ref === ref));
-  if (report.ok) return { hash: report.finalHash, problem: null };
+): {
+  readonly hash: Hash64 | null;
+  readonly views: Sha256 | null;
+  readonly problem: string | null;
+} {
+  const hasher = new ViewHasher();
+  const report = verifyLog(lines, (ref) => rulesets.find((rs) => rs.ref === ref), {
+    onCheckpoint: (_hour, r) => hasher.add(r),
+  });
+  if (report.ok) return { hash: report.finalHash, views: hasher.digest(), problem: null };
   const d = report.divergence;
   return {
     hash: null,
+    views: null,
     problem:
       d === undefined
         ? "Level E failed"
@@ -148,16 +163,17 @@ export function addFingerprints(fixturesDir: string, rulesets: readonly AnyRules
   for (const rs of rulesets) {
     let entry = fp[rs.ref];
     if (entry === undefined) {
-      entry = { artefacts: rulesetFingerprint(rs), goldens: {} };
+      entry = { artefacts: rulesetFingerprint(rs), goldens: {}, views: {} };
       fp[rs.ref] = entry;
       added.push(rs.ref);
     }
     for (const g of goldens.filter((x) => x.ref === rs.ref)) {
       if (Object.hasOwn(entry.goldens, g.name)) continue;
-      const { hash, problem } = levelE(readJsonl(g.path), rulesets);
-      if (hash === null)
+      const { hash, views, problem } = levelE(readLog(g.path), rulesets);
+      if (hash === null || views === null)
         throw new Error(`golden ${g.ref}/${g.name} does not replay: ${problem ?? ""}`);
       entry.goldens[g.name] = hash;
+      entry.views[g.name] = views;
       added.push(`${g.ref}/${g.name}`);
     }
   }
@@ -214,7 +230,7 @@ export async function checkGoldens(
     const where = `golden ${g.ref}/${g.name}`;
     let lines: LogLine[];
     try {
-      lines = readJsonl(g.path);
+      lines = readLog(g.path);
     } catch (error) {
       problems.push(`${where}: ${errorText(error)}`);
       checks.push({ ref: g.ref, name: g.name, finalHash: null, levelG: "skipped" });
@@ -230,6 +246,16 @@ export async function checkGoldens(
     if (recorded === undefined) problems.push(`${where}: no final hash in ${FINGERPRINTS_FILE}`);
     else if (e.hash !== null && e.hash !== recorded) {
       problems.push(`${where}: final hash ${e.hash}, ${FINGERPRINTS_FILE} records ${recorded}`);
+    }
+    const views = fp[g.ref]?.views[g.name];
+    if (views === undefined) {
+      if (recorded !== undefined) {
+        problems.push(`${where}: no views fingerprint in ${FINGERPRINTS_FILE}`);
+      }
+    } else if (e.views !== null && e.views !== views) {
+      problems.push(
+        `${where}: what the ruleset's hooks show at its checkpoints changed (${views} recorded, ${e.views} now): a published version must not change (§3.5)`,
+      );
     }
     // Level G re-runs a golden that replays (a failed Level E is already a problem) of a ruleset of
     // `rulesets`; a re-simulation that cannot run is a problem of this golden, not of the check.
@@ -276,4 +302,53 @@ export async function checkGoldens(
     if (fp[rs.ref] === undefined) problems.push(`${rs.ref} has no entry in ${FINGERPRINTS_FILE}`);
   }
   return { ok: problems.length === 0, problems, goldens: checks, fingerprints };
+}
+
+/** A string-valued record of an older fingerprints file, read leniently (any older format). */
+function stringRecord(value: unknown): Record<string, string> {
+  const out: Record<string, string> = {};
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return out;
+  for (const [k, v] of Object.entries(value)) if (typeof v === "string") out[k] = v;
+  return out;
+}
+
+/**
+ * The append-only rule of §13.5 and §13.6 between an older fingerprints file (`base`, e.g. the
+ * base branch's) and the current one: every ref, artefact fingerprint, golden final hash and views
+ * fingerprint of `base` is still there, unchanged. New refs and new golden entries are allowed.
+ * Returns the problems, each naming the entry; `base` is read leniently, whatever its format.
+ */
+export function appendOnlyProblems(base: unknown, head: Fingerprints): string[] {
+  const problems: string[] = [];
+  if (base === null || typeof base !== "object" || Array.isArray(base)) {
+    return [`the older ${FINGERPRINTS_FILE} is not a JSON object`];
+  }
+  for (const [ref, old] of Object.entries(base).toSorted(([a], [b]) => byCodeUnit(a, b))) {
+    const now = head[ref];
+    if (now === undefined) {
+      problems.push(`${FINGERPRINTS_FILE}: the entry of ${ref} was removed`);
+      continue;
+    }
+    if (old === null || typeof old !== "object" || Array.isArray(old)) continue;
+    const artefacts: unknown = Reflect.get(old, "artefacts");
+    if (typeof artefacts === "string" && artefacts !== now.artefacts) {
+      problems.push(
+        `${FINGERPRINTS_FILE}: ${ref}'s artefacts were rewritten (${artefacts} → ${now.artefacts})`,
+      );
+    }
+    for (const key of ["goldens", "views"] as const) {
+      const recorded = stringRecord(Reflect.get(old, key));
+      for (const name of Object.keys(recorded).toSorted(byCodeUnit)) {
+        const value = Object.hasOwn(now[key], name) ? now[key][name] : undefined;
+        if (value === undefined) {
+          problems.push(`${FINGERPRINTS_FILE}: ${ref}'s ${key} entry ${name} was removed`);
+        } else if (value !== recorded[name]) {
+          problems.push(
+            `${FINGERPRINTS_FILE}: ${ref}'s ${key} entry ${name} was rewritten (${recorded[name]} → ${value})`,
+          );
+        }
+      }
+    }
+  }
+  return problems;
 }

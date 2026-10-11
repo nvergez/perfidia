@@ -13,8 +13,9 @@
 //   `movementAccess` says of them (`seenMovements`).
 // - A return's recorded party is history (the target of the attack it was). Every view shows as
 //   the party of a return heading into a held home the besieger it will fight (`homecomingFoe`,
-//   perfidia-1 §9.3), and under `incoming` access never the return's own party nor `turnedBack`
-//   (perfidia-1 §12: id, owner, launch and arrival times). `movementView` takes the viewer.
+//   perfidia-1 §9.3), and under `incoming` access never the return's own party, its origin
+//   (`from: null`, `originOf`) nor `turnedBack` (perfidia-1 §12: id, owner, launch and arrival
+//   times). `movementView` takes the viewer.
 // - `explain(v, {r, seat, gw})` takes the read context and the gateway state, since `QUEUE_ITEM`
 //   reads the seat's archive and the queue, and the other explanations fill numbers the details
 //   leave out from the seat's own cities; `toolError` and `toolWarning` wrap it. It reads the
@@ -29,35 +30,36 @@
 //   from the `movement_recalled` notice: perfidia-1 §7.4's "turned back at t"), whose notices then
 //   leave `events`. Every `events` and `news` entry carries `at`, the event's time as a pair; standard
 //   reports keep their standard fields only (the headline), and `read_notes {open}` returns them
-//   whole. `more.events` names a `read_notes` search of the event types left out; the `more`
-//   searches also return the entries kept (and, for `msgs`, the seat's own messages), so they can
-//   list more than `count`.
+//   whole. `more.events` names a `read_notes` search of the event types left out. Each `more`
+//   search is bounded by `before` (one past the newest entry left out) and `since` (the last
+//   briefing), so it lists the entries left out and none the briefing kept (for `msgs`, also the
+//   seat's own messages of that span); past 20 hits it pages on with `before`.
+// - `lastTurn.warnings` lists the warnings on the last round's accepted calls, which no round
+//   shows (`end_turn`'s `WAKE_CLAMPED` included).
 // - `rules` leaves out the duration tables (§8.1 allows it), and its `interface` block also lists
 //   the wake triggers by class from `rules.gateway.wake`.
 //
 // Budgets not met, with measurements (§8.1 asks to report them; the tests pin the sizes):
-// - `rules` for perfidia-1 at N = 12: 17,762 characters against 12,000: the effective config 4,277,
-//   the agent rules 7,801 (cost tables required by `AgentRulesSchema`), the cheat sheet 2,203 and the
-//   interface block 3,166. Meeting 12,000 needs §8.1 to drop or shorten a part (e.g. the config,
+// - `rules` for perfidia-1 at N = 12: 18,783 characters against 12,000: the effective config 4,277,
+//   the agent rules 7,801 (cost tables required by `AgentRulesSchema`), the cheat sheet 2,306 and the
+//   interface block 4,082. Meeting 12,000 needs §8.1 to drop or shorten a part (e.g. the config,
 //   which the agent rules repeat in compiled form).
 // - `view_map` with `fromCity` for perfidia-1 at N = 12: at most 8,325 at the start (12 capitals and
 //   the Crown) but 10,531 to 10,579 in a mid-game world of 37 cities (three a player) with city
 //   points and three sieges: each city row costs about 70 characters, and `CityRowSchema`,
 //   `MapIslandSchema` and the `travel` pairs leave nothing to drop.
 // - The briefing's 2,400 target for a 3-city perfidia-1 seat (with its city points, sieges and
-//   countdowns): met with one incoming attack, but 2,457 with three, even after every list that can
-//   give way has, and 3,523 with full queues in every city (5 build items and 2 recruit batches
+//   countdowns): met with one incoming attack, but 2,505 with three, even after every list that can
+//   give way has, and 3,571 with full queues in every city (5 build items and 2 recruit batches
 //   each), since cities, `incoming` and `proposals` never give way and `BriefingCitySchema` requires
 //   `build` and `recruit` even when empty. Non-attack incoming movements do not give way either: no
 //   single call lists them across cities (`view_city` is per city).
-// - A return keeps `from`: after a bounce it is the city the attack was aimed at, which the
-//   besieger of its home then sees (`MovementViewSchema` and `BriefingIncomingSchema` require it,
-//   and perfidia-1's homecoming notice carries it too).
 
 export {
   byArrival,
   homecomingFoe,
   movementView,
+  originOf,
   ownMovements,
   partyOf,
   seenMovements,
@@ -73,7 +75,7 @@ export {
   visibilityOf,
   type SeatVisibility,
 } from "./common.ts";
-export { MESSAGE_CUT, isTimeKey, renderData, renderEvent } from "./events.ts";
+export { MESSAGE_CUT, isTimeKey, renderData, renderEntryData, renderEvent } from "./events.ts";
 export { leaderboard, openProposals, viewCity, viewIsland, viewMap, viewPlayer } from "./views.ts";
 export { BRIEFING_TARGET_CHARS, MESSAGE_MIN_CUT, briefingSize, buildBriefing } from "./briefing.ts";
 export {

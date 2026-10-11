@@ -1,5 +1,5 @@
 import { parseBotLabel } from "@perfidia/bots";
-import { DAY, canonicalJson, fmtTime } from "@perfidia/engine/core";
+import { canonicalJson, DAY, fmtTime, utf8Encode } from "@perfidia/engine/core";
 import type {
   ClockSpec,
   GameTime,
@@ -169,19 +169,9 @@ function distribution(values: readonly number[]): Distribution {
   return { mean: round2(sum / sorted.length), p95, max: sorted.at(-1) ?? 0 };
 }
 
-/** Bytes of `s` in UTF-8. */
+/** Bytes of `s` in UTF-8, as core encodes it (the `bytes` of an `obs` line count the same way). */
 function utf8Length(s: string): number {
-  let n = 0;
-  for (let i = 0; i < s.length; i += 1) {
-    const c = s.charCodeAt(i);
-    if (c < 0x80) n += 1;
-    else if (c < 0x800) n += 2;
-    else if (c >= 0xd800 && c <= 0xdbff) {
-      n += 4;
-      i += 1;
-    } else n += 3;
-  }
-  return n;
+  return utf8Encode(s).length;
 }
 
 const zeroDay = (): WakeDay => ({ urgent: 0, own: 0, social: 0, safety: 0, start: 0, deferred: 0 });

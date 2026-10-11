@@ -66,8 +66,6 @@ export type MessageId = z.infer<typeof MessageIdSchema>;
 
 /** Prefixes of the public id kinds (counters), in no particular order. */
 export const PUBLIC_ID_PREFIXES = ["p", "i", "c", "a"] as const;
-/** Prefixes of the private id kinds (opaque, per owner), in no particular order. */
-export const OPAQUE_ID_PREFIXES = ["m", "r", "q", "g"] as const;
 
 /** Queue item number, per city, shared by build items and recruit batches; shown as "#7". */
 export const QueueItemIdSchema = z.int().positive();

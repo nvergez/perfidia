@@ -10,6 +10,7 @@ import {
   addRecruitBatch,
   addStationed,
   buildState,
+  fixtureRules,
   fixtureRuleset,
   matchFromState,
   testStep,
@@ -30,6 +31,7 @@ import {
   type CompiledRules,
   type DomainEvent,
   type GameState,
+  type MovementId,
   type PlayerId,
 } from "@perfidia/protocol";
 import {
@@ -38,7 +40,9 @@ import {
   briefingSize,
   buildBriefing,
   leaderboard,
+  movementView,
   viewCity,
+  visibilityOf,
   viewPlayer,
 } from "./index.ts";
 import {
@@ -50,7 +54,9 @@ import {
   event,
   feedP1,
   fixtureMatch,
+  fixtureWorld,
   gatewayFor,
+  grantingRuleset,
   oid,
   perfidiaGateway,
   perfidiaRuleset,
@@ -75,9 +81,6 @@ function p1Briefing(): { b: Briefing; gw: GatewayState; match: Match } {
   const b = buildBriefing(match.read(), P1, gw, wakeRecord(["incoming_attack m24hp8"], true));
   return { b: parse(b), gw, match };
 }
-
-const byText = (a: string | null, b: string | null): number =>
-  (a ?? "") < (b ?? "") ? -1 : (a ?? "") > (b ?? "") ? 1 : 0;
 
 describe("the briefing of the fixture world", () => {
   test("header, wake, budget, lastTurn", () => {
@@ -429,6 +432,7 @@ function budgetWorld(attacks: 1 | 3, fullQueues = false): { match: Match; gw: Ga
         message: "c3: 60 raider requested, 10 at home.",
       },
     ],
+    warnings: [],
     nextWake: { at: 230520, kind: "self" },
   };
   return { match, gw };
@@ -467,15 +471,13 @@ describe("the §8.2 budget, one incoming attack", () => {
       count: 5 - b.msgs.length,
       call: {
         tool: "read_notes",
-        args: { search: { scope: "mine", kinds: ["message"], since: LAST_BRIEFING } },
+        args: { search: { scope: "mine", kinds: ["message"], since: LAST_BRIEFING, before: 10 } },
       },
     });
-    // The read_notes call lists every message, the ones left out included.
-    const search = { scope: "mine" as const, kinds: ["message"], since: LAST_BRIEFING };
+    // The read_notes call lists exactly the messages left out, newest first, none it kept.
+    const search = { scope: "mine" as const, kinds: ["message"], since: LAST_BRIEFING, before: 10 };
     const hits = searchArchivePage(gw, SEAT, search).hits;
-    expect(hits.map((h) => h.id).toSorted(byText)).toEqual(
-      [1, 2, 3, 4, 5].map((i) => oid("g", i)).toSorted(byText),
-    );
+    expect(hits.map((h) => h.id)).toEqual([4, 3, 2, 1].map((i) => oid("g", i)));
   });
 
   test("every open proposal is listed with its text", () => {
@@ -500,6 +502,7 @@ describe("the §8.2 budget, one incoming attack", () => {
           message: "c3: 60 raider requested, 10 at home.",
         },
       ],
+      warnings: [],
       nextWake: { at: [230520, "D3 16:02"], kind: "self" },
     });
     expect(plain(b.budget)).toEqual({
@@ -532,8 +535,8 @@ describe("the §8.2 budget, one incoming attack", () => {
 // Over the target (reported, as §8.1 asks of its budgets): cities, `incoming` and `proposals` never
 // give way, and with three attacks, perfidia-1's extras and the `more` entries of the lists that
 // gave way, nothing is left to cut. The sizes are pinned so that any growth shows.
-const THREE_ATTACKS_CHARS = 2457;
-const FULL_QUEUES_CHARS = 3523;
+const THREE_ATTACKS_CHARS = 2505;
+const FULL_QUEUES_CHARS = 3571;
 
 describe("the §8.2 budget, three incoming attacks", () => {
   const { b, gw } = budgetBriefing(3);
@@ -551,32 +554,36 @@ describe("the §8.2 budget, three incoming attacks", () => {
     expect(b.news).toEqual([]);
     expect(b.msgs).toEqual([]);
     expect(b.events).toEqual([]);
+    const events = { scope: "mine" as const, kinds: ["build_done", "queue_empty"], before: 4 };
     expect(plain(b.more)).toEqual({
       msgs: {
         count: 5,
         call: {
           tool: "read_notes",
-          args: { search: { scope: "mine", kinds: ["message"], since: LAST_BRIEFING } },
+          args: {
+            search: { scope: "mine", kinds: ["message"], since: LAST_BRIEFING, before: 11 },
+          },
         },
       },
       events: {
         count: 2,
-        call: {
-          tool: "read_notes",
-          args: {
-            search: { scope: "mine", kinds: ["build_done", "queue_empty"], since: LAST_BRIEFING },
-          },
-        },
+        call: { tool: "read_notes", args: { search: { ...events, since: LAST_BRIEFING } } },
       },
       news: {
         count: 2,
-        call: { tool: "read_notes", args: { search: { scope: "public", since: LAST_BRIEFING } } },
+        call: {
+          tool: "read_notes",
+          args: { search: { scope: "public", since: LAST_BRIEFING, before: 6 } },
+        },
       },
     });
-    // The events call lists exactly the events left out.
-    const search = { scope: "mine" as const, kinds: ["build_done", "queue_empty"] };
-    const hits = searchArchivePage(gw, SEAT, { ...search, since: LAST_BRIEFING }).hits;
+    // Each call lists exactly the entries left out.
+    const hits = searchArchivePage(gw, SEAT, { ...events, since: LAST_BRIEFING }).hits;
     expect(hits.map((h) => h.type)).toEqual(["build_done", "queue_empty"]);
+    const msgs = { scope: "mine" as const, kinds: ["message"], since: LAST_BRIEFING, before: 11 };
+    expect(searchArchivePage(gw, SEAT, msgs).hits).toHaveLength(5);
+    const news = { scope: "public" as const, since: LAST_BRIEFING, before: 6 };
+    expect(searchArchivePage(gw, SEAT, news).hits).toHaveLength(2);
     // A single own movement costs less than its more entry, so it stays.
     expect(b.moves).toHaveLength(1);
   });
@@ -729,15 +736,15 @@ function returnId(match: Match): string {
 }
 
 describe("homecomings and recalled attacks", () => {
-  test("the besieger's briefing lists a return into the city it holds, itself as the foe", () => {
+  test("the besieger's briefing lists a return into the city it holds, itself as the foe, no origin", () => {
     for (const homecoming of [BOUNCED, STATIONED]) {
       const match = fixtureMatch([homecoming]);
       const { gw, wake } = gatewayFor(match);
       const id = returnId(match);
-      // perfidia-1 tells the besieger with an incoming_attack notice (homecoming: true).
+      // perfidia-1 tells the besieger with an incoming_attack notice (homecoming: true, from: null).
       const notice = event(NOW - 100, "incoming_attack", [[P4, "party"]], {
         movement: id,
-        from: "c4",
+        from: null,
         by: P1,
         foe: P4,
         to: "c3",
@@ -748,10 +755,12 @@ describe("homecomings and recalled attacks", () => {
       deliver(gw, [notice], wake);
       const b = parse(buildBriefing(match.read(), P4, gw, wakeRecord([`incoming_attack ${id}`])));
       // Never the return's recorded party (p3's city was the target), never null; no turnedBack.
+      // Nor its origin: c4 is where p1 had troops stationed (a stationed recall or a dismissal), or
+      // the target of the attack that bounced, neither of which p4 was told about (perfidia-1 §12).
       expect(plain(b.incoming.find((x) => x.id === id))).toEqual({
         id,
         kind: "return",
-        from: "c4",
+        from: null,
         by: P1,
         foe: P4,
         to: "c3",
@@ -761,6 +770,11 @@ describe("homecomings and recalled attacks", () => {
       });
       // The notice of a listed movement does not repeat in events.
       expect(b.events).toEqual([]);
+      // The movement view at the besieger's access hides the origin too; its owner sees it.
+      const m = Object.values(match.read().state.movements).find((x) => x.id === id);
+      if (m === undefined) throw new Error("no return");
+      expect(movementView(match.read(), m, "incoming", P4).from).toBeNull();
+      expect(movementView(match.read(), m, "own", P1).from).toBe("c4");
     }
   });
 
@@ -866,6 +880,42 @@ describe("homecomings and recalled attacks", () => {
       to: "c1",
       arriveAt: [10800, "D1 03:00"],
     });
+  });
+});
+
+describe("which movements incoming lists", () => {
+  test("with full ally access: attacks on its own and its ally's cities, never an ally's outgoing attack nor a support to the ally", () => {
+    const state = fixtureWorld();
+    // p3's support to p2's c4: p1 sees it in full (its ally's city), but it does not concern p1.
+    addMovement(state, fixtureRules(4), {
+      kind: "support",
+      owner: P3,
+      from: "c5",
+      to: "c4",
+      party: P2,
+      units: { soldier: 1 },
+      departAt: NOW - 50,
+      arriveAt: NOW + 3000,
+    });
+    const match = matchFromState(state, grantingRuleset);
+    const r = match.read();
+    const { gw } = gatewayFor(match);
+    const vis = visibilityOf(r);
+    const of = (owner: PlayerId, kind: string): MovementId => {
+      const m = Object.values(r.state.movements).find((x) => x.owner === owner && x.kind === kind);
+      if (m === undefined) throw new Error(`no ${kind} of ${owner}`);
+      return m.id;
+    };
+    // p2's attack on p4's c6 (an ally's outgoing attack) and p3's support are seen in full.
+    expect(vis.movementAccess(P1, of(P2, "attack"))).toBe("full");
+    expect(vis.movementAccess(P1, of(P3, "support"))).toBe("full");
+    // p3's attack on p1's own c1 is still seen: the granting fixture keeps the default access.
+    expect(vis.movementAccess(P1, of(P3, "attack"))).toBe("incoming");
+    const b = parse(buildBriefing(r, P1, gw, wakeRecord(["start"])));
+    expect(b.incoming.map((x) => [x.kind, x.by, x.to, x.foe])).toEqual([
+      ["attack", P4, "c4", P2],
+      ["attack", P3, "c1", P1],
+    ]);
   });
 });
 

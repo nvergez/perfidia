@@ -6,14 +6,15 @@ import * as hash from "./hash.ts";
 import * as int from "./int.ts";
 import * as opaque from "./opaque.ts";
 import * as prng from "./prng.ts";
+import * as record from "./record.ts";
 import * as sorted from "./sorted.ts";
 
 const byCodeUnit = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
 
 /** The runtime exports of each core module, laid out as architecture.md §15.3 (T03) and §6 place them. */
 const CORE_LAYOUT: readonly [object, readonly string[]][] = [
-  [canonical, ["CanonicalJsonError", "canonicalJson"]],
-  [format, ["DAY", "fmt", "fmtDuration", "fmtTime"]],
+  [canonical, ["CanonicalJsonError", "canonicalCopy", "canonicalJson", "jsonCopy"]],
+  [format, ["DAY", "HOUR", "fmt", "fmtDuration", "fmtTime"]],
   [hash, ["fnv1a64", "sha256Hex", "sha256Words", "utf8Encode"]],
   [
     int,
@@ -42,6 +43,7 @@ const CORE_LAYOUT: readonly [object, readonly string[]][] = [
     ],
   ],
   [prng, ["fnv1a32", "mulberry32", "randInt", "shuffle", "streamRng"]],
+  [record, ["own"]],
   [sorted, ["insertSorted", "removeWhere"]],
 ];
 

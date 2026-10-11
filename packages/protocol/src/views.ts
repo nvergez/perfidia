@@ -48,7 +48,8 @@ export const MovementViewSchema = z.looseObject({
   kind: MovementKindSchema,
   access: z.enum(["own", "full", "incoming"]),
   owner: PlayerIdSchema,
-  from: CityIdSchema,
+  /** `null` for a return seen with `incoming` access: its origin is hidden (perfidia-1 §12). */
+  from: CityIdSchema.nullable(),
   /** `null` for found. */
   to: CityIdSchema.nullable(),
   /** Recorded foe or party; `null` = neutral or not applicable. */

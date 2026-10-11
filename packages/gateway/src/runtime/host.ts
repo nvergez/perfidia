@@ -23,6 +23,7 @@ import {
   deliver,
   recordAct,
   recordGw,
+  recordWarnings,
   roundCallCap,
   seatOf,
   type GatewayState,
@@ -51,6 +52,7 @@ import {
 import type { LogSink } from "./sink.ts";
 import {
   HostFailure,
+  clampWarning,
   copyOf,
   createToolRegistry,
   canonicalBytes,
@@ -58,6 +60,7 @@ import {
   invokeTool,
   isFatal,
   jsonData,
+  warningText,
   type ToolEnv,
   type ToolRegistry,
 } from "./tools.ts";
@@ -533,6 +536,9 @@ export class MatchHost implements ClockHost {
       endTurn: (wakeAt) => {
         const set =
           wakeAt === null ? null : this.wake.requestSelfWake(turn.seat, wakeAt, this.match.now);
+        if (wakeAt !== null && set !== null && set.clamped) {
+          turn.clamp = { requested: Math.min(wakeAt, Number.MAX_SAFE_INTEGER), at: set.at };
+        }
         turn.markEndTurn();
         return set;
       },
@@ -634,7 +640,9 @@ export class MatchHost implements ClockHost {
         r: out.ok ? { ok: true } : { ok: false, code: out.violation.code },
       };
       this.write(line);
-      recordAct(this.gw, line, message);
+      const env = { r: m.read(), seat: turn.seat, gw: this.gw };
+      const warnings = out.ok ? out.warnings.map((w) => warningText(w, env)) : [];
+      recordAct(this.gw, line, message, warnings);
       if (out.ok) {
         for (const e of out.events) this.write({ k: "ev", t: e.t, e });
         this.deliver(out.events);
@@ -659,11 +667,21 @@ export class MatchHost implements ClockHost {
     });
   }
 
-  /** Closes `turn`: the scheduler's end, `lastTurn`, then the `turn` line. */
+  /**
+   * Closes `turn`: its `end_turn` clamp as a warning of the last round, the scheduler's end,
+   * `lastTurn`, then the `turn` line (with the clamp, so the rebuild records the same warning).
+   */
   closeTurnOf(turn: HostTurn, why: TurnEnd, error: string | undefined): void {
     const m = this.match;
     const t = m.now;
     const s = seatOf(this.gw, turn.seat);
+    const clamp = turn.clamp;
+    if (clamp !== undefined) {
+      const env = { r: m.read(), seat: turn.seat, gw: this.gw };
+      recordWarnings(this.gw, turn.seat, turn.round - 1, "end_turn", [
+        warningText(clampWarning(clamp), env),
+      ]);
+    }
     const out = closeTurn(this.gw, this.wake, {
       t,
       seat: turn.seat,
@@ -683,6 +701,7 @@ export class MatchHost implements ClockHost {
       selfAt: out.selfAt,
       next: out.next,
     };
+    if (clamp !== undefined) line.clamp = { requested: clamp.requested, at: clamp.at };
     if (turn.thought !== undefined) line.thought = turn.thought;
     if (error !== undefined) line.error = error;
     if (this.wall !== undefined && turn.wallStart !== undefined) {
@@ -708,6 +727,8 @@ export class HostTurn implements TurnHandle {
   thought: string | undefined;
   /** `end_turn` ran in the current round: later calls of the round get `TURN_OVER`. */
   endTurnSeen = false;
+  /** The self-wake `end_turn` asked for and the one it got, when it was clamped. */
+  clamp: { readonly requested: number; readonly at: number } | undefined;
   private results: ToolResult[] = [];
   /** Calls of this turn that passed the gate (the per-wake call cap). */
   private run = 0;

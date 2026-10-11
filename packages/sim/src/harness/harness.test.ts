@@ -8,6 +8,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { RULESETS, getRuleset, verifyLog, type AnyRuleset } from "@perfidia/engine";
 import { idKeyFromSeed } from "@perfidia/engine/core";
+import { PerfidiaExtSchema } from "@perfidia/engine/rulesets/perfidia-1";
 import type { LogSink } from "@perfidia/gateway";
 import type { LogLine } from "@perfidia/protocol";
 import {
@@ -18,6 +19,7 @@ import {
   JsonlFileSink,
   addFingerprints,
   addGolden,
+  appendOnlyProblems,
   checkGoldens,
   jsonlText,
   listGoldens,
@@ -27,14 +29,16 @@ import {
   parseJsonl,
   prepareBotRun,
   readFingerprints,
-  readJsonl,
+  readLog,
   resimProblem,
+  rulesetArtefacts,
   rulesetFingerprint,
   runBots,
   runPrepared,
   setupFor,
   snapshotFileName,
   writeJsonl,
+  type Fingerprints,
 } from "./index.ts";
 
 const SANDBOX = getRuleset("sandbox-1@1.0.0");
@@ -104,7 +108,7 @@ describe("JSONL", () => {
     try {
       for (const name of ["a.jsonl", "a.jsonl.gz"]) {
         writeJsonl(join(dir, name), lines);
-        expect(jsonlText(readJsonl(join(dir, name)))).toBe(jsonlText(lines));
+        expect(jsonlText(readLog(join(dir, name)))).toBe(jsonlText(lines));
       }
       expect(readFileSync(join(dir, "a.jsonl"), "utf8")).toBe(jsonlText(lines));
       expect(readFileSync(join(dir, "a.jsonl.gz")).subarray(0, 2)).toEqual(
@@ -183,6 +187,59 @@ describe("the ruleset fingerprint", () => {
       ),
     };
     expect(rulesetFingerprint(reworded)).not.toBe(rulesetFingerprint(SANDBOX));
+  });
+
+  test("covers the title, the extra tools, the event schemas and the world at every N", () => {
+    const fp = rulesetFingerprint(SANDBOX);
+    const titled: AnyRuleset = { ...SANDBOX, title: `${SANDBOX.title} 2` };
+    expect(rulesetFingerprint(titled)).not.toBe(fp);
+    const [first, second] = SANDBOX.tools ?? [];
+    if (first === undefined || second === undefined) throw new Error("sandbox-1 has two extras");
+    const described: AnyRuleset = {
+      ...SANDBOX,
+      tools: [first, { ...second, description: second.description.replace("16", "12") }],
+    };
+    expect(described.tools?.[1]?.description).not.toBe(second.description);
+    expect(rulesetFingerprint(described)).not.toBe(fp);
+    const events: AnyRuleset = { ...SANDBOX, eventSchemas: {} };
+    expect(rulesetFingerprint(events)).not.toBe(fp);
+    // A world that changes only at the largest N (12 seats: the public tie-break order reversed)
+    // changes the fingerprint, though no golden has 12 seats to replay it.
+    const reversed: AnyRuleset = {
+      ...PERFIDIA,
+      hooks: {
+        ...PERFIDIA.hooks,
+        createWorld: (w) => {
+          const out = PERFIDIA.hooks.createWorld(w);
+          if (w.players.length !== 12) return out;
+          const ext = PerfidiaExtSchema.parse(out.ext);
+          return { ...out, ext: { ...ext, tiebreak: ext.tiebreak.toReversed() } };
+        },
+      },
+    };
+    expect(rulesetArtefacts(reversed).worlds["11"]).toBe(rulesetArtefacts(PERFIDIA).worlds["11"]);
+    expect(rulesetArtefacts(reversed).worlds["12"]).not.toBe(
+      rulesetArtefacts(PERFIDIA).worlds["12"],
+    );
+  });
+
+  test("the append-only rule: an older entry may not change or go; new entries may come", () => {
+    const head: Fingerprints = {
+      "a@1.0.0": { artefacts: "1".repeat(64), goldens: { g1: "0".repeat(16) }, views: {} },
+      "b@1.0.0": { artefacts: "2".repeat(64), goldens: {}, views: {} },
+    };
+    const base = { "a@1.0.0": { artefacts: "1".repeat(64), goldens: { g1: "0".repeat(16) } } };
+    expect(appendOnlyProblems(base, head)).toEqual([]);
+    const rewritten = { "a@1.0.0": { artefacts: "3".repeat(64), goldens: { g1: "f".repeat(16) } } };
+    expect(appendOnlyProblems(rewritten, head)).toEqual([
+      `${FINGERPRINTS_FILE}: a@1.0.0's artefacts were rewritten (${"3".repeat(64)} → ${"1".repeat(64)})`,
+      `${FINGERPRINTS_FILE}: a@1.0.0's goldens entry g1 was rewritten (${"f".repeat(16)} → ${"0".repeat(16)})`,
+    ]);
+    const gone = { "c@1.0.0": {}, "a@1.0.0": { goldens: { g2: "0".repeat(16) } } };
+    expect(appendOnlyProblems(gone, head)).toEqual([
+      `${FINGERPRINTS_FILE}: a@1.0.0's goldens entry g2 was removed`,
+      `${FINGERPRINTS_FILE}: the entry of c@1.0.0 was removed`,
+    ]);
   });
 });
 
@@ -320,7 +377,7 @@ describe("the file sink", () => {
         snapshot(snap) {
           const name = snapshotFileName(snap);
           expect(existsSync(join(snapshotsDir, name))).toBe(false);
-          const onDisk = readJsonl(path);
+          const onDisk = readLog(path);
           const last = onDisk.at(-1);
           seen.push([snap.hour, last?.k === "ckpt" ? `ckpt ${last.hour}` : last?.k]);
           file.snapshot(snap);

@@ -242,6 +242,11 @@ export const ReadNotesArgsSchema = z.strictObject({
       with: PlayerIdSchema.optional(),
       since: GameTimeSchema.optional(),
       until: GameTimeSchema.optional(),
+      /**
+       * Only entries numbered below this `e` (the number every hit shows): older ones. With `more`,
+       * pass the last hit's `e` to read the next page.
+       */
+      before: z.int().positive().optional(),
       limit: z.int().min(1).max(READ_NOTES_MAX_HITS).optional(),
     })
     .optional(),
@@ -376,10 +381,12 @@ export const TOOL_RESULT_DATA = {
   rules: RulesInfoSchema,
   build: z.looseObject({ items: z.array(BuildItemResultSchema).min(1) }),
   recruit: z.looseObject({ items: z.array(RecruitItemResultSchema).min(1) }),
+  /** `refund`: what was credited to the stock; `lost`: what the storage cap cut from it. */
   cancel_queue: z.looseObject({
     city: CityIdSchema,
     removed: z.array(QueueItemIdSchema).min(1),
     refund: ResSchema,
+    lost: ResSchema,
   }),
   send_resources: MovementResult,
   attack: MovementResult,
@@ -397,7 +404,10 @@ export const TOOL_RESULT_DATA = {
   answer_proposal: z.looseObject({ proposal: ProposalIdSchema, accept: z.boolean() }),
   leave_alliance: z.looseObject({}),
   write_note: z.looseObject({ chars: z.int().nonnegative(), max: z.int().nonnegative() }),
-  /** `notes` always; `hits` for a search (newest first, with `more` when truncated); `entry` for `open`. */
+  /**
+   * `notes` always; `hits` for a search (newest first, with `more` when truncated: the next page is
+   * the same search with `before` set to the last hit's `e`); `entry` for `open`.
+   */
   read_notes: z.looseObject({
     notes: z.string(),
     hits: z.array(ArchiveHitSchema).max(READ_NOTES_MAX_HITS).optional(),

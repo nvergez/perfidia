@@ -1,5 +1,5 @@
-// Run directories and log files (docs/architecture.md §10.1): the streaming log reader, the run
-// directory's file sink and snapshot files.
+// Run directories and log files (docs/architecture.md §10.1): the log reader (the harness's, so
+// the CLI and the freeze guard read logs alike), the run directory's file sink and snapshot files.
 
 export {
   LogFileError,
@@ -8,7 +8,7 @@ export {
   readFirstLine,
   readLog,
   readLogLines,
-} from "./reader.ts";
+} from "../harness/index.ts";
 export {
   FINAL_SNAPSHOT,
   LOG_FILE,

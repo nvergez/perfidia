@@ -781,7 +781,7 @@ export class FakeGame {
         const removed = city.build.filter((x) => x.item >= a.item).map((x) => x.item);
         if (removed.length === 0) return this.err("QUEUE_ITEM", { city: a.city, item: a.item });
         city.build = city.build.filter((x) => x.item < a.item);
-        return this.ok(tool, { city: a.city, removed, refund: res(0, 0, 0) });
+        return this.ok(tool, { city: a.city, removed, refund: res(0, 0, 0), lost: res(0, 0, 0) });
       }
       case "attack":
       case "support":

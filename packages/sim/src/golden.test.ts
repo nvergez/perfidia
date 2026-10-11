@@ -1,9 +1,10 @@
 // The freeze guard (docs/architecture.md §13.5, §13.6), in the default suite on purpose: every
 // `bun test` replays every committed golden at Level E (and Level G when its controllers are bots
-// of this build), recomputes the ruleset fingerprints, and checks that every published ref keeps a
-// golden and a fingerprint entry. The same check must fail on a tampered temporary copy of the
-// fixtures and on a `perfidia-1` descriptor whose cheat sheet changed. The goldens' coverage claims
-// of §13.5 are asserted from their own lines.
+// of this build), recomputes the ruleset fingerprints and the views fingerprint of every golden
+// (what the hooks show every seat at every checkpoint), and checks that every published ref keeps
+// a golden and a fingerprint entry. The same check must fail on a tampered temporary copy of the
+// fixtures, and on descriptors whose cheat sheet, visibility hook, title or extra tool changed.
+// The goldens' coverage claims of §13.5 are asserted from their own lines.
 
 import { describe, expect, test } from "bun:test";
 import { cpSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -20,7 +21,7 @@ import {
   listGoldens,
   normalisedText,
   readFingerprints,
-  readJsonl,
+  readLog,
   type GoldenFile,
 } from "./harness/index.ts";
 
@@ -53,6 +54,7 @@ describe("the freeze guard", () => {
     expect(report.ok).toBe(true);
     // The goldens of §13.5; Level G runs for the bot goldens, not for the scripted scenario.
     expect(report.goldens.map((g) => `${g.ref}/${g.name} ${g.levelG}`)).toEqual([
+      `${PERFIDIA}/lockstep-12p-1d pass`,
       `${PERFIDIA}/lockstep-6p-4d pass`,
       `${PERFIDIA}/rt-virtual-6p-1d pass`,
       `${PERFIDIA}/scenario-late skipped`,
@@ -76,7 +78,7 @@ describe("the freeze guard", () => {
     try {
       const g = listGoldens(dir).find((x) => x.ref === PERFIDIA && x.name === "scenario-late");
       if (g === undefined) throw new Error("no scenario-late in the copy");
-      const lines = readJsonl(g.path);
+      const lines = readLog(g.path);
       const at = lines.findIndex((l) => l.k === "act" && l.r.ok);
       const act = lines[at];
       if (act?.k !== "act") throw new Error("no accepted action");
@@ -113,11 +115,53 @@ describe("the freeze guard", () => {
     expect(report.problems).toHaveLength(1);
     expect(report.problems[0]).toContain(`${FINGERPRINTS_FILE}: ${PERFIDIA}'s artefacts changed`);
   }, 60000);
+
+  test("a changed visibility hook, title or extra tool description fails", async () => {
+    const perfidia = getRuleset(PERFIDIA);
+    const sandbox = getRuleset(SANDBOX);
+    const briefing = perfidia.hooks.visibility?.briefing;
+    if (briefing === undefined) throw new Error("perfidia-1 has a briefing hook");
+    // What the hooks show agents during a match: caught by the views of every perfidia-1 golden.
+    const hooked: AnyRuleset = {
+      ...perfidia,
+      hooks: {
+        ...perfidia.hooks,
+        visibility: {
+          ...perfidia.hooks.visibility,
+          briefing: (r, seat) => ({ ...briefing(r, seat), x: 1 }),
+        },
+      },
+    };
+    const views = await checkGoldens(FIXTURES_DIR, swap(hooked), { levelG: false });
+    expect(views.ok).toBe(false);
+    expect(views.problems.length).toBeGreaterThan(0);
+    for (const p of views.problems) {
+      expect(p).toContain("what the ruleset's hooks show at its checkpoints changed");
+    }
+    const titled: AnyRuleset = { ...perfidia, title: `${perfidia.title} 2` };
+    const title = await checkGoldens(FIXTURES_DIR, swap(titled), { levelG: false });
+    expect(title.problems).toHaveLength(1);
+    expect(title.problems[0]).toContain(`${FINGERPRINTS_FILE}: ${PERFIDIA}'s artefacts changed`);
+    const [first, second] = sandbox.tools ?? [];
+    if (first === undefined || second === undefined) throw new Error("sandbox-1 has two extras");
+    const described: AnyRuleset = {
+      ...sandbox,
+      tools: [first, { ...second, description: `${second.description} ` }],
+    };
+    const tool = await checkGoldens(FIXTURES_DIR, swap(described), { levelG: false });
+    expect(tool.problems).toHaveLength(1);
+    expect(tool.problems[0]).toContain(`${FINGERPRINTS_FILE}: ${SANDBOX}'s artefacts changed`);
+  }, 60000);
 });
+
+/** The registry with `rs` in place of the ruleset of its ref. */
+function swap(rs: AnyRuleset): AnyRuleset[] {
+  return RULESETS.map((x) => (x.ref === rs.ref ? rs : x));
+}
 
 describe("what the goldens cover (§13.5)", () => {
   test("lockstep-6p-4d: the default config with the four bots, past capital immunity and the domination opening", () => {
-    const lines = readJsonl(golden(PERFIDIA, "lockstep-6p-4d").path);
+    const lines = readLog(golden(PERFIDIA, "lockstep-6p-4d").path);
     const header = lines[0];
     if (header?.k !== "header") throw new Error("no header");
     expect(header.setup.overrides).toEqual({ "time.matchEnd": 345600 });
@@ -133,7 +177,7 @@ describe("what the goldens cover (§13.5)", () => {
 
   test("rt-virtual-6p-1d: real time under VirtualTime, speed 3, latency 2–60 s", () => {
     for (const ref of [PERFIDIA, SANDBOX]) {
-      const header = readJsonl(golden(ref, "rt-virtual-6p-1d").path)[0];
+      const header = readLog(golden(ref, "rt-virtual-6p-1d").path)[0];
       expect(header).toMatchObject({
         k: "header",
         clock: { kind: "realtime", speed: [3, 1], time: "virtual", latencyMs: [2000, 60000] },
@@ -142,13 +186,13 @@ describe("what the goldens cover (§13.5)", () => {
   });
 
   test("sandbox-1 lockstep-6p-3d runs past hill_open", () => {
-    const end = readJsonl(golden(SANDBOX, "lockstep-6p-3d").path).at(-1);
+    const end = readLog(golden(SANDBOX, "lockstep-6p-3d").path).at(-1);
     if (end?.k !== "end") throw new Error("no end line");
     expect(end.t).toBeGreaterThan(172800);
   });
 
   test("scenario-late: siege, relief, homecoming, capital conquest with re-homing, elimination, pact expiry and supersession, domination start, cancel and win", () => {
-    const lines = readJsonl(golden(PERFIDIA, "scenario-late").path);
+    const lines = readLog(golden(PERFIDIA, "scenario-late").path);
     const header = lines[0];
     if (header?.k !== "header") throw new Error("no header");
     expect(new Set(Object.values(header.controllers))).toEqual(new Set([SCENARIO_LATE_LABEL]));
@@ -227,7 +271,7 @@ describe("what the goldens cover (§13.5)", () => {
   });
 
   test("the scenario agent still plays scenario-late byte for byte", async () => {
-    const lines = readJsonl(golden(PERFIDIA, "scenario-late").path);
+    const lines = readLog(golden(PERFIDIA, "scenario-late").path);
     const again = await runScenarioLate();
     expect(normalisedText(again.lines)).toBe(normalisedText(lines));
   });

@@ -200,7 +200,9 @@ export function compileRules(config: DeepReadonly<PerfidiaConfig>, players: numb
     movement: {
       recall: {
         window: config.time.recallWindow,
-        kinds: ["attack", "support", "found"],
+        // §18: a window of 0 disables recalls (an inclusive window of 0 s would still allow one
+        // in the launch second).
+        kinds: config.time.recallWindow === 0 ? [] : ["attack", "support", "found"],
         stationed: "partial",
         dismiss: true,
       },

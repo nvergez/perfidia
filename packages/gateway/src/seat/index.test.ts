@@ -5,6 +5,7 @@ import * as caps from "./caps.ts";
 import * as deliver from "./deliver.ts";
 import * as errors from "./errors.ts";
 import * as notes from "./notes.ts";
+import * as clean from "./clean.ts";
 import * as state from "./state.ts";
 import { P1, RULES } from "./testkit.test.ts";
 import * as turn from "./turn.ts";
@@ -16,7 +17,15 @@ const byCodeUnit = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0
 const SEAT_LAYOUT: readonly [object, readonly string[]][] = [
   [
     archive,
-    ["entryId", "involves", "openArchive", "searchArchive", "searchArchivePage", "summarizeEvent"],
+    [
+      "entryId",
+      "involves",
+      "openArchive",
+      "readableNumbers",
+      "searchArchive",
+      "searchArchivePage",
+      "summarizeEvent",
+    ],
   ],
   [
     caps,
@@ -30,6 +39,7 @@ const SEAT_LAYOUT: readonly [object, readonly string[]][] = [
       "seatBudget",
     ],
   ],
+  [clean, ["copyJson", "copyObject", "isJsonArray", "setOwn", "stripControl"]],
   [deliver, ["deliver"]],
   [errors, ["SEAT_ERROR_CODES", "seatError", "seatErrorText"]],
   [notes, ["appendedNotes", "writeNote"]],
@@ -49,7 +59,7 @@ const SEAT_LAYOUT: readonly [object, readonly string[]][] = [
       "unreadNews",
     ],
   ],
-  [turn, ["closeTurn", "recordAct", "recordGw"]],
+  [turn, ["closeTurn", "recordAct", "recordGw", "recordWarnings"]],
   [wake, ["createWakeScheduler", "isPublicMessage", "wakeClassOf", "wakeReasonOf"]],
 ];
 

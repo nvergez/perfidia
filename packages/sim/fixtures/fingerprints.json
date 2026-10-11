@@ -1,17 +1,28 @@
 {
   "perfidia-1@1.0.0": {
-    "artefacts": "e25044aecd4b1ab58f2af838fdcc1dbd09d4706912046b3fe971c999da843f1b",
+    "artefacts": "6e3b2195d4cfb33beab6e87f1d31266e464449e49b925b2715004d40b7250876",
     "goldens": {
-      "lockstep-6p-4d": "6e13c38102a9d5b6",
+      "lockstep-12p-1d": "9c1f7d883ffc7f28",
+      "lockstep-6p-4d": "96bd6f37f267c3cd",
       "rt-virtual-6p-1d": "251c4a2163559ea4",
-      "scenario-late": "9fc3d52c00047efc"
+      "scenario-late": "add278fb5f7e1e85"
+    },
+    "views": {
+      "lockstep-12p-1d": "62ba34350fb358d63855d99e724948c6da44a56910ff783874bc99663689b92f",
+      "lockstep-6p-4d": "1d0f05018bf547d65cd83e99031a192404cbe32395e7841a449d7f1c7c6b2212",
+      "rt-virtual-6p-1d": "af5ea2acae60502f1d9f21d65526290a0acf3ed5dae8de5e60ac36d70365d5c4",
+      "scenario-late": "c57b02bebdd95925b4562cd7a17f3ba52da7c940cbcf35ddbb41b92aa4964fcc"
     }
   },
   "sandbox-1@1.0.0": {
-    "artefacts": "e83848d0d6e2cbb8ae10d859b986a9bf214ee5d194d59cb56db4952f8960bdfc",
+    "artefacts": "4be646661d454143623fe992421932aa138ea6e8317008684661e2e49e4e35ab",
     "goldens": {
       "lockstep-6p-3d": "61690c75d7642a90",
       "rt-virtual-6p-1d": "04791dbeba2d9573"
+    },
+    "views": {
+      "lockstep-6p-3d": "ba1f557dbd0ddd2f98c79ec6712bd6c41618a20125c93da1d781aa539ae064ec",
+      "rt-virtual-6p-1d": "3cca21eb214fac0e517eb32187e8a2caabe1bd1984bf7727644508d4d3491006"
     }
   }
 }

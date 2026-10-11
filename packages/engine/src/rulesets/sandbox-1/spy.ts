@@ -1,3 +1,4 @@
+import { own } from "@perfidia/engine/core";
 import type { Ctx, ReadCtx } from "@perfidia/engine/contracts";
 import { deleteMovement, queueEtas, stockAt, unitsAtHome, unitsPop } from "@perfidia/engine/std";
 import type {
@@ -22,10 +23,6 @@ type SandboxCtx = Ctx<SandboxConfig, SandboxExt>;
 
 function bug(message: string): never {
   throw new Error(`sandbox-1: ${message}`);
-}
-
-function own<V>(rec: Readonly<Record<string, V>>, key: string): V | undefined {
-  return Object.hasOwn(rec, key) ? rec[key] : undefined;
 }
 
 /** The land units of `units` (boats excluded). */

@@ -13,6 +13,7 @@ const SECTION_0 = [
   "            × 30 s (spy, no units). Never less than 1 h. Same time both ways. view_map lists them.",
   "            An incoming attack shows its origin, owner, launch and arrival times, never its units.",
   "            Its pace therefore shows whether it is warships only.",
+  "            A return heading into a city you besiege shows its owner and times only, never its origin.",
   "PRODUCTION  producer level L: 50 + 20L + 5L² per hour. Frontier ×1.5, inner/hub ×1.25, Crown ×1.5.",
   "STORAGE     warehouse L holds 60L² + 280L + 660 of each resource. 100·L of each is safe from loot.",
   "POPULATION  hall H allows 2H² + 20H + 40 pop. Every unit homed in the city counts, wherever it is.",

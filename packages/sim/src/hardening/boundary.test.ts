@@ -1,9 +1,9 @@
 // The ruleset boundary scan (docs/architecture.md §13.4): no non-test source of engine `core`,
 // `contracts`, `kernel`, `std` and `domain`, of `gateway/src`, or of `bots/src` (except `hints.ts`)
-// contains a string literal naming a perfidia-1 building, unit or queue id (`build` excepted, the
-// generic queue) or a ruleset id. The ids come from the registry (perfidia-1's compiled rules at
-// every allowed N, and every registered ruleset id), so a renamed or added id is covered without
-// editing this test. Literals are found by a small lexer that skips comments and regular
+// contains a string literal naming a building, unit or queue id of a registered ruleset (`build`
+// excepted, the generic queue) or a ruleset id. The ids come from the registry (the compiled rules
+// of every ruleset of `RULESETS` at every allowed N, and every registered ruleset id), so a renamed
+// or added id, or a new ruleset, is covered without editing this test. Literals are found by a small lexer that skips comments and regular
 // expressions and reads the static parts of template literals.
 //
 // Deviation from §13.4, which excepts only `build`: the `read_notes` scope literal "mine" (§8.4)
@@ -15,7 +15,6 @@ import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
 import { RULESETS, parseRulesetRef, resolveConfig } from "@perfidia/engine";
-import { perfidia1_1_0_0 } from "@perfidia/engine/rulesets/perfidia-1";
 
 const ROOT = resolve(import.meta.dir, "../../../..");
 
@@ -44,17 +43,19 @@ const ALLOWED: Readonly<Record<string, readonly string[]>> = {
   "packages/gateway/src/present/briefing.ts": ["mine"],
 };
 
-/** perfidia-1's building, unit and queue ids at every allowed N, `build` excepted. */
-function perfidiaIds(): Set<string> {
-  const resolved = resolveConfig(perfidia1_1_0_0, {});
-  if (!resolved.ok) throw new Error("perfidia-1's defaults do not resolve");
-  const { min, max } = perfidia1_1_0_0.players(resolved.config);
+/** The building, unit and queue ids of every ruleset at every allowed N, `build` excepted. */
+function rulesIds(): Set<string> {
   const ids = new Set<string>();
-  for (let n = min; n <= max; n += 1) {
-    const rules = perfidia1_1_0_0.compile(resolved.config, n);
-    for (const b of rules.buildings) ids.add(b.id);
-    for (const u of rules.units) ids.add(u.id);
-    for (const q of rules.queues.recruit) ids.add(q.id);
+  for (const rs of RULESETS) {
+    const resolved = resolveConfig(rs, {});
+    if (!resolved.ok) throw new Error(`${rs.ref}'s defaults do not resolve`);
+    const { min, max } = rs.players(resolved.config);
+    for (let n = min; n <= max; n += 1) {
+      const rules = rs.compile(resolved.config, n);
+      for (const b of rules.buildings) ids.add(b.id);
+      for (const u of rules.units) ids.add(u.id);
+      for (const q of rules.queues.recruit) ids.add(q.id);
+    }
   }
   ids.delete("build");
   return ids;
@@ -237,11 +238,14 @@ function scannedFiles(): string[] {
 }
 
 describe("ruleset boundary scan (§13.4)", () => {
-  const ids = perfidiaIds();
+  const ids = rulesIds();
   const rulesets = rulesetIds();
 
-  test("the forbidden ids come from the registry", () => {
+  test("the forbidden ids come from the registry: every ruleset's", () => {
     for (const id of ["hall", "barracks", "wall", "guard", "settler", "warship"]) {
+      expect(ids.has(id)).toBe(true);
+    }
+    for (const id of ["keep", "sawmill", "camp", "docks", "spearman", "colonist", "boat"]) {
       expect(ids.has(id)).toBe(true);
     }
     expect(ids.has("build")).toBe(false);
@@ -256,7 +260,7 @@ describe("ruleset boundary scan (§13.4)", () => {
     expect(files.some((f) => f.includes("/rulesets/"))).toBe(false);
   });
 
-  test("no scanned source names a perfidia-1 id or a ruleset id", () => {
+  test("no scanned source names a ruleset's building, unit or queue id, or a ruleset id", () => {
     const found: Record<string, string[]> = {};
     for (const file of scannedFiles()) {
       const allowed = new Set(ALLOWED[file] ?? []);

@@ -58,10 +58,17 @@ export const TurnEndSchema = z.enum([
 ]);
 export type TurnEnd = z.infer<typeof TurnEndSchema>;
 
-/** The previous turn's ending, the failed results the agent never saw, and the effective next wake. */
+/**
+ * The previous turn's ending, the failed results the agent never saw, the warnings on accepted
+ * calls it never saw (those of the turn's last round trip, `end_turn`'s `WAKE_CLAMPED` included:
+ * no result of that round trip ever reaches the agent), and the effective next wake.
+ */
 export const BriefingLastTurnSchema = z.looseObject({
   ended: TurnEndSchema,
   unseen: z.array(z.looseObject({ tool: z.string(), code: ErrorCodeSchema, message: z.string() })),
+  warnings: z.array(
+    z.looseObject({ tool: z.string(), code: ErrorCodeSchema, message: z.string() }),
+  ),
   nextWake: z.looseObject({ at: TimePairSchema, kind: WakeKindSchema }).nullable(),
 });
 export type BriefingLastTurn = z.infer<typeof BriefingLastTurnSchema>;
@@ -108,7 +115,8 @@ export type BriefingCity = z.infer<typeof BriefingCitySchema>;
 export const BriefingIncomingSchema = z.looseObject({
   id: MovementIdSchema,
   kind: MovementKindSchema,
-  from: CityIdSchema,
+  /** `null` for a return heading into a city you besiege: its origin is hidden (perfidia-1 §12). */
+  from: CityIdSchema.nullable(),
   by: PlayerIdSchema,
   foe: PlayerIdSchema.nullable().optional(),
   to: CityIdSchema,

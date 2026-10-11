@@ -161,6 +161,31 @@ describe("searchArchive", () => {
     const old = searchArchivePage(gw, P1, { scope: "public", until: 50 });
     expect(es(old.hits)).toEqual([5, 4, 3, 2, 1]);
     expect(old.more).toBe(false);
+    // Exactly `limit` matches: nothing more.
+    const exact = searchArchivePage(gw, P1, { scope: "public", until: 50, limit: 5 });
+    expect(es(exact.hits)).toEqual([5, 4, 3, 2, 1]);
+    expect(exact.more).toBe(false);
+  });
+
+  test("`before` pages through more than a page of entries of one second, which time cannot split", () => {
+    const gw = createGatewayState([P1, P2, P3]);
+    const wake = createWakeScheduler(gw, RULES);
+    const burst = Array.from({ length: 45 }, (_, i) =>
+      publicMessage(600, i % 2 === 0 ? P2 : P3, i),
+    );
+    deliver(gw, burst, wake);
+    const seen: number[] = [];
+    let page = searchArchivePage(gw, P1, { scope: "public", since: 600, until: 600 });
+    seen.push(...es(page.hits));
+    while (page.more) {
+      const before = page.hits.at(-1)?.e ?? 0;
+      page = searchArchivePage(gw, P1, { scope: "public", since: 600, before });
+      seen.push(...es(page.hits));
+    }
+    expect(seen).toEqual(Array.from({ length: 45 }, (_, i) => 45 - i));
+    // Time bounds alone return the same newest 20 whatever the bounds.
+    const until = searchArchivePage(gw, P1, { scope: "public", until: 600 });
+    expect(es(until.hits)).toEqual(es(searchArchivePage(gw, P1, { scope: "public" }).hits));
   });
 
   test("deterministic, unchanged by a JSON round trip, and never aliasing the state", () => {

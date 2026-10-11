@@ -61,6 +61,20 @@ describe("checkRules", () => {
     expect(paths(rules)).toEqual([]);
   });
 
+  test("resourceScale must be a multiple of 3600: accrual is exact per second", () => {
+    const rules = fixtureRules();
+    rules.resourceScale = 1000;
+    expect(checkRules(rules)).toEqual([
+      {
+        path: "resourceScale",
+        message:
+          "is 1000; it must be a multiple of 3600 so that every rate per hour accrues a whole number of stored units per second",
+      },
+    ]);
+    rules.resourceScale = 7200;
+    expect(paths(rules)).toEqual([]);
+  });
+
   test("MatchConfigError lists every issue with its path", () => {
     const e = new MatchConfigError([
       { path: "time.matchEnd", message: "is 0" },

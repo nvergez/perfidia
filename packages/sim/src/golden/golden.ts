@@ -48,7 +48,10 @@ export type GoldenSpec = BotGoldenSpec | ScenarioGoldenSpec;
 
 const isScenario = (s: GoldenSpec): s is ScenarioGoldenSpec => !("run" in s);
 
-/** The goldens of §13.5: four bot goldens and the scripted `scenario-late`. */
+/**
+ * The goldens of §13.5: five bot goldens (one at the largest N, 12, so that the seat-count
+ * dependent parts of a ruleset are replayed too) and the scripted `scenario-late`.
+ */
 export const GOLDEN_SPECS: readonly GoldenSpec[] = Object.freeze([
   {
     ref: "perfidia-1@1.0.0",
@@ -65,6 +68,11 @@ export const GOLDEN_SPECS: readonly GoldenSpec[] = Object.freeze([
       clock: { kind: "virtual", speed: { num: 3, den: 1 }, latencyMs: [2000, 60000] },
       strict: true,
     },
+  },
+  {
+    ref: "perfidia-1@1.0.0",
+    name: "lockstep-12p-1d",
+    run: { seed: 1, players: 12, days: 1, clock: { kind: "lockstep" }, strict: true },
   },
   {
     ref: SCENARIO_LATE_REF,

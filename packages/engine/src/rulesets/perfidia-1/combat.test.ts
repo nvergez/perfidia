@@ -14,7 +14,6 @@ import {
   moralePm,
   NEUTRAL,
   resolveBattle,
-  splitLosses,
   type StackOutcome,
   statsOf,
   survivorsOf,
@@ -77,38 +76,6 @@ describe("§8.3 losses", () => {
     expect(lossPm(1, 3)).toBe(110);
     expect(lossPm(3, 4)).toBe(562);
     expect(lossPm(100, 141)).toBe(502);
-  });
-
-  test("split stacks: 73 losses over groups of 60 and 40 give 44 and 29", () => {
-    expect(splitLosses([60, 40], 73)).toEqual([44, 29]);
-  });
-
-  test("ties go to the earlier group; the split always sums to the loss (property)", () => {
-    expect(splitLosses([50, 50], 1)).toEqual([1, 0]);
-    expect(splitLosses([1, 1, 1], 2)).toEqual([1, 1, 0]);
-    expect(splitLosses([], 0)).toEqual([]);
-    expect(splitLosses([0, 0], 0)).toEqual([0, 0]);
-    fc.assert(
-      fc.property(
-        fc.array(fc.integer({ min: 0, max: 5000 }), { minLength: 1, maxLength: 6 }),
-        fc.double({ min: 0, max: 1, noNaN: true }),
-        (sizes, frac) => {
-          const n = sizes.reduce((a, b) => a + b, 0);
-          const loss = Math.floor(n * frac);
-          const split = splitLosses(sizes, loss);
-          expect(split.reduce((a, b) => a + b, 0)).toBe(loss);
-          for (const [i, l] of split.entries()) {
-            expect(l).toBeGreaterThanOrEqual(0);
-            expect(l).toBeLessThanOrEqual(sizes[i]!);
-            expect(Math.abs(l - (loss * sizes[i]!) / (n || 1))).toBeLessThan(1);
-          }
-        },
-      ),
-    );
-  });
-
-  test("rejects a loss above the stack", () => {
-    expect(() => splitLosses([3, 4], 8)).toThrow(RangeError);
   });
 });
 

@@ -363,12 +363,15 @@ function redactedReport(f: Fought, report: string): JsonObject {
 
 /**
  * Emits one `battle_report` per recipient (§8.10), each with its own report id: the attacker
- * (`self`, redacted when no attacking unit survived), the foe (`party`: the city owner, or the
- * besieger in a garrison battle) and every owner of a defending stationed group (`stationed`); then
- * the public `battle` headline, without numbers.
+ * (redacted when no attacking unit survived), the foe (`party`: the city owner, or the besieger in
+ * a garrison battle) and every owner of a defending stationed group (`stationed`); then the public
+ * `battle` headline, without numbers. The attacker of a city or relief battle launched it: its
+ * copy is `self`, an own wake. The attacker of a homecoming is the owner of the returning group,
+ * which other players can send home (a dismissal, a bounce), so its copy is `target` (the battle
+ * is fought at its own city), a social wake: others never spend its own budget (§14.2).
  */
 function emitReports(ctx: PCtx, f: Fought, o: Outcome, attackerSurvived: boolean): void {
-  const to: Recipient[] = [{ p: f.attacker, as: "self" }];
+  const to: Recipient[] = [{ p: f.attacker, as: f.kind === "homecoming" ? "target" : "self" }];
   if (f.foe !== null && f.foe !== f.attacker) to.push({ p: f.foe, as: "party" });
   for (const p of f.stationed) to.push({ p, as: "stationed" });
   for (const rcpt of to) {

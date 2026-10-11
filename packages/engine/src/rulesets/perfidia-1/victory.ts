@@ -55,7 +55,10 @@ function trackRelations(ctx: PCtx): void {
   if (!sameMembers(x.related, now)) x.related = now;
 }
 
-/** Breaks every siege whose garrison has no settler left (§9.3, e.g. recalled: "abandoned"). */
+/**
+ * Breaks every siege whose garrison has no settler left (§9.3): recalled ("abandoned"), or gone
+ * with its eliminated besieger ("eliminated", §9.7). The one path for both.
+ */
 function checkGarrisons(ctx: PCtx): void {
   const x = ctx.ext();
   const settler = ctx.rules.roles.settler;
@@ -69,10 +72,11 @@ function checkGarrisons(ctx: PCtx): void {
 }
 
 /**
- * Tells besiegers about the returns created during this step by code other than perfidia-1's own
- * (a recall, a stationed recall or a dismissal through the domain handlers): every return heading
- * into a city besieged by another player that does not record that besieger as its party yet, plus
- * the movements recalled in this step (a turned-back attack keeps its launch party).
+ * Tells besiegers about the returns created or re-homed during this step that no code announced
+ * yet: a recall, a stationed recall or a dismissal through the domain handlers, and the returns a
+ * conquest re-homes onto a besieged fallback (§7.7). Every return heading into a city besieged by
+ * another player that does not record that besieger as its party yet, plus the movements recalled
+ * in this step (a turned-back attack keeps its launch party).
  */
 function announceNewReturns(ctx: PCtx, step: StepInfo): void {
   const recalled = new Set<string>();
@@ -191,6 +195,7 @@ export function onDominationOpen(ctx: PCtx, _ev: ScheduledEvent): void {
  * `on.domination_end` (class 11): the countdowns ending this second are resolved together, in the
  * order more cities, higher total score, best tie-break position (§13.3). The first whose bloc still
  * qualifies with the same members wins and ends the match; the countdown of this event is removed.
+ * One always does: a countdown that stopped qualifying was cancelled by the step that changed it.
  */
 export function onDominationEnd(ctx: PCtx, ev: ScheduledEvent): void {
   const x = ctx.ext();
@@ -226,19 +231,9 @@ export function onDominationEnd(ctx: PCtx, ev: ScheduledEvent): void {
     ctx.endMatch(resultOf(ctx, "domination", winner.members));
     return;
   }
-  // Unreachable while `afterStep` cancels failing countdowns at every step; kept consistent anyway.
-  const bloc = blocs.find((b) => b.key === mine.bloc);
-  const sameBloc = bloc !== undefined && sameMembers(bloc.members, mine.members);
-  ctx.emit({
-    type: DOMINATION_CANCELLED,
-    public: true,
-    to: [],
-    data: {
-      key: mine.bloc,
-      members: [...mine.members],
-      reason: sameBloc ? "condition" : "membership",
-    },
-  });
+  // `afterStep` cancels every countdown whose bloc changed or stopped qualifying, at every step,
+  // so each countdown ending now still qualifies and one of them has won.
+  fail(`domination_end (seq ${ev.seq}) of ${ev.ref}: no ending countdown qualifies`);
 }
 
 /**

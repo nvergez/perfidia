@@ -10,6 +10,7 @@ import {
   unitsAtHome,
 } from "@perfidia/engine/std";
 import {
+  readableNumbers,
   seatBudget,
   seatOf,
   unreadNews,
@@ -46,6 +47,7 @@ import { renderData, renderEvent } from "./events.ts";
 import {
   byArrival,
   homecomingFoe,
+  originOf,
   ownMovements,
   partyOf,
   seenMovements,
@@ -148,7 +150,7 @@ function incomingEntry(r: ReadCtx, seat: PlayerId, s: SeenMovement): BriefingInc
   const entry: BriefingIncoming = {
     id: m.id,
     kind: m.kind,
-    from: m.from,
+    from: originOf(m, s.access),
     by: m.owner,
     to: m.to,
     depart: timePair(m.departAt),
@@ -219,9 +221,13 @@ function messageEntry(d: Delivered): MessageEntry | null {
   return parsed.success ? parsed.data : null;
 }
 
-/** An entry that can give way, with the game time it happened at. */
+/**
+ * An entry that can give way, with the game time it happened at and, for an archived event (every
+ * list but `moves`), its delivery number.
+ */
 interface Item<V> {
   readonly t: GameTime;
+  readonly e?: number;
   readonly value: V;
 }
 
@@ -234,21 +240,25 @@ interface Lists {
 
 /**
  * The call that lists the entries left out of a list (§8.2): `view_player` on oneself for `moves`;
- * for the others a `read_notes` search since the last briefing, newest first: of the messages
- * (`msgs`), of the event types left out (`events`, an addition to §8.2, whose calls cover `moves`,
- * `msgs` and `news` only), or of the public feed (`news`). The search also returns the entries the
- * briefing kept and, for `msgs`, the seat's own messages, so it can list more than `count`.
+ * for the others a `read_notes` search since the last briefing, newest first, of the entries
+ * numbered below `before` (one past the newest entry left out, so none the briefing kept): of the
+ * messages (`msgs`), of the event types left out (`events`, an addition to §8.2, whose calls cover
+ * `moves`, `msgs` and `news` only), or of the public feed (`news`). For `msgs` the search also
+ * lists the seat's own messages of that span; past 20 hits, `more` pages on with `before`.
  */
 function moreCall(
   name: ListName,
   seat: PlayerId,
   since: GameTime,
+  before: number,
   leftTypes: readonly string[],
 ): BriefingMore["call"] {
   if (name === "moves") return { tool: "view_player", args: { player: seat } };
-  if (name === "news") return { tool: "read_notes", args: { search: { scope: "public", since } } };
+  if (name === "news") {
+    return { tool: "read_notes", args: { search: { scope: "public", since, before } } };
+  }
   const kinds = name === "msgs" ? ["message"] : [...new Set(leftTypes)].toSorted(byCodeUnit);
-  return { tool: "read_notes", args: { search: { scope: "mine", kinds, since } } };
+  return { tool: "read_notes", args: { search: { scope: "mine", kinds, since, before } } };
 }
 
 /** How many entries of each list are kept. */
@@ -266,13 +276,19 @@ function moreOf(
   keep: Readonly<Keep>,
   seat: PlayerId,
   since: GameTime,
+  readable: () => ReadonlyMap<number, number>,
 ): Record<string, BriefingMore> | null {
   const more: Record<string, BriefingMore> = {};
   // Entries left out: the latest arrivals of `moves`, the oldest entries of the other lists.
   const leftTypes = all.events.slice(0, all.events.length - keep.events).map((x) => x.value.type);
   for (const name of ["moves", "msgs", "events", "news"] as const) {
-    const count = all[name].length - keep[name];
-    if (count > 0) more[name] = { count, call: moreCall(name, seat, since, leftTypes) };
+    const list: readonly Item<unknown>[] = all[name];
+    const count = list.length - keep[name];
+    if (count <= 0) continue;
+    // One past the readable number of the newest entry left out: the search lists it and older.
+    const newest = list[count - 1]?.e;
+    const before = newest === undefined ? 1 : (readable().get(newest) ?? 0) + 1;
+    more[name] = { count, call: moreCall(name, seat, since, before, leftTypes) };
   }
   return Object.keys(more).length === 0 ? null : more;
 }
@@ -329,7 +345,7 @@ export function buildBriefing(
     const ev = d.event;
     if (ev.type === "message") {
       const entry = ev.data["from"] === seat ? null : messageEntry(d);
-      if (entry !== null) msgs.push({ t: ev.t, value: entry });
+      if (entry !== null) msgs.push({ t: ev.t, e: d.e, value: entry });
       continue;
     }
     if (ev.type === "proposal") continue;
@@ -339,12 +355,18 @@ export function buildBriefing(
       (ev.type.startsWith("incoming_")
         ? visibleIds.has(movement) || recalledIds.has(movement)
         : ev.type === "movement_recalled" && recalledIds.has(movement));
-    if (!listed) events.push({ t: ev.t, value: renderEvent(ev) });
+    if (!listed) events.push({ t: ev.t, e: d.e, value: renderEvent(ev) });
   }
   const news: Item<EventEntry>[] = unreadNews(gw, seat).map((d) => ({
     t: d.event.t,
+    e: d.e,
     value: renderEvent(d.event),
   }));
+  let numbers: ReadonlyMap<number, number> | null = null;
+  const readable = (): ReadonlyMap<number, number> => {
+    numbers ??= readableNumbers(gw, seat);
+    return numbers;
+  };
 
   const b = seatBudget(s, gatewayRulesCopy(r.rules.gateway), now);
   const budget: Briefing["budget"] = {
@@ -369,6 +391,7 @@ export function buildBriefing(
             if (u.count !== undefined) entry["count"] = u.count;
             return entry;
           }),
+          warnings: last.warnings.map((w) => ({ tool: w.tool, code: w.code, message: w.message })),
           nextWake:
             last.nextWake === null
               ? null
@@ -399,7 +422,7 @@ export function buildBriefing(
       events: keptOf("events", events, keep.events),
       news: keptOf("news", news, keep.news),
     };
-    const more = moreOf(all, keep, seat, s.lastBriefingAt);
+    const more = moreOf(all, keep, seat, s.lastBriefingAt, readable);
     if (more !== null) briefing.more = more;
     return briefing;
   };

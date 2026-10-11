@@ -132,7 +132,7 @@ describe("cancelFrom", () => {
     const keep = enqueueRecruit(ctx, "c1", "pike", 1);
     ctx.setNow(1000);
     const before = stockAt(ctx.read(), "c1");
-    const credited = cancelFrom(ctx, "c1", a.id);
+    const credited = cancelFrom(ctx, "c1", a.id).refund;
     expect(credited).toEqual(res(32 + 68, 80 + 170, 48 + 102));
     expect(stockAt(ctx.read(), "c1")).toEqual(
       res(before.wood + 100, before.stone + 250, before.gold + 150),
@@ -146,7 +146,7 @@ describe("cancelFrom", () => {
     const ctx = ctxAt();
     const batch = enqueueRecruit(ctx, "c1", "pike", 5); // 272 s each
     ctx.setNow(600); // units 1 and 2 done, unit 3 in training
-    const credited = cancelFrom(ctx, "c1", batch.id);
+    const credited = cancelFrom(ctx, "c1", batch.id).refund;
     expect(credited).toEqual(res(90, 180, 90));
     expect(cityOf(ctx, "c1").units.pike).toBe(22);
     expect(cityOf(ctx, "c1").recruit["camp"]).toEqual([]);
@@ -160,7 +160,7 @@ describe("cancelFrom", () => {
     const b = enqueueRecruit(ctx, "c1", "axe", 2);
     const c = enqueueRecruit(ctx, "c1", "pike", 2);
     ctx.setNow(100);
-    expect(cancelFrom(ctx, "c1", b.id)).toEqual(res(160, 160, 180));
+    expect(cancelFrom(ctx, "c1", b.id).refund).toEqual(res(160, 160, 180));
     expect(cityOf(ctx, "c1").recruit["camp"]?.map((x) => [x.id, x.end])).toEqual([[a.id, a.end]]);
     expect(seqs(ctx)).toEqual([a.seq]);
     expect(seqs(ctx)).not.toContain(c.seq);
@@ -173,23 +173,39 @@ describe("cancelFrom", () => {
     const r1 = enqueueRecruit(ctx, "c1", "pike", 4);
     enqueueRecruit(ctx, "c1", "axe", 2);
     ctx.setNow(1000);
-    expect(cancelFrom(ctx, "c1", a.id)).toEqual(res(24 + 68, 60 + 170, 36 + 102));
-    expect(cancelFrom(ctx, "c1", r1.id)).toEqual(res(60 + 100, 120 + 40, 60 + 120));
+    expect(cancelFrom(ctx, "c1", a.id).refund).toEqual(res(24 + 68, 60 + 170, 36 + 102));
+    expect(cancelFrom(ctx, "c1", r1.id).refund).toEqual(res(60 + 100, 120 + 40, 60 + 120));
     expect(cityOf(ctx, "c1").units.pike).toBe(20); // batch delivery: nothing was delivered
     expect(ctx.state.queue).toEqual([]);
   });
 
-  test("refunds are capped by storage and the result is what was credited", () => {
+  test("refunds are capped by storage: the result is what was credited and what the cap cut", () => {
     const ctx = ctxAt();
     const c2 = cityOf(ctx, "c2");
     const item = enqueueRecruit(ctx, "c2", "pike", 5); // 150/300/150 paid
     c2.stock = res(1000 * SCALE, 990 * SCALE, 0);
-    expect(cancelFrom(ctx, "c2", item.id)).toEqual(res(0, 10, 150));
+    expect(cancelFrom(ctx, "c2", item.id)).toEqual({
+      refund: res(0, 10, 150),
+      lost: res(150, 290, 0),
+    });
     expect(stockAt(ctx.read(), "c2")).toEqual(res(1000, 1000, 150));
   });
 
   test("an unknown item is an error", () => {
     expect(() => cancelFrom(ctxAt(), "c1", 9)).toThrow(StdError);
+  });
+
+  test("an item that starts exactly now is active: refunded at pm, not at queuedPm", () => {
+    const ctx = ctxAt(0, batchRules());
+    enqueueBuild(ctx, "c1", "woodcut");
+    const b = enqueueBuild(ctx, "c1", "woodcut"); // 68/170/102, starts when the first ends
+    ctx.setNow(b.start);
+    expect(cancelFrom(ctx, "c1", b.id).refund).toEqual(res(34, 85, 51));
+    const ctx2 = ctxAt(0, batchRules());
+    enqueueRecruit(ctx2, "c1", "pike", 1);
+    const r = enqueueRecruit(ctx2, "c1", "pike", 2); // 2 × 30/60/30, starts when the first ends
+    ctx2.setNow(r.start);
+    expect(cancelFrom(ctx2, "c1", r.id).refund).toEqual(res(30, 60, 30));
   });
 });
 
@@ -211,13 +227,27 @@ describe("queue_empty is never emitted by removals", () => {
 });
 
 describe("removeQueueItems, reflowQueue, clearQueues", () => {
+  test("removeQueueItems refuses a repeated id or a rate outside 0..1000, and changes nothing", () => {
+    const ctx = ctxAt();
+    const a = enqueueRecruit(ctx, "c1", "pike", 1);
+    const b = enqueueRecruit(ctx, "c1", "pike", 1);
+    const before = structuredClone(cityOf(ctx, "c1").recruit);
+    expect(() => removeQueueItems(ctx, "c1", "camp", [b.id, b.id], [1000, 1000])).toThrow(StdError);
+    expect(() => removeQueueItems(ctx, "c1", "camp", [a.id], [1001])).toThrow(StdError);
+    expect(() => removeQueueItems(ctx, "c1", "camp", [a.id], [-1])).toThrow(StdError);
+    expect(cityOf(ctx, "c1").recruit).toEqual(before);
+  });
+
   test("removing a middle item leaves a gap that reflowQueue closes, rescheduling events", () => {
     const ctx = ctxAt();
     const a = enqueueRecruit(ctx, "c1", "pike", 2); // 0..544
     const b = enqueueRecruit(ctx, "c1", "pike", 2); // 544..1088
     const oldSeq = enqueueRecruit(ctx, "c1", "pike", 2).seq; // 1088..1632
     ctx.setNow(100);
-    expect(removeQueueItems(ctx, "c1", "camp", [b.id], [500])).toEqual(res(30, 60, 30));
+    expect(removeQueueItems(ctx, "c1", "camp", [b.id], [500])).toEqual({
+      refund: res(30, 60, 30),
+      lost: res(0, 0, 0),
+    });
     expect(cityOf(ctx, "c1").recruit["camp"]?.map((x) => [x.start, x.end])).toEqual([
       [0, 544],
       [1088, 1632],
@@ -254,7 +284,10 @@ describe("removeQueueItems, reflowQueue, clearQueues", () => {
     enqueueRecruit(refunded, "c1", "pike", 5);
     refunded.setNow(600);
     const before = stockAt(refunded.read(), "c1");
-    clearQueues(refunded, "c1", true);
+    expect(clearQueues(refunded, "c1", true)).toEqual({
+      refund: res(38 + 90, 96 + 180, 57 + 90),
+      lost: res(0, 0, 0),
+    });
     expect(stockAt(refunded.read(), "c1")).toEqual(
       res(before.wood + 38 + 90, before.stone + 96 + 180, before.gold + 57 + 90),
     );
@@ -265,7 +298,7 @@ describe("removeQueueItems, reflowQueue, clearQueues", () => {
     enqueueRecruit(kept, "c1", "pike", 5);
     kept.setNow(600);
     const before2 = stockAt(kept.read(), "c1");
-    clearQueues(kept, "c1", false);
+    expect(clearQueues(kept, "c1", false)).toEqual({ refund: res(0, 0, 0), lost: res(0, 0, 0) });
     expect(stockAt(kept.read(), "c1")).toEqual(before2);
     expect(cityOf(kept, "c1").units.pike).toBe(22);
     expect(kept.state.queue).toEqual([]);

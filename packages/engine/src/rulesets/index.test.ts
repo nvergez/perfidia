@@ -51,6 +51,8 @@ function rejection(list: readonly AnyRuleset[]): string {
   return "accepted";
 }
 
+const someText = () => ({ message: "m", hint: "h" });
+
 const readTool = (name: string, args: z.ZodType = z.strictObject({})): ExtraTool => ({
   name,
   family: "observe",
@@ -231,6 +233,48 @@ describe("validateRegistry rejects", () => {
     expect(rejection([variant(sandbox, "1.0.1", { errorSamples: [] })])).toContain(
       "has no entry in errorSamples",
     );
+  });
+
+  test("a wake key or a publicOncePerDay entry that names no event type of the build", () => {
+    const wake = variant(sandbox, "1.0.1", {}, (r) => ({
+      ...r,
+      gateway: { ...r.gateway, wake: { ...r.gateway.wake, incomming_attack: { party: "urgent" } } },
+    }));
+    expect(rejection([wake])).toContain(
+      "N = 2: gateway.wake names incomming_attack, which is neither a standard event type nor a key of eventSchemas",
+    );
+    const once = variant(sandbox, "1.0.1", {}, (r) => ({
+      ...r,
+      gateway: { ...r.gateway, publicOncePerDay: ["hill_opened"] },
+    }));
+    expect(rejection([once])).toContain("gateway.publicOncePerDay names hill_opened");
+    // city_renamed is a public event of sandbox-1, but its data has no key to group by.
+    const keyless = variant(sandbox, "1.0.1", {}, (r) => ({
+      ...r,
+      gateway: { ...r.gateway, publicOncePerDay: ["city_renamed"] },
+    }));
+    expect(rejection([keyless])).toContain(
+      "gateway.publicOncePerDay names city_renamed, whose data has no required key field to group by",
+    );
+    const keyed = variant(
+      sandbox,
+      "1.0.1",
+      { eventSchemas: { ...sandbox.eventSchemas, tick: z.looseObject({ key: z.string() }) } },
+      (r) => ({ ...r, gateway: { ...r.gateway, publicOncePerDay: ["tick"] } }),
+    );
+    expect(rejection([keyed])).toBe("accepted");
+  });
+
+  test("an errors code that reuses a domain code or a gateway warning", () => {
+    for (const code of ["NOT_OWNER", "WAKE_CLAMPED"]) {
+      const reused = variant(sandbox, "1.0.1", {
+        errors: { ...sandbox.errors, [code]: someText },
+        errorSamples: [...sandbox.errorSamples, { code, details: {} }],
+      });
+      expect(rejection([reused])).toContain(
+        `errors.${code} reuses a domain or gateway code, which the gateway words itself`,
+      );
+    }
   });
 });
 

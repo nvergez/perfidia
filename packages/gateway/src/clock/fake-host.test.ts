@@ -6,7 +6,7 @@ import {
   FakeHostError,
   replayFakeTrace,
   traceViolations,
-} from "./fake-host.ts";
+} from "./testkit.test.ts";
 import type { TurnHandle } from "./types.ts";
 
 // The driver tests rest on this double, so its wake model and its contract checks are tested too.

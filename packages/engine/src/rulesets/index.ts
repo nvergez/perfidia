@@ -9,13 +9,18 @@ import { checkEventKinds, resolveConfig } from "@perfidia/engine/kernel";
 import { perfidia1_1_0_0 } from "@perfidia/engine/rulesets/perfidia-1";
 import { sandbox1_1_0_0 } from "@perfidia/engine/rulesets/sandbox-1";
 import {
+  DOMAIN_ERROR_CODES,
+  GATEWAY_WARNING_CODES,
   INTEL_EVENT_TYPES,
   RulesetIdSchema,
   RulesetRefSchema,
+  STANDARD_EVENT_DATA,
   STANDARD_EVENT_TYPES,
   SemverSchema,
   TOOL_NAMES,
   z,
+  type CompiledRules,
+  type ZodType,
 } from "@perfidia/protocol";
 
 /** Every ruleset version of this build, published and test. */
@@ -170,6 +175,74 @@ function checkEvents(rs: AnyRuleset): void {
   }
 }
 
+/** The data schema of an event type: a standard type's, else the ruleset's own, else `undefined`. */
+function eventSchemaOf(rs: AnyRuleset, type: string): ZodType | undefined {
+  const standard: Readonly<Record<string, ZodType>> = STANDARD_EVENT_DATA;
+  if (Object.hasOwn(standard, type)) return standard[type];
+  return Object.hasOwn(rs.eventSchemas, type) ? rs.eventSchemas[type] : undefined;
+}
+
+/** Whether an event schema declares a required `key` field (what `publicOncePerDay` groups by). */
+function hasKeyField(schema: ZodType): boolean {
+  try {
+    const json = z.toJSONSchema(schema);
+    const props = json["properties"];
+    const required = json["required"];
+    return (
+      props !== null &&
+      typeof props === "object" &&
+      Object.hasOwn(props, "key") &&
+      Array.isArray(required) &&
+      required.includes("key")
+    );
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The gateway tables of one compiled rule set name only event types this build can emit (a
+ * misspelt wake key would silently never wake anyone), and every `publicOncePerDay` type carries
+ * the `key` field its once-per-day grouping reads.
+ */
+function checkGatewayTables(rs: AnyRuleset, n: number, rules: CompiledRules): void {
+  const unknown = (field: string, type: string): RegistryError =>
+    new RegistryError(
+      rs.ref,
+      `N = ${n}: gateway.${field} names ${type}, which is neither a standard event type nor a key of eventSchemas`,
+    );
+  for (const type of Object.keys(rules.gateway.wake)) {
+    if (eventSchemaOf(rs, type) === undefined) throw unknown("wake", type);
+  }
+  for (const type of rules.gateway.publicOncePerDay) {
+    const schema = eventSchemaOf(rs, type);
+    if (schema === undefined) throw unknown("publicOncePerDay", type);
+    if (!hasKeyField(schema)) {
+      throw new RegistryError(
+        rs.ref,
+        `N = ${n}: gateway.publicOncePerDay names ${type}, whose data has no required key field to group by`,
+      );
+    }
+  }
+}
+
+/**
+ * A ruleset code must not reuse a domain code or a gateway warning: the gateway words those
+ * itself first, so the ruleset's explainer would be dead text, and a later gateway code of the
+ * same name would silently change what agents read under a frozen ref.
+ */
+function checkErrorCodes(rs: AnyRuleset): void {
+  const core = new Set<string>([...DOMAIN_ERROR_CODES, ...GATEWAY_WARNING_CODES]);
+  for (const code of Object.keys(rs.errors)) {
+    if (core.has(code)) {
+      throw new RegistryError(
+        rs.ref,
+        `errors.${code} reuses a domain or gateway code, which the gateway words itself`,
+      );
+    }
+  }
+}
+
 function checkSamples(rs: AnyRuleset): void {
   for (const code of Object.keys(rs.errors)) {
     if (!rs.errorSamples.some((v) => v.code === code)) {
@@ -193,7 +266,9 @@ function checkConfig(rs: AnyRuleset): void {
   }
   const { min, max } = rs.players(resolved.config);
   for (let n = min; n <= max; n += 1) {
-    const issues = checkEventKinds(rs, domain, rs.compile(resolved.config, n), []);
+    const rules = rs.compile(resolved.config, n);
+    checkGatewayTables(rs, n, rules);
+    const issues = checkEventKinds(rs, domain, rules, []);
     const first = issues[0];
     if (first !== undefined) {
       throw new RegistryError(
@@ -224,7 +299,10 @@ function checkIdentity(rs: AnyRuleset): void {
  * redeclares a standard one; an `intelEvents` entry that is not a key of `eventSchemas`; an extra
  * tool whose name is not snake_case or collides with `TOOL_NAMES` or another extra, whose `args`
  * do not convert with `z.toJSONSchema` to a root `type: "object"`, which is a `write` tool while
- * `hooks.actions.ext` is missing, or a `read` tool without `read`; an `errors` code without a sample.
+ * `hooks.actions.ext` is missing, or a `read` tool without `read`; an `errors` code without a
+ * sample, or one that reuses a domain code or a gateway warning; a `gateway.wake` key or a
+ * `publicOncePerDay` entry that is no event type of the build, or a `publicOncePerDay` type
+ * without a required `key` field.
  */
 export function validateRegistry(list: readonly AnyRuleset[] = RULESETS): void {
   const refs = new Set<string>();
@@ -237,6 +315,7 @@ export function validateRegistry(list: readonly AnyRuleset[] = RULESETS): void {
     checkConfig(rs);
     checkEvents(rs);
     checkTools(rs);
+    checkErrorCodes(rs);
     checkSamples(rs);
   }
 }

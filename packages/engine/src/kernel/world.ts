@@ -13,7 +13,6 @@ import {
   type DeepReadonly,
   type GameState,
   type MatchSetup,
-  type PlayerId,
   type Sha256,
   type UnitCounts,
 } from "@perfidia/protocol";
@@ -336,9 +335,4 @@ function travelIssues(p: WorldParams, state: GameState): ConfigIssue[] {
     }
   }
   return issues;
-}
-
-/** The player ids of a setup, `p1..pN`. */
-export function seatIds(setup: MatchSetup): PlayerId[] {
-  return setup.seats.map((s) => s.id);
 }

@@ -9,6 +9,7 @@
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { getRuleset, loadMatch, verifyLog } from "@perfidia/engine";
+import { PerfidiaExtSchema } from "@perfidia/engine/rulesets/perfidia-1";
 import { buildBriefing } from "@perfidia/gateway";
 import type { Json, LogLine } from "@perfidia/protocol";
 import { parseVariant, runBatch } from "../batch/index.ts";
@@ -147,6 +148,18 @@ async function runChecked(name: string, t: Target, clock: ClockChoice, s = spec(
     lines: run.lines.length,
   });
   return { run, summary, wallMs, levelEMs } satisfies Checked;
+}
+
+/** `[hour, ext.domination.open]` at every checkpoint of a perfidia-1 log, from a Level E replay. */
+function dominationOpenByHour(lines: readonly LogLine[]): [number, boolean][] {
+  const out: [number, boolean][] = [];
+  verifyLog(lines, {
+    onCheckpoint: (hour, r) => {
+      const ext = PerfidiaExtSchema.parse(r.state.ext);
+      out.push([hour, ext.domination.open]);
+    },
+  });
+  return out;
 }
 
 /** The 95th percentile of a sample, rounded to the microsecond. */
@@ -298,9 +311,39 @@ suite("phase-1 exit criterion (§13.7)", () => {
       const header = r.run.lines[0];
       expect(header?.k === "header" && header.setup.overrides).toEqual({});
       expect(r.summary.endedAt).toBeLessThanOrEqual(MATCH_END);
-      // Domination runs at full scale from day 4: a domination end is accepted and reported.
+      // Domination runs at full scale from day 4: closed before 259200, open from then on (the
+      // `domination_open` timer fired and `afterStep` evaluated every bloc), and a domination end
+      // is accepted and reported.
+      const open = dominationOpenByHour(r.run.lines);
+      expect(open.filter(([hour]) => hour < 72).every(([, o]) => !o)).toBe(true);
+      const late = open.filter(([hour]) => hour >= 72);
+      expect(late.length).toBeGreaterThan(0);
+      expect(late.every(([, o]) => o)).toBe(true);
       console.log(
         `published defaults: ended at ${r.summary.endedAt} (${r.summary.reason}), winners ${r.summary.winners.join(", ")}`,
+      );
+    },
+    RUN_TIMEOUT,
+  );
+
+  test(
+    "perfidia-1@1.0.0 with a domination threshold the bots reach: countdowns start, and are cancelled or won",
+    async () => {
+      // The published config with only the threshold lowered (8 of about 70 cities, no per-player
+      // floor), so the full domination code path runs: starts, cancellations, a possible win.
+      const t: Target = {
+        ref: "perfidia-1@1.0.0",
+        overrides: { "victory.dominationPm": 110, "victory.dominationMinPerPlayer": 0 },
+      };
+      const r = await runChecked("perfidia-1@1.0.0 domination", t, LOCKSTEP);
+      const types = (type: string): number =>
+        r.run.lines.filter((l) => l.k === "ev" && l.e.type === type).length;
+      const started = types("domination_started");
+      const cancelled = types("domination_cancelled");
+      expect(started).toBeGreaterThan(0);
+      if (r.summary.reason !== "domination") expect(cancelled).toBeGreaterThan(0);
+      console.log(
+        `domination run: ${started} countdowns started, ${cancelled} cancelled; ended at ${r.summary.endedAt} (${r.summary.reason}), winners ${r.summary.winners.join(", ")}`,
       );
     },
     RUN_TIMEOUT,

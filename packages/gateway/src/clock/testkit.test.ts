@@ -14,12 +14,13 @@ import type {
 } from "@perfidia/protocol";
 import type { AgentFailure, ClockHost, TurnHandle } from "./types.ts";
 
-// A scripted `ClockHost` for driver tests (§9.4: "Driver tests use a scripted FakeHost"). It is a
-// test double, not exported by the package barrel. It models just enough of the wake scheduler of
-// §8.5 to make the drivers' behaviour observable: a start wake at 0, urgent triggers with a gap,
-// normal triggers grouped by a window, self-wakes, a safety wake, no wake time while a seat is in a
-// turn, and `end(t)` pushing normal wakes to `t + 1`. Every state change goes through a method a
-// driver calls, and is recorded in `trace`, so `replayFakeTrace` can rebuild a run from its trace.
+// A scripted `ClockHost` for driver tests (§9.4: "Driver tests use a scripted FakeHost"): a test
+// double, kept in a `*.test.ts` kit like every test kit and never exported. It models just enough
+// of the wake scheduler of §8.5 to make the drivers' behaviour observable: a start wake at 0,
+// urgent triggers with a gap, normal triggers grouped by a window, self-wakes, a safety wake, no
+// wake time while a seat is in a turn, and `end(t)` pushing normal wakes to `t + 1`. Every state
+// change goes through a method a driver calls, and is recorded in `trace`, so `replayFakeTrace`
+// can rebuild a run from its trace.
 // It throws `FakeHostError` whenever a driver breaks the `ClockHost` contract.
 
 export class FakeHostError extends Error {

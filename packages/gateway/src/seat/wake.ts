@@ -267,6 +267,7 @@ export function createWakeScheduler(gw: GatewayState, rules: GatewayRules): Wake
     else if (charge === "social") day.socialWakes += 1;
     s.turns += 1;
     s.turnFailures = [];
+    s.turnWarnings = [];
     return {
       reasons,
       urgent,

@@ -8,7 +8,8 @@ export { MatchConfigError, checkRules } from "./checks.ts";
 export { configHashOf, parseOverride, resolveConfig, rulesHashOf } from "./config.ts";
 export { compareScheduled } from "./queue.ts";
 export { eventProblems, kernelInvariants, MintedIds, type InvariantLevel } from "./invariants.ts";
-export { HOUR, stateHash } from "./snapshot.ts";
+export { stateHash } from "./snapshot.ts";
+export { HOUR } from "@perfidia/engine/core";
 export { checkEventKinds } from "./world.ts";
 export {
   createMatch,

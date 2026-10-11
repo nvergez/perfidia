@@ -1,4 +1,4 @@
-import { CanonicalJsonError, canonicalJson, fnv1a64 } from "@perfidia/engine/core";
+import { canonicalJson, CanonicalJsonError, fnv1a64 } from "@perfidia/engine/core";
 import type { AnyRuleset } from "@perfidia/engine/contracts";
 import {
   GameStateSchema,
@@ -16,9 +16,6 @@ import { ENGINE_VERSION } from "./version.ts";
 
 // Snapshots (docs/architecture.md §10.3): `{format, engine, setup, configHash, rulesHash, hour, t,
 // afterN, hash, state}`, always a canonical copy, never a reference to the live state (§6.6).
-
-/** Game-seconds per checkpoint hour. */
-export const HOUR = 3600;
 
 /** FNV-1a 64 of the canonical state (§6.3). */
 export function stateHash(state: GameState): Hash64 {

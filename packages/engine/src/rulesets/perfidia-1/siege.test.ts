@@ -76,6 +76,45 @@ describe("siege start", () => {
       stone: 500 + 49 + 80 + 300,
       gold: 500 + 29 + 48 + 150,
     });
+    // The owner alone is told what was refunded (§9.1, §4.3).
+    const refunded = ofType(events, "queues_refunded");
+    expect(refunded.map((e) => [e.to, e.public])).toEqual([[[{ p: "p2", as: "target" }], false]]);
+    expect(refunded[0]?.data).toEqual({
+      city: "c2",
+      refund: { wood: 19 + 32 + 150, stone: 49 + 80 + 300, gold: 29 + 48 + 150 },
+      lost: { wood: 0, stone: 0, gold: 0 },
+    });
+  });
+
+  test("a refund the warehouse cannot hold is lost, and the owner is told how much (§4.3)", () => {
+    const w = world({ now: T });
+    city(w, { id: "c1", owner: "p1", island: "i1", units: { raider: 20, settler: 1 } });
+    city(w, {
+      id: "c2",
+      owner: "p2",
+      island: "i2",
+      buildings: { hall: 3, barracks: 2, warehouse: 1 },
+      stock: 1000,
+    });
+    addRecruitBatch(w.state, w.rules, "c2", "guard", 16, { unitTime: 300 });
+    addMovement(w.state, w.rules, {
+      kind: "attack",
+      owner: "p1",
+      from: "c1",
+      to: "c2",
+      units: { raider: 20, settler: 1 },
+      party: "p2",
+      departAt: T - 3599,
+      arriveAt: T + 1,
+    });
+    const match = load(w);
+    const { events } = match.advanceTo(T + 1);
+    expect(stockAt(match.read(), "c2")).toEqual({ wood: 1000, stone: 1000, gold: 1000 });
+    expect(copyFor(events, "queues_refunded", "p2").data).toEqual({
+      city: "c2",
+      refund: { wood: 0, stone: 0, gold: 0 },
+      lost: { wood: 480, stone: 960, gold: 480 },
+    });
   });
 
   test("the attacker's stand-aside units do not fight and join the garrison", () => {
@@ -218,10 +257,12 @@ describe("homecomings (§7.4, §9.3, §12)", () => {
       const warned = ofType(out.events, "incoming_attack");
       expect(warned).toHaveLength(1);
       expect(warned[0]?.to).toEqual([{ p: "p2", as: "party" }]);
-      // std.turnBack keeps the movement's origin as the return's `from`.
+      // std.turnBack keeps the movement's origin as the return's `from`; the besieger is not told
+      // where a return comes from (§9.3, §12).
+      expect(back?.from).toBe("c1");
       expect(warned[0]?.data).toEqual({
         movement: id,
-        from: "c1",
+        from: null,
         by: "p1",
         foe: "p2",
         to: "c1",
@@ -233,7 +274,11 @@ describe("homecomings (§7.4, §9.3, §12)", () => {
       const again = match.apply("p1", { type: "send_message", to: ["p3"], text: "hi" });
       expect(again.ok && ofType(again.events, "incoming_attack")).toEqual([]);
       const { events } = match.advanceTo(T + 3900);
-      const report = copyFor(events, "battle_report", "p1").data;
+      const copy = copyFor(events, "battle_report", "p1");
+      // A homecoming report is the returning owner's as `target` (a social wake): other players can
+      // send its troops home, and they never spend its own budget (§14.2).
+      expect(copy.to).toEqual([{ p: "p1", as: "target" }]);
+      const report = copy.data;
       expect(report).toMatchObject({ kind: "homecoming", attacker: "p1", defender: "p2" });
       expect(report["siege"]).toBe("broken");
       expect(extOf(match).sieges).toEqual({});
@@ -260,6 +305,8 @@ describe("homecomings (§7.4, §9.3, §12)", () => {
     const warned = copyFor(out.events, "incoming_attack", "p2");
     expect(warned.to).toEqual([{ p: "p2", as: "party" }]);
     expect(warned.data).toMatchObject({ by: "p1", foe: "p2", to: "c1", homecoming: true });
+    // Never where it comes from: c3 is where p1 had troops stationed (§12).
+    expect(warned.data["from"]).toBeNull();
     expect(movementBy(match, "p1", "return").party).toBe("p2");
     // Once the siege is over, the return has no homecoming foe any more.
     const left = match.apply("p2", { type: "recall_stationed", at: "c1", home: "c2", units: null });
@@ -442,6 +489,44 @@ describe("conquest (§9.4) and re-homing (§7.7)", () => {
     });
     expect(ofType(events, "pact_ended")[0]?.data).toMatchObject({ cause: "eliminated" });
     expect(match.ended).toBe(false);
+  });
+
+  test("eliminating a besieger breaks its own sieges only, not another player's (§9.7)", () => {
+    const w = world({ now: T });
+    city(w, { id: "c1", owner: "p1", island: "i3" });
+    city(w, { id: "c2", owner: "p2", island: "i1" });
+    city(w, { id: "c3", owner: "p3", island: "i3" });
+    city(w, { id: "c4", owner: "p4", island: "i4" });
+    city(w, { id: "c14", owner: "p5", island: "i2" });
+    besiege(w, {
+      city: "c14",
+      by: "p2",
+      garrison: [{ home: "c2", units: { settler: 1, raider: 3 } }],
+      endsAt: T + 100,
+    });
+    besiege(w, {
+      city: "c3",
+      by: "p5",
+      garrison: [{ home: "c14", units: { settler: 1, raider: 5 } }],
+      endsAt: T + 5000,
+    });
+    besiege(w, {
+      city: "c4",
+      by: "p1",
+      garrison: [{ home: "c1", units: { settler: 1, raider: 2 } }],
+      endsAt: T + 6000,
+    });
+    const match = load(w);
+    const before = extOf(match).sieges["c4"];
+    if (before === undefined) throw new Error("c4 is not besieged");
+    const { events } = match.advanceTo(T + 100);
+    expect(ofType(events, "siege_broken").map((e) => e.data["city"])).toEqual(["c3"]);
+    expect(extOf(match).sieges).toEqual({ c4: before });
+    expect(plain(cityIn(match, "c4").stationed)).toEqual([
+      { owner: "p1", home: "c1", role: "hold", units: { raider: 2, settler: 1 } },
+    ]);
+    const ends = match.read().state.queue.filter((e) => e.kind === "siege_end");
+    expect(ends.map((e) => e.ref)).toEqual(["c4"]);
   });
 
   test("the last player standing wins at once", () => {

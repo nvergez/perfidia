@@ -232,12 +232,21 @@ function removeTail(ctx: Ctx, c: City, queue: QueueId, from: number, withRefund:
 }
 
 /**
+ * A refund paid into a city's stock (§4.3 of perfidia-1: every addition is capped by the
+ * warehouse, and the excess is reported): what was credited, and what the storage cap cut.
+ */
+export interface Refund {
+  readonly refund: Res;
+  readonly lost: Res;
+}
+
+/**
  * Tail cancel: removes `item` and every later item of its queue, so remaining end times never
  * move; refunds per `queues.refund` (an active build item pro rata or at pm, queued items at
  * `queuedPm`; a recruit batch keeps its delivered units), capped by storage. Cancels the removed
- * items' events. Returns what was credited to the stock (the refund less what the cap cut).
+ * items' events. Returns what was credited to the stock and what the cap cut.
  */
-export function cancelFrom(ctx: Ctx, city: CityId, item: QueueItemId): Res {
+export function cancelFrom(ctx: Ctx, city: CityId, item: QueueItemId): Refund {
   const c = draftCity(ctx, city);
   const where = locate(ctx, c, item);
   if (where === null) fail(`${city} has no queue item #${item}`);
@@ -246,16 +255,16 @@ export function cancelFrom(ctx: Ctx, city: CityId, item: QueueItemId): Res {
   return credit(ctx, city, due);
 }
 
-function credit(ctx: Ctx, city: CityId, due: Readonly<Res>): Res {
+function credit(ctx: Ctx, city: CityId, due: Readonly<Res>): Refund {
   const lost = addCapped(ctx, city, due);
-  return resOf((id) => due[id] - lost[id]);
+  return { refund: resOf((id) => due[id] - lost[id]), lost };
 }
 
 /**
  * Removes the listed items from one queue (any positions), refunding item i at `refundPm[i]` per
  * mille of its cost (a recruit batch: of its undelivered units; delivered ones are kept), capped
  * by storage. Later items keep their times: call `reflowQueue` to close the gaps. Returns what was
- * credited. A building block for `cancel_queue` overrides.
+ * credited and what the cap cut. A building block for `cancel_queue` overrides.
  */
 export function removeQueueItems(
   ctx: Ctx,
@@ -263,7 +272,7 @@ export function removeQueueItems(
   queue: QueueId,
   items: readonly QueueItemId[],
   refundPm: readonly number[],
-): Res {
+): Refund {
   if (items.length !== refundPm.length) fail("removeQueueItems needs one refund rate per item");
   const c = draftCity(ctx, city);
   const list: { id: QueueItemId; seq: number }[] =
@@ -326,12 +335,13 @@ export function reflowQueue(ctx: Ctx, city: CityId, queue: QueueId): void {
 /**
  * Removes every item of every queue of the city and cancels their events. With `refund`, each
  * queue is refunded as a tail cancel from its head (`cancelFrom`'s rules), capped by storage;
- * without, nothing is refunded. Delivered recruits are kept. Never emits `queue_empty`.
+ * without, nothing is refunded. Delivered recruits are kept. Never emits `queue_empty`. Returns
+ * what was credited and what the cap cut (both zero without `refund`).
  */
-export function clearQueues(ctx: Ctx, city: CityId, refund: boolean): void {
+export function clearQueues(ctx: Ctx, city: CityId, refund: boolean): Refund {
   const c = draftCity(ctx, city);
   materialize(ctx, city);
   const due = removeTail(ctx, c, BUILD_QUEUE, 0, refund);
   for (const q of ctx.rules.queues.recruit) addRes(due, removeTail(ctx, c, q.id, 0, refund));
-  if (refund) credit(ctx, city, due);
+  return refund ? credit(ctx, city, due) : { refund: zeroRes(), lost: zeroRes() };
 }

@@ -19,7 +19,7 @@ import {
   thinkingAgent,
   traceViolations,
   unprintableError,
-} from "./fake-host.ts";
+} from "./testkit.test.ts";
 import {
   createRealtimeDriver,
   type RealtimeOptions,

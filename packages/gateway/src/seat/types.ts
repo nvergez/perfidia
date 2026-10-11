@@ -87,6 +87,26 @@ export interface UnseenFailure {
   count?: number;
 }
 
+/**
+ * A warning on an accepted call of the current turn (an addition to §8.4), kept until the turn
+ * closes: those of the latest round with one. The agent sees a round's warnings in the next round's
+ * results, but no round follows the last one, so `lastTurn.warnings` lists that round's.
+ */
+export interface TurnWarning {
+  /** Round index, from 0. */
+  round: number;
+  tool: string;
+  code: ErrorCode;
+  message: string;
+}
+
+/** A warning on an accepted call that the agent never saw (an addition to §8.2). */
+export interface UnseenWarning {
+  tool: string;
+  code: ErrorCode;
+  message: string;
+}
+
 /** How the previous turn ended (§8.2): the briefing's `lastTurn`, before times become pairs. */
 export interface LastTurn {
   ended: TurnEnd;
@@ -95,6 +115,8 @@ export interface LastTurn {
    * `CALLS_CAP` rejections, one entry per code (the first call's tool and message, with `count`).
    */
   unseen: UnseenFailure[];
+  /** Warnings on the last round's accepted calls, `end_turn`'s `WAKE_CLAMPED` included. */
+  warnings: UnseenWarning[];
   /** The effective next wake when the turn closed; `null` when there is none. */
   nextWake: { at: GameTime; kind: WakeKind } | null;
 }
@@ -121,6 +143,8 @@ export interface SeatState {
   lastTurn: LastTurn | null;
   /** Failures of the turn in progress (an addition to §8.4); emptied when a turn begins or closes. */
   turnFailures: TurnFailure[];
+  /** Warnings of the turn in progress (an addition to §8.4); emptied when a turn begins or closes. */
+  turnWarnings: TurnWarning[];
 }
 
 export interface GatewayState {

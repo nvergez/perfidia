@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import fc from "fast-check";
-import { rejectionOf } from "./fake-host.ts";
+import { rejectionOf } from "./testkit.test.ts";
 import { VirtualTime, VirtualTimeDeadlock } from "./virtual.ts";
 
 const tick = (): Promise<void> => new Promise((resolve) => setImmediate(resolve));

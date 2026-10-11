@@ -240,6 +240,19 @@ describe("rule data", () => {
     });
   });
 
+  test("time.recallWindow = 0 disables recalls: no kind is recallable (§18)", () => {
+    const config = PerfidiaConfigSchema.parse({
+      ...PERFIDIA_1_DEFAULTS,
+      time: { ...PERFIDIA_1_DEFAULTS.time, recallWindow: 0 },
+    });
+    expect(compileRules(config, 8).movement.recall).toEqual({
+      window: 0,
+      kinds: [],
+      stationed: "partial",
+      dismiss: true,
+    });
+  });
+
   test("allianceMax = max(2, floor(N / 3))", () => {
     expect(
       [6, 7, 8, 9, 10, 11, 12].map(

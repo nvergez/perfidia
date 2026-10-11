@@ -1,7 +1,13 @@
 import { describe, expect, test } from "bun:test";
 import type { RoundInput, SeatAgent, Sleep, TimeSource } from "@perfidia/protocol";
 import { describeError, UNPRINTABLE_ERROR } from "./errors.ts";
-import { answering, FakeHost, hostileAnswer, revokedError, unprintableError } from "./fake-host.ts";
+import {
+  answering,
+  FakeHost,
+  hostileAnswer,
+  revokedError,
+  unprintableError,
+} from "./testkit.test.ts";
 import { playRound, type RoundSettlement, settlementOf } from "./round.ts";
 import { VirtualTime } from "./virtual.ts";
 

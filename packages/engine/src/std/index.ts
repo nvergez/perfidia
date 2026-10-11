@@ -56,6 +56,7 @@ export {
   enqueueRecruit,
   reflowQueue,
   removeQueueItems,
+  type Refund,
 } from "./queues.ts";
 export { disbandHomed, eliminate, foundCity, rehomeAll, transferCity } from "./cities.ts";
 export { cancelProposalsOf, defaultRelations, endPact, leaveAlliance } from "./diplomacy.ts";

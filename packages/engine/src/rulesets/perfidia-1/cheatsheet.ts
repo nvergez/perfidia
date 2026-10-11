@@ -139,6 +139,7 @@ export function renderCheatSheet(
     `${INDENT}× ${config.movement.spyPace} s (spy, no units). Never less than ${hours(t.minTravel)}. Same time both ways. view_map lists them.`,
     `${INDENT}An incoming attack shows its origin, owner, launch and arrival times, never its units.`,
     `${INDENT}Its pace therefore shows whether it is warships only.`,
+    `${INDENT}A return heading into a city you besiege shows its owner and times only, never its origin.`,
     `${label("PRODUCTION")}producer level L: ${quadText(e.production, "L", "asc")} per hour.${richnessText(config)}`,
     `${label("STORAGE")}warehouse L holds ${quadText(e.warehouseCap, "L", "desc")} of each resource. ${e.lootProtectPerLevel}·L of each is safe from loot.`,
     `${label("POPULATION")}hall H allows ${quadText(e.popCap, "H", "desc")} pop. Every unit homed in the city counts, wherever it is.`,

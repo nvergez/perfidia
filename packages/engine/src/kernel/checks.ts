@@ -147,6 +147,14 @@ function checkNewCity(rules: Rules, out: Issues): void {
 }
 
 function checkTime(rules: Rules, out: Issues): void {
+  // Rates are per game hour and accrue per second (`std.accrualPerSecond`): only a scale that is a
+  // multiple of 3600 makes every whole rate a whole number of stored units per second.
+  if (rules.resourceScale % 3600 !== 0) {
+    out.add(
+      "resourceScale",
+      `is ${rules.resourceScale}; it must be a multiple of 3600 so that every rate per hour accrues a whole number of stored units per second`,
+    );
+  }
   if (rules.time.matchEnd < 1) {
     out.add("time.matchEnd", `is ${rules.time.matchEnd}; the match must last at least 1 s`);
   }
@@ -219,7 +227,7 @@ function checkDiplomacy(rules: Rules, out: Issues): void {
 /**
  * The generic checks of §3.6 on one compiled rule set: every build and recruit time ≥ 1 s and the
  * queue and level tables covering every `maxLevel`; the new-city stock within its storage cap;
- * `time.matchEnd ≥ 1`, `time.minTravel ≥ 1` and `gateway.urgentMinGap < time.minTravel`; the
+ * `resourceScale` a multiple of 3600 (exact per-second accrual); `time.matchEnd ≥ 1`, `time.minTravel ≥ 1` and `gateway.urgentMinGap < time.minTravel`; the
  * self-wake range, the safety wake, the per-turn caps and both daily wake budgets; the diplomacy
  * durations (`proposalTtl ≥ 1`, `pactDuration` null or ≥ 1). Pure; an empty list means the rules
  * pass.

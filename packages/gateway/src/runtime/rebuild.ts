@@ -12,6 +12,7 @@ import {
   deliver,
   recordAct,
   recordGw,
+  recordWarnings,
   seatOf,
   sortedSeats,
   writeNote,
@@ -29,7 +30,7 @@ import type {
   Violation,
   WakeLine,
 } from "@perfidia/protocol";
-import { INTERNAL_FALLBACK } from "./tools.ts";
+import { INTERNAL_FALLBACK, clampWarning, warningText } from "./tools.ts";
 
 // The gateway state rebuild (docs/architecture.md §10.5): a fold over a match log through the
 // engine's Level E replay (`verifyLog` with `onLine`), calling the same `seat/` functions as the
@@ -38,10 +39,12 @@ import { INTERNAL_FALLBACK } from "./tools.ts";
 //   header → createGatewayState, createWakeScheduler (the seats and the compiled gateway rules)
 //   ev     → deliver
 //   wake   → wake.begin (its reasons, urgency, charge, day and usage checked against the line), briefed
-//   act    → recordAct (a rejection worded from the violation the engine re-run returns)
+//   act    → recordAct (a rejection, or an accepted call's warnings, worded from what the engine
+//            re-run returns)
 //   gw     → recordGw (the message regenerated from the code and details)
 //   note   → writeNote
-//   turn   → closeTurn (wake.end, the line's selfAt, lastTurn; its next wake checked)
+//   turn   → recordWarnings (the line's clamp: end_turn's WAKE_CLAMPED), then closeTurn
+//            (wake.end, the line's selfAt, lastTurn; its next wake checked)
 //   defer  → wake.defer
 //
 // `obs`, `batch`, `controller`, `ckpt` and `end` change no gateway state. Every change to the live
@@ -220,7 +223,9 @@ class Fold {
       throw new Drift(`ok: ${String(line.r.ok)}`, `ok: ${String(applied.ok)}`);
     }
     const message = applied.ok ? null : messageOf(applied.violation, r, line.seat, this.gw);
-    recordAct(this.gw, line, message);
+    const env = { r, seat: line.seat, gw: this.gw };
+    const warnings = applied.ok ? applied.warnings.map((w) => warningText(w, env)) : [];
+    recordAct(this.gw, line, message, warnings);
   }
 
   private close(line: TurnLine, r: ReadCtx): void {
@@ -232,6 +237,12 @@ class Fold {
       );
     }
     const wake = this.scheduler;
+    if (line.clamp !== undefined) {
+      const env = { r, seat: line.seat, gw: this.gw };
+      recordWarnings(this.gw, line.seat, line.rounds - 1, "end_turn", [
+        warningText(clampWarning(line.clamp), env),
+      ]);
+    }
     closeTurn(this.gw, wake, {
       t: line.t,
       seat: line.seat,

@@ -3,6 +3,9 @@
 /** Game seconds in a game day. */
 export const DAY = 86400;
 
+/** Game seconds in a game hour (rates are per hour; checkpoints fall on every hour). */
+export const HOUR = 3600;
+
 /** The formatter handed to explainers (structurally identical to the `Fmt` of `contracts`). */
 export interface Fmt {
   time(t: number): string;

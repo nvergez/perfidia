@@ -3,7 +3,7 @@
 // violations several handlers share. Validation reads only the actor's own data and public data
 // (fog-safe, §7.2), and never writes.
 
-import { fmtTime } from "@perfidia/engine/core";
+import { fmtTime, own as lookup } from "@perfidia/engine/core";
 import type { ActionHandler, ReadCtx } from "@perfidia/engine/contracts";
 import {
   BUILD_QUEUE,
@@ -60,10 +60,8 @@ export class DomainError extends Error {
   }
 }
 
-/** The own value of `key`, never a prototype member. */
-export function lookup<V>(rec: Readonly<Record<string, V>>, key: string): V | undefined {
-  return Object.hasOwn(rec, key) ? rec[key] : undefined;
-}
+/** `core.own` under the domain's name: the own value of `key`, never a prototype member. */
+export { lookup };
 
 /** Like `lookup`, but a missing entry is an engine bug (the plan or the event named it). */
 export function need<V>(rec: Readonly<Record<string, V>>, key: string, what: string): V {

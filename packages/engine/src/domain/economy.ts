@@ -330,7 +330,8 @@ export interface CancelPlan {
 
 /**
  * `cancel_queue {city, item}`: a tail cancel (§5.3, §6.3 of perfidia-1) of `item` and every later
- * item of its queue, refunded per `queues.refund` and capped by storage (`std.cancelFrom`). An item
+ * item of its queue, refunded per `queues.refund` and capped by storage (`std.cancelFrom`): the
+ * result names what was credited (`refund`) and what the cap cut (`lost`). An item
  * in no queue (already completed, cancelled or never issued) is `QUEUE_ITEM`. Emits nothing, not
  * even `queue_empty`.
  */
@@ -352,7 +353,7 @@ export const cancelQueue = handler<ActionOf<"cancel_queue">, CancelPlan>({
     };
   },
   apply(ctx, _seat, plan) {
-    const refund = cancelFrom(ctx, plan.city, plan.item);
-    return { city: plan.city, queue: plan.queue, removed: [...plan.removed], refund };
+    const { refund, lost } = cancelFrom(ctx, plan.city, plan.item);
+    return { city: plan.city, queue: plan.queue, removed: [...plan.removed], refund, lost };
   },
 });

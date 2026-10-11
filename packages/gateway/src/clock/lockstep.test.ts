@@ -20,7 +20,7 @@ import {
   thinkingAgent,
   traceViolations,
   unprintableError,
-} from "./fake-host.ts";
+} from "./testkit.test.ts";
 import { createLockstepDriver, lockstepOrder, type LockstepOptions } from "./lockstep.ts";
 import { VirtualTime, VirtualTimeDeadlock } from "./virtual.ts";
 

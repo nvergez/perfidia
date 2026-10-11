@@ -25,6 +25,7 @@ import {
   MatchHost,
   MemorySink,
   createToolRegistry,
+  rebuildGatewayState,
   runMatch,
   type LogSink,
   type ToolRegistry,
@@ -307,6 +308,42 @@ describe("caps and the turn gate", () => {
     expect(kept).toEqual({ ok: true, t: 0, data: { wakeAt: null, clamped: false } });
     expect(failed(over).code).toBe("TURN_OVER");
     h2.close();
+  });
+
+  test("the last round's warnings, which no round shows, go to lastTurn; the rebuild agrees", () => {
+    const setup = setupOf(PERFIDIA, 6, {
+      "time.protectionEnd": 0,
+      "start.capital.units": { guard: 10, raider: 50, settler: 1, transport: 10 },
+    });
+    const { host, sink } = manualHost(PERFIDIA, setup);
+    const h = host.openTurn("p1");
+    // The usual LLM pattern: actions and end_turn in one round trip, whose results never return.
+    h.execute({
+      calls: [
+        call("attack", { from: "c1", to: "c2", units: { raider: 50, settler: 1, transport: 10 } }),
+        call("end_turn", { nextWakeIn: 999999 }),
+      ],
+    });
+    expect(h.done).toBe(true);
+    h.close();
+    const live = seatOf(host.gw, "p1").lastTurn;
+    expect(live?.warnings.map((w) => [w.tool, w.code])).toEqual([
+      ["attack", "CAPITAL_IMMUNE"],
+      ["end_turn", "WAKE_CLAMPED"],
+    ]);
+    expect(live?.warnings[1]?.message).toContain("is outside the self-wake range");
+    const lines = sink.parsed();
+    expect(linesOf(lines, "turn")[0]?.clamp).toEqual({ requested: 999999, at: 43200 });
+    const rebuilt = rebuildGatewayState(lines, (ref) =>
+      ref === PERFIDIA.ref ? PERFIDIA : undefined,
+    );
+    expect(rebuilt.drift).toBeNull();
+    expect(seatOf(rebuilt.gw, "p1").lastTurn).toEqual(live);
+    // A warning of an earlier round was shown in the next round's results: not listed again.
+    const h2 = host.openTurn("p2");
+    h2.execute({ calls: [call("end_turn", { nextWakeIn: 10 })] });
+    h2.close();
+    expect(seatOf(host.gw, "p2").lastTurn?.warnings.map((w) => w.code)).toEqual(["WAKE_CLAMPED"]);
   });
 });
 

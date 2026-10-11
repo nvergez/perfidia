@@ -29,7 +29,11 @@
 // - `WakeScheduler` adds `rules` (read by `deliver` for `publicOncePerDay`) and `peek(seat)` (the
 //   effective next wake, for the `turn` line's `next` and `lastTurn.nextWake`).
 // - State fields beyond §8.4 and §8.5: `SeatWake.urgentReasons` and `SeatWake.deferTo`,
-//   `SeatState.lastBriefingE` and `SeatState.turnFailures`.
+//   `SeatState.lastBriefingE`, `SeatState.turnFailures` and `SeatState.turnWarnings`.
+// - `lastTurn.warnings` lists the warnings on the last round's accepted calls (§8.2 lists only the
+//   failures): no round follows the last one, so the agent would never see them otherwise. They
+//   come from the `act` lines (`recordAct`'s `warnings`) and from the `turn` line's `clamp`
+//   (`end_turn`'s `WAKE_CLAMPED`, through `recordWarnings`).
 // - A seat's news (`unreadNews`) is the feed after the delivery number `lastBriefingE`, not after
 //   the time `lastBriefingAt` (a time cannot split the events of one second), and leaves out the
 //   events addressed to the seat, which its inbox already holds.
@@ -66,7 +70,9 @@ export type {
   SeatState,
   SeatWake,
   TurnFailure,
+  TurnWarning,
   UnseenFailure,
+  UnseenWarning,
   WakeRecord,
   WakeScheduler,
 } from "./types.ts";
@@ -102,9 +108,11 @@ export {
   entryId,
   involves,
   openArchive,
+  readableNumbers,
   searchArchive,
   searchArchivePage,
   summarizeEvent,
   type ArchiveSearch,
 } from "./archive.ts";
-export { closeTurn, recordAct, recordGw } from "./turn.ts";
+export { closeTurn, recordAct, recordGw, recordWarnings, type WarningText } from "./turn.ts";
+export { copyJson, copyObject, isJsonArray, setOwn, stripControl } from "./clean.ts";

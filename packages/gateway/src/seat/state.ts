@@ -38,6 +38,7 @@ function initialSeat(seat: PlayerId): SeatState {
     turns: 0,
     lastTurn: null,
     turnFailures: [],
+    turnWarnings: [],
   };
 }
 

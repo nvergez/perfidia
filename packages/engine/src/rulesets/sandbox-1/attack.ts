@@ -1,3 +1,4 @@
+import { own } from "@perfidia/engine/core";
 import type { Ctx } from "@perfidia/engine/contracts";
 import {
   bounce,
@@ -65,10 +66,6 @@ const COLONIST = "colonist";
 
 function bug(message: string): never {
   throw new Error(`sandbox-1: ${message}`);
-}
-
-function own<V>(rec: Readonly<Record<string, V>>, key: string): V | undefined {
-  return Object.hasOwn(rec, key) ? rec[key] : undefined;
 }
 
 /** One defending group with where it sits. */

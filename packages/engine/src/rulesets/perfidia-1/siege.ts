@@ -6,6 +6,7 @@ import {
   type MovementId,
   type PlayerId,
   type Recipient,
+  type Res,
   type Role,
   type ScheduledEvent,
   type UnitCounts,
@@ -21,7 +22,6 @@ import {
   rehomeAll,
   relationsOf,
   removeUnits,
-  sortedIds,
   startReturn,
   station,
   transferCity,
@@ -39,7 +39,7 @@ import {
   type PCtx,
   type PRead,
 } from "./common.ts";
-import { SIEGE_BROKEN, SIEGE_STARTED, type SiegeBreakCause } from "./events.ts";
+import { QUEUES_REFUNDED, SIEGE_BROKEN, SIEGE_STARTED, type SiegeBreakCause } from "./events.ts";
 import type { PerfidiaExt } from "./ext.ts";
 import { scoreRows } from "./scoring.ts";
 
@@ -47,11 +47,13 @@ import { scoreRows } from "./scoring.ts";
 // its garrison, the besieger's `hold` groups in the city, and its `siege_end` event (class 9).
 //
 // Homecoming warnings (§9.3, §12): the besieger is told about every return heading into the city
-// it besieges, as an `incoming_attack` with `homecoming: true` addressed to it as `party`, from the
-// siege start or from the return's creation. A told return records the besieger as its `party`
-// (the foe of the coming homecoming battle), which is how `afterStep` recognises the returns other
-// code created during a step and tells each one once. When the siege ends, the returns heading
-// into the city drop that foe again (`party: null`), so no view shows a stale one.
+// it besieges, as an `incoming_attack` with `homecoming: true` and `from: null` addressed to it as
+// `party`, from the siege start or from the return's creation. The origin stays hidden: it is the
+// target of a bounced movement, or a city where the returning player had troops stationed. A told
+// return records the besieger as its `party` (the foe of the coming homecoming battle), which is
+// how `afterStep` recognises the returns other code created during a step and tells each one once.
+// When the siege ends, the returns heading into the city drop that foe again (`party: null`), so
+// no view shows a stale one.
 
 /** The scheduled event that ends a siege (class 9), ref = the city. */
 export const SIEGE_END = "siege_end";
@@ -100,7 +102,7 @@ export function announceHomecoming(ctx: PCtx, m: MovementId): void {
     to: [{ p: siege.by, as: "party" }],
     data: {
       movement: m,
-      from: mv.from,
+      from: null,
       by: mv.owner,
       foe: siege.by,
       to: mv.home,
@@ -127,12 +129,18 @@ function forgetHomecomings(ctx: PCtx, city: CityId, by: PlayerId): void {
   }
 }
 
+/** Whether any resource of `r` is non-zero. */
+function anyRes(r: Readonly<Res>): boolean {
+  return r.wood > 0 || r.stone > 0 || r.gold > 0;
+}
+
 /**
  * Starts a siege of `city` by `by` (§9.1): the attack's survivors (`units`, homed in `home`) and the
  * attacker's stand-aside groups in the city become its garrison; the city's queues are cancelled
  * with normal refunds (no `queue_empty`); `siege_end` is scheduled `siegeDuration` later; the public
- * `siege_started` goes to the besieger, the owner and the owner's allies; every return already
- * heading into the city is announced to the besieger.
+ * `siege_started` goes to the besieger, the owner and the owner's allies, then the owner's private
+ * `queues_refunded` (what was credited and what the warehouse cap cut, §4.3) when anything was
+ * due; every return already heading into the city is announced to the besieger.
  */
 export function startSiege(
   ctx: PCtx,
@@ -149,7 +157,7 @@ export function startSiege(
     const moved = unstation(ctx, city, by, h, undefined, "support");
     station(ctx, city, { owner: by, home: h, role: "hold", units: moved });
   }
-  clearQueues(ctx, city, true);
+  const refunded = clearQueues(ctx, city, true);
   const endsAt = ctx.now + ctx.config.time.siegeDuration;
   const seq = ctx.schedule(SIEGE_END, endsAt, city);
   ctx.ext().sieges[city] = { by, startedAt: ctx.now, endsAt, seq };
@@ -161,6 +169,14 @@ export function startSiege(
     to: audience([[by, "self"], [owner, "target"], ...allies]),
     data: { city, owner, by, endsAt },
   });
+  if (owner !== null && (anyRes(refunded.refund) || anyRes(refunded.lost))) {
+    ctx.emit({
+      type: QUEUES_REFUNDED,
+      public: false,
+      to: [{ p: owner, as: "target" }],
+      data: { city, refund: { ...refunded.refund }, lost: { ...refunded.lost } },
+    });
+  }
   for (const m of returnsInto(ctx.state, city)) announceHomecoming(ctx, m);
 }
 
@@ -203,18 +219,17 @@ function scorePartsOf(ctx: PCtx, p: PlayerId): ScoreParts {
 /**
  * Eliminates `p` (§9.7): its score freezes at `score` (by default its parts now; a conquest passes
  * the parts it had with its last city), then `std.eliminate` removes its units, movements and
- * proposals and ends its alliance and pacts, and every siege `p` held breaks, its garrison gone.
+ * proposals and ends its alliance and pacts. The sieges `p` held lose their garrison with its
+ * units; `afterStep`'s garrison sweep breaks them (cause `eliminated`) at the end of this step,
+ * the one mechanism for every garrison left without a settler.
  */
 export function eliminatePlayer(
   ctx: PCtx,
   p: PlayerId,
   score: ScoreParts = scorePartsOf(ctx, p),
 ): void {
-  const x = ctx.ext();
-  const held = sortedIds(x.sieges).filter((c) => own(x.sieges, c)?.by === p);
-  x.frozenScores[p] = { cityPoints: score.cityPoints, battleScore: score.battleScore };
+  ctx.ext().frozenScores[p] = { cityPoints: score.cityPoints, battleScore: score.battleScore };
   eliminate(ctx, p);
-  for (const city of held) breakSiege(ctx, city, "eliminated");
 }
 
 /**
@@ -223,7 +238,8 @@ export function eliminatePlayer(
  * its buildings and stock, the public `city_conquered` goes out, and the former owner falls back
  * on its lowest-numbered city (everything homed in the conquered city is re-homed there and returns
  * heading to it sail on, §7.7) or is eliminated when it has none left, with the score it had
- * before this city fell (§9.7).
+ * before this city fell (§9.7). Returns that sail on into a besieged fallback are announced to its
+ * besieger by `afterStep`'s sweep at the end of this step, as every return other code re-homes.
  */
 function conquer(ctx: PCtx, city: CityId, by: PlayerId): void {
   const settler = ctx.rules.roles.settler;
@@ -243,7 +259,6 @@ function conquer(ctx: PCtx, city: CityId, by: PlayerId): void {
       garrison[unit] = (garrison[unit] ?? 0) + (n ?? 0);
   }
   const former = cityOf(ctx.state, city).owner;
-  const sailing = former === null ? [] : returnsInto(ctx.state, city);
   const lastScore = former === null ? undefined : scorePartsOf(ctx, former);
   forgetHomecomings(ctx, city, by);
   transferCity(ctx, city, by);
@@ -264,8 +279,6 @@ function conquer(ctx: PCtx, city: CityId, by: PlayerId): void {
     return;
   }
   rehomeAll(ctx, city, fallback);
-  for (const m of sailing)
-    if (own(ctx.state.movements, m) !== undefined) announceHomecoming(ctx, m);
 }
 
 /**

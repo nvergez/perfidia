@@ -18,7 +18,9 @@ import * as config from "./config.ts";
 import * as domination from "./domination.ts";
 import * as errors from "./errors.ts";
 import * as ext from "./ext.ts";
-import { extOf, testDomain } from "./fixtures.test.ts";
+import { domain } from "@perfidia/engine/domain";
+import { addMovement, matchFromState } from "@perfidia/engine/testing";
+import { city, extOf, testDomain, world } from "./fixtures.test.ts";
 import * as map from "./map.ts";
 import * as scoring from "./scoring.ts";
 import * as sin10k from "./sin10k.ts";
@@ -110,7 +112,6 @@ const T06_EXPORTS = [
   "sectorIslandId",
   "siegeOf",
   "sinT",
-  "splitLosses",
   "spyGoldNeeded",
   "spySucceeds",
   "standingsOf",
@@ -167,10 +168,11 @@ describe("the descriptor", () => {
     expect(Object.keys(P1.eventSchemas).toSorted(compareIds)).toEqual([
       "domination_cancelled",
       "domination_started",
+      "queues_refunded",
       "siege_broken",
       "siege_started",
     ]);
-    expect(P1.intelEvents).toEqual(["siege_started", "siege_broken"]);
+    expect(P1.intelEvents).toEqual(["siege_started", "siege_broken", "queues_refunded"]);
     for (const e of P1.intelEvents ?? []) expect(Object.hasOwn(P1.eventSchemas, e)).toBe(true);
     expect(P1.errorSamples.map((v) => v.code).toSorted(compareIds)).toEqual(
       Object.keys(P1.errors).toSorted(compareIds),
@@ -247,6 +249,36 @@ describe("a whole match through the kernel", () => {
       expect(match.result?.endedAt).toBe(86400);
     });
   }
+
+  test("time.recallWindow = 0 rejects a recall even in the launch second (§18); 600 accepts it", () => {
+    for (const window of [0, 600]) {
+      const w = world({ overrides: { "time.recallWindow": window } });
+      city(w, { id: "c1", owner: "p1", island: "i1", units: { raider: 10, transport: 1 } });
+      city(w, { id: "c2", owner: "p2", island: "i2" });
+      const m = addMovement(w.state, w.rules, {
+        kind: "attack",
+        owner: "p1",
+        from: "c1",
+        to: "c2",
+        party: "p2",
+        units: { raider: 5, transport: 1 },
+        arriveAt: w.state.now + 7200,
+      });
+      const match = matchFromState(w.state, P1, {
+        domain,
+        overrides: { "time.recallWindow": window },
+      });
+      const out = match.apply("p1", { type: "recall", movement: m.id });
+      if (window === 0) {
+        expect(out.ok ? "accepted" : out.violation).toMatchObject({
+          code: "NOT_RECALLABLE",
+          details: { window: 0, recallableUntil: null },
+        });
+      } else {
+        expect(out.ok).toBe(true);
+      }
+    }
+  });
 
   test("is deterministic: the same setup gives the same hashes", () => {
     expect(day(7, 5).hashes).toEqual(day(7, 5).hashes);

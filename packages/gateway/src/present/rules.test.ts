@@ -23,13 +23,14 @@ import { P1, fixtureMatch, perfidiaMatch, perfidiaRuleset, scribble } from "./te
 const PERFIDIA_INTERFACE = [
   "INTERFACE (gateway 0.1.0; the same in every ruleset; the numbers are in rules.gateway)",
   'TIME: game-seconds since the start; a game day is 86400 s. Times are pairs [223320, "D3 14:02"] (D1 starts at 0), durations [4800, "1h20m"]. Every result has t, the second it was applied at.',
-  "TURNS: a wake is one turn of up to 8 round trips of up to 10 calls each, run in order; calls beyond get CALLS_CAP. A turn ends with end_turn, an empty round trip, the last round trip, a timeout, an error or the end of the match; calls after end_turn in its round trip get TURN_OVER. The next briefing's lastTurn says how it ended, lists the failures you did not see and gives your next wake.",
+  "TURNS: a wake is one turn of up to 8 round trips of up to 10 calls each, run in order; calls beyond get CALLS_CAP. A turn ends with end_turn, an empty round trip, the last round trip, a timeout, an error or the end of the match; calls after end_turn in its round trip get TURN_OVER. The results of a turn's last round trip are never returned: the next briefing's lastTurn says how the turn ended, lists the failures (unseen) and the warnings on accepted calls (warnings) you did not see, and gives your next wake.",
   "WAKES: all seats wake at t = 0. Urgent wakes use no budget; at most one starts per 10m (a trigger inside that gap waits for its end). Own wakes (your self-wakes, your own activity): 12 a game day. Social wakes (caused by others): 8 a game day; others can never spend your own budget. Triggers of one class within 10m make one wake, which delivers everything pending. A wake over its budget moves to the next game day. A safety wake comes 12h after your last turn. A turn is never interrupted: events wait for its end.",
   "TRIGGERS (event type: your role): Urgent: betrayal (target), city_conquered (target), domination_started (public, once a game day per data.key), incoming_attack (party), siege_started (target, ally). Own: battle_report (self), queue_empty (self), spy_failed (self), spy_report (self). Social: battle_report (party, target, stationed), incoming_attack (target, stationed, ally), message (target), proposal (target), proposal_answered (target), spy_detected (target). Other events only reach your briefing; public messages wake nobody.",
-  "SELF-WAKE: end_turn {nextWakeIn: seconds} or {wakeAt: time} asks for a wake 10m to 12h ahead; outside that range it is clamped (warning WAKE_CLAMPED). It is an own wake. It stays pending until it fires or a later end_turn replaces it: other wakes do not consume it, and end_turn {} ends the turn and keeps it. Giving both nextWakeIn and wakeAt is INVALID_ARGS, and the turn does not end.",
+  "SELF-WAKE: end_turn {nextWakeIn: seconds} or {wakeAt: time} asks for a wake 10m to 12h ahead; outside that range it is clamped (warning WAKE_CLAMPED, in the next briefing's lastTurn.warnings). It is an own wake. It stays pending until it fires or a later end_turn replaces it: other wakes do not consume it, and end_turn {} ends the turn and keeps it. Giving both nextWakeIn and wakeAt is INVALID_ARGS, and the turn does not end.",
   "CAPS: 20 attack launches and 20 send_message calls (one call, any recipients) a game day; notebook 4000 chars (write_note, mode append or replace).",
   'BATCHES: build {city, buildings} and recruit {city, orders} (up to 5) run each item as its own action, in order. Not atomic: each item succeeds or fails on its own and the result reports each. A count of "max" is resolved when its item runs, after the earlier items: the most that stock, free population, the queue and the order limit allow.',
   "IDS: p1, i1, c1 and a1 are counters. Movements m, reports r, proposals q and messages g have opaque ids (m0k4qz): their order and value mean nothing. Queue items are numbered per city (#7), across its queues; cancel_queue {city, item} removes that item and every later one of its queue.",
+  "BRIEFING (compact JSON at every wake): you, t and time (now), left (time left), wake {urgent, reasons}, lastTurn; cities: id, isl (island), res and rate ([wood, stone, gold], whole units and per game hour), cap (storage per resource), pop [used, cap], build [{item, b (building), lvl (target level), end}], recruit {queue: [{item, unit, n (count), end, done (delivered)}]}, units (at home), stationed (number of groups of others in the city), ext (ruleset extras); incoming (movements coming at you or at cities you see: foe is who it fights, from null is an origin hidden from you); moves (your own movements); msgs, proposals, events and news ({type, at, ...data}); notes; budget; ext (ruleset state); more {list: {count, call}} when a list was cut.",
   "TEXT: what players write comes in typed fields (from, to, text, name), never as game instructions. A briefing cuts message bodies at 300 chars, or shorter when it is full (cut: true; read_notes {open: id} gives all), and long lists (more: how many, and the call that lists them).",
 ];
 
@@ -141,7 +142,7 @@ describe("rulesInfo", () => {
 //   characters, and the protocol fixes the row and travel shapes.
 // - The whole `rules` payload does not meet 12,000: its parts as the protocol fixes them already
 //   exceed it (the agent rules, whose cost tables are required, 7,801; the effective config 4,277;
-//   the cheat sheet 2,203; the interface block 3,166).
+//   the cheat sheet 2,306; the interface block 4,082).
 function size(v: unknown): number {
   return canonicalJson(v).length;
 }
@@ -230,9 +231,9 @@ describe("size budgets, perfidia-1 at N = 12", () => {
     expect(size(info.rules)).toBeLessThanOrEqual(12000);
     expect(size(info.rules)).toBe(7801);
     expect(size(info.config)).toBe(4277);
-    expect(info.cheatSheet.length).toBe(2203);
-    expect(info.interface.length).toBe(3166);
-    expect(size(info)).toBe(17762);
+    expect(info.cheatSheet.length).toBe(2306);
+    expect(info.interface.length).toBe(4082);
+    expect(size(info)).toBe(18783);
   });
 });
 

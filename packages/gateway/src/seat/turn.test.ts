@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { BriefingLastTurnSchema, type Action } from "@perfidia/protocol";
 import { briefed, createGatewayState, seatOf } from "./state.ts";
 import { P1, RULES } from "./testkit.test.ts";
-import { closeTurn, recordAct, recordGw } from "./turn.ts";
+import { closeTurn, recordAct, recordGw, recordWarnings } from "./turn.ts";
 import { createWakeScheduler } from "./wake.ts";
 
 const build: Action = { type: "build", city: "c1", building: "hall" };
@@ -16,6 +16,32 @@ function opened() {
 }
 
 describe("lastTurn", () => {
+  test("lists the warnings of the last round's accepted calls only: earlier rounds showed theirs", () => {
+    const { gw, wake, s } = opened();
+    const ok = (rt: number, code: string) =>
+      recordAct(gw, { t: 0, seat: P1, rt, tool: "build", a: build, r: { ok: true } }, null, [
+        { code, message: `${code} in round ${rt}` },
+      ]);
+    ok(0, "EARLY");
+    ok(1, "LATE");
+    recordWarnings(gw, P1, 1, "end_turn", [{ code: "WAKE_CLAMPED", message: "moved" }]);
+    expect(s.turnWarnings.map((w) => [w.round, w.code])).toEqual([
+      [1, "LATE"],
+      [1, "WAKE_CLAMPED"],
+    ]);
+    closeTurn(gw, wake, { t: 0, seat: P1, why: "end_turn", rounds: 2, selfAt: null });
+    expect(s.lastTurn?.warnings).toEqual([
+      { tool: "build", code: "LATE", message: "LATE in round 1" },
+      { tool: "end_turn", code: "WAKE_CLAMPED", message: "moved" },
+    ]);
+    expect(s.turnWarnings).toEqual([]);
+    // A turn whose last round had no warning lists none.
+    wake.begin(P1, 43200);
+    ok(0, "EARLY");
+    closeTurn(gw, wake, { t: 43200, seat: P1, why: "empty_round", rounds: 2, selfAt: null });
+    expect(s.lastTurn?.warnings).toEqual([]);
+  });
+
   test("lists the last round's failures and every TURN_OVER or CALLS_CAP, then the next wake", () => {
     const { gw, wake, s } = opened();
     const fail = (rt: number, code: string, message: string) =>
@@ -53,6 +79,7 @@ describe("lastTurn", () => {
         { tool: "build", code: "QUEUE_FULL", message: "never seen" },
         { tool: "attack", code: "TURN_OVER", message: "after end_turn" },
       ],
+      warnings: [],
       nextWake: { at: 7200, kind: "self" },
     });
     expect(BriefingLastTurnSchema.safeParse({ ...s.lastTurn, nextWake: null }).success).toBe(true);
@@ -70,6 +97,7 @@ describe("lastTurn", () => {
     expect(s.lastTurn).toEqual({
       ended: "empty_round",
       unseen: [],
+      warnings: [],
       nextWake: { at: 43200, kind: "safety" },
     });
   });

@@ -16,7 +16,7 @@ import {
   type FakeRecord,
   replayFakeTrace,
   traceViolations,
-} from "./fake-host.ts";
+} from "./testkit.test.ts";
 import { createLockstepDriver } from "./lockstep.ts";
 import { createRealtimeDriver } from "./realtime.ts";
 

@@ -1,20 +1,20 @@
 // The sim harness (docs/architecture.md §12.1): shared by the CLI, the integration test, the
 // hardening, golden and exit tests, so `verify --resim` and the golden tests cannot drift apart.
 // Time sources, bot runs and Level G options from a log header, normalised logs, the canonical
-// JSONL reader and writer, the golden check and add-only writers, and the ruleset fingerprint.
+// JSONL writer, the log reader, the golden check and add-only writers, and the ruleset fingerprint.
 
 export { SystemTime, createVirtualTime, systemWall, yieldMacrotask } from "./time.ts";
+export { JsonlFileSink, jsonlText, parseJsonl, snapshotFileName, writeJsonl } from "./jsonl.ts";
 export {
   JsonlError,
-  JsonlFileSink,
+  LogFileError,
+  isCorruptLog,
   isGzip,
-  jsonlText,
-  parseJsonl,
-  readJsonl,
-  readJsonlText,
-  snapshotFileName,
-  writeJsonl,
-} from "./jsonl.ts";
+  parseLogLine,
+  readFirstLine,
+  readLog,
+  readLogLines,
+} from "./reader.ts";
 export { normaliseLog, normalisedHash, normalisedText } from "./normalise.ts";
 export {
   DEFAULT_BOTS,
@@ -35,7 +35,13 @@ export {
   type SetupSpec,
   type ThinkTime,
 } from "./match.ts";
-export { rulesetArtefacts, rulesetFingerprint } from "./fingerprint.ts";
+export {
+  ViewHasher,
+  checkpointView,
+  rulesetArtefacts,
+  rulesetFingerprint,
+  type RulesetArtefacts,
+} from "./fingerprint.ts";
 export {
   FINGERPRINTS_FILE,
   FingerprintEntrySchema,
@@ -44,6 +50,7 @@ export {
   GZIP_ABOVE_BYTES,
   GoldenExists,
   addFingerprints,
+  appendOnlyProblems,
   addGolden,
   checkGoldens,
   goldenPath,

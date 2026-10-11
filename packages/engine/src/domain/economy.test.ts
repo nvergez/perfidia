@@ -366,6 +366,23 @@ describe("recruit", () => {
     });
   });
 
+  test("population: exactly the cap is allowed, one more is not", () => {
+    const m = load(world().state);
+    // Pop allows 30 soldiers: 30 fail on stone only (25 affordable), 31 on population.
+    expect(m.validate("p1", recruit("c1", "soldier", 30))?.code).toBe("INSUFFICIENT_RESOURCES");
+    expect(m.validate("p1", recruit("c1", "soldier", 31))?.code).toBe("INSUFFICIENT_POPULATION");
+  });
+
+  test("a requirement met only by a queued item counts (projected levels)", () => {
+    const { state } = world();
+    cityOf(state, "c1").stock = res(200 * 3600, 200 * 3600, 200 * 3600);
+    const m = load(state);
+    expect(m.validate("p1", build("c1", "drill"))?.code).toBe("REQUIREMENT_MISSING");
+    accepted(m.apply("p1", build("c1", "tower")));
+    // drill needs tower 2: the queued tower item meets it (only stone is short now).
+    expect(m.validate("p1", build("c1", "drill"))?.code).toBe("INSUFFICIENT_RESOURCES");
+  });
+
   test("recruitMax is the binding minimum, and 0 on a full queue", () => {
     const m = load(world().state);
     // Stone pays for 25 soldiers; pop allows 30.
@@ -396,6 +413,7 @@ describe("cancel_queue", () => {
       queue: "build",
       removed: [2, 3],
       refund: res(120, 120, 80),
+      lost: res(0, 0, 0),
     });
     expect(out.ok && out.events).toEqual([]);
     const after = stockAt(m.read(), "c1");

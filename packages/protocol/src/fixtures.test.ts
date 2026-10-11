@@ -799,6 +799,7 @@ export const briefing: Briefing = {
         message: "c12 has 10 raiders at home, 60 requested.",
       },
     ],
+    warnings: [],
     nextWake: { at: [230520, "D3 16:02"], kind: "self" },
   },
   cities: [
@@ -901,7 +902,7 @@ export const toolResultData: Record<ToolName, JsonObject> = {
   rules: views.rules,
   build: { items: buildItems },
   recruit: { items: recruitItems },
-  cancel_queue: { city: "c3", removed: [12, 13], refund: res(144, 144, 96) },
+  cancel_queue: { city: "c3", removed: [12, 13], refund: res(144, 144, 96), lost: res(0, 0, 0) },
   send_resources: { movement: "m3f8tb", arrive: pair(224400, "D3 14:20") },
   attack: { movement: "m0k4qz", arrive: pair(226620, "D3 14:57") },
   support: { movement: "m3f8ta", arrive: pair(224400, "D3 14:20") },

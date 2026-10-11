@@ -2,8 +2,8 @@
 // Wave 3 (T06): config, world and pure rules. Wave 4 (T11): the mechanics hooks and the
 // `perfidia1_1_0_0` descriptor; every wave-3 export is kept unchanged.
 //
-// Clarification of the ruleset doc, to be written into its §13.2 and recorded with the deviations
-// of docs/architecture.md (T17): while the match runs, the leaderboard (`hooks.standings`, in
+// Clarification of the ruleset doc, written into its §13.2 and recorded with the deviations of
+// docs/architecture.md (§17.1): while the match runs, the leaderboard (`hooks.standings`, in
 // `victory.ts`) ranks by score, then cities, then the public tie-break order; battle points, which
 // §12 keeps private, break ties only in the final ranking of §13.4, once the match has ended.
 // Found by T16: under P10, the order of tied players showed their raw battle points.
