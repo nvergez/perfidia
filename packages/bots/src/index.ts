@@ -1,5 +1,8 @@
-import { GATEWAY_PACKAGE } from "@perfidia/gateway";
+// @perfidia/bots: scripted players that play exclusively through the `SeatAgent` contract the
+// gateway drives (docs/architecture.md §11). Bots import only `protocol` at runtime.
 
-// Placeholder until the real bots code lands.
-export const BOTS_PACKAGE = "@perfidia/bots";
-export const BOTS_UPSTREAM = GATEWAY_PACKAGE;
+export { BotAgent, type BotOptions } from "./agent.ts";
+export { hintsFor, NO_HINTS, RULESET_HINTS, type StrategyHints } from "./hints.ts";
+export { botFromLabel, botLabel, createBot, isBotStrategy, parseBotLabel } from "./registry.ts";
+export { BOT_STRATEGIES, type BotStrategy } from "./strategies/strategy.ts";
+export { thinkLatencyMs, withThinkTime, type ThinkTimeOptions } from "./think.ts";

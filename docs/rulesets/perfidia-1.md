@@ -53,6 +53,7 @@ TRAVEL      same island: 1 h. Other island: tiles × 60 s (with transports), × 
             × 30 s (spy, no units). Never less than 1 h. Same time both ways. view_map lists them.
             An incoming attack shows its origin, owner, launch and arrival times, never its units.
             Its pace therefore shows whether it is warships only.
+            A return heading into a city you besiege shows its owner and times only, never its origin.
 PRODUCTION  producer level L: 50 + 20L + 5L² per hour. Frontier ×1.5, inner/hub ×1.25, Crown ×1.5.
 STORAGE     warehouse L holds 60L² + 280L + 660 of each resource. 100·L of each is safe from loot.
 POPULATION  hall H allows 2H² + 20H + 40 pop. Every unit homed in the city counts, wherever it is.
@@ -308,7 +309,7 @@ The production rate of a resource in a city, per game hour, is `rate = floor(pro
 - Over an interval [t0, t1] with no change of rate or cap: `S_r = min(cap × 3600, S_r + rate_r × (t1 − t0))`.
 - The visible stock is `floor(S_r / 3600)`. Spending or adding x changes S_r by ∓3600·x. An action is affordable when the visible stock is ≥ the cost.
 - The city is materialised (§1.5) before any change of stock, rate or cap. Rates and caps only change at materialised instants (level completion, conquest), so the result does not depend on how often stocks are read.
-- **Every addition is capped by the warehouse**: refunds, loot, shipments and returning cargo. The excess is lost, and the event reports how much was lost.
+- **Every addition is capped by the warehouse**: refunds, loot, shipments and returning cargo. The excess is lost, and the event or result reports how much was lost: the battle report (loot), `shipment_delivered`, `returned`, the `cancel_queue` result (`refund` credited, `lost`) and, at a siege start, the owner's `queues_refunded` (§9.1).
 - **Gateway hint:** "available in `ceilDiv(x·3600 − S_r, rate_r)` s", or "never" when x > cap or rate = 0.
 
 ### 4.4 Population
@@ -468,7 +469,7 @@ The gateway explains each failure with numbers, and the engine re-checks every c
 | Kind     | Extra checks                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
 | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | attack   | t ≥ 43200; the gateway cap of 20 attack launches per player per game day (§14); the target is a city the mover does not own, or the mover's own city while it is besieged (relief); the target is not besieged by the mover (send `support` instead); at least one land unit with attack > 0, or, across water, at least one warship. The movement records its **foe**: the besieger if the target is besieged at launch, otherwise the owner (a player, or "neutral" for the Crown). |
-| support  | The target is a player-owned city other than the origin. If the target is besieged, only its besieger may support it. The movement records its **party**: the besieger if the target is besieged, otherwise the target's owner.                                                                                                                                                                                                                                                       |
+| support  | The target is a city other than the origin: a player-owned city, or a besieged city when the mover is its besieger (the neutral Crown included, §9.2, §9.6). If the target is besieged, only its besieger may support it. The movement records its **party**: the besieger if the target is besieged, otherwise the target's owner.                                                                                                                                                   |
 | found    | The target island has ≥ 1 free slot at departure. At least 1 settler.                                                                                                                                                                                                                                                                                                                                                                                                                 |
 | spy      | The target is a city the mover does not own. `100 ≤ gold ≤ stock`; the gold is paid at departure.                                                                                                                                                                                                                                                                                                                                                                                     |
 | shipment | The target is a player-owned city other than the origin and is not besieged. Total load ≥ 1. The cargo in flight from the origin, plus this one, must be ≤ `500 + 500 · harbor(origin)`. Cargo in flight counts the origin's shipments and the returns created by bouncing them, until they arrive. The resources are paid at departure.                                                                                                                                              |
@@ -521,6 +522,7 @@ Returns, spies, shipments, and attacks more than 600 s after launch cannot be re
    - Outbound movements continue, and their eventual return goes to the new home.
    - Returns already heading to X **sail on**: their arrival becomes `old arrival + travel(X's island, fallback's island, group pace)`.
    - Re-homed pop counts against the fallback city (§4.4).
+   - A movement re-homed onto its own target (its origin was conquered in flight and the fallback city is where it was heading, e.g. a support or a relief of that city) is **home** on arrival when that city is not besieged: its units come home as a return's would. If it is besieged, §7.5 applies as usual: a relief still fights the besieger recorded as its foe, and any other besieger makes the movement bounce; its return (same-island travel, §7.2, §7.6) is then a homecoming the besieger is warned about (§9.3, §12).
 3. If the former owner has no city left, they are **eliminated** (§9.7) instead.
 4. Movements targeting X follow §7.5 with their recorded foe or party. For example, the old owner's supports and shipments bounce, and an attack launched against the besieger now fights it as the new owner.
 
@@ -703,7 +705,7 @@ A siege starts when a city battle is won by an attack that still has ≥ 1 settl
 - **Garrison:** every surviving unit of the movement (ships included), plus the attacker's stand-aside units in the city. Garrison units keep their home city.
 - Siege record: `{by: attacker, startedAt: t, endsAt: t + 21600}` (6 h).
 - Public event `siege_started {city, owner, by, endsAt}`.
-- The city's three queues are cancelled with normal refunds (§5.3, §6.3), paid into its own stock.
+- The city's three queues are cancelled with normal refunds (§5.3, §6.3), paid into its own stock. The owner alone gets `queues_refunded {city, refund, lost}`: what was credited and what the warehouse cap cut (§4.3), when anything was due.
 
 ### 9.2 During a siege
 
@@ -718,7 +720,7 @@ A siege starts when a city battle is won by an attack that still has ≥ 1 settl
 
 - A **relief battle** is any attack whose foe is the besieger. The city's owner, its allies and any third party may launch one.
 - A **homecoming battle** happens when the owner's units return home. Its attacker is the returning group's owner and its foe is the besieger: morale (§8.2), battle points (§8.8) and betrayal (§8.9) use that pair. The naval phase runs when the return left from another island than the city's.
-- The besieger sees every return heading into the city it besieges as an incoming attack without composition (§12), from the siege start or from the return's departure, whichever is later. A return created by an in-window recall after the siege started takes at least 1 h (§7.4), so the besieger always gets that hour of warning; a return already under way when the siege starts may land sooner, which is the besieger's risk.
+- The besieger sees every return heading into the city it besieges as an incoming attack without composition and without origin (§12: id, owner, launch and arrival times; the notice's `from` is `null`), from the siege start or from the return's departure, whichever is later. The origin would reveal where the returning player had troops stationed, or the target of a movement that bounced. A return created by an in-window recall after the siege started takes at least 1 h (§7.4), so the besieger always gets that hour of warning; a return already under way when the siege starts may land sooner, which is the besieger's risk.
 - Both use §8 with the garrison as the defender: wall factor and base defense included, **no wall breach, no loot**.
   - Relief survivors return home.
   - Homecoming survivors are home, with their cargo.
@@ -870,7 +872,7 @@ Tribute is a `send_resources` shipment (§7.3). The recipient (and its allies) s
 | Own city in full: stock, rates, buildings, queues, pop, units present (foreign groups included), incoming movements                                                                                        | owner, **and the owner's alliance members** (live shared vision, cut off when they leave) |
 | Own units anywhere (stationed groups and garrisons abroad), own movements, settler k, own reports, own notes                                                                                               | owner only (`view_player` on yourself lists them)                                         |
 | Incoming **attack** on a city: id, origin city and owner, its recorded foe, launch and arrival times, "turned back" if recalled. No composition.                                                           | city owner, its allies, and owners of groups stationed there (the besieger included)      |
-| A return heading into a besieged city (a coming homecoming battle): id, owner, launch and arrival times. No composition.                                                                                   | the besieger                                                                              |
+| A return heading into a besieged city (a coming homecoming battle): id, owner, launch and arrival times. No composition, no origin.                                                                        | the besieger                                                                              |
 | Incoming support or shipment: full                                                                                                                                                                         | city owner and its allies                                                                 |
 | Spies and founding movements in flight                                                                                                                                                                     | sender only                                                                               |
 | In your briefing: the siege flag and end time of your own besieged cities, the sieges you hold (city, owner, end time) and every running domination countdown                                              | you (the countdowns are public anyway)                                                    |
@@ -897,6 +899,8 @@ The leaderboard is public. It shows:
 - alliance, pacts;
 - eliminated flag;
 - every domination countdown, with the bloc's cities against the threshold.
+
+While the match runs, equal scores are ordered by cities, then the public tie-break order. Battle points are private (§12), so they break ties only in the final ranking (§13.4).
 
 Army sizes are not public to players; spectators see them.
 
@@ -955,10 +959,10 @@ Urgent, safety and start wakes are exempt from both budgets.
 - **Own** wakes fire within the own budget. Triggers:
   - a self-scheduled time (it stays pending until it fires or a later `end_turn` replaces it);
   - a build or recruit queue becoming empty, 600 s after the first such trigger (the window gathers later ones);
-  - your own battle report as the attacker, a spy report, a spy-failure notice, also grouped over 600 s.
+  - your own battle report as the attacker of a city or relief battle, a spy report, a spy-failure notice, also grouped over 600 s.
 - **Social** wakes fire 600 s after their first pending trigger, within the social budget. Triggers:
   - a private message, a proposal or an answer to yours;
-  - a battle report as a defender, a notice that your city was spied on;
+  - a battle report as a defender, or of your troops' homecoming battle (other players can send them home: a dismissal, a bounce), a notice that your city was spied on;
   - an incoming attack on an ally's city, on a city where you have stationed troops, or on your city when its foe is someone else (a relief of your besieged city).
 - Public messages (`"all"`) never wake anyone.
 - When a wake fires it delivers every pending trigger, whatever its class. It counts against the own budget when an own trigger was due, otherwise against the social budget, and against neither when it carries an urgent, safety or start reason. A wake whose budget is used up for the day moves to the start of the next game day.

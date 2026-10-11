@@ -30,20 +30,46 @@
     "typescript/only-throw-error": "error",
     "typescript/prefer-promise-reject-errors": "error",
     "typescript/restrict-plus-operands": "error",
-    "typescript/switch-exhaustiveness-check": "error"
+    "typescript/switch-exhaustiveness-check": "error",
+    "typescript/require-array-sort-compare": [
+      "error",
+      {
+        "ignoreStringArrays": false
+      }
+    ]
   },
+  // The import plugin is enabled per override (docs/architecture.md §2.4), so oxlint builds no
+  // module graph and only the plugin's single-file rules run: no-nodejs-modules, and from the
+  // categories no-unassigned-import, no-absolute-path and no-empty-named-blocks. Cross-module rules
+  // (default, namespace, no-named-as-default, no-named-as-default-member, no-self-import) never
+  // fire, which is why tests keep fast-check's default-import idiom `fc.assert(fc.property(…))`.
   "overrides": [
     {
-      "files": ["packages/protocol/**", "packages/engine/**", "packages/gateway/**"],
+      "files": [
+        "packages/protocol/**",
+        "packages/engine/**",
+        "packages/gateway/src/**",
+        "packages/bots/src/**"
+      ],
       "excludeFiles": ["**/*.test.ts"],
+      "plugins": ["import"],
       "rules": {
+        "typescript/triple-slash-reference": [
+          "error",
+          {
+            "lib": "never",
+            "path": "never",
+            "types": "never"
+          }
+        ],
+        "import/no-nodejs-modules": "error",
         "no-restricted-imports": [
           "error",
           {
             "paths": [
               {
                 "name": "bun",
-                "message": "Pure package: no Bun APIs (it must run unchanged in a browser)."
+                "message": "Pure code (protocol, engine, gateway and bot sources, docs/architecture.md §2.4): no Bun APIs."
               },
               {
                 "name": "elysia",
@@ -53,11 +79,11 @@
             "patterns": [
               {
                 "group": ["bun:*"],
-                "message": "Pure package: no Bun APIs (it must run unchanged in a browser)."
+                "message": "Pure code (protocol, engine, gateway and bot sources, docs/architecture.md §2.4): no Bun APIs."
               },
               {
                 "group": ["node:*"],
-                "message": "Pure package: no Node APIs (it must run unchanged in a browser)."
+                "message": "Pure code (protocol, engine, gateway and bot sources, docs/architecture.md §2.4): no Node APIs."
               },
               {
                 "group": ["@elysiajs/*"],
@@ -69,8 +95,80 @@
         "no-restricted-globals": [
           "error",
           {
+            "name": "Bun",
+            "message": "Pure code (protocol, engine, gateway and bot sources, docs/architecture.md §2.4): no host runtime globals."
+          },
+          {
+            "name": "process",
+            "message": "Pure code (protocol, engine, gateway and bot sources, docs/architecture.md §2.4): no host runtime globals."
+          },
+          {
+            "name": "require",
+            "message": "Pure code (protocol, engine, gateway and bot sources, docs/architecture.md §2.4): no host runtime globals. Use an ESM import."
+          },
+          {
+            "name": "setTimeout",
+            "message": "No wall-clock time or timers in pure code: use integer game-seconds or an injected TimeSource (§2.4, §9.4)."
+          },
+          {
+            "name": "setInterval",
+            "message": "No wall-clock time or timers in pure code: use integer game-seconds or an injected TimeSource (§2.4, §9.4)."
+          },
+          {
+            "name": "setImmediate",
+            "message": "No wall-clock time or timers in pure code: use integer game-seconds or an injected TimeSource (§2.4, §9.4)."
+          },
+          {
+            "name": "queueMicrotask",
+            "message": "No wall-clock time or timers in pure code: use integer game-seconds or an injected TimeSource (§2.4, §9.4)."
+          },
+          {
             "name": "Date",
-            "message": "No wall-clock time in pure packages: use integer game-seconds from the engine."
+            "message": "No wall-clock time or timers in pure code: use integer game-seconds or an injected TimeSource (§2.4, §9.4)."
+          },
+          {
+            "name": "performance",
+            "message": "No wall-clock time or timers in pure code: use integer game-seconds or an injected TimeSource (§2.4, §9.4)."
+          },
+          {
+            "name": "Intl",
+            "message": "Locale- and Unicode-table-dependent output is not reproducible across runtimes (§6.5)."
+          },
+          {
+            "name": "parseFloat",
+            "message": "No floating-point game maths: integers only, fixed-point where fractions are needed (§6.1)."
+          },
+          {
+            "name": "crypto",
+            "message": "Randomness comes from the seeded PRNG of @perfidia/engine/core; hashes from core/hash (§6.2, §6.3)."
+          },
+          {
+            "name": "fetch",
+            "message": "Pure code (protocol, engine, gateway and bot sources, docs/architecture.md §2.4): no I/O."
+          },
+          {
+            "name": "WeakRef",
+            "message": "Garbage-collector timing is not deterministic (§6.5)."
+          },
+          {
+            "name": "FinalizationRegistry",
+            "message": "Garbage-collector timing is not deterministic (§6.5)."
+          },
+          {
+            "name": "globalThis",
+            "message": "Global-object aliases would bypass the bans on Date, Math, timers and host APIs (§2.4)."
+          },
+          {
+            "name": "global",
+            "message": "Global-object aliases would bypass the bans on Date, Math, timers and host APIs (§2.4)."
+          },
+          {
+            "name": "self",
+            "message": "Global-object aliases would bypass the bans on Date, Math, timers and host APIs (§2.4)."
+          },
+          {
+            "name": "window",
+            "message": "Global-object aliases would bypass the bans on Date, Math, timers and host APIs (§2.4)."
           }
         ],
         "no-restricted-properties": [
@@ -78,25 +176,178 @@
           {
             "object": "Math",
             "property": "random",
-            "message": "Use the engine's seeded PRNG so matches replay identically."
+            "message": "Use the seeded PRNG of @perfidia/engine/core so matches replay identically (§6.2)."
+          },
+          {
+            "object": "Math",
+            "property": "sin",
+            "message": "Implementation-approximated maths: Bun and browsers may disagree. Use integer helpers from @perfidia/engine/core or a committed integer table (§6.1)."
+          },
+          {
+            "object": "Math",
+            "property": "cos",
+            "message": "Implementation-approximated maths: Bun and browsers may disagree. Use integer helpers from @perfidia/engine/core or a committed integer table (§6.1)."
+          },
+          {
+            "object": "Math",
+            "property": "tan",
+            "message": "Implementation-approximated maths: Bun and browsers may disagree. Use integer helpers from @perfidia/engine/core or a committed integer table (§6.1)."
+          },
+          {
+            "object": "Math",
+            "property": "asin",
+            "message": "Implementation-approximated maths: Bun and browsers may disagree. Use integer helpers from @perfidia/engine/core or a committed integer table (§6.1)."
+          },
+          {
+            "object": "Math",
+            "property": "acos",
+            "message": "Implementation-approximated maths: Bun and browsers may disagree. Use integer helpers from @perfidia/engine/core or a committed integer table (§6.1)."
+          },
+          {
+            "object": "Math",
+            "property": "atan",
+            "message": "Implementation-approximated maths: Bun and browsers may disagree. Use integer helpers from @perfidia/engine/core or a committed integer table (§6.1)."
+          },
+          {
+            "object": "Math",
+            "property": "atan2",
+            "message": "Implementation-approximated maths: Bun and browsers may disagree. Use integer helpers from @perfidia/engine/core or a committed integer table (§6.1)."
+          },
+          {
+            "object": "Math",
+            "property": "sinh",
+            "message": "Implementation-approximated maths: Bun and browsers may disagree. Use integer helpers from @perfidia/engine/core or a committed integer table (§6.1)."
+          },
+          {
+            "object": "Math",
+            "property": "cosh",
+            "message": "Implementation-approximated maths: Bun and browsers may disagree. Use integer helpers from @perfidia/engine/core or a committed integer table (§6.1)."
+          },
+          {
+            "object": "Math",
+            "property": "tanh",
+            "message": "Implementation-approximated maths: Bun and browsers may disagree. Use integer helpers from @perfidia/engine/core or a committed integer table (§6.1)."
+          },
+          {
+            "object": "Math",
+            "property": "asinh",
+            "message": "Implementation-approximated maths: Bun and browsers may disagree. Use integer helpers from @perfidia/engine/core or a committed integer table (§6.1)."
+          },
+          {
+            "object": "Math",
+            "property": "acosh",
+            "message": "Implementation-approximated maths: Bun and browsers may disagree. Use integer helpers from @perfidia/engine/core or a committed integer table (§6.1)."
+          },
+          {
+            "object": "Math",
+            "property": "atanh",
+            "message": "Implementation-approximated maths: Bun and browsers may disagree. Use integer helpers from @perfidia/engine/core or a committed integer table (§6.1)."
+          },
+          {
+            "object": "Math",
+            "property": "exp",
+            "message": "Implementation-approximated maths: Bun and browsers may disagree. Use integer helpers from @perfidia/engine/core or a committed integer table (§6.1)."
+          },
+          {
+            "object": "Math",
+            "property": "expm1",
+            "message": "Implementation-approximated maths: Bun and browsers may disagree. Use integer helpers from @perfidia/engine/core or a committed integer table (§6.1)."
+          },
+          {
+            "object": "Math",
+            "property": "log",
+            "message": "Implementation-approximated maths: Bun and browsers may disagree. Use integer helpers from @perfidia/engine/core or a committed integer table (§6.1)."
+          },
+          {
+            "object": "Math",
+            "property": "log1p",
+            "message": "Implementation-approximated maths: Bun and browsers may disagree. Use integer helpers from @perfidia/engine/core or a committed integer table (§6.1)."
+          },
+          {
+            "object": "Math",
+            "property": "log2",
+            "message": "Implementation-approximated maths: Bun and browsers may disagree. Use integer helpers from @perfidia/engine/core or a committed integer table (§6.1)."
+          },
+          {
+            "object": "Math",
+            "property": "log10",
+            "message": "Implementation-approximated maths: Bun and browsers may disagree. Use integer helpers from @perfidia/engine/core or a committed integer table (§6.1)."
+          },
+          {
+            "object": "Math",
+            "property": "cbrt",
+            "message": "Implementation-approximated maths: Bun and browsers may disagree. Use integer helpers from @perfidia/engine/core or a committed integer table (§6.1)."
+          },
+          {
+            "object": "Math",
+            "property": "hypot",
+            "message": "Implementation-approximated maths: Bun and browsers may disagree. Use integer helpers from @perfidia/engine/core or a committed integer table (§6.1)."
+          },
+          {
+            "object": "Math",
+            "property": "pow",
+            "message": "Implementation-approximated maths: Bun and browsers may disagree. Use integer helpers from @perfidia/engine/core or a committed integer table (§6.1)."
+          },
+          {
+            "object": "Number",
+            "property": "parseFloat",
+            "message": "No floating-point game maths: integers only, fixed-point where fractions are needed (§6.1)."
+          },
+          {
+            "property": "localeCompare",
+            "message": "Locale- and Unicode-table-dependent output is not reproducible across runtimes (§6.5). Compare by UTF-16 code unit or with compareIds; fold ASCII A-Z only."
+          },
+          {
+            "property": "toLocaleString",
+            "message": "Locale- and Unicode-table-dependent output is not reproducible across runtimes (§6.5). Compare by UTF-16 code unit or with compareIds; fold ASCII A-Z only."
+          },
+          {
+            "property": "toLocaleUpperCase",
+            "message": "Locale- and Unicode-table-dependent output is not reproducible across runtimes (§6.5). Compare by UTF-16 code unit or with compareIds; fold ASCII A-Z only."
+          },
+          {
+            "property": "toLocaleLowerCase",
+            "message": "Locale- and Unicode-table-dependent output is not reproducible across runtimes (§6.5). Compare by UTF-16 code unit or with compareIds; fold ASCII A-Z only."
+          },
+          {
+            "property": "toFixed",
+            "message": "Locale- and Unicode-table-dependent output is not reproducible across runtimes (§6.5). Format integers with core's fmt helpers."
+          },
+          {
+            "property": "toPrecision",
+            "message": "Locale- and Unicode-table-dependent output is not reproducible across runtimes (§6.5). Format integers with core's fmt helpers."
+          },
+          {
+            "property": "toExponential",
+            "message": "Locale- and Unicode-table-dependent output is not reproducible across runtimes (§6.5). Format integers with core's fmt helpers."
+          },
+          {
+            "property": "normalize",
+            "message": "String.prototype.normalize depends on the runtime's Unicode tables, so results are not reproducible across runtimes (§6.5)."
           }
         ]
       }
     },
     {
-      "files": [
-        "packages/protocol/**/*.test.ts",
-        "packages/engine/**/*.test.ts",
-        "packages/gateway/**/*.test.ts"
-      ],
+      "files": ["packages/protocol/**/*.test.ts", "packages/engine/**/*.test.ts"],
+      "plugins": ["import"],
       "rules": {
+        "typescript/triple-slash-reference": [
+          "error",
+          {
+            "lib": "never",
+            "path": "never",
+            "types": "never"
+          }
+        ],
+        "import/no-nodejs-modules": "error",
         "no-restricted-imports": [
           "error",
           {
             "paths": [
               {
                 "name": "bun",
-                "message": "Pure package tests: only bun:test is allowed."
+                "message": "Pure code (protocol, engine, gateway and bot sources, docs/architecture.md §2.4): no Bun APIs."
               },
               {
                 "name": "elysia",
@@ -106,15 +357,402 @@
             "patterns": [
               {
                 "group": ["bun:*", "!bun:test"],
-                "message": "Pure package tests: only bun:test is allowed."
+                "message": "Pure package tests: bun:test is the only Bun module allowed."
               },
               {
                 "group": ["node:*"],
-                "message": "Pure package: no Node APIs."
+                "message": "Pure code (protocol, engine, gateway and bot sources, docs/architecture.md §2.4): no Node APIs."
               },
               {
                 "group": ["@elysiajs/*"],
                 "message": "Pure package: HTTP lives in the server package."
+              }
+            ]
+          }
+        ],
+        "no-restricted-globals": [
+          "error",
+          {
+            "name": "Bun",
+            "message": "Pure code (protocol, engine, gateway and bot sources, docs/architecture.md §2.4): no host runtime globals."
+          },
+          {
+            "name": "process",
+            "message": "Pure code (protocol, engine, gateway and bot sources, docs/architecture.md §2.4): no host runtime globals."
+          },
+          {
+            "name": "require",
+            "message": "Pure code (protocol, engine, gateway and bot sources, docs/architecture.md §2.4): no host runtime globals. Use an ESM import."
+          },
+          {
+            "name": "setTimeout",
+            "message": "No wall-clock time or timers in pure code: use integer game-seconds or an injected TimeSource (§2.4, §9.4)."
+          },
+          {
+            "name": "setInterval",
+            "message": "No wall-clock time or timers in pure code: use integer game-seconds or an injected TimeSource (§2.4, §9.4)."
+          },
+          {
+            "name": "setImmediate",
+            "message": "No wall-clock time or timers in pure code: use integer game-seconds or an injected TimeSource (§2.4, §9.4)."
+          },
+          {
+            "name": "queueMicrotask",
+            "message": "No wall-clock time or timers in pure code: use integer game-seconds or an injected TimeSource (§2.4, §9.4)."
+          },
+          {
+            "name": "Date",
+            "message": "No wall-clock time or timers in pure code: use integer game-seconds or an injected TimeSource (§2.4, §9.4)."
+          },
+          {
+            "name": "performance",
+            "message": "No wall-clock time or timers in pure code: use integer game-seconds or an injected TimeSource (§2.4, §9.4)."
+          },
+          {
+            "name": "Intl",
+            "message": "Locale- and Unicode-table-dependent output is not reproducible across runtimes (§6.5)."
+          },
+          {
+            "name": "parseFloat",
+            "message": "No floating-point game maths: integers only, fixed-point where fractions are needed (§6.1)."
+          },
+          {
+            "name": "crypto",
+            "message": "Randomness comes from the seeded PRNG of @perfidia/engine/core; hashes from core/hash (§6.2, §6.3)."
+          },
+          {
+            "name": "fetch",
+            "message": "Pure code (protocol, engine, gateway and bot sources, docs/architecture.md §2.4): no I/O."
+          },
+          {
+            "name": "WeakRef",
+            "message": "Garbage-collector timing is not deterministic (§6.5)."
+          },
+          {
+            "name": "FinalizationRegistry",
+            "message": "Garbage-collector timing is not deterministic (§6.5)."
+          },
+          {
+            "name": "globalThis",
+            "message": "Global-object aliases would bypass the bans on Date, Math, timers and host APIs (§2.4)."
+          },
+          {
+            "name": "global",
+            "message": "Global-object aliases would bypass the bans on Date, Math, timers and host APIs (§2.4)."
+          },
+          {
+            "name": "self",
+            "message": "Global-object aliases would bypass the bans on Date, Math, timers and host APIs (§2.4)."
+          },
+          {
+            "name": "window",
+            "message": "Global-object aliases would bypass the bans on Date, Math, timers and host APIs (§2.4)."
+          }
+        ],
+        "no-restricted-properties": [
+          "error",
+          {
+            "object": "Math",
+            "property": "random",
+            "message": "Use the seeded PRNG of @perfidia/engine/core so matches replay identically (§6.2)."
+          },
+          {
+            "object": "Math",
+            "property": "sin",
+            "message": "Implementation-approximated maths: Bun and browsers may disagree. Use integer helpers from @perfidia/engine/core or a committed integer table (§6.1)."
+          },
+          {
+            "object": "Math",
+            "property": "cos",
+            "message": "Implementation-approximated maths: Bun and browsers may disagree. Use integer helpers from @perfidia/engine/core or a committed integer table (§6.1)."
+          },
+          {
+            "object": "Math",
+            "property": "tan",
+            "message": "Implementation-approximated maths: Bun and browsers may disagree. Use integer helpers from @perfidia/engine/core or a committed integer table (§6.1)."
+          },
+          {
+            "object": "Math",
+            "property": "asin",
+            "message": "Implementation-approximated maths: Bun and browsers may disagree. Use integer helpers from @perfidia/engine/core or a committed integer table (§6.1)."
+          },
+          {
+            "object": "Math",
+            "property": "acos",
+            "message": "Implementation-approximated maths: Bun and browsers may disagree. Use integer helpers from @perfidia/engine/core or a committed integer table (§6.1)."
+          },
+          {
+            "object": "Math",
+            "property": "atan",
+            "message": "Implementation-approximated maths: Bun and browsers may disagree. Use integer helpers from @perfidia/engine/core or a committed integer table (§6.1)."
+          },
+          {
+            "object": "Math",
+            "property": "atan2",
+            "message": "Implementation-approximated maths: Bun and browsers may disagree. Use integer helpers from @perfidia/engine/core or a committed integer table (§6.1)."
+          },
+          {
+            "object": "Math",
+            "property": "sinh",
+            "message": "Implementation-approximated maths: Bun and browsers may disagree. Use integer helpers from @perfidia/engine/core or a committed integer table (§6.1)."
+          },
+          {
+            "object": "Math",
+            "property": "cosh",
+            "message": "Implementation-approximated maths: Bun and browsers may disagree. Use integer helpers from @perfidia/engine/core or a committed integer table (§6.1)."
+          },
+          {
+            "object": "Math",
+            "property": "tanh",
+            "message": "Implementation-approximated maths: Bun and browsers may disagree. Use integer helpers from @perfidia/engine/core or a committed integer table (§6.1)."
+          },
+          {
+            "object": "Math",
+            "property": "asinh",
+            "message": "Implementation-approximated maths: Bun and browsers may disagree. Use integer helpers from @perfidia/engine/core or a committed integer table (§6.1)."
+          },
+          {
+            "object": "Math",
+            "property": "acosh",
+            "message": "Implementation-approximated maths: Bun and browsers may disagree. Use integer helpers from @perfidia/engine/core or a committed integer table (§6.1)."
+          },
+          {
+            "object": "Math",
+            "property": "atanh",
+            "message": "Implementation-approximated maths: Bun and browsers may disagree. Use integer helpers from @perfidia/engine/core or a committed integer table (§6.1)."
+          },
+          {
+            "object": "Math",
+            "property": "exp",
+            "message": "Implementation-approximated maths: Bun and browsers may disagree. Use integer helpers from @perfidia/engine/core or a committed integer table (§6.1)."
+          },
+          {
+            "object": "Math",
+            "property": "expm1",
+            "message": "Implementation-approximated maths: Bun and browsers may disagree. Use integer helpers from @perfidia/engine/core or a committed integer table (§6.1)."
+          },
+          {
+            "object": "Math",
+            "property": "log",
+            "message": "Implementation-approximated maths: Bun and browsers may disagree. Use integer helpers from @perfidia/engine/core or a committed integer table (§6.1)."
+          },
+          {
+            "object": "Math",
+            "property": "log1p",
+            "message": "Implementation-approximated maths: Bun and browsers may disagree. Use integer helpers from @perfidia/engine/core or a committed integer table (§6.1)."
+          },
+          {
+            "object": "Math",
+            "property": "log2",
+            "message": "Implementation-approximated maths: Bun and browsers may disagree. Use integer helpers from @perfidia/engine/core or a committed integer table (§6.1)."
+          },
+          {
+            "object": "Math",
+            "property": "log10",
+            "message": "Implementation-approximated maths: Bun and browsers may disagree. Use integer helpers from @perfidia/engine/core or a committed integer table (§6.1)."
+          },
+          {
+            "object": "Math",
+            "property": "cbrt",
+            "message": "Implementation-approximated maths: Bun and browsers may disagree. Use integer helpers from @perfidia/engine/core or a committed integer table (§6.1)."
+          },
+          {
+            "object": "Math",
+            "property": "hypot",
+            "message": "Implementation-approximated maths: Bun and browsers may disagree. Use integer helpers from @perfidia/engine/core or a committed integer table (§6.1)."
+          },
+          {
+            "object": "Math",
+            "property": "pow",
+            "message": "Implementation-approximated maths: Bun and browsers may disagree. Use integer helpers from @perfidia/engine/core or a committed integer table (§6.1)."
+          },
+          {
+            "object": "Number",
+            "property": "parseFloat",
+            "message": "No floating-point game maths: integers only, fixed-point where fractions are needed (§6.1)."
+          },
+          {
+            "property": "localeCompare",
+            "message": "Locale- and Unicode-table-dependent output is not reproducible across runtimes (§6.5). Compare by UTF-16 code unit or with compareIds; fold ASCII A-Z only."
+          },
+          {
+            "property": "toLocaleString",
+            "message": "Locale- and Unicode-table-dependent output is not reproducible across runtimes (§6.5). Compare by UTF-16 code unit or with compareIds; fold ASCII A-Z only."
+          },
+          {
+            "property": "toLocaleUpperCase",
+            "message": "Locale- and Unicode-table-dependent output is not reproducible across runtimes (§6.5). Compare by UTF-16 code unit or with compareIds; fold ASCII A-Z only."
+          },
+          {
+            "property": "toLocaleLowerCase",
+            "message": "Locale- and Unicode-table-dependent output is not reproducible across runtimes (§6.5). Compare by UTF-16 code unit or with compareIds; fold ASCII A-Z only."
+          },
+          {
+            "property": "toFixed",
+            "message": "Locale- and Unicode-table-dependent output is not reproducible across runtimes (§6.5). Format integers with core's fmt helpers."
+          },
+          {
+            "property": "toPrecision",
+            "message": "Locale- and Unicode-table-dependent output is not reproducible across runtimes (§6.5). Format integers with core's fmt helpers."
+          },
+          {
+            "property": "toExponential",
+            "message": "Locale- and Unicode-table-dependent output is not reproducible across runtimes (§6.5). Format integers with core's fmt helpers."
+          },
+          {
+            "property": "normalize",
+            "message": "String.prototype.normalize depends on the runtime's Unicode tables, so results are not reproducible across runtimes (§6.5)."
+          }
+        ],
+        "import/no-unassigned-import": "off"
+      }
+    },
+    {
+      "files": ["packages/gateway/**/*.test.ts", "packages/bots/**/*.test.ts"],
+      "plugins": ["import"],
+      "rules": {
+        "typescript/triple-slash-reference": [
+          "error",
+          {
+            "lib": "never",
+            "path": "never",
+            "types": "never"
+          }
+        ],
+        "import/no-nodejs-modules": "error",
+        "no-restricted-imports": [
+          "error",
+          {
+            "paths": [
+              {
+                "name": "bun",
+                "message": "Pure code (protocol, engine, gateway and bot sources, docs/architecture.md §2.4): no Bun APIs."
+              },
+              {
+                "name": "elysia",
+                "message": "Pure package: HTTP lives in the server package."
+              }
+            ],
+            "patterns": [
+              {
+                "group": ["bun:*", "!bun:test"],
+                "message": "Pure package tests: bun:test is the only Bun module allowed."
+              },
+              {
+                "group": ["node:*"],
+                "message": "Pure code (protocol, engine, gateway and bot sources, docs/architecture.md §2.4): no Node APIs."
+              },
+              {
+                "group": ["@elysiajs/*"],
+                "message": "Pure package: HTTP lives in the server package."
+              }
+            ]
+          }
+        ],
+        "import/no-unassigned-import": "off"
+      }
+    },
+    {
+      "files": ["packages/bots/src/**"],
+      "excludeFiles": ["**/*.test.ts"],
+      "plugins": ["import"],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "paths": [
+              {
+                "name": "bun",
+                "message": "Pure code (protocol, engine, gateway and bot sources, docs/architecture.md §2.4): no Bun APIs."
+              },
+              {
+                "name": "elysia",
+                "message": "Pure package: HTTP lives in the server package."
+              },
+              {
+                "name": "@perfidia/gateway",
+                "allowTypeImports": true,
+                "message": "Bots reach the game only through the SeatAgent contract: type-only imports of the gateway and engine are allowed, runtime imports are not (§2.1, §2.4)."
+              },
+              {
+                "name": "@perfidia/engine",
+                "allowTypeImports": true,
+                "message": "Bots reach the game only through the SeatAgent contract: type-only imports of the gateway and engine are allowed, runtime imports are not (§2.1, §2.4)."
+              }
+            ],
+            "patterns": [
+              {
+                "group": ["bun:*"],
+                "message": "Pure code (protocol, engine, gateway and bot sources, docs/architecture.md §2.4): no Bun APIs."
+              },
+              {
+                "group": ["node:*"],
+                "message": "Pure code (protocol, engine, gateway and bot sources, docs/architecture.md §2.4): no Node APIs."
+              },
+              {
+                "group": ["@elysiajs/*"],
+                "message": "Pure package: HTTP lives in the server package."
+              },
+              {
+                "group": ["@perfidia/gateway/*"],
+                "allowTypeImports": true,
+                "message": "Bots reach the game only through the SeatAgent contract: type-only imports of the gateway and engine are allowed, runtime imports are not (§2.1, §2.4)."
+              },
+              {
+                "group": ["@perfidia/engine/*"],
+                "allowTypeImports": true,
+                "message": "Bots reach the game only through the SeatAgent contract: type-only imports of the gateway and engine are allowed, runtime imports are not (§2.1, §2.4)."
+              }
+            ]
+          }
+        ],
+        "typescript/no-import-type-side-effects": "error"
+      }
+    },
+    {
+      "files": [
+        "packages/engine/src/core/**",
+        "packages/engine/src/contracts/**",
+        "packages/engine/src/kernel/**",
+        "packages/engine/src/std/**",
+        "packages/engine/src/domain/**"
+      ],
+      "excludeFiles": ["**/*.test.ts"],
+      "plugins": ["import"],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "paths": [
+              {
+                "name": "bun",
+                "message": "Pure code (protocol, engine, gateway and bot sources, docs/architecture.md §2.4): no Bun APIs."
+              },
+              {
+                "name": "elysia",
+                "message": "Pure package: HTTP lives in the server package."
+              }
+            ],
+            "patterns": [
+              {
+                "group": ["bun:*"],
+                "message": "Pure code (protocol, engine, gateway and bot sources, docs/architecture.md §2.4): no Bun APIs."
+              },
+              {
+                "group": ["node:*"],
+                "message": "Pure code (protocol, engine, gateway and bot sources, docs/architecture.md §2.4): no Node APIs."
+              },
+              {
+                "group": ["@elysiajs/*"],
+                "message": "Pure package: HTTP lives in the server package."
+              },
+              {
+                "group": ["**/rulesets", "**/rulesets/**"],
+                "message": "Engine core layers (core, contracts, kernel, std, domain) never import a ruleset or the registry; the kernel receives the ruleset as an argument (§2.3)."
+              },
+              {
+                "group": ["@perfidia/engine/rulesets", "@perfidia/engine/rulesets/*"],
+                "message": "Engine core layers (core, contracts, kernel, std, domain) never import a ruleset or the registry; the kernel receives the ruleset as an argument (§2.3)."
               }
             ]
           }

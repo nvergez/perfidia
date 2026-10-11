@@ -18,3 +18,50 @@ jobs:
           bun-version: 1.4.3
       - run: bun install --frozen-lockfile
       - run: bun run check
+
+  # The freeze guard is append-only (docs/architecture.md §13.5, §13.6): a pull request may add
+  # goldens and fingerprint entries, never modify, rename or delete what its base branch has.
+  append-only:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    env:
+      BASE_REF: ${{ github.base_ref }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.3
+      - run: bun install --frozen-lockfile
+      - name: Committed goldens are never modified, renamed or deleted
+        run: |
+          changed="$(git diff --name-only --diff-filter=MDR "origin/$BASE_REF...HEAD" -- packages/sim/fixtures/golden)"
+          if [ -n "$changed" ]; then
+            echo "Goldens are append-only (§13.5); this pull request changes:"
+            echo "$changed"
+            exit 1
+          fi
+      - name: Fingerprint entries are never rewritten or removed
+        run: |
+          base="packages/sim/fixtures/fingerprints.json"
+          if git cat-file -e "origin/$BASE_REF:$base" 2>/dev/null; then
+            git show "origin/$BASE_REF:$base" > "$RUNNER_TEMP/base-fingerprints.json"
+            bun run sim -- golden --check --no-resim --base "$RUNNER_TEMP/base-fingerprints.json"
+          else
+            echo "origin/$BASE_REF has no $base yet: nothing to compare"
+          fi
+
+  # The phase-1 exit criterion (docs/architecture.md §13.7): 7-day matches of both rulesets under
+  # every clock, with the performance figures of §13.8. Skipped by the default `bun test`.
+  exit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.3
+      - run: bun install --frozen-lockfile
+      - run: bun run test:exit
+      - run: bun run sim -- golden --check

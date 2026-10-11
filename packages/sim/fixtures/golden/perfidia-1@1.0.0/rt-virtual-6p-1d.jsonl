@@ -1,0 +1,1050 @@
+{"clock":{"kind":"realtime","latencyMs":[2000,60000],"speed":[3,1],"time":"virtual"},"config":{"buildings":{"barracks":{"cost":{"gold":50,"stone":80,"wood":60},"requires":{"hall":2},"time":1500},"hall":{"cost":{"gold":60,"stone":90,"wood":90},"requires":{},"time":1800},"harbor":{"cost":{"gold":60,"stone":60,"wood":100},"requires":{"hall":3},"time":2400},"lumber":{"cost":{"gold":30,"stone":50,"wood":20},"requires":{},"time":1500},"mine":{"cost":{"gold":10,"stone":50,"wood":50},"requires":{},"time":1500},"quarry":{"cost":{"gold":30,"stone":20,"wood":50},"requires":{},"time":1500},"wall":{"cost":{"gold":30,"stone":120,"wood":30},"requires":{"barracks":1},"time":1500},"warehouse":{"cost":{"gold":20,"stone":60,"wood":60},"requires":{},"time":1200}},"combat":{"moraleFloorPm":700,"moralePmPerCity":100,"wallBreachOnLoss":1,"wallPmPerLevel":50},"diplomacy":{"allianceNameMaxChars":24,"allianceSize":{"divisor":3,"min":2},"maxOpenProposals":3,"maxPacts":2,"messageMaxChars":1000,"proposalTextMaxChars":300},"economy":{"baseDefense":{"a":0,"b":20,"c":50},"buildTimeOffset":9,"levelWeight":{"a":1,"b":3,"c":6},"levelWeightDiv":10,"lootProtectPerLevel":100,"maxLevel":10,"popCap":{"a":2,"b":20,"c":40},"production":{"a":5,"b":20,"c":50},"recruitTimeOffset":9,"resourceScale":3600,"warehouseCap":{"a":60,"b":280,"c":660}},"gateway":{"attackLaunchesPerDay":20,"groupWindow":600,"messagesPerDay":20,"notesMaxChars":4000,"ownWakesPerDay":12,"roundTripsPerWake":8,"safetyWake":43200,"selfWake":{"max":43200,"min":600},"socialWakesPerDay":8,"toolCallsPerRoundTrip":10,"toolCallsPerWake":null,"urgentMinGap":600},"map":{"centerMargin":120,"homeRadius":{"10":291,"11":319,"12":348,"6":180,"7":207,"8":235,"9":263},"hubMaxPlayers":7,"kinds":{"backyard":{"richnessPm":1000,"slots":1},"crown":{"richnessPm":1500,"slots":1},"frontier":{"richnessPm":1500,"slots":2},"home":{"richnessPm":1000,"slots":2},"hub":{"richnessPm":1250,"slots":1},"inner":{"richnessPm":1250,"slots":1}},"radialJitter":10,"radius":{"backyardOffset":80,"frontierOffset":0,"hub":60,"innerOffset":-80}},"movement":{"homeboundPace":60,"shipment":{"base":500,"pace":60,"perHarborLevel":500},"spyPace":30},"players":{"max":12,"min":6},"queues":{"batchMaxUnits":500,"buildMax":5,"recruitBatchesMax":5},"scoring":{"cityBase":100,"crownBonus":100,"killCapPm":250,"killPopPerPoint":10,"perBuildingLevel":1},"settler":{"maxPerOrder":1,"scaleCap":10},"spy":{"counterBase":100,"counterPerLandPop":1,"counterPerWall":50,"minGold":100},"start":{"capital":{"buildings":{"barracks":0,"hall":1,"harbor":0,"lumber":1,"mine":1,"quarry":1,"wall":0,"warehouse":1},"stock":{"gold":800,"stone":800,"wood":800},"units":{"guard":10}},"crown":{"buildings":{"barracks":5,"hall":5,"harbor":5,"lumber":5,"mine":5,"quarry":5,"wall":5,"warehouse":5},"stock":{"gold":3000,"stone":3000,"wood":3000},"units":{"guard":400,"warship":10}},"newCity":{"buildings":{"barracks":0,"hall":1,"harbor":0,"lumber":1,"mine":1,"quarry":1,"wall":0,"warehouse":1},"stock":{"gold":300,"stone":300,"wood":300},"units":{}}},"time":{"capitalImmunityEnd":172800,"day":86400,"dominationHold":86400,"dominationStart":259200,"killCreditCooldown":86400,"matchEnd":86400,"minTravel":3600,"pactDuration":172800,"proposalTtl":43200,"protectionEnd":43200,"recallWindow":600,"sameIslandTravel":3600,"siegeDuration":21600},"units":{"guard":{"attack":5,"capacity":0,"carry":10,"cost":{"gold":30,"stone":60,"wood":30},"defense":20,"domain":"land","naval":0,"pop":1,"queue":"barracks","requires":{"barracks":1},"time":300},"raider":{"attack":20,"capacity":0,"carry":50,"cost":{"gold":60,"stone":20,"wood":50},"defense":5,"domain":"land","naval":0,"pop":1,"queue":"barracks","requires":{"barracks":1},"time":300},"settler":{"attack":0,"capacity":0,"carry":0,"cost":{"gold":750,"stone":450,"wood":450},"defense":0,"domain":"land","naval":0,"pop":10,"queue":"barracks","requires":{"barracks":2,"hall":3},"time":5400},"transport":{"attack":0,"capacity":20,"carry":0,"cost":{"gold":80,"stone":40,"wood":120},"defense":0,"domain":"naval","naval":0,"pop":2,"queue":"harbor","requires":{"harbor":1},"seaPace":60,"time":1200},"warship":{"attack":0,"capacity":0,"carry":0,"cost":{"gold":250,"stone":100,"wood":150},"defense":0,"domain":"naval","naval":50,"pop":4,"queue":"harbor","requires":{"harbor":3},"seaPace":45,"time":2400}},"victory":{"dominationMinPerPlayer":2,"dominationPm":400}},"configHash":"65c93fbe27a0341dac5a165d897e9cd1c5330d21710aa1f55376f861b927da50","controllers":{"p1":"bot:expander@1","p2":"bot:rusher@1","p3":"bot:turtle@1","p4":"bot:opportunist@1","p5":"bot:expander@1","p6":"bot:rusher@1"},"engine":"0.1.0","format":"perfidia-log/1","initialHash":"b44c84570151ecfc","k":"header","rulesHash":"1cbc21cffbf2f6198453a2302c6a48a7ebe07f61707b5f4ec879c102ce694ca7","setup":{"idKey":"daf3512e460bf8a30b03008c9119445a","overrides":{"time.matchEnd":86400},"ruleset":"perfidia-1@1.0.0","seats":[{"id":"p1"},{"id":"p2"},{"id":"p3"},{"id":"p4"},{"id":"p5"},{"id":"p6"}],"seed":1}}
+{"charge":null,"day":0,"k":"wake","reasons":["start"],"seat":"p1","t":0,"turn":1,"urgent":false,"used":{"own":0,"social":0}}
+{"charge":null,"day":0,"k":"wake","reasons":["start"],"seat":"p2","t":0,"turn":1,"urgent":false,"used":{"own":0,"social":0}}
+{"charge":null,"day":0,"k":"wake","reasons":["start"],"seat":"p3","t":0,"turn":1,"urgent":false,"used":{"own":0,"social":0}}
+{"charge":null,"day":0,"k":"wake","reasons":["start"],"seat":"p4","t":0,"turn":1,"urgent":false,"used":{"own":0,"social":0}}
+{"charge":null,"day":0,"k":"wake","reasons":["start"],"seat":"p5","t":0,"turn":1,"urgent":false,"used":{"own":0,"social":0}}
+{"charge":null,"day":0,"k":"wake","reasons":["start"],"seat":"p6","t":0,"turn":1,"urgent":false,"used":{"own":0,"social":0}}
+{"args":{},"bytes":18741,"k":"obs","n":1,"rt":0,"seat":"p5","t":85,"tool":"rules","turn":1}
+{"args":{"player":"p5"},"bytes":436,"k":"obs","n":2,"rt":0,"seat":"p5","t":85,"tool":"view_player","turn":1}
+{"args":{"fromCity":"c5"},"bytes":5105,"k":"obs","n":3,"rt":0,"seat":"p5","t":85,"tool":"view_map","turn":1}
+{"args":{"city":"c5"},"bytes":487,"k":"obs","n":4,"rt":0,"seat":"p5","t":85,"tool":"view_city","turn":1}
+{"args":{},"bytes":18741,"k":"obs","n":5,"rt":0,"seat":"p6","t":98,"tool":"rules","turn":1}
+{"args":{"player":"p6"},"bytes":436,"k":"obs","n":6,"rt":0,"seat":"p6","t":98,"tool":"view_player","turn":1}
+{"args":{"fromCity":"c6"},"bytes":5126,"k":"obs","n":7,"rt":0,"seat":"p6","t":98,"tool":"view_map","turn":1}
+{"args":{"city":"c6"},"bytes":488,"k":"obs","n":8,"rt":0,"seat":"p6","t":98,"tool":"view_city","turn":1}
+{"args":{},"bytes":18742,"k":"obs","n":9,"rt":0,"seat":"p3","t":101,"tool":"rules","turn":1}
+{"args":{"player":"p3"},"bytes":437,"k":"obs","n":10,"rt":0,"seat":"p3","t":101,"tool":"view_player","turn":1}
+{"args":{"fromCity":"c3"},"bytes":5127,"k":"obs","n":11,"rt":0,"seat":"p3","t":101,"tool":"view_map","turn":1}
+{"args":{"city":"c3"},"bytes":489,"k":"obs","n":12,"rt":0,"seat":"p3","t":101,"tool":"view_city","turn":1}
+{"args":{},"bytes":18742,"k":"obs","n":13,"rt":0,"seat":"p4","t":118,"tool":"rules","turn":1}
+{"args":{"player":"p4"},"bytes":437,"k":"obs","n":14,"rt":0,"seat":"p4","t":118,"tool":"view_player","turn":1}
+{"args":{"fromCity":"c4"},"bytes":5101,"k":"obs","n":15,"rt":0,"seat":"p4","t":118,"tool":"view_map","turn":1}
+{"args":{"city":"c4"},"bytes":489,"k":"obs","n":16,"rt":0,"seat":"p4","t":118,"tool":"view_city","turn":1}
+{"args":{},"bytes":18742,"k":"obs","n":17,"rt":0,"seat":"p1","t":123,"tool":"rules","turn":1}
+{"args":{"player":"p1"},"bytes":437,"k":"obs","n":18,"rt":0,"seat":"p1","t":123,"tool":"view_player","turn":1}
+{"args":{"fromCity":"c1"},"bytes":5106,"k":"obs","n":19,"rt":0,"seat":"p1","t":123,"tool":"view_map","turn":1}
+{"args":{"city":"c1"},"bytes":489,"k":"obs","n":20,"rt":0,"seat":"p1","t":123,"tool":"view_city","turn":1}
+{"args":{},"bytes":957,"k":"obs","n":21,"rt":1,"seat":"p4","t":128,"tool":"leaderboard","turn":1}
+{"args":{},"bytes":18742,"k":"obs","n":22,"rt":0,"seat":"p2","t":141,"tool":"rules","turn":1}
+{"args":{"player":"p2"},"bytes":437,"k":"obs","n":23,"rt":0,"seat":"p2","t":141,"tool":"view_player","turn":1}
+{"args":{"fromCity":"c2"},"bytes":5101,"k":"obs","n":24,"rt":0,"seat":"p2","t":141,"tool":"view_map","turn":1}
+{"args":{"city":"c2"},"bytes":488,"k":"obs","n":25,"rt":0,"seat":"p2","t":141,"tool":"view_city","turn":1}
+{"args":{"city":"c5"},"bytes":166,"k":"obs","n":26,"rt":1,"seat":"p2","t":164,"tool":"view_city","turn":1}
+{"args":{"city":"c6"},"bytes":167,"k":"obs","n":27,"rt":1,"seat":"p2","t":164,"tool":"view_city","turn":1}
+{"args":{"city":"c3"},"bytes":167,"k":"obs","n":28,"rt":1,"seat":"p2","t":164,"tool":"view_city","turn":1}
+{"a":{"building":"warehouse","city":"c2","type":"build"},"i":0,"k":"act","n":29,"r":{"ok":true},"rt":2,"seat":"p2","t":177,"tool":"build","turn":1}
+{"a":{"building":"hall","city":"c2","type":"build"},"i":1,"k":"act","n":30,"r":{"ok":true},"rt":2,"seat":"p2","t":177,"tool":"build","turn":1}
+{"a":{"building":"barracks","city":"c2","type":"build"},"i":2,"k":"act","n":31,"r":{"ok":true},"rt":2,"seat":"p2","t":177,"tool":"build","turn":1}
+{"a":{"building":"barracks","city":"c2","type":"build"},"i":3,"k":"act","n":32,"r":{"ok":true},"rt":2,"seat":"p2","t":177,"tool":"build","turn":1}
+{"a":{"building":"hall","city":"c2","type":"build"},"i":4,"k":"act","n":33,"r":{"ok":true},"rt":2,"seat":"p2","t":177,"tool":"build","turn":1}
+{"a":{"building":"warehouse","city":"c3","type":"build"},"i":0,"k":"act","n":34,"r":{"ok":true},"rt":1,"seat":"p3","t":185,"tool":"build","turn":1}
+{"a":{"building":"hall","city":"c3","type":"build"},"i":1,"k":"act","n":35,"r":{"ok":true},"rt":1,"seat":"p3","t":185,"tool":"build","turn":1}
+{"a":{"building":"barracks","city":"c3","type":"build"},"i":2,"k":"act","n":36,"r":{"ok":true},"rt":1,"seat":"p3","t":185,"tool":"build","turn":1}
+{"a":{"building":"barracks","city":"c3","type":"build"},"i":3,"k":"act","n":37,"r":{"ok":true},"rt":1,"seat":"p3","t":185,"tool":"build","turn":1}
+{"a":{"building":"hall","city":"c3","type":"build"},"i":4,"k":"act","n":38,"r":{"ok":true},"rt":1,"seat":"p3","t":185,"tool":"build","turn":1}
+{"a":{"building":"warehouse","city":"c5","type":"build"},"i":0,"k":"act","n":39,"r":{"ok":true},"rt":1,"seat":"p5","t":188,"tool":"build","turn":1}
+{"a":{"building":"hall","city":"c5","type":"build"},"i":1,"k":"act","n":40,"r":{"ok":true},"rt":1,"seat":"p5","t":188,"tool":"build","turn":1}
+{"a":{"building":"barracks","city":"c5","type":"build"},"i":2,"k":"act","n":41,"r":{"ok":true},"rt":1,"seat":"p5","t":188,"tool":"build","turn":1}
+{"a":{"building":"barracks","city":"c5","type":"build"},"i":3,"k":"act","n":42,"r":{"ok":true},"rt":1,"seat":"p5","t":188,"tool":"build","turn":1}
+{"a":{"building":"hall","city":"c5","type":"build"},"i":4,"k":"act","n":43,"r":{"ok":true},"rt":1,"seat":"p5","t":188,"tool":"build","turn":1}
+{"args":{"city":"c1"},"bytes":167,"k":"obs","n":44,"rt":1,"seat":"p6","t":213,"tool":"view_city","turn":1}
+{"args":{"city":"c2"},"bytes":166,"k":"obs","n":45,"rt":1,"seat":"p6","t":213,"tool":"view_city","turn":1}
+{"args":{"city":"c5"},"bytes":166,"k":"obs","n":46,"rt":1,"seat":"p6","t":213,"tool":"view_city","turn":1}
+{"k":"note","mode":"replace","n":47,"seat":"p3","t":217,"text":"{\"v\":2,\"s\":\"turtle\",\"h\":\"65c93fbe27a0341d:6\",\"f\":{},\"m\":[],\"x\":{},\"k\":[]}","turn":1}
+{"calls":7,"k":"turn","next":{"at":8504,"kind":"self"},"rounds":3,"seat":"p3","selfAt":8504,"t":217,"thought":"turtle D1 00:03:05: build c3 warehouse,hall,barracks,barracks,hall","turn":1,"why":"end_turn"}
+{"k":"note","mode":"replace","n":48,"seat":"p2","t":234,"text":"{\"v\":2,\"s\":\"rusher\",\"h\":\"65c93fbe27a0341d:6\",\"f\":{},\"m\":[],\"x\":{},\"k\":[]}","turn":1}
+{"calls":10,"k":"turn","next":{"at":7363,"kind":"self"},"rounds":4,"seat":"p2","selfAt":7363,"t":234,"thought":"rusher D1 00:02:57: build c2 warehouse,hall,barracks,barracks,hall","turn":1,"why":"end_turn"}
+{"a":{"building":"warehouse","city":"c1","type":"build"},"i":0,"k":"act","n":49,"r":{"ok":true},"rt":1,"seat":"p1","t":237,"tool":"build","turn":1}
+{"a":{"building":"hall","city":"c1","type":"build"},"i":1,"k":"act","n":50,"r":{"ok":true},"rt":1,"seat":"p1","t":237,"tool":"build","turn":1}
+{"a":{"building":"barracks","city":"c1","type":"build"},"i":2,"k":"act","n":51,"r":{"ok":true},"rt":1,"seat":"p1","t":237,"tool":"build","turn":1}
+{"a":{"building":"barracks","city":"c1","type":"build"},"i":3,"k":"act","n":52,"r":{"ok":true},"rt":1,"seat":"p1","t":237,"tool":"build","turn":1}
+{"a":{"building":"hall","city":"c1","type":"build"},"i":4,"k":"act","n":53,"r":{"ok":true},"rt":1,"seat":"p1","t":237,"tool":"build","turn":1}
+{"a":{"building":"warehouse","city":"c6","type":"build"},"i":0,"k":"act","n":54,"r":{"ok":true},"rt":2,"seat":"p6","t":244,"tool":"build","turn":1}
+{"a":{"building":"hall","city":"c6","type":"build"},"i":1,"k":"act","n":55,"r":{"ok":true},"rt":2,"seat":"p6","t":244,"tool":"build","turn":1}
+{"a":{"building":"barracks","city":"c6","type":"build"},"i":2,"k":"act","n":56,"r":{"ok":true},"rt":2,"seat":"p6","t":244,"tool":"build","turn":1}
+{"a":{"building":"barracks","city":"c6","type":"build"},"i":3,"k":"act","n":57,"r":{"ok":true},"rt":2,"seat":"p6","t":244,"tool":"build","turn":1}
+{"a":{"building":"hall","city":"c6","type":"build"},"i":4,"k":"act","n":58,"r":{"ok":true},"rt":2,"seat":"p6","t":244,"tool":"build","turn":1}
+{"k":"note","mode":"replace","n":59,"seat":"p5","t":270,"text":"{\"v\":2,\"s\":\"expander\",\"h\":\"65c93fbe27a0341d:6\",\"f\":{},\"m\":[],\"x\":{},\"k\":[]}","turn":1}
+{"calls":7,"k":"turn","next":{"at":7388,"kind":"self"},"rounds":3,"seat":"p5","selfAt":7388,"t":270,"thought":"expander D1 00:03:08: build c5 warehouse,hall,barracks,barracks,hall","turn":1,"why":"end_turn"}
+{"a":{"kind":"alliance","name":"League p4","text":"Let us stand together.","to":"p1","type":"propose","until":null},"i":0,"k":"act","n":60,"r":{"ok":true},"rt":2,"seat":"p4","t":275,"tool":"propose_alliance","turn":1}
+{"e":{"data":{"expiresAt":43475,"from":"p4","kind":"alliance","name":"League p4","proposal":"q9syyk","text":"Let us stand together.","to":"p1","until":null},"public":false,"t":275,"to":[{"as":"self","p":"p4"},{"as":"target","p":"p1"}],"type":"proposal"},"k":"ev","t":275}
+{"a":{"kind":"pact","name":null,"text":"Peace between us?","to":"p3","type":"propose","until":null},"i":0,"k":"act","n":61,"r":{"ok":true},"rt":2,"seat":"p4","t":275,"tool":"propose_alliance","turn":1}
+{"e":{"data":{"expiresAt":43475,"from":"p4","kind":"pact","name":null,"proposal":"q19qa5","text":"Peace between us?","to":"p3","until":null},"public":false,"t":275,"to":[{"as":"self","p":"p4"},{"as":"target","p":"p3"}],"type":"proposal"},"k":"ev","t":275}
+{"a":{"kind":"pact","name":null,"text":"Peace between us?","to":"p6","type":"propose","until":null},"i":0,"k":"act","n":62,"r":{"ok":true},"rt":2,"seat":"p4","t":275,"tool":"propose_alliance","turn":1}
+{"e":{"data":{"expiresAt":43475,"from":"p4","kind":"pact","name":null,"proposal":"qa6gks","text":"Peace between us?","to":"p6","until":null},"public":false,"t":275,"to":[{"as":"self","p":"p4"},{"as":"target","p":"p6"}],"type":"proposal"},"k":"ev","t":275}
+{"a":{"from":"c4","res":{"gold":95,"stone":95,"wood":95},"to":"c2","type":"send_resources"},"i":0,"k":"act","n":63,"r":{"ok":true},"rt":2,"seat":"p4","t":275,"tool":"send_resources","turn":1}
+{"e":{"data":{"arriveAt":21893,"by":"p4","cargo":{"gold":95,"stone":95,"wood":95},"departAt":275,"from":"c4","movement":"m5eye2","to":"c2"},"public":false,"t":275,"to":[{"as":"party","p":"p2"}],"type":"incoming_shipment"},"k":"ev","t":275}
+{"a":{"building":"warehouse","city":"c4","type":"build"},"i":0,"k":"act","n":64,"r":{"ok":true},"rt":2,"seat":"p4","t":275,"tool":"build","turn":1}
+{"a":{"building":"hall","city":"c4","type":"build"},"i":1,"k":"act","n":65,"r":{"ok":true},"rt":2,"seat":"p4","t":275,"tool":"build","turn":1}
+{"a":{"building":"barracks","city":"c4","type":"build"},"i":2,"k":"act","n":66,"r":{"ok":true},"rt":2,"seat":"p4","t":275,"tool":"build","turn":1}
+{"a":{"building":"barracks","city":"c4","type":"build"},"i":3,"k":"act","n":67,"r":{"ok":true},"rt":2,"seat":"p4","t":275,"tool":"build","turn":1}
+{"a":{"building":"hall","city":"c4","type":"build"},"i":4,"k":"act","n":68,"r":{"ok":true},"rt":2,"seat":"p4","t":275,"tool":"build","turn":1}
+{"k":"note","mode":"replace","n":69,"seat":"p1","t":290,"text":"{\"v\":2,\"s\":\"expander\",\"h\":\"65c93fbe27a0341d:6\",\"f\":{},\"m\":[],\"x\":{},\"k\":[]}","turn":1}
+{"calls":7,"k":"turn","next":{"at":875,"kind":"social"},"rounds":3,"seat":"p1","selfAt":7437,"t":290,"thought":"expander D1 00:03:57: build c1 warehouse,hall,barracks,barracks,hall","turn":1,"why":"end_turn"}
+{"k":"note","mode":"replace","n":70,"seat":"p6","t":336,"text":"{\"v\":2,\"s\":\"rusher\",\"h\":\"65c93fbe27a0341d:6\",\"f\":{},\"m\":[],\"x\":{},\"k\":[]}","turn":1}
+{"calls":10,"k":"turn","next":{"at":875,"kind":"social"},"rounds":4,"seat":"p6","selfAt":7424,"t":336,"thought":"rusher D1 00:04:04: build c6 warehouse,hall,barracks,barracks,hall","turn":1,"why":"end_turn"}
+{"k":"note","mode":"replace","n":71,"seat":"p4","t":354,"text":"{\"v\":2,\"s\":\"opportunist\",\"h\":\"65c93fbe27a0341d:6\",\"f\":{},\"m\":[],\"x\":{\"pr\":1,\"tr\":1},\"k\":[]}","turn":1}
+{"calls":12,"k":"turn","next":{"at":7453,"kind":"self"},"rounds":4,"seat":"p4","selfAt":7453,"t":354,"thought":"opportunist D1 00:04:35: propose alliance p1; propose pact p3; propose pact p6; ship c2; build c4 warehouse,hall,barracks,barracks,hall","turn":1,"why":"end_turn"}
+{"charge":"social","day":0,"k":"wake","reasons":["proposal q9syyk"],"seat":"p1","t":875,"turn":2,"urgent":false,"used":{"own":0,"social":1}}
+{"charge":"social","day":0,"k":"wake","reasons":["proposal q19qa5"],"seat":"p3","t":875,"turn":2,"urgent":false,"used":{"own":0,"social":1}}
+{"charge":"social","day":0,"k":"wake","reasons":["proposal qa6gks"],"seat":"p6","t":875,"turn":2,"urgent":false,"used":{"own":0,"social":1}}
+{"args":{"player":"p1"},"bytes":591,"k":"obs","n":72,"rt":0,"seat":"p1","t":904,"tool":"view_player","turn":2}
+{"args":{},"bytes":3201,"k":"obs","n":73,"rt":0,"seat":"p1","t":904,"tool":"view_map","turn":2}
+{"args":{"city":"c1"},"bytes":976,"k":"obs","n":74,"rt":0,"seat":"p1","t":904,"tool":"view_city","turn":2}
+{"args":{"player":"p3"},"bytes":575,"k":"obs","n":75,"rt":0,"seat":"p3","t":913,"tool":"view_player","turn":2}
+{"args":{},"bytes":3201,"k":"obs","n":76,"rt":0,"seat":"p3","t":913,"tool":"view_map","turn":2}
+{"args":{"city":"c3"},"bytes":976,"k":"obs","n":77,"rt":0,"seat":"p3","t":913,"tool":"view_city","turn":2}
+{"a":{"accept":true,"proposal":"q9syyk","type":"answer"},"i":0,"k":"act","n":78,"r":{"ok":true},"rt":1,"seat":"p1","t":913,"tool":"answer_proposal","turn":2}
+{"e":{"data":{"accept":true,"from":"p4","kind":"alliance","proposal":"q9syyk","to":"p1"},"public":false,"t":913,"to":[{"as":"self","p":"p1"},{"as":"target","p":"p4"}],"type":"proposal_answered"},"k":"ev","t":913}
+{"e":{"data":{"alliance":"a1","members":["p1","p4"],"name":"League p4"},"public":true,"t":913,"to":[{"as":"self","p":"p1"},{"as":"target","p":"p4"}],"type":"alliance_formed"},"k":"ev","t":913}
+{"args":{"player":"p6"},"bytes":575,"k":"obs","n":79,"rt":0,"seat":"p6","t":920,"tool":"view_player","turn":2}
+{"args":{},"bytes":3201,"k":"obs","n":80,"rt":0,"seat":"p6","t":920,"tool":"view_map","turn":2}
+{"args":{"city":"c6"},"bytes":976,"k":"obs","n":81,"rt":0,"seat":"p6","t":920,"tool":"view_city","turn":2}
+{"k":"note","mode":"replace","n":82,"seat":"p1","t":920,"text":"{\"v\":2,\"s\":\"expander\",\"h\":\"65c93fbe27a0341d:6\",\"f\":{},\"m\":[],\"x\":{},\"k\":[\"q9syyk\"]}","turn":2}
+{"calls":6,"k":"turn","next":{"at":8113,"kind":"self"},"rounds":3,"seat":"p1","selfAt":8113,"t":920,"thought":"expander D1 00:15:13: answer q9syyk yes","turn":2,"why":"end_turn"}
+{"a":{"accept":true,"proposal":"q19qa5","type":"answer"},"i":0,"k":"act","n":83,"r":{"ok":true},"rt":1,"seat":"p3","t":970,"tool":"answer_proposal","turn":2}
+{"e":{"data":{"accept":true,"from":"p4","kind":"pact","proposal":"q19qa5","to":"p3"},"public":false,"t":970,"to":[{"as":"self","p":"p3"},{"as":"target","p":"p4"}],"type":"proposal_answered"},"k":"ev","t":970}
+{"e":{"data":{"a":"p3","b":"p4","expiresAt":173770},"public":true,"t":970,"to":[{"as":"self","p":"p3"},{"as":"target","p":"p4"}],"type":"pact_signed"},"k":"ev","t":970}
+{"k":"note","mode":"replace","n":84,"seat":"p3","t":1001,"text":"{\"v\":2,\"s\":\"turtle\",\"h\":\"65c93fbe27a0341d:6\",\"f\":{},\"m\":[],\"x\":{},\"k\":[\"q19qa5\"]}","turn":2}
+{"calls":6,"k":"turn","next":{"at":9289,"kind":"self"},"rounds":3,"seat":"p3","selfAt":9289,"t":1001,"thought":"turtle D1 00:16:10: answer q19qa5 yes","turn":2,"why":"end_turn"}
+{"args":{"city":"c1"},"bytes":168,"k":"obs","n":85,"rt":1,"seat":"p6","t":1051,"tool":"view_city","turn":2}
+{"args":{"city":"c2"},"bytes":167,"k":"obs","n":86,"rt":1,"seat":"p6","t":1051,"tool":"view_city","turn":2}
+{"args":{"city":"c5"},"bytes":167,"k":"obs","n":87,"rt":1,"seat":"p6","t":1051,"tool":"view_city","turn":2}
+{"a":{"accept":false,"proposal":"qa6gks","type":"answer"},"i":0,"k":"act","n":88,"r":{"ok":true},"rt":2,"seat":"p6","t":1179,"tool":"answer_proposal","turn":2}
+{"e":{"data":{"accept":false,"from":"p4","kind":"pact","proposal":"qa6gks","to":"p6"},"public":false,"t":1179,"to":[{"as":"self","p":"p6"},{"as":"target","p":"p4"}],"type":"proposal_answered"},"k":"ev","t":1179}
+{"k":"note","mode":"replace","n":89,"seat":"p6","t":1252,"text":"{\"v\":2,\"s\":\"rusher\",\"h\":\"65c93fbe27a0341d:6\",\"f\":{},\"m\":[],\"x\":{},\"k\":[\"qa6gks\"]}","turn":2}
+{"calls":9,"k":"turn","next":{"at":8281,"kind":"self"},"rounds":4,"seat":"p6","selfAt":8281,"t":1252,"thought":"rusher D1 00:19:39: answer qa6gks no","turn":2,"why":"end_turn"}
+{"charge":"social","day":0,"k":"wake","reasons":["proposal_answered q9syyk","proposal_answered q19qa5","proposal_answered qa6gks"],"seat":"p4","t":1513,"turn":2,"urgent":false,"used":{"own":0,"social":1}}
+{"args":{"player":"p4"},"bytes":800,"k":"obs","n":90,"rt":0,"seat":"p4","t":1564,"tool":"view_player","turn":2}
+{"args":{},"bytes":3202,"k":"obs","n":91,"rt":0,"seat":"p4","t":1564,"tool":"view_map","turn":2}
+{"args":{"city":"c4"},"bytes":1219,"k":"obs","n":92,"rt":0,"seat":"p4","t":1564,"tool":"view_city","turn":2}
+{"args":{},"bytes":1163,"k":"obs","n":93,"rt":1,"seat":"p4","t":1711,"tool":"leaderboard","turn":2}
+{"k":"note","mode":"replace","n":94,"seat":"p4","t":1870,"text":"{\"v\":2,\"s\":\"opportunist\",\"h\":\"65c93fbe27a0341d:6\",\"f\":{},\"m\":[\"ally p1 since D1\",\"pact p3 since D1\"],\"x\":{\"pr\":1,\"tr\":1},\"k\":[]}","turn":2}
+{"calls":6,"k":"turn","next":{"at":8769,"kind":"self"},"rounds":3,"seat":"p4","selfAt":8769,"t":1870,"thought":"opportunist D1 00:28:31: nothing to do","turn":2,"why":"end_turn"}
+{"e":{"data":{"building":"warehouse","city":"c2","item":1,"level":2},"public":false,"t":2097,"to":[{"as":"self","p":"p2"}],"type":"build_done"},"k":"ev","t":2097}
+{"e":{"data":{"building":"warehouse","city":"c3","item":1,"level":2},"public":false,"t":2105,"to":[{"as":"self","p":"p3"}],"type":"build_done"},"k":"ev","t":2105}
+{"e":{"data":{"building":"warehouse","city":"c5","item":1,"level":2},"public":false,"t":2108,"to":[{"as":"self","p":"p5"}],"type":"build_done"},"k":"ev","t":2108}
+{"e":{"data":{"building":"warehouse","city":"c1","item":1,"level":2},"public":false,"t":2157,"to":[{"as":"self","p":"p1"}],"type":"build_done"},"k":"ev","t":2157}
+{"e":{"data":{"building":"warehouse","city":"c6","item":1,"level":2},"public":false,"t":2164,"to":[{"as":"self","p":"p6"}],"type":"build_done"},"k":"ev","t":2164}
+{"e":{"data":{"building":"warehouse","city":"c4","item":1,"level":2},"public":false,"t":2195,"to":[{"as":"self","p":"p4"}],"type":"build_done"},"k":"ev","t":2195}
+{"h":"63d20881afc095ae","hour":1,"k":"ckpt","t":3600}
+{"e":{"data":{"building":"hall","city":"c2","item":2,"level":2},"public":false,"t":4977,"to":[{"as":"self","p":"p2"}],"type":"build_done"},"k":"ev","t":4977}
+{"e":{"data":{"building":"hall","city":"c3","item":2,"level":2},"public":false,"t":4985,"to":[{"as":"self","p":"p3"}],"type":"build_done"},"k":"ev","t":4985}
+{"e":{"data":{"building":"hall","city":"c5","item":2,"level":2},"public":false,"t":4988,"to":[{"as":"self","p":"p5"}],"type":"build_done"},"k":"ev","t":4988}
+{"e":{"data":{"building":"hall","city":"c1","item":2,"level":2},"public":false,"t":5037,"to":[{"as":"self","p":"p1"}],"type":"build_done"},"k":"ev","t":5037}
+{"e":{"data":{"building":"hall","city":"c6","item":2,"level":2},"public":false,"t":5044,"to":[{"as":"self","p":"p6"}],"type":"build_done"},"k":"ev","t":5044}
+{"e":{"data":{"building":"hall","city":"c4","item":2,"level":2},"public":false,"t":5075,"to":[{"as":"self","p":"p4"}],"type":"build_done"},"k":"ev","t":5075}
+{"e":{"data":{"building":"barracks","city":"c2","item":3,"level":1},"public":false,"t":6477,"to":[{"as":"self","p":"p2"}],"type":"build_done"},"k":"ev","t":6477}
+{"e":{"data":{"building":"barracks","city":"c3","item":3,"level":1},"public":false,"t":6485,"to":[{"as":"self","p":"p3"}],"type":"build_done"},"k":"ev","t":6485}
+{"e":{"data":{"building":"barracks","city":"c5","item":3,"level":1},"public":false,"t":6488,"to":[{"as":"self","p":"p5"}],"type":"build_done"},"k":"ev","t":6488}
+{"e":{"data":{"building":"barracks","city":"c1","item":3,"level":1},"public":false,"t":6537,"to":[{"as":"self","p":"p1"}],"type":"build_done"},"k":"ev","t":6537}
+{"e":{"data":{"building":"barracks","city":"c6","item":3,"level":1},"public":false,"t":6544,"to":[{"as":"self","p":"p6"}],"type":"build_done"},"k":"ev","t":6544}
+{"e":{"data":{"building":"barracks","city":"c4","item":3,"level":1},"public":false,"t":6575,"to":[{"as":"self","p":"p4"}],"type":"build_done"},"k":"ev","t":6575}
+{"h":"252f6ccb9e007a69","hour":2,"k":"ckpt","t":7200}
+{"charge":"own","day":0,"k":"wake","reasons":["self"],"seat":"p2","t":7363,"turn":2,"urgent":false,"used":{"own":1,"social":0}}
+{"charge":"own","day":0,"k":"wake","reasons":["self"],"seat":"p5","t":7388,"turn":2,"urgent":false,"used":{"own":1,"social":0}}
+{"args":{"player":"p2"},"bytes":438,"k":"obs","n":95,"rt":0,"seat":"p2","t":7461,"tool":"view_player","turn":2}
+{"args":{},"bytes":3202,"k":"obs","n":96,"rt":0,"seat":"p2","t":7461,"tool":"view_map","turn":2}
+{"args":{"city":"c2"},"bytes":904,"k":"obs","n":97,"rt":0,"seat":"p2","t":7461,"tool":"view_city","turn":2}
+{"args":{"player":"p5"},"bytes":438,"k":"obs","n":98,"rt":0,"seat":"p5","t":7498,"tool":"view_player","turn":2}
+{"args":{},"bytes":3202,"k":"obs","n":99,"rt":0,"seat":"p5","t":7498,"tool":"view_map","turn":2}
+{"args":{"city":"c5"},"bytes":683,"k":"obs","n":100,"rt":0,"seat":"p5","t":7498,"tool":"view_city","turn":2}
+{"a":{"building":"lumber","city":"c5","type":"build"},"i":0,"k":"act","n":101,"r":{"ok":true},"rt":1,"seat":"p5","t":7521,"tool":"build","turn":2}
+{"a":{"building":"quarry","city":"c5","type":"build"},"i":1,"k":"act","n":102,"r":{"ok":true},"rt":1,"seat":"p5","t":7521,"tool":"build","turn":2}
+{"a":{"building":"mine","city":"c5","type":"build"},"i":2,"k":"act","n":103,"r":{"ok":true},"rt":1,"seat":"p5","t":7521,"tool":"build","turn":2}
+{"calls":5,"k":"turn","next":{"at":14721,"kind":"self"},"rounds":3,"seat":"p5","selfAt":14721,"t":7532,"thought":"expander D1 02:05:21: build c5 lumber,quarry,mine","turn":2,"why":"end_turn"}
+{"args":{"city":"c5"},"bytes":167,"k":"obs","n":104,"rt":1,"seat":"p2","t":7583,"tool":"view_city","turn":2}
+{"args":{"city":"c6"},"bytes":168,"k":"obs","n":105,"rt":1,"seat":"p2","t":7583,"tool":"view_city","turn":2}
+{"args":{"city":"c3"},"bytes":168,"k":"obs","n":106,"rt":1,"seat":"p2","t":7583,"tool":"view_city","turn":2}
+{"a":{"building":"harbor","city":"c2","type":"build"},"i":0,"k":"act","n":107,"r":{"ok":true},"rt":2,"seat":"p2","t":7614,"tool":"build","turn":2}
+{"a":{"building":"lumber","city":"c2","type":"build"},"i":1,"k":"act","n":108,"r":{"ok":true},"rt":2,"seat":"p2","t":7614,"tool":"build","turn":2}
+{"a":{"building":"quarry","city":"c2","type":"build"},"i":2,"k":"act","n":109,"r":{"ok":true},"rt":2,"seat":"p2","t":7614,"tool":"build","turn":2}
+{"calls":8,"k":"turn","next":{"at":14777,"kind":"self"},"rounds":4,"seat":"p2","selfAt":14777,"t":7624,"thought":"rusher D1 02:06:54: build c2 harbor,lumber,quarry","turn":2,"why":"end_turn"}
+{"charge":"own","day":0,"k":"wake","reasons":["self"],"seat":"p1","t":8113,"turn":3,"urgent":false,"used":{"own":1,"social":1}}
+{"args":{"player":"p1"},"bytes":480,"k":"obs","n":110,"rt":0,"seat":"p1","t":8241,"tool":"view_player","turn":3}
+{"args":{},"bytes":3202,"k":"obs","n":111,"rt":0,"seat":"p1","t":8241,"tool":"view_map","turn":3}
+{"args":{"city":"c1"},"bytes":684,"k":"obs","n":112,"rt":0,"seat":"p1","t":8241,"tool":"view_city","turn":3}
+{"a":{"building":"lumber","city":"c1","type":"build"},"i":0,"k":"act","n":113,"r":{"ok":true},"rt":1,"seat":"p1","t":8262,"tool":"build","turn":3}
+{"a":{"building":"quarry","city":"c1","type":"build"},"i":1,"k":"act","n":114,"r":{"ok":true},"rt":1,"seat":"p1","t":8262,"tool":"build","turn":3}
+{"a":{"building":"mine","city":"c1","type":"build"},"i":2,"k":"act","n":115,"r":{"ok":true},"rt":1,"seat":"p1","t":8262,"tool":"build","turn":3}
+{"charge":"own","day":0,"k":"wake","reasons":["self"],"seat":"p6","t":8281,"turn":3,"urgent":false,"used":{"own":1,"social":1}}
+{"args":{"player":"p6"},"bytes":438,"k":"obs","n":116,"rt":0,"seat":"p6","t":8317,"tool":"view_player","turn":3}
+{"args":{},"bytes":3202,"k":"obs","n":117,"rt":0,"seat":"p6","t":8317,"tool":"view_map","turn":3}
+{"args":{"city":"c6"},"bytes":684,"k":"obs","n":118,"rt":0,"seat":"p6","t":8317,"tool":"view_city","turn":3}
+{"calls":5,"k":"turn","next":{"at":15462,"kind":"self"},"rounds":3,"seat":"p1","selfAt":15462,"t":8355,"thought":"expander D1 02:17:42: build c1 lumber,quarry,mine","turn":3,"why":"end_turn"}
+{"args":{"city":"c1"},"bytes":168,"k":"obs","n":119,"rt":1,"seat":"p6","t":8385,"tool":"view_city","turn":3}
+{"args":{"city":"c2"},"bytes":167,"k":"obs","n":120,"rt":1,"seat":"p6","t":8385,"tool":"view_city","turn":3}
+{"args":{"city":"c5"},"bytes":167,"k":"obs","n":121,"rt":1,"seat":"p6","t":8385,"tool":"view_city","turn":3}
+{"a":{"building":"harbor","city":"c6","type":"build"},"i":0,"k":"act","n":122,"r":{"ok":true},"rt":2,"seat":"p6","t":8440,"tool":"build","turn":3}
+{"a":{"building":"lumber","city":"c6","type":"build"},"i":1,"k":"act","n":123,"r":{"ok":true},"rt":2,"seat":"p6","t":8440,"tool":"build","turn":3}
+{"a":{"building":"quarry","city":"c6","type":"build"},"i":2,"k":"act","n":124,"r":{"ok":true},"rt":2,"seat":"p6","t":8440,"tool":"build","turn":3}
+{"calls":8,"k":"turn","next":{"at":15528,"kind":"self"},"rounds":4,"seat":"p6","selfAt":15528,"t":8486,"thought":"rusher D1 02:20:40: build c6 harbor,lumber,quarry","turn":3,"why":"end_turn"}
+{"charge":"own","day":0,"k":"wake","reasons":["self"],"seat":"p4","t":8769,"turn":3,"urgent":false,"used":{"own":1,"social":1}}
+{"e":{"data":{"building":"barracks","city":"c2","item":4,"level":2},"public":false,"t":8877,"to":[{"as":"self","p":"p2"}],"type":"build_done"},"k":"ev","t":8877}
+{"e":{"data":{"building":"barracks","city":"c3","item":4,"level":2},"public":false,"t":8885,"to":[{"as":"self","p":"p3"}],"type":"build_done"},"k":"ev","t":8885}
+{"e":{"data":{"building":"barracks","city":"c5","item":4,"level":2},"public":false,"t":8888,"to":[{"as":"self","p":"p5"}],"type":"build_done"},"k":"ev","t":8888}
+{"args":{"player":"p4"},"bytes":784,"k":"obs","n":125,"rt":0,"seat":"p4","t":8895,"tool":"view_player","turn":3}
+{"args":{},"bytes":3202,"k":"obs","n":126,"rt":0,"seat":"p4","t":8895,"tool":"view_map","turn":3}
+{"args":{"city":"c4"},"bytes":927,"k":"obs","n":127,"rt":0,"seat":"p4","t":8895,"tool":"view_city","turn":3}
+{"args":{},"bytes":1163,"k":"obs","n":128,"rt":1,"seat":"p4","t":8910,"tool":"leaderboard","turn":3}
+{"a":{"building":"lumber","city":"c4","type":"build"},"i":0,"k":"act","n":129,"r":{"ok":true},"rt":2,"seat":"p4","t":8930,"tool":"build","turn":3}
+{"a":{"building":"quarry","city":"c4","type":"build"},"i":1,"k":"act","n":130,"r":{"ok":true},"rt":2,"seat":"p4","t":8930,"tool":"build","turn":3}
+{"a":{"building":"mine","city":"c4","type":"build"},"i":2,"k":"act","n":131,"r":{"ok":true},"rt":2,"seat":"p4","t":8930,"tool":"build","turn":3}
+{"e":{"data":{"building":"barracks","city":"c1","item":4,"level":2},"public":false,"t":8937,"to":[{"as":"self","p":"p1"}],"type":"build_done"},"k":"ev","t":8937}
+{"e":{"data":{"building":"barracks","city":"c6","item":4,"level":2},"public":false,"t":8944,"to":[{"as":"self","p":"p6"}],"type":"build_done"},"k":"ev","t":8944}
+{"e":{"data":{"building":"barracks","city":"c4","item":4,"level":2},"public":false,"t":8975,"to":[{"as":"self","p":"p4"}],"type":"build_done"},"k":"ev","t":8975}
+{"calls":6,"k":"turn","next":{"at":15973,"kind":"self"},"rounds":4,"seat":"p4","selfAt":15973,"t":9044,"thought":"opportunist D1 02:28:50: build c4 lumber,quarry,mine","turn":3,"why":"end_turn"}
+{"charge":"own","day":0,"k":"wake","reasons":["self"],"seat":"p3","t":9289,"turn":3,"urgent":false,"used":{"own":1,"social":1}}
+{"args":{"player":"p3"},"bytes":498,"k":"obs","n":132,"rt":0,"seat":"p3","t":9339,"tool":"view_player","turn":3}
+{"args":{},"bytes":3202,"k":"obs","n":133,"rt":0,"seat":"p3","t":9339,"tool":"view_map","turn":3}
+{"args":{"city":"c3"},"bytes":585,"k":"obs","n":134,"rt":0,"seat":"p3","t":9339,"tool":"view_city","turn":3}
+{"a":{"building":"wall","city":"c3","type":"build"},"i":0,"k":"act","n":135,"r":{"ok":true},"rt":1,"seat":"p3","t":9438,"tool":"build","turn":3}
+{"a":{"building":"lumber","city":"c3","type":"build"},"i":1,"k":"act","n":136,"r":{"ok":true},"rt":1,"seat":"p3","t":9438,"tool":"build","turn":3}
+{"a":{"building":"quarry","city":"c3","type":"build"},"i":2,"k":"act","n":137,"r":{"ok":true},"rt":1,"seat":"p3","t":9438,"tool":"build","turn":3}
+{"a":{"building":"mine","city":"c3","type":"build"},"i":3,"k":"act","n":138,"r":{"ok":true},"rt":1,"seat":"p3","t":9438,"tool":"build","turn":3}
+{"calls":5,"k":"turn","next":{"at":17757,"kind":"self"},"rounds":3,"seat":"p3","selfAt":17757,"t":9539,"thought":"turtle D1 02:37:18: build c3 wall,lumber,quarry,mine","turn":3,"why":"end_turn"}
+{"h":"5154bdf06ae0cefc","hour":3,"k":"ckpt","t":10800}
+{"e":{"data":{"building":"hall","city":"c2","item":5,"level":3},"public":false,"t":13197,"to":[{"as":"self","p":"p2"}],"type":"build_done"},"k":"ev","t":13197}
+{"e":{"data":{"building":"hall","city":"c3","item":5,"level":3},"public":false,"t":13205,"to":[{"as":"self","p":"p3"}],"type":"build_done"},"k":"ev","t":13205}
+{"e":{"data":{"building":"hall","city":"c5","item":5,"level":3},"public":false,"t":13208,"to":[{"as":"self","p":"p5"}],"type":"build_done"},"k":"ev","t":13208}
+{"e":{"data":{"building":"hall","city":"c1","item":5,"level":3},"public":false,"t":13257,"to":[{"as":"self","p":"p1"}],"type":"build_done"},"k":"ev","t":13257}
+{"e":{"data":{"building":"hall","city":"c6","item":5,"level":3},"public":false,"t":13264,"to":[{"as":"self","p":"p6"}],"type":"build_done"},"k":"ev","t":13264}
+{"e":{"data":{"building":"hall","city":"c4","item":5,"level":3},"public":false,"t":13295,"to":[{"as":"self","p":"p4"}],"type":"build_done"},"k":"ev","t":13295}
+{"h":"445bb53241fd4342","hour":4,"k":"ckpt","t":14400}
+{"e":{"data":{"building":"wall","city":"c3","item":6,"level":1},"public":false,"t":14568,"to":[{"as":"self","p":"p3"}],"type":"build_done"},"k":"ev","t":14568}
+{"charge":"own","day":0,"k":"wake","reasons":["self"],"seat":"p5","t":14721,"turn":3,"urgent":false,"used":{"own":2,"social":0}}
+{"charge":"own","day":0,"k":"wake","reasons":["self"],"seat":"p2","t":14777,"turn":3,"urgent":false,"used":{"own":2,"social":0}}
+{"args":{"player":"p2"},"bytes":439,"k":"obs","n":139,"rt":0,"seat":"p2","t":14845,"tool":"view_player","turn":3}
+{"args":{},"bytes":3203,"k":"obs","n":140,"rt":0,"seat":"p2","t":14845,"tool":"view_map","turn":3}
+{"args":{"city":"c2"},"bytes":1005,"k":"obs","n":141,"rt":0,"seat":"p2","t":14845,"tool":"view_city","turn":3}
+{"args":{"player":"p5"},"bytes":439,"k":"obs","n":142,"rt":0,"seat":"p5","t":14876,"tool":"view_player","turn":3}
+{"args":{},"bytes":3203,"k":"obs","n":143,"rt":0,"seat":"p5","t":14876,"tool":"view_map","turn":3}
+{"args":{"city":"c5"},"bytes":785,"k":"obs","n":144,"rt":0,"seat":"p5","t":14876,"tool":"view_city","turn":3}
+{"calls":4,"k":"turn","next":{"at":22029,"kind":"self"},"rounds":2,"seat":"p5","selfAt":22029,"t":14965,"thought":"expander D1 04:07:56: nothing to do","turn":3,"why":"end_turn"}
+{"args":{"city":"c5"},"bytes":168,"k":"obs","n":145,"rt":1,"seat":"p2","t":14986,"tool":"view_city","turn":3}
+{"args":{"city":"c6"},"bytes":169,"k":"obs","n":146,"rt":1,"seat":"p2","t":14986,"tool":"view_city","turn":3}
+{"args":{"city":"c3"},"bytes":169,"k":"obs","n":147,"rt":1,"seat":"p2","t":14986,"tool":"view_city","turn":3}
+{"a":{"building":"mine","city":"c2","type":"build"},"i":0,"k":"act","n":148,"r":{"ok":true},"rt":2,"seat":"p2","t":15093,"tool":"build","turn":3}
+{"a":{"building":"lumber","city":"c2","type":"build"},"i":1,"k":"act","n":149,"r":{"ok":true},"rt":2,"seat":"p2","t":15093,"tool":"build","turn":3}
+{"calls":8,"k":"turn","next":{"at":22224,"kind":"self"},"rounds":4,"seat":"p2","selfAt":22224,"t":15133,"thought":"rusher D1 04:11:33: build c2 mine,lumber","turn":3,"why":"end_turn"}
+{"e":{"data":{"building":"harbor","city":"c2","item":6,"level":1},"public":false,"t":15378,"to":[{"as":"self","p":"p2"}],"type":"build_done"},"k":"ev","t":15378}
+{"e":{"data":{"building":"lumber","city":"c5","item":6,"level":2},"public":false,"t":15389,"to":[{"as":"self","p":"p5"}],"type":"build_done"},"k":"ev","t":15389}
+{"e":{"data":{"building":"lumber","city":"c1","item":6,"level":2},"public":false,"t":15438,"to":[{"as":"self","p":"p1"}],"type":"build_done"},"k":"ev","t":15438}
+{"e":{"data":{"building":"harbor","city":"c6","item":6,"level":1},"public":false,"t":15445,"to":[{"as":"self","p":"p6"}],"type":"build_done"},"k":"ev","t":15445}
+{"charge":"own","day":0,"k":"wake","reasons":["self"],"seat":"p1","t":15462,"turn":4,"urgent":false,"used":{"own":2,"social":1}}
+{"e":{"data":{"building":"lumber","city":"c4","item":6,"level":2},"public":false,"t":15476,"to":[{"as":"self","p":"p4"}],"type":"build_done"},"k":"ev","t":15476}
+{"charge":"own","day":0,"k":"wake","reasons":["self"],"seat":"p6","t":15528,"turn":4,"urgent":false,"used":{"own":2,"social":1}}
+{"args":{"player":"p1"},"bytes":481,"k":"obs","n":150,"rt":0,"seat":"p1","t":15626,"tool":"view_player","turn":4}
+{"args":{},"bytes":3203,"k":"obs","n":151,"rt":0,"seat":"p1","t":15626,"tool":"view_map","turn":4}
+{"args":{"city":"c1"},"bytes":685,"k":"obs","n":152,"rt":0,"seat":"p1","t":15626,"tool":"view_city","turn":4}
+{"args":{"player":"p6"},"bytes":439,"k":"obs","n":153,"rt":0,"seat":"p6","t":15663,"tool":"view_player","turn":4}
+{"args":{},"bytes":3203,"k":"obs","n":154,"rt":0,"seat":"p6","t":15663,"tool":"view_map","turn":4}
+{"args":{"city":"c6"},"bytes":689,"k":"obs","n":155,"rt":0,"seat":"p6","t":15663,"tool":"view_city","turn":4}
+{"calls":4,"k":"turn","next":{"at":22704,"kind":"self"},"rounds":2,"seat":"p1","selfAt":22704,"t":15771,"thought":"expander D1 04:20:26: nothing to do","turn":4,"why":"end_turn"}
+{"args":{"city":"c1"},"bytes":169,"k":"obs","n":156,"rt":1,"seat":"p6","t":15804,"tool":"view_city","turn":4}
+{"args":{"city":"c2"},"bytes":168,"k":"obs","n":157,"rt":1,"seat":"p6","t":15804,"tool":"view_city","turn":4}
+{"args":{"city":"c5"},"bytes":168,"k":"obs","n":158,"rt":1,"seat":"p6","t":15804,"tool":"view_city","turn":4}
+{"calls":7,"k":"turn","next":{"at":22864,"kind":"self"},"rounds":3,"seat":"p6","selfAt":22864,"t":15821,"thought":"rusher D1 04:23:24: nothing to do","turn":4,"why":"end_turn"}
+{"charge":"own","day":0,"k":"wake","reasons":["self"],"seat":"p4","t":15973,"turn":4,"urgent":false,"used":{"own":2,"social":1}}
+{"args":{"player":"p4"},"bytes":785,"k":"obs","n":159,"rt":0,"seat":"p4","t":16054,"tool":"view_player","turn":4}
+{"args":{},"bytes":3203,"k":"obs","n":160,"rt":0,"seat":"p4","t":16054,"tool":"view_map","turn":4}
+{"args":{"city":"c4"},"bytes":931,"k":"obs","n":161,"rt":0,"seat":"p4","t":16054,"tool":"view_city","turn":4}
+{"args":{},"bytes":1164,"k":"obs","n":162,"rt":1,"seat":"p4","t":16191,"tool":"leaderboard","turn":4}
+{"a":{"building":"lumber","city":"c4","type":"build"},"i":0,"k":"act","n":163,"r":{"ok":true},"rt":2,"seat":"p4","t":16229,"tool":"build","turn":4}
+{"a":{"building":"quarry","city":"c4","type":"build"},"i":1,"k":"act","n":164,"r":{"ok":true},"rt":2,"seat":"p4","t":16229,"tool":"build","turn":4}
+{"calls":6,"k":"turn","next":{"at":23247,"kind":"self"},"rounds":4,"seat":"p4","selfAt":23247,"t":16256,"thought":"opportunist D1 04:30:29: build c4 lumber,quarry","turn":4,"why":"end_turn"}
+{"e":{"data":{"building":"lumber","city":"c3","item":7,"level":2},"public":false,"t":16749,"to":[{"as":"self","p":"p3"}],"type":"build_done"},"k":"ev","t":16749}
+{"e":{"data":{"building":"lumber","city":"c2","item":7,"level":2},"public":false,"t":17559,"to":[{"as":"self","p":"p2"}],"type":"build_done"},"k":"ev","t":17559}
+{"e":{"data":{"building":"quarry","city":"c5","item":7,"level":2},"public":false,"t":17570,"to":[{"as":"self","p":"p5"}],"type":"build_done"},"k":"ev","t":17570}
+{"e":{"data":{"building":"quarry","city":"c1","item":7,"level":2},"public":false,"t":17619,"to":[{"as":"self","p":"p1"}],"type":"build_done"},"k":"ev","t":17619}
+{"e":{"data":{"building":"lumber","city":"c6","item":7,"level":2},"public":false,"t":17626,"to":[{"as":"self","p":"p6"}],"type":"build_done"},"k":"ev","t":17626}
+{"e":{"data":{"building":"quarry","city":"c4","item":7,"level":2},"public":false,"t":17657,"to":[{"as":"self","p":"p4"}],"type":"build_done"},"k":"ev","t":17657}
+{"charge":"own","day":0,"k":"wake","reasons":["self"],"seat":"p3","t":17757,"turn":4,"urgent":false,"used":{"own":2,"social":1}}
+{"args":{"player":"p3"},"bytes":499,"k":"obs","n":165,"rt":0,"seat":"p3","t":17809,"tool":"view_player","turn":4}
+{"args":{},"bytes":3203,"k":"obs","n":166,"rt":0,"seat":"p3","t":17809,"tool":"view_map","turn":4}
+{"args":{"city":"c3"},"bytes":688,"k":"obs","n":167,"rt":0,"seat":"p3","t":17809,"tool":"view_city","turn":4}
+{"calls":4,"k":"turn","next":{"at":24669,"kind":"self"},"rounds":2,"seat":"p3","selfAt":24669,"t":17848,"thought":"turtle D1 04:56:49: nothing to do","turn":4,"why":"end_turn"}
+{"h":"75f19b8d0328f123","hour":5,"k":"ckpt","t":18000}
+{"e":{"data":{"building":"quarry","city":"c3","item":8,"level":2},"public":false,"t":18930,"to":[{"as":"self","p":"p3"}],"type":"build_done"},"k":"ev","t":18930}
+{"e":{"data":{"building":"quarry","city":"c2","item":8,"level":2},"public":false,"t":19740,"to":[{"as":"self","p":"p2"}],"type":"build_done"},"k":"ev","t":19740}
+{"e":{"data":{"building":"mine","city":"c5","item":8,"level":2},"public":false,"t":19751,"to":[{"as":"self","p":"p5"}],"type":"build_done"},"k":"ev","t":19751}
+{"e":{"data":{"city":"c5","queue":"build"},"public":false,"t":19751,"to":[{"as":"self","p":"p5"}],"type":"queue_empty"},"k":"ev","t":19751}
+{"e":{"data":{"building":"mine","city":"c1","item":8,"level":2},"public":false,"t":19800,"to":[{"as":"self","p":"p1"}],"type":"build_done"},"k":"ev","t":19800}
+{"e":{"data":{"city":"c1","queue":"build"},"public":false,"t":19800,"to":[{"as":"self","p":"p1"}],"type":"queue_empty"},"k":"ev","t":19800}
+{"e":{"data":{"building":"quarry","city":"c6","item":8,"level":2},"public":false,"t":19807,"to":[{"as":"self","p":"p6"}],"type":"build_done"},"k":"ev","t":19807}
+{"e":{"data":{"city":"c6","queue":"build"},"public":false,"t":19807,"to":[{"as":"self","p":"p6"}],"type":"queue_empty"},"k":"ev","t":19807}
+{"e":{"data":{"building":"mine","city":"c4","item":8,"level":2},"public":false,"t":19838,"to":[{"as":"self","p":"p4"}],"type":"build_done"},"k":"ev","t":19838}
+{"charge":"own","day":0,"k":"wake","reasons":["queue_empty c5"],"seat":"p5","t":20351,"turn":4,"urgent":false,"used":{"own":3,"social":0}}
+{"charge":"own","day":0,"k":"wake","reasons":["queue_empty c1"],"seat":"p1","t":20400,"turn":5,"urgent":false,"used":{"own":3,"social":1}}
+{"charge":"own","day":0,"k":"wake","reasons":["queue_empty c6"],"seat":"p6","t":20407,"turn":5,"urgent":false,"used":{"own":3,"social":1}}
+{"args":{"player":"p5"},"bytes":456,"k":"obs","n":168,"rt":0,"seat":"p5","t":20439,"tool":"view_player","turn":4}
+{"args":{},"bytes":3203,"k":"obs","n":169,"rt":0,"seat":"p5","t":20439,"tool":"view_map","turn":4}
+{"args":{"city":"c5"},"bytes":494,"k":"obs","n":170,"rt":0,"seat":"p5","t":20439,"tool":"view_city","turn":4}
+{"args":{"player":"p1"},"bytes":498,"k":"obs","n":171,"rt":0,"seat":"p1","t":20481,"tool":"view_player","turn":5}
+{"args":{},"bytes":3203,"k":"obs","n":172,"rt":0,"seat":"p1","t":20481,"tool":"view_map","turn":5}
+{"args":{"city":"c1"},"bytes":495,"k":"obs","n":173,"rt":0,"seat":"p1","t":20481,"tool":"view_city","turn":5}
+{"calls":4,"k":"turn","next":{"at":27806,"kind":"self"},"rounds":2,"seat":"p1","selfAt":27806,"t":20496,"thought":"expander D1 05:41:21: nothing to do","turn":5,"why":"end_turn"}
+{"args":{"player":"p6"},"bytes":456,"k":"obs","n":174,"rt":0,"seat":"p6","t":20532,"tool":"view_player","turn":5}
+{"args":{},"bytes":3203,"k":"obs","n":175,"rt":0,"seat":"p6","t":20532,"tool":"view_map","turn":5}
+{"args":{"city":"c6"},"bytes":494,"k":"obs","n":176,"rt":0,"seat":"p6","t":20532,"tool":"view_city","turn":5}
+{"calls":4,"k":"turn","next":{"at":27768,"kind":"self"},"rounds":2,"seat":"p5","selfAt":27768,"t":20614,"thought":"expander D1 05:40:39: nothing to do","turn":4,"why":"end_turn"}
+{"args":{"city":"c1"},"bytes":169,"k":"obs","n":177,"rt":1,"seat":"p6","t":20640,"tool":"view_city","turn":5}
+{"args":{"city":"c2"},"bytes":168,"k":"obs","n":178,"rt":1,"seat":"p6","t":20640,"tool":"view_city","turn":5}
+{"args":{"city":"c5"},"bytes":168,"k":"obs","n":179,"rt":1,"seat":"p6","t":20640,"tool":"view_city","turn":5}
+{"calls":7,"k":"turn","next":{"at":27947,"kind":"self"},"rounds":3,"seat":"p6","selfAt":27947,"t":20710,"thought":"rusher D1 05:44: nothing to do","turn":5,"why":"end_turn"}
+{"e":{"data":{"building":"mine","city":"c3","item":9,"level":2},"public":false,"t":21111,"to":[{"as":"self","p":"p3"}],"type":"build_done"},"k":"ev","t":21111}
+{"e":{"data":{"city":"c3","queue":"build"},"public":false,"t":21111,"to":[{"as":"self","p":"p3"}],"type":"queue_empty"},"k":"ev","t":21111}
+{"h":"d2246ddd2457914f","hour":6,"k":"ckpt","t":21600}
+{"charge":"own","day":0,"k":"wake","reasons":["queue_empty c3"],"seat":"p3","t":21711,"turn":5,"urgent":false,"used":{"own":3,"social":1}}
+{"e":{"data":{"building":"mine","city":"c2","item":9,"level":2},"public":false,"t":21740,"to":[{"as":"self","p":"p2"}],"type":"build_done"},"k":"ev","t":21740}
+{"args":{"player":"p3"},"bytes":516,"k":"obs","n":180,"rt":0,"seat":"p3","t":21870,"tool":"view_player","turn":5}
+{"args":{},"bytes":3203,"k":"obs","n":181,"rt":0,"seat":"p3","t":21870,"tool":"view_map","turn":5}
+{"args":{"city":"c3"},"bytes":495,"k":"obs","n":182,"rt":0,"seat":"p3","t":21870,"tool":"view_city","turn":5}
+{"e":{"data":{"by":"p4","from":"c4","lost":{"gold":0,"stone":0,"wood":0},"movement":"m5eye2","outcome":"delivered","res":{"gold":95,"stone":95,"wood":95},"to":"c2"},"public":false,"t":21893,"to":[{"as":"party","p":"p2"}],"type":"shipment_delivered"},"k":"ev","t":21893}
+{"e":{"data":{"movement":"m5eye2","outcome":"delivered","to":"c2"},"public":false,"t":21893,"to":[{"as":"self","p":"p4"}],"type":"shipment_delivered"},"k":"ev","t":21893}
+{"calls":4,"k":"turn","next":{"at":30189,"kind":"self"},"rounds":2,"seat":"p3","selfAt":30189,"t":21947,"thought":"turtle D1 06:04:30: nothing to do","turn":5,"why":"end_turn"}
+{"charge":"own","day":0,"k":"wake","reasons":["self"],"seat":"p2","t":22224,"turn":4,"urgent":false,"used":{"own":3,"social":0}}
+{"args":{"player":"p2"},"bytes":439,"k":"obs","n":183,"rt":0,"seat":"p2","t":22383,"tool":"view_player","turn":4}
+{"args":{},"bytes":3203,"k":"obs","n":184,"rt":0,"seat":"p2","t":22383,"tool":"view_map","turn":4}
+{"args":{"city":"c2"},"bytes":593,"k":"obs","n":185,"rt":0,"seat":"p2","t":22383,"tool":"view_city","turn":4}
+{"args":{"city":"c5"},"bytes":168,"k":"obs","n":186,"rt":1,"seat":"p2","t":22533,"tool":"view_city","turn":4}
+{"args":{"city":"c6"},"bytes":169,"k":"obs","n":187,"rt":1,"seat":"p2","t":22533,"tool":"view_city","turn":4}
+{"args":{"city":"c3"},"bytes":169,"k":"obs","n":188,"rt":1,"seat":"p2","t":22533,"tool":"view_city","turn":4}
+{"calls":7,"k":"turn","next":{"at":29630,"kind":"self"},"rounds":3,"seat":"p2","selfAt":29630,"t":22635,"thought":"rusher D1 06:15:33: nothing to do","turn":4,"why":"end_turn"}
+{"e":{"data":{"building":"lumber","city":"c4","item":9,"level":3},"public":false,"t":22838,"to":[{"as":"self","p":"p4"}],"type":"build_done"},"k":"ev","t":22838}
+{"charge":"own","day":0,"k":"wake","reasons":["self"],"seat":"p4","t":23247,"turn":5,"urgent":false,"used":{"own":3,"social":1}}
+{"args":{"player":"p4"},"bytes":542,"k":"obs","n":189,"rt":0,"seat":"p4","t":23386,"tool":"view_player","turn":5}
+{"args":{},"bytes":3203,"k":"obs","n":190,"rt":0,"seat":"p4","t":23386,"tool":"view_map","turn":5}
+{"args":{"city":"c4"},"bytes":594,"k":"obs","n":191,"rt":0,"seat":"p4","t":23386,"tool":"view_city","turn":5}
+{"args":{},"bytes":1164,"k":"obs","n":192,"rt":1,"seat":"p4","t":23546,"tool":"leaderboard","turn":5}
+{"calls":5,"k":"turn","next":{"at":30530,"kind":"self"},"rounds":3,"seat":"p4","selfAt":30530,"t":23582,"thought":"opportunist D1 06:32:26: nothing to do","turn":5,"why":"end_turn"}
+{"e":{"data":{"building":"lumber","city":"c2","item":10,"level":3},"public":false,"t":24740,"to":[{"as":"self","p":"p2"}],"type":"build_done"},"k":"ev","t":24740}
+{"e":{"data":{"city":"c2","queue":"build"},"public":false,"t":24740,"to":[{"as":"self","p":"p2"}],"type":"queue_empty"},"k":"ev","t":24740}
+{"h":"999d4a574059400e","hour":7,"k":"ckpt","t":25200}
+{"charge":"own","day":0,"k":"wake","reasons":["queue_empty c2"],"seat":"p2","t":25340,"turn":5,"urgent":false,"used":{"own":4,"social":0}}
+{"args":{"player":"p2"},"bytes":456,"k":"obs","n":193,"rt":0,"seat":"p2","t":25491,"tool":"view_player","turn":5}
+{"args":{},"bytes":3203,"k":"obs","n":194,"rt":0,"seat":"p2","t":25491,"tool":"view_map","turn":5}
+{"args":{"city":"c2"},"bytes":494,"k":"obs","n":195,"rt":0,"seat":"p2","t":25491,"tool":"view_city","turn":5}
+{"args":{"city":"c5"},"bytes":168,"k":"obs","n":196,"rt":1,"seat":"p2","t":25565,"tool":"view_city","turn":5}
+{"args":{"city":"c6"},"bytes":169,"k":"obs","n":197,"rt":1,"seat":"p2","t":25565,"tool":"view_city","turn":5}
+{"args":{"city":"c3"},"bytes":169,"k":"obs","n":198,"rt":1,"seat":"p2","t":25565,"tool":"view_city","turn":5}
+{"calls":7,"k":"turn","next":{"at":33170,"kind":"self"},"rounds":3,"seat":"p2","selfAt":33170,"t":25615,"thought":"rusher D1 07:06:05: nothing to do","turn":5,"why":"end_turn"}
+{"e":{"data":{"building":"quarry","city":"c4","item":10,"level":3},"public":false,"t":25838,"to":[{"as":"self","p":"p4"}],"type":"build_done"},"k":"ev","t":25838}
+{"e":{"data":{"city":"c4","queue":"build"},"public":false,"t":25838,"to":[{"as":"self","p":"p4"}],"type":"queue_empty"},"k":"ev","t":25838}
+{"charge":"own","day":0,"k":"wake","reasons":["queue_empty c4"],"seat":"p4","t":26438,"turn":6,"urgent":false,"used":{"own":4,"social":1}}
+{"args":{"player":"p4"},"bytes":559,"k":"obs","n":199,"rt":0,"seat":"p4","t":26528,"tool":"view_player","turn":6}
+{"args":{},"bytes":3203,"k":"obs","n":200,"rt":0,"seat":"p4","t":26528,"tool":"view_map","turn":6}
+{"args":{"city":"c4"},"bytes":495,"k":"obs","n":201,"rt":0,"seat":"p4","t":26528,"tool":"view_city","turn":6}
+{"args":{},"bytes":1164,"k":"obs","n":202,"rt":1,"seat":"p4","t":26537,"tool":"leaderboard","turn":6}
+{"calls":5,"k":"turn","next":{"at":34020,"kind":"self"},"rounds":3,"seat":"p4","selfAt":34020,"t":26608,"thought":"opportunist D1 07:22:17: nothing to do","turn":6,"why":"end_turn"}
+{"charge":"own","day":0,"k":"wake","reasons":["self"],"seat":"p5","t":27768,"turn":5,"urgent":false,"used":{"own":4,"social":0}}
+{"charge":"own","day":0,"k":"wake","reasons":["self"],"seat":"p1","t":27806,"turn":6,"urgent":false,"used":{"own":4,"social":1}}
+{"args":{"player":"p5"},"bytes":439,"k":"obs","n":203,"rt":0,"seat":"p5","t":27893,"tool":"view_player","turn":5}
+{"args":{},"bytes":3203,"k":"obs","n":204,"rt":0,"seat":"p5","t":27893,"tool":"view_map","turn":5}
+{"args":{"city":"c5"},"bytes":494,"k":"obs","n":205,"rt":0,"seat":"p5","t":27893,"tool":"view_city","turn":5}
+{"args":{"player":"p1"},"bytes":481,"k":"obs","n":206,"rt":0,"seat":"p1","t":27943,"tool":"view_player","turn":6}
+{"args":{},"bytes":3203,"k":"obs","n":207,"rt":0,"seat":"p1","t":27943,"tool":"view_map","turn":6}
+{"args":{"city":"c1"},"bytes":495,"k":"obs","n":208,"rt":0,"seat":"p1","t":27943,"tool":"view_city","turn":6}
+{"charge":"own","day":0,"k":"wake","reasons":["self"],"seat":"p6","t":27947,"turn":6,"urgent":false,"used":{"own":4,"social":1}}
+{"args":{"player":"p6"},"bytes":439,"k":"obs","n":209,"rt":0,"seat":"p6","t":28005,"tool":"view_player","turn":6}
+{"args":{},"bytes":3203,"k":"obs","n":210,"rt":0,"seat":"p6","t":28005,"tool":"view_map","turn":6}
+{"args":{"city":"c6"},"bytes":494,"k":"obs","n":211,"rt":0,"seat":"p6","t":28005,"tool":"view_city","turn":6}
+{"a":{"city":"c5","count":1,"type":"recruit","unit":"settler"},"i":0,"k":"act","n":212,"r":{"ok":true},"rt":1,"seat":"p5","t":28070,"tool":"recruit","turn":5}
+{"a":{"building":"lumber","city":"c5","type":"build"},"i":0,"k":"act","n":213,"r":{"ok":true},"rt":1,"seat":"p5","t":28070,"tool":"build","turn":5}
+{"a":{"building":"quarry","city":"c5","type":"build"},"i":1,"k":"act","n":214,"r":{"ok":true},"rt":1,"seat":"p5","t":28070,"tool":"build","turn":5}
+{"calls":6,"k":"turn","next":{"at":35362,"kind":"self"},"rounds":3,"seat":"p5","selfAt":35362,"t":28103,"thought":"expander D1 07:47:50: recruit c5 1 settler; build c5 lumber,quarry","turn":5,"why":"end_turn"}
+{"a":{"city":"c1","count":1,"type":"recruit","unit":"settler"},"i":0,"k":"act","n":215,"r":{"ok":true},"rt":1,"seat":"p1","t":28118,"tool":"recruit","turn":6}
+{"a":{"building":"lumber","city":"c1","type":"build"},"i":0,"k":"act","n":216,"r":{"ok":true},"rt":1,"seat":"p1","t":28118,"tool":"build","turn":6}
+{"a":{"building":"quarry","city":"c1","type":"build"},"i":1,"k":"act","n":217,"r":{"ok":true},"rt":1,"seat":"p1","t":28118,"tool":"build","turn":6}
+{"args":{"city":"c1"},"bytes":169,"k":"obs","n":218,"rt":1,"seat":"p6","t":28149,"tool":"view_city","turn":6}
+{"args":{"city":"c2"},"bytes":168,"k":"obs","n":219,"rt":1,"seat":"p6","t":28149,"tool":"view_city","turn":6}
+{"args":{"city":"c5"},"bytes":168,"k":"obs","n":220,"rt":1,"seat":"p6","t":28149,"tool":"view_city","turn":6}
+{"a":{"city":"c6","count":1,"type":"recruit","unit":"settler"},"i":0,"k":"act","n":221,"r":{"ok":true},"rt":2,"seat":"p6","t":28198,"tool":"recruit","turn":6}
+{"a":{"building":"mine","city":"c6","type":"build"},"i":0,"k":"act","n":222,"r":{"ok":true},"rt":2,"seat":"p6","t":28198,"tool":"build","turn":6}
+{"calls":9,"k":"turn","next":{"at":35474,"kind":"self"},"rounds":4,"seat":"p6","selfAt":35474,"t":28248,"thought":"rusher D1 07:49:58: recruit c6 1 settler; build c6 mine","turn":6,"why":"end_turn"}
+{"calls":6,"k":"turn","next":{"at":35404,"kind":"self"},"rounds":3,"seat":"p1","selfAt":35404,"t":28285,"thought":"expander D1 07:48:38: recruit c1 1 settler; build c1 lumber,quarry","turn":6,"why":"end_turn"}
+{"h":"df6f612e3663cbe0","hour":8,"k":"ckpt","t":28800}
+{"charge":"own","day":0,"k":"wake","reasons":["self"],"seat":"p3","t":30189,"turn":6,"urgent":false,"used":{"own":4,"social":1}}
+{"e":{"data":{"building":"mine","city":"c6","item":10,"level":2},"public":false,"t":30198,"to":[{"as":"self","p":"p6"}],"type":"build_done"},"k":"ev","t":30198}
+{"e":{"data":{"city":"c6","queue":"build"},"public":false,"t":30198,"to":[{"as":"self","p":"p6"}],"type":"queue_empty"},"k":"ev","t":30198}
+{"args":{"player":"p3"},"bytes":499,"k":"obs","n":223,"rt":0,"seat":"p3","t":30252,"tool":"view_player","turn":6}
+{"args":{},"bytes":3203,"k":"obs","n":224,"rt":0,"seat":"p3","t":30252,"tool":"view_map","turn":6}
+{"args":{"city":"c3"},"bytes":495,"k":"obs","n":225,"rt":0,"seat":"p3","t":30252,"tool":"view_city","turn":6}
+{"a":{"city":"c3","count":1,"type":"recruit","unit":"settler"},"i":0,"k":"act","n":226,"r":{"ok":true},"rt":1,"seat":"p3","t":30360,"tool":"recruit","turn":6}
+{"calls":5,"k":"turn","next":{"at":37365,"kind":"self"},"rounds":3,"seat":"p3","selfAt":37365,"t":30457,"thought":"turtle D1 08:26: recruit c3 1 settler","turn":6,"why":"end_turn"}
+{"charge":"own","day":0,"k":"wake","reasons":["queue_empty c6"],"seat":"p6","t":30798,"turn":7,"urgent":false,"used":{"own":5,"social":1}}
+{"args":{"player":"p6"},"bytes":457,"k":"obs","n":227,"rt":0,"seat":"p6","t":30968,"tool":"view_player","turn":7}
+{"args":{},"bytes":3203,"k":"obs","n":228,"rt":0,"seat":"p6","t":30968,"tool":"view_map","turn":7}
+{"args":{"city":"c6"},"bytes":599,"k":"obs","n":229,"rt":0,"seat":"p6","t":30968,"tool":"view_city","turn":7}
+{"args":{"city":"c1"},"bytes":169,"k":"obs","n":230,"rt":1,"seat":"p6","t":31063,"tool":"view_city","turn":7}
+{"args":{"city":"c2"},"bytes":168,"k":"obs","n":231,"rt":1,"seat":"p6","t":31063,"tool":"view_city","turn":7}
+{"args":{"city":"c5"},"bytes":168,"k":"obs","n":232,"rt":1,"seat":"p6","t":31063,"tool":"view_city","turn":7}
+{"e":{"data":{"building":"lumber","city":"c5","item":10,"level":3},"public":false,"t":31070,"to":[{"as":"self","p":"p5"}],"type":"build_done"},"k":"ev","t":31070}
+{"e":{"data":{"building":"lumber","city":"c1","item":10,"level":3},"public":false,"t":31118,"to":[{"as":"self","p":"p1"}],"type":"build_done"},"k":"ev","t":31118}
+{"a":{"building":"lumber","city":"c6","type":"build"},"i":0,"k":"act","n":233,"r":{"ok":true},"rt":2,"seat":"p6","t":31223,"tool":"build","turn":7}
+{"calls":8,"k":"turn","next":{"at":39106,"kind":"self"},"rounds":4,"seat":"p6","selfAt":39106,"t":31294,"thought":"rusher D1 08:40:23: build c6 lumber","turn":7,"why":"end_turn"}
+{"h":"055128dc055e97fc","hour":9,"k":"ckpt","t":32400}
+{"e":{"data":{"city":"c5","count":1,"item":9,"queue":"barracks","unit":"settler"},"public":false,"t":32979,"to":[{"as":"self","p":"p5"}],"type":"recruit_done"},"k":"ev","t":32979}
+{"e":{"data":{"city":"c5","queue":"barracks"},"public":false,"t":32979,"to":[{"as":"self","p":"p5"}],"type":"queue_empty"},"k":"ev","t":32979}
+{"e":{"data":{"city":"c1","count":1,"item":9,"queue":"barracks","unit":"settler"},"public":false,"t":33027,"to":[{"as":"self","p":"p1"}],"type":"recruit_done"},"k":"ev","t":33027}
+{"e":{"data":{"city":"c1","queue":"barracks"},"public":false,"t":33027,"to":[{"as":"self","p":"p1"}],"type":"queue_empty"},"k":"ev","t":33027}
+{"e":{"data":{"city":"c6","count":1,"item":9,"queue":"barracks","unit":"settler"},"public":false,"t":33107,"to":[{"as":"self","p":"p6"}],"type":"recruit_done"},"k":"ev","t":33107}
+{"e":{"data":{"city":"c6","queue":"barracks"},"public":false,"t":33107,"to":[{"as":"self","p":"p6"}],"type":"queue_empty"},"k":"ev","t":33107}
+{"charge":"own","day":0,"k":"wake","reasons":["self"],"seat":"p2","t":33170,"turn":6,"urgent":false,"used":{"own":5,"social":0}}
+{"args":{"player":"p2"},"bytes":439,"k":"obs","n":234,"rt":0,"seat":"p2","t":33198,"tool":"view_player","turn":6}
+{"args":{},"bytes":3203,"k":"obs","n":235,"rt":0,"seat":"p2","t":33198,"tool":"view_map","turn":6}
+{"args":{"city":"c2"},"bytes":495,"k":"obs","n":236,"rt":0,"seat":"p2","t":33198,"tool":"view_city","turn":6}
+{"args":{"city":"c5"},"bytes":168,"k":"obs","n":237,"rt":1,"seat":"p2","t":33299,"tool":"view_city","turn":6}
+{"args":{"city":"c6"},"bytes":169,"k":"obs","n":238,"rt":1,"seat":"p2","t":33299,"tool":"view_city","turn":6}
+{"args":{"city":"c3"},"bytes":169,"k":"obs","n":239,"rt":1,"seat":"p2","t":33299,"tool":"view_city","turn":6}
+{"a":{"city":"c2","count":1,"type":"recruit","unit":"settler"},"i":0,"k":"act","n":240,"r":{"ok":true},"rt":2,"seat":"p2","t":33338,"tool":"recruit","turn":6}
+{"a":{"building":"quarry","city":"c2","type":"build"},"i":0,"k":"act","n":241,"r":{"ok":true},"rt":2,"seat":"p2","t":33338,"tool":"build","turn":6}
+{"a":{"building":"mine","city":"c2","type":"build"},"i":1,"k":"act","n":242,"r":{"ok":true},"rt":2,"seat":"p2","t":33338,"tool":"build","turn":6}
+{"a":{"city":"c2","count":1,"type":"recruit","unit":"transport"},"i":0,"k":"act","n":243,"r":{"ok":true},"rt":2,"seat":"p2","t":33338,"tool":"recruit","turn":6}
+{"calls":10,"k":"turn","next":{"at":40919,"kind":"self"},"rounds":4,"seat":"p2","selfAt":40919,"t":33423,"thought":"rusher D1 09:15:38: recruit c2 1 settler; build c2 quarry,mine; recruit c2 1 transport","turn":6,"why":"end_turn"}
+{"charge":"own","day":0,"k":"wake","reasons":["queue_empty c5"],"seat":"p5","t":33579,"turn":6,"urgent":false,"used":{"own":5,"social":0}}
+{"charge":"own","day":0,"k":"wake","reasons":["queue_empty c1"],"seat":"p1","t":33627,"turn":7,"urgent":false,"used":{"own":5,"social":1}}
+{"args":{"player":"p1"},"bytes":499,"k":"obs","n":244,"rt":0,"seat":"p1","t":33649,"tool":"view_player","turn":7}
+{"args":{},"bytes":3203,"k":"obs","n":245,"rt":0,"seat":"p1","t":33649,"tool":"view_map","turn":7}
+{"args":{"city":"c1"},"bytes":606,"k":"obs","n":246,"rt":0,"seat":"p1","t":33649,"tool":"view_city","turn":7}
+{"args":{"player":"p5"},"bytes":457,"k":"obs","n":247,"rt":0,"seat":"p5","t":33660,"tool":"view_player","turn":6}
+{"args":{},"bytes":3203,"k":"obs","n":248,"rt":0,"seat":"p5","t":33660,"tool":"view_map","turn":6}
+{"args":{"city":"c5"},"bytes":605,"k":"obs","n":249,"rt":0,"seat":"p5","t":33660,"tool":"view_city","turn":6}
+{"charge":"own","day":0,"k":"wake","reasons":["queue_empty c6"],"seat":"p6","t":33707,"turn":8,"urgent":false,"used":{"own":6,"social":1}}
+{"args":{"player":"p6"},"bytes":457,"k":"obs","n":250,"rt":0,"seat":"p6","t":33714,"tool":"view_player","turn":8}
+{"args":{},"bytes":3203,"k":"obs","n":251,"rt":0,"seat":"p6","t":33714,"tool":"view_map","turn":8}
+{"args":{"city":"c6"},"bytes":606,"k":"obs","n":252,"rt":0,"seat":"p6","t":33714,"tool":"view_city","turn":8}
+{"a":{"from":"c5","island":"i7","slot":null,"type":"found_city","units":{"guard":2,"settler":1}},"i":0,"k":"act","n":253,"r":{"ok":true},"rt":1,"seat":"p5","t":33766,"tool":"found_city","turn":6}
+{"a":{"building":"harbor","city":"c5","type":"build"},"i":0,"k":"act","n":254,"r":{"ok":true},"rt":1,"seat":"p5","t":33766,"tool":"build","turn":6}
+{"a":{"from":"c1","island":"i22","slot":null,"type":"found_city","units":{"guard":2,"settler":1}},"i":0,"k":"act","n":255,"r":{"ok":true},"rt":1,"seat":"p1","t":33804,"tool":"found_city","turn":7}
+{"a":{"building":"harbor","city":"c1","type":"build"},"i":0,"k":"act","n":256,"r":{"ok":true},"rt":1,"seat":"p1","t":33804,"tool":"build","turn":7}
+{"args":{"city":"c1"},"bytes":169,"k":"obs","n":257,"rt":1,"seat":"p6","t":33889,"tool":"view_city","turn":8}
+{"args":{"city":"c2"},"bytes":168,"k":"obs","n":258,"rt":1,"seat":"p6","t":33889,"tool":"view_city","turn":8}
+{"args":{"city":"c5"},"bytes":168,"k":"obs","n":259,"rt":1,"seat":"p6","t":33889,"tool":"view_city","turn":8}
+{"k":"note","mode":"replace","n":260,"seat":"p1","t":33939,"text":"{\"v\":2,\"s\":\"expander\",\"h\":\"65c93fbe27a0341d:6\",\"f\":{\"i22\":[37404]},\"m\":[],\"x\":{},\"k\":[\"q9syyk\"]}","turn":7}
+{"calls":7,"k":"turn","next":{"at":41318,"kind":"self"},"rounds":3,"seat":"p1","selfAt":41318,"t":33939,"thought":"expander D1 09:23:24: found i22 from c1; build c1 harbor","turn":7,"why":"end_turn"}
+{"k":"note","mode":"replace","n":261,"seat":"p5","t":33940,"text":"{\"v\":2,\"s\":\"expander\",\"h\":\"65c93fbe27a0341d:6\",\"f\":{\"i7\":[37366]},\"m\":[],\"x\":{},\"k\":[]}","turn":6}
+{"calls":7,"k":"turn","next":{"at":41286,"kind":"self"},"rounds":3,"seat":"p5","selfAt":41286,"t":33940,"thought":"expander D1 09:22:46: found i7 from c5; build c5 harbor","turn":6,"why":"end_turn"}
+{"a":{"from":"c6","island":"i27","slot":null,"type":"found_city","units":{"settler":1}},"i":0,"k":"act","n":262,"r":{"ok":true},"rt":2,"seat":"p6","t":33963,"tool":"found_city","turn":8}
+{"a":{"building":"quarry","city":"c6","type":"build"},"i":0,"k":"act","n":263,"r":{"ok":true},"rt":2,"seat":"p6","t":33963,"tool":"build","turn":8}
+{"charge":"own","day":0,"k":"wake","reasons":["self"],"seat":"p4","t":34020,"turn":7,"urgent":false,"used":{"own":5,"social":1}}
+{"args":{"player":"p4"},"bytes":542,"k":"obs","n":264,"rt":0,"seat":"p4","t":34029,"tool":"view_player","turn":7}
+{"args":{},"bytes":3203,"k":"obs","n":265,"rt":0,"seat":"p4","t":34029,"tool":"view_map","turn":7}
+{"args":{"city":"c4"},"bytes":495,"k":"obs","n":266,"rt":0,"seat":"p4","t":34029,"tool":"view_city","turn":7}
+{"k":"note","mode":"replace","n":267,"seat":"p6","t":34033,"text":"{\"v\":2,\"s\":\"rusher\",\"h\":\"65c93fbe27a0341d:6\",\"f\":{\"i27\":[37563]},\"m\":[],\"x\":{},\"k\":[\"qa6gks\"]}","turn":8}
+{"calls":10,"k":"turn","next":{"at":42703,"kind":"self"},"rounds":4,"seat":"p6","selfAt":42703,"t":34033,"thought":"rusher D1 09:26:03: found i27 from c6; build c6 quarry","turn":8,"why":"end_turn"}
+{"e":{"data":{"building":"quarry","city":"c5","item":11,"level":3},"public":false,"t":34070,"to":[{"as":"self","p":"p5"}],"type":"build_done"},"k":"ev","t":34070}
+{"e":{"data":{"building":"quarry","city":"c1","item":11,"level":3},"public":false,"t":34118,"to":[{"as":"self","p":"p1"}],"type":"build_done"},"k":"ev","t":34118}
+{"args":{},"bytes":1164,"k":"obs","n":268,"rt":1,"seat":"p4","t":34145,"tool":"leaderboard","turn":7}
+{"e":{"data":{"building":"lumber","city":"c6","item":11,"level":3},"public":false,"t":34223,"to":[{"as":"self","p":"p6"}],"type":"build_done"},"k":"ev","t":34223}
+{"a":{"city":"c4","count":1,"type":"recruit","unit":"settler"},"i":0,"k":"act","n":269,"r":{"ok":true},"rt":2,"seat":"p4","t":34318,"tool":"recruit","turn":7}
+{"a":{"building":"mine","city":"c4","type":"build"},"i":0,"k":"act","n":270,"r":{"ok":true},"rt":2,"seat":"p4","t":34318,"tool":"build","turn":7}
+{"calls":7,"k":"turn","next":{"at":41759,"kind":"self"},"rounds":4,"seat":"p4","selfAt":41759,"t":34330,"thought":"opportunist D1 09:31:58: recruit c4 1 settler; build c4 mine","turn":7,"why":"end_turn"}
+{"e":{"data":{"city":"c2","count":1,"item":14,"queue":"harbor","unit":"transport"},"public":false,"t":34538,"to":[{"as":"self","p":"p2"}],"type":"recruit_done"},"k":"ev","t":34538}
+{"e":{"data":{"city":"c2","queue":"harbor"},"public":false,"t":34538,"to":[{"as":"self","p":"p2"}],"type":"queue_empty"},"k":"ev","t":34538}
+{"charge":"own","day":0,"k":"wake","reasons":["queue_empty c2"],"seat":"p2","t":35138,"turn":7,"urgent":false,"used":{"own":6,"social":0}}
+{"e":{"data":{"city":"c3","count":1,"item":10,"queue":"barracks","unit":"settler"},"public":false,"t":35269,"to":[{"as":"self","p":"p3"}],"type":"recruit_done"},"k":"ev","t":35269}
+{"e":{"data":{"city":"c3","queue":"barracks"},"public":false,"t":35269,"to":[{"as":"self","p":"p3"}],"type":"queue_empty"},"k":"ev","t":35269}
+{"args":{"player":"p2"},"bytes":457,"k":"obs","n":271,"rt":0,"seat":"p2","t":35310,"tool":"view_player","turn":7}
+{"args":{},"bytes":3203,"k":"obs","n":272,"rt":0,"seat":"p2","t":35310,"tool":"view_map","turn":7}
+{"args":{"city":"c2"},"bytes":809,"k":"obs","n":273,"rt":0,"seat":"p2","t":35310,"tool":"view_city","turn":7}
+{"args":{"city":"c5"},"bytes":168,"k":"obs","n":274,"rt":1,"seat":"p2","t":35462,"tool":"view_city","turn":7}
+{"args":{"city":"c6"},"bytes":169,"k":"obs","n":275,"rt":1,"seat":"p2","t":35462,"tool":"view_city","turn":7}
+{"args":{"city":"c3"},"bytes":169,"k":"obs","n":276,"rt":1,"seat":"p2","t":35462,"tool":"view_city","turn":7}
+{"calls":7,"k":"turn","next":{"at":43952,"kind":"self"},"rounds":3,"seat":"p2","selfAt":43952,"t":35625,"thought":"rusher D1 09:51:02: nothing to do","turn":7,"why":"end_turn"}
+{"charge":"own","day":0,"k":"wake","reasons":["queue_empty c3"],"seat":"p3","t":35869,"turn":7,"urgent":false,"used":{"own":5,"social":1}}
+{"args":{"player":"p3"},"bytes":517,"k":"obs","n":277,"rt":0,"seat":"p3","t":35943,"tool":"view_player","turn":7}
+{"args":{},"bytes":3203,"k":"obs","n":278,"rt":0,"seat":"p3","t":35943,"tool":"view_map","turn":7}
+{"args":{"city":"c3"},"bytes":507,"k":"obs","n":279,"rt":0,"seat":"p3","t":35943,"tool":"view_city","turn":7}
+{"h":"f08e83f47bd0986a","hour":10,"k":"ckpt","t":36000}
+{"a":{"from":"c3","island":"i12","slot":null,"type":"found_city","units":{"guard":5,"settler":1}},"i":0,"k":"act","n":280,"r":{"ok":true},"rt":1,"seat":"p3","t":36016,"tool":"found_city","turn":7}
+{"a":{"building":"harbor","city":"c3","type":"build"},"i":0,"k":"act","n":281,"r":{"ok":true},"rt":1,"seat":"p3","t":36016,"tool":"build","turn":7}
+{"a":{"building":"warehouse","city":"c3","type":"build"},"i":1,"k":"act","n":282,"r":{"ok":true},"rt":1,"seat":"p3","t":36016,"tool":"build","turn":7}
+{"e":{"data":{"building":"harbor","city":"c5","item":12,"level":1},"public":false,"t":36070,"to":[{"as":"self","p":"p5"}],"type":"build_done"},"k":"ev","t":36070}
+{"e":{"data":{"city":"c5","queue":"build"},"public":false,"t":36070,"to":[{"as":"self","p":"p5"}],"type":"queue_empty"},"k":"ev","t":36070}
+{"k":"note","mode":"replace","n":283,"seat":"p3","t":36094,"text":"{\"v\":2,\"s\":\"turtle\",\"h\":\"65c93fbe27a0341d:6\",\"f\":{\"i12\":[39616]},\"m\":[],\"x\":{},\"k\":[\"q19qa5\"]}","turn":7}
+{"calls":7,"k":"turn","next":{"at":43214,"kind":"self"},"rounds":3,"seat":"p3","selfAt":43214,"t":36094,"thought":"turtle D1 10:00:16: found i12 from c3; build c3 harbor,warehouse","turn":7,"why":"end_turn"}
+{"e":{"data":{"building":"harbor","city":"c1","item":12,"level":1},"public":false,"t":36118,"to":[{"as":"self","p":"p1"}],"type":"build_done"},"k":"ev","t":36118}
+{"e":{"data":{"city":"c1","queue":"build"},"public":false,"t":36118,"to":[{"as":"self","p":"p1"}],"type":"queue_empty"},"k":"ev","t":36118}
+{"e":{"data":{"building":"quarry","city":"c2","item":12,"level":3},"public":false,"t":36338,"to":[{"as":"self","p":"p2"}],"type":"build_done"},"k":"ev","t":36338}
+{"charge":"own","day":0,"k":"wake","reasons":["queue_empty c5"],"seat":"p5","t":36670,"turn":7,"urgent":false,"used":{"own":6,"social":0}}
+{"charge":"own","day":0,"k":"wake","reasons":["queue_empty c1"],"seat":"p1","t":36718,"turn":8,"urgent":false,"used":{"own":6,"social":1}}
+{"args":{"player":"p5"},"bytes":717,"k":"obs","n":284,"rt":0,"seat":"p5","t":36812,"tool":"view_player","turn":7}
+{"args":{},"bytes":3203,"k":"obs","n":285,"rt":0,"seat":"p5","t":36812,"tool":"view_map","turn":7}
+{"args":{"city":"c5"},"bytes":753,"k":"obs","n":286,"rt":0,"seat":"p5","t":36812,"tool":"view_city","turn":7}
+{"args":{"player":"p1"},"bytes":759,"k":"obs","n":287,"rt":0,"seat":"p1","t":36816,"tool":"view_player","turn":8}
+{"args":{},"bytes":3203,"k":"obs","n":288,"rt":0,"seat":"p1","t":36816,"tool":"view_map","turn":8}
+{"args":{"city":"c1"},"bytes":754,"k":"obs","n":289,"rt":0,"seat":"p1","t":36816,"tool":"view_city","turn":8}
+{"a":{"city":"c5","count":1,"type":"recruit","unit":"transport"},"i":0,"k":"act","n":290,"r":{"ok":true},"rt":1,"seat":"p5","t":36819,"tool":"recruit","turn":7}
+{"a":{"building":"warehouse","city":"c5","type":"build"},"i":0,"k":"act","n":291,"r":{"ok":true},"rt":1,"seat":"p5","t":36819,"tool":"build","turn":7}
+{"calls":6,"k":"turn","next":{"at":45083,"kind":"self"},"rounds":3,"seat":"p5","selfAt":45083,"t":36947,"thought":"expander D1 10:13:39: recruit c5 1 transport; build c5 warehouse","turn":7,"why":"end_turn"}
+{"a":{"city":"c1","count":1,"type":"recruit","unit":"transport"},"i":0,"k":"act","n":292,"r":{"ok":true},"rt":1,"seat":"p1","t":36974,"tool":"recruit","turn":8}
+{"a":{"building":"warehouse","city":"c1","type":"build"},"i":0,"k":"act","n":293,"r":{"ok":true},"rt":1,"seat":"p1","t":36974,"tool":"build","turn":8}
+{"calls":6,"k":"turn","next":{"at":45212,"kind":"self"},"rounds":3,"seat":"p1","selfAt":45212,"t":37130,"thought":"expander D1 10:16:14: recruit c1 1 transport; build c1 warehouse","turn":8,"why":"end_turn"}
+{"e":{"data":{"building":"quarry","city":"c6","item":12,"level":3},"public":false,"t":37223,"to":[{"as":"self","p":"p6"}],"type":"build_done"},"k":"ev","t":37223}
+{"e":{"data":{"city":"c6","queue":"build"},"public":false,"t":37223,"to":[{"as":"self","p":"p6"}],"type":"queue_empty"},"k":"ev","t":37223}
+{"e":{"data":{"building":"mine","city":"c4","item":12,"level":3},"public":false,"t":37318,"to":[{"as":"self","p":"p4"}],"type":"build_done"},"k":"ev","t":37318}
+{"e":{"data":{"city":"c4","queue":"build"},"public":false,"t":37318,"to":[{"as":"self","p":"p4"}],"type":"queue_empty"},"k":"ev","t":37318}
+{"e":{"data":{"city":"c8","island":"i7","owner":"p5","slot":1},"public":true,"t":37366,"to":[{"as":"self","p":"p5"}],"type":"city_founded"},"k":"ev","t":37366}
+{"e":{"data":{"city":"c9","island":"i22","owner":"p1","slot":1},"public":true,"t":37404,"to":[{"as":"self","p":"p1"}],"type":"city_founded"},"k":"ev","t":37404}
+{"e":{"data":{"city":"c10","island":"i27","owner":"p6","slot":1},"public":true,"t":37563,"to":[{"as":"self","p":"p6"}],"type":"city_founded"},"k":"ev","t":37563}
+{"charge":"own","day":0,"k":"wake","reasons":["queue_empty c6"],"seat":"p6","t":37823,"turn":9,"urgent":false,"used":{"own":7,"social":1}}
+{"charge":"own","day":0,"k":"wake","reasons":["queue_empty c4"],"seat":"p4","t":37918,"turn":8,"urgent":false,"used":{"own":6,"social":1}}
+{"args":{"player":"p4"},"bytes":560,"k":"obs","n":294,"rt":0,"seat":"p4","t":37960,"tool":"view_player","turn":8}
+{"args":{},"bytes":3464,"k":"obs","n":295,"rt":0,"seat":"p4","t":37960,"tool":"view_map","turn":8}
+{"args":{"city":"c4"},"bytes":600,"k":"obs","n":296,"rt":0,"seat":"p4","t":37960,"tool":"view_city","turn":8}
+{"args":{"player":"p6"},"bytes":463,"k":"obs","n":297,"rt":0,"seat":"p6","t":37994,"tool":"view_player","turn":9}
+{"args":{"fromCity":"c10"},"bytes":5391,"k":"obs","n":298,"rt":0,"seat":"p6","t":37994,"tool":"view_map","turn":9}
+{"args":{"city":"c6"},"bytes":495,"k":"obs","n":299,"rt":0,"seat":"p6","t":37994,"tool":"view_city","turn":9}
+{"args":{"city":"c10"},"bytes":482,"k":"obs","n":300,"rt":0,"seat":"p6","t":37994,"tool":"view_city","turn":9}
+{"e":{"data":{"building":"harbor","city":"c3","item":11,"level":1},"public":false,"t":38016,"to":[{"as":"self","p":"p3"}],"type":"build_done"},"k":"ev","t":38016}
+{"e":{"data":{"city":"c5","count":1,"item":13,"queue":"harbor","unit":"transport"},"public":false,"t":38019,"to":[{"as":"self","p":"p5"}],"type":"recruit_done"},"k":"ev","t":38019}
+{"e":{"data":{"city":"c5","queue":"harbor"},"public":false,"t":38019,"to":[{"as":"self","p":"p5"}],"type":"queue_empty"},"k":"ev","t":38019}
+{"args":{},"bytes":1164,"k":"obs","n":301,"rt":1,"seat":"p4","t":38084,"tool":"leaderboard","turn":8}
+{"args":{"city":"c1"},"bytes":169,"k":"obs","n":302,"rt":1,"seat":"p6","t":38163,"tool":"view_city","turn":9}
+{"args":{"city":"c9"},"bytes":169,"k":"obs","n":303,"rt":1,"seat":"p6","t":38163,"tool":"view_city","turn":9}
+{"args":{"city":"c2"},"bytes":168,"k":"obs","n":304,"rt":1,"seat":"p6","t":38163,"tool":"view_city","turn":9}
+{"e":{"data":{"city":"c1","count":1,"item":13,"queue":"harbor","unit":"transport"},"public":false,"t":38174,"to":[{"as":"self","p":"p1"}],"type":"recruit_done"},"k":"ev","t":38174}
+{"e":{"data":{"city":"c1","queue":"harbor"},"public":false,"t":38174,"to":[{"as":"self","p":"p1"}],"type":"queue_empty"},"k":"ev","t":38174}
+{"a":{"building":"lumber","city":"c4","type":"build"},"i":0,"k":"act","n":305,"r":{"ok":true},"rt":2,"seat":"p4","t":38214,"tool":"build","turn":8}
+{"a":{"building":"quarry","city":"c4","type":"build"},"i":1,"k":"act","n":306,"r":{"ok":true},"rt":2,"seat":"p4","t":38214,"tool":"build","turn":8}
+{"e":{"data":{"city":"c2","count":1,"item":11,"queue":"barracks","unit":"settler"},"public":false,"t":38247,"to":[{"as":"self","p":"p2"}],"type":"recruit_done"},"k":"ev","t":38247}
+{"e":{"data":{"city":"c2","queue":"barracks"},"public":false,"t":38247,"to":[{"as":"self","p":"p2"}],"type":"queue_empty"},"k":"ev","t":38247}
+{"a":{"building":"mine","city":"c6","type":"build"},"i":0,"k":"act","n":307,"r":{"ok":true},"rt":2,"seat":"p6","t":38260,"tool":"build","turn":9}
+{"a":{"building":"hall","city":"c10","type":"build"},"i":0,"k":"act","n":308,"r":{"ok":true},"rt":2,"seat":"p6","t":38260,"tool":"build","turn":9}
+{"a":{"building":"barracks","city":"c10","type":"build"},"i":1,"k":"act","n":309,"r":{"ok":true},"rt":2,"seat":"p6","t":38260,"tool":"build","turn":9}
+{"a":{"building":"lumber","city":"c10","type":"build"},"i":2,"k":"act","n":310,"r":{"ok":true},"rt":2,"seat":"p6","t":38260,"tool":"build","turn":9}
+{"a":{"city":"c6","count":1,"type":"recruit","unit":"transport"},"i":0,"k":"act","n":311,"r":{"ok":true},"rt":2,"seat":"p6","t":38260,"tool":"recruit","turn":9}
+{"calls":6,"k":"turn","next":{"at":46245,"kind":"self"},"rounds":4,"seat":"p4","selfAt":46245,"t":38387,"thought":"opportunist D1 10:36:54: build c4 lumber,quarry","turn":8,"why":"end_turn"}
+{"k":"note","mode":"replace","n":312,"seat":"p6","t":38416,"text":"{\"v\":2,\"s\":\"rusher\",\"h\":\"65c93fbe27a0341d:6\",\"f\":{},\"m\":[],\"x\":{},\"k\":[\"qa6gks\"]}","turn":9}
+{"calls":12,"k":"turn","next":{"at":47888,"kind":"self"},"rounds":4,"seat":"p6","selfAt":47888,"t":38416,"thought":"rusher D1 10:37:40: build c6 mine; build c10 hall,barracks,lumber; recruit c6 1 transport","turn":9,"why":"end_turn"}
+{"charge":"own","day":0,"k":"wake","reasons":["queue_empty c5"],"seat":"p5","t":38619,"turn":8,"urgent":false,"used":{"own":7,"social":0}}
+{"args":{"player":"p5"},"bytes":462,"k":"obs","n":313,"rt":0,"seat":"p5","t":38761,"tool":"view_player","turn":8}
+{"args":{"fromCity":"c8"},"bytes":5369,"k":"obs","n":314,"rt":0,"seat":"p5","t":38761,"tool":"view_map","turn":8}
+{"args":{"city":"c5"},"bytes":609,"k":"obs","n":315,"rt":0,"seat":"p5","t":38761,"tool":"view_city","turn":8}
+{"args":{"city":"c8"},"bytes":488,"k":"obs","n":316,"rt":0,"seat":"p5","t":38761,"tool":"view_city","turn":8}
+{"charge":"own","day":0,"k":"wake","reasons":["queue_empty c1"],"seat":"p1","t":38774,"turn":9,"urgent":false,"used":{"own":7,"social":1}}
+{"charge":"own","day":0,"k":"wake","reasons":["queue_empty c2"],"seat":"p2","t":38847,"turn":8,"urgent":false,"used":{"own":7,"social":0}}
+{"a":{"building":"mine","city":"c5","type":"build"},"i":0,"k":"act","n":317,"r":{"ok":true},"rt":1,"seat":"p5","t":38922,"tool":"build","turn":8}
+{"a":{"building":"lumber","city":"c8","type":"build"},"i":0,"k":"act","n":318,"r":{"ok":true},"rt":1,"seat":"p5","t":38922,"tool":"build","turn":8}
+{"a":{"building":"quarry","city":"c8","type":"build"},"i":1,"k":"act","n":319,"r":{"ok":true},"rt":1,"seat":"p5","t":38922,"tool":"build","turn":8}
+{"a":{"building":"mine","city":"c8","type":"build"},"i":2,"k":"act","n":320,"r":{"ok":true},"rt":1,"seat":"p5","t":38922,"tool":"build","turn":8}
+{"a":{"building":"lumber","city":"c8","type":"build"},"i":3,"k":"act","n":321,"r":{"ok":true},"rt":1,"seat":"p5","t":38922,"tool":"build","turn":8}
+{"args":{"player":"p1"},"bytes":504,"k":"obs","n":322,"rt":0,"seat":"p1","t":38953,"tool":"view_player","turn":9}
+{"args":{"fromCity":"c9"},"bytes":5369,"k":"obs","n":323,"rt":0,"seat":"p1","t":38953,"tool":"view_map","turn":9}
+{"args":{"city":"c1"},"bytes":610,"k":"obs","n":324,"rt":0,"seat":"p1","t":38953,"tool":"view_city","turn":9}
+{"args":{"city":"c9"},"bytes":489,"k":"obs","n":325,"rt":0,"seat":"p1","t":38953,"tool":"view_city","turn":9}
+{"args":{"player":"p2"},"bytes":457,"k":"obs","n":326,"rt":0,"seat":"p2","t":39007,"tool":"view_player","turn":8}
+{"args":{},"bytes":3464,"k":"obs","n":327,"rt":0,"seat":"p2","t":39007,"tool":"view_map","turn":8}
+{"args":{"city":"c2"},"bytes":617,"k":"obs","n":328,"rt":0,"seat":"p2","t":39007,"tool":"view_city","turn":8}
+{"a":{"building":"mine","city":"c1","type":"build"},"i":0,"k":"act","n":329,"r":{"ok":true},"rt":1,"seat":"p1","t":39015,"tool":"build","turn":9}
+{"a":{"building":"lumber","city":"c9","type":"build"},"i":0,"k":"act","n":330,"r":{"ok":true},"rt":1,"seat":"p1","t":39015,"tool":"build","turn":9}
+{"a":{"building":"quarry","city":"c9","type":"build"},"i":1,"k":"act","n":331,"r":{"ok":true},"rt":1,"seat":"p1","t":39015,"tool":"build","turn":9}
+{"a":{"building":"mine","city":"c9","type":"build"},"i":2,"k":"act","n":332,"r":{"ok":true},"rt":1,"seat":"p1","t":39015,"tool":"build","turn":9}
+{"a":{"building":"lumber","city":"c9","type":"build"},"i":3,"k":"act","n":333,"r":{"ok":true},"rt":1,"seat":"p1","t":39015,"tool":"build","turn":9}
+{"k":"note","mode":"replace","n":334,"seat":"p5","t":39027,"text":"{\"v\":2,\"s\":\"expander\",\"h\":\"65c93fbe27a0341d:6\",\"f\":{},\"m\":[],\"x\":{},\"k\":[]}","turn":8}
+{"calls":8,"k":"turn","next":{"at":48418,"kind":"self"},"rounds":3,"seat":"p5","selfAt":48418,"t":39027,"thought":"expander D1 10:48:42: build c5 mine; build c8 lumber,quarry,mine,lumber","turn":8,"why":"end_turn"}
+{"args":{"city":"c5"},"bytes":168,"k":"obs","n":335,"rt":1,"seat":"p2","t":39066,"tool":"view_city","turn":8}
+{"args":{"city":"c8"},"bytes":168,"k":"obs","n":336,"rt":1,"seat":"p2","t":39066,"tool":"view_city","turn":8}
+{"args":{"city":"c6"},"bytes":169,"k":"obs","n":337,"rt":1,"seat":"p2","t":39066,"tool":"view_city","turn":8}
+{"a":{"from":"c2","island":"i2","slot":null,"type":"found_city","units":{"settler":1}},"i":0,"k":"act","n":338,"r":{"ok":true},"rt":2,"seat":"p2","t":39111,"tool":"found_city","turn":8}
+{"a":{"building":"warehouse","city":"c2","type":"build"},"i":0,"k":"act","n":339,"r":{"ok":true},"rt":2,"seat":"p2","t":39111,"tool":"build","turn":8}
+{"k":"note","mode":"replace","n":340,"seat":"p2","t":39136,"text":"{\"v\":2,\"s\":\"rusher\",\"h\":\"65c93fbe27a0341d:6\",\"f\":{\"i2\":[42711]},\"m\":[],\"x\":{},\"k\":[]}","turn":8}
+{"calls":10,"k":"turn","next":{"at":48569,"kind":"self"},"rounds":4,"seat":"p2","selfAt":48569,"t":39136,"thought":"rusher D1 10:51:51: found i2 from c2; build c2 warehouse","turn":8,"why":"end_turn"}
+{"k":"note","mode":"replace","n":341,"seat":"p1","t":39190,"text":"{\"v\":2,\"s\":\"expander\",\"h\":\"65c93fbe27a0341d:6\",\"f\":{},\"m\":[],\"x\":{},\"k\":[\"q9syyk\"]}","turn":9}
+{"calls":8,"k":"turn","next":{"at":48492,"kind":"self"},"rounds":3,"seat":"p1","selfAt":48492,"t":39190,"thought":"expander D1 10:50:15: build c1 mine; build c9 lumber,quarry,mine,lumber","turn":9,"why":"end_turn"}
+{"e":{"data":{"building":"warehouse","city":"c5","item":14,"level":3},"public":false,"t":39219,"to":[{"as":"self","p":"p5"}],"type":"build_done"},"k":"ev","t":39219}
+{"e":{"data":{"city":"c4","count":1,"item":11,"queue":"barracks","unit":"settler"},"public":false,"t":39227,"to":[{"as":"self","p":"p4"}],"type":"recruit_done"},"k":"ev","t":39227}
+{"e":{"data":{"city":"c4","queue":"barracks"},"public":false,"t":39227,"to":[{"as":"self","p":"p4"}],"type":"queue_empty"},"k":"ev","t":39227}
+{"e":{"data":{"building":"mine","city":"c2","item":13,"level":3},"public":false,"t":39338,"to":[{"as":"self","p":"p2"}],"type":"build_done"},"k":"ev","t":39338}
+{"e":{"data":{"building":"warehouse","city":"c1","item":14,"level":3},"public":false,"t":39374,"to":[{"as":"self","p":"p1"}],"type":"build_done"},"k":"ev","t":39374}
+{"e":{"data":{"city":"c6","count":1,"item":14,"queue":"harbor","unit":"transport"},"public":false,"t":39460,"to":[{"as":"self","p":"p6"}],"type":"recruit_done"},"k":"ev","t":39460}
+{"e":{"data":{"city":"c6","queue":"harbor"},"public":false,"t":39460,"to":[{"as":"self","p":"p6"}],"type":"queue_empty"},"k":"ev","t":39460}
+{"h":"44011a426b2102bd","hour":11,"k":"ckpt","t":39600}
+{"e":{"data":{"city":"c11","island":"i12","owner":"p3","slot":1},"public":true,"t":39616,"to":[{"as":"self","p":"p3"}],"type":"city_founded"},"k":"ev","t":39616}
+{"charge":"own","day":0,"k":"wake","reasons":["queue_empty c4"],"seat":"p4","t":39827,"turn":9,"urgent":false,"used":{"own":7,"social":1}}
+{"args":{"player":"p4"},"bytes":560,"k":"obs","n":342,"rt":0,"seat":"p4","t":39877,"tool":"view_player","turn":9}
+{"args":{},"bytes":3552,"k":"obs","n":343,"rt":0,"seat":"p4","t":39877,"tool":"view_map","turn":9}
+{"args":{"city":"c4"},"bytes":705,"k":"obs","n":344,"rt":0,"seat":"p4","t":39877,"tool":"view_city","turn":9}
+{"args":{},"bytes":1164,"k":"obs","n":345,"rt":1,"seat":"p4","t":39925,"tool":"leaderboard","turn":9}
+{"a":{"from":"c4","island":"i17","slot":null,"type":"found_city","units":{"guard":2,"settler":1}},"i":0,"k":"act","n":346,"r":{"ok":true},"rt":2,"seat":"p4","t":39982,"tool":"found_city","turn":9}
+{"a":{"building":"harbor","city":"c4","type":"build"},"i":0,"k":"act","n":347,"r":{"ok":true},"rt":2,"seat":"p4","t":39982,"tool":"build","turn":9}
+{"charge":"own","day":0,"k":"wake","reasons":["queue_empty c6"],"seat":"p6","t":40060,"turn":10,"urgent":false,"used":{"own":8,"social":1}}
+{"k":"note","mode":"replace","n":348,"seat":"p4","t":40137,"text":"{\"v\":2,\"s\":\"opportunist\",\"h\":\"65c93fbe27a0341d:6\",\"f\":{\"i17\":[43582]},\"m\":[\"ally p1 since D1\",\"pact p3 since D1\"],\"x\":{\"pr\":1,\"tr\":1},\"k\":[]}","turn":9}
+{"calls":8,"k":"turn","next":{"at":49266,"kind":"self"},"rounds":4,"seat":"p4","selfAt":49266,"t":40137,"thought":"opportunist D1 11:06:22: found i17 from c4; build c4 harbor","turn":9,"why":"end_turn"}
+{"args":{"player":"p6"},"bytes":463,"k":"obs","n":349,"rt":0,"seat":"p6","t":40180,"tool":"view_player","turn":10}
+{"args":{},"bytes":3552,"k":"obs","n":350,"rt":0,"seat":"p6","t":40180,"tool":"view_map","turn":10}
+{"args":{"city":"c6"},"bytes":606,"k":"obs","n":351,"rt":0,"seat":"p6","t":40180,"tool":"view_city","turn":10}
+{"args":{"city":"c10"},"bytes":777,"k":"obs","n":352,"rt":0,"seat":"p6","t":40180,"tool":"view_city","turn":10}
+{"args":{"city":"c1"},"bytes":169,"k":"obs","n":353,"rt":1,"seat":"p6","t":40286,"tool":"view_city","turn":10}
+{"args":{"city":"c9"},"bytes":169,"k":"obs","n":354,"rt":1,"seat":"p6","t":40286,"tool":"view_city","turn":10}
+{"args":{"city":"c2"},"bytes":168,"k":"obs","n":355,"rt":1,"seat":"p6","t":40286,"tool":"view_city","turn":10}
+{"e":{"data":{"building":"warehouse","city":"c3","item":12,"level":3},"public":false,"t":40416,"to":[{"as":"self","p":"p3"}],"type":"build_done"},"k":"ev","t":40416}
+{"e":{"data":{"city":"c3","queue":"build"},"public":false,"t":40416,"to":[{"as":"self","p":"p3"}],"type":"queue_empty"},"k":"ev","t":40416}
+{"a":{"building":"quarry","city":"c10","type":"build"},"i":0,"k":"act","n":356,"r":{"ok":true},"rt":2,"seat":"p6","t":40420,"tool":"build","turn":10}
+{"calls":9,"k":"turn","next":{"at":51915,"kind":"self"},"rounds":4,"seat":"p6","selfAt":51915,"t":40572,"thought":"rusher D1 11:13:40: build c10 quarry","turn":10,"why":"end_turn"}
+{"charge":"own","day":0,"k":"wake","reasons":["queue_empty c3"],"seat":"p3","t":41016,"turn":8,"urgent":false,"used":{"own":6,"social":1}}
+{"args":{"player":"p3"},"bytes":523,"k":"obs","n":357,"rt":0,"seat":"p3","t":41024,"tool":"view_player","turn":8}
+{"args":{"fromCity":"c11"},"bytes":5479,"k":"obs","n":358,"rt":0,"seat":"p3","t":41024,"tool":"view_map","turn":8}
+{"args":{"city":"c3"},"bytes":493,"k":"obs","n":359,"rt":0,"seat":"p3","t":41024,"tool":"view_city","turn":8}
+{"args":{"city":"c11"},"bytes":491,"k":"obs","n":360,"rt":0,"seat":"p3","t":41024,"tool":"view_city","turn":8}
+{"a":{"city":"c3","count":1,"type":"recruit","unit":"transport"},"i":0,"k":"act","n":361,"r":{"ok":true},"rt":1,"seat":"p3","t":41124,"tool":"recruit","turn":8}
+{"a":{"building":"lumber","city":"c3","type":"build"},"i":0,"k":"act","n":362,"r":{"ok":true},"rt":1,"seat":"p3","t":41124,"tool":"build","turn":8}
+{"a":{"building":"quarry","city":"c3","type":"build"},"i":1,"k":"act","n":363,"r":{"ok":true},"rt":1,"seat":"p3","t":41124,"tool":"build","turn":8}
+{"a":{"building":"hall","city":"c11","type":"build"},"i":0,"k":"act","n":364,"r":{"ok":true},"rt":1,"seat":"p3","t":41124,"tool":"build","turn":8}
+{"a":{"building":"barracks","city":"c11","type":"build"},"i":1,"k":"act","n":365,"r":{"ok":true},"rt":1,"seat":"p3","t":41124,"tool":"build","turn":8}
+{"e":{"data":{"building":"hall","city":"c10","item":1,"level":2},"public":false,"t":41140,"to":[{"as":"self","p":"p6"}],"type":"build_done"},"k":"ev","t":41140}
+{"k":"note","mode":"replace","n":366,"seat":"p3","t":41184,"text":"{\"v\":2,\"s\":\"turtle\",\"h\":\"65c93fbe27a0341d:6\",\"f\":{},\"m\":[],\"x\":{},\"k\":[\"q19qa5\"]}","turn":8}
+{"calls":9,"k":"turn","next":{"at":48670,"kind":"self"},"rounds":3,"seat":"p3","selfAt":48670,"t":41184,"thought":"turtle D1 11:25:24: recruit c3 1 transport; build c3 lumber,quarry; build c11 hall,barracks","turn":8,"why":"end_turn"}
+{"e":{"data":{"building":"mine","city":"c6","item":13,"level":3},"public":false,"t":41260,"to":[{"as":"self","p":"p6"}],"type":"build_done"},"k":"ev","t":41260}
+{"e":{"data":{"city":"c6","queue":"build"},"public":false,"t":41260,"to":[{"as":"self","p":"p6"}],"type":"queue_empty"},"k":"ev","t":41260}
+{"e":{"data":{"building":"lumber","city":"c8","item":1,"level":2},"public":false,"t":41322,"to":[{"as":"self","p":"p5"}],"type":"build_done"},"k":"ev","t":41322}
+{"e":{"data":{"building":"lumber","city":"c9","item":1,"level":2},"public":false,"t":41415,"to":[{"as":"self","p":"p1"}],"type":"build_done"},"k":"ev","t":41415}
+{"e":{"data":{"building":"warehouse","city":"c2","item":15,"level":3},"public":false,"t":41738,"to":[{"as":"self","p":"p2"}],"type":"build_done"},"k":"ev","t":41738}
+{"e":{"data":{"city":"c2","queue":"build"},"public":false,"t":41738,"to":[{"as":"self","p":"p2"}],"type":"queue_empty"},"k":"ev","t":41738}
+{"charge":"own","day":0,"k":"wake","reasons":["queue_empty c6"],"seat":"p6","t":41860,"turn":11,"urgent":false,"used":{"own":9,"social":1}}
+{"args":{"player":"p6"},"bytes":463,"k":"obs","n":367,"rt":0,"seat":"p6","t":41948,"tool":"view_player","turn":11}
+{"args":{},"bytes":3552,"k":"obs","n":368,"rt":0,"seat":"p6","t":41948,"tool":"view_map","turn":11}
+{"args":{"city":"c6"},"bytes":509,"k":"obs","n":369,"rt":0,"seat":"p6","t":41948,"tool":"view_city","turn":11}
+{"args":{"city":"c10"},"bytes":778,"k":"obs","n":370,"rt":0,"seat":"p6","t":41948,"tool":"view_city","turn":11}
+{"args":{"city":"c1"},"bytes":169,"k":"obs","n":371,"rt":1,"seat":"p6","t":42106,"tool":"view_city","turn":11}
+{"args":{"city":"c9"},"bytes":169,"k":"obs","n":372,"rt":1,"seat":"p6","t":42106,"tool":"view_city","turn":11}
+{"args":{"city":"c2"},"bytes":168,"k":"obs","n":373,"rt":1,"seat":"p6","t":42106,"tool":"view_city","turn":11}
+{"e":{"data":{"building":"mine","city":"c5","item":15,"level":3},"public":false,"t":42219,"to":[{"as":"self","p":"p5"}],"type":"build_done"},"k":"ev","t":42219}
+{"e":{"data":{"city":"c5","queue":"build"},"public":false,"t":42219,"to":[{"as":"self","p":"p5"}],"type":"queue_empty"},"k":"ev","t":42219}
+{"calls":8,"k":"turn","next":{"at":56871,"kind":"self"},"rounds":3,"seat":"p6","selfAt":56871,"t":42266,"thought":"rusher D1 11:41:46: nothing to do","turn":11,"why":"end_turn"}
+{"e":{"data":{"city":"c3","count":1,"item":13,"queue":"harbor","unit":"transport"},"public":false,"t":42324,"to":[{"as":"self","p":"p3"}],"type":"recruit_done"},"k":"ev","t":42324}
+{"e":{"data":{"city":"c3","queue":"harbor"},"public":false,"t":42324,"to":[{"as":"self","p":"p3"}],"type":"queue_empty"},"k":"ev","t":42324}
+{"charge":"own","day":0,"k":"wake","reasons":["queue_empty c2"],"seat":"p2","t":42338,"turn":9,"urgent":false,"used":{"own":8,"social":0}}
+{"args":{"player":"p2"},"bytes":707,"k":"obs","n":374,"rt":0,"seat":"p2","t":42353,"tool":"view_player","turn":9}
+{"args":{},"bytes":3552,"k":"obs","n":375,"rt":0,"seat":"p2","t":42353,"tool":"view_map","turn":9}
+{"args":{"city":"c2"},"bytes":758,"k":"obs","n":376,"rt":0,"seat":"p2","t":42353,"tool":"view_city","turn":9}
+{"e":{"data":{"building":"mine","city":"c1","item":15,"level":3},"public":false,"t":42374,"to":[{"as":"self","p":"p1"}],"type":"build_done"},"k":"ev","t":42374}
+{"e":{"data":{"city":"c1","queue":"build"},"public":false,"t":42374,"to":[{"as":"self","p":"p1"}],"type":"queue_empty"},"k":"ev","t":42374}
+{"e":{"data":{"building":"lumber","city":"c4","item":13,"level":4},"public":false,"t":42464,"to":[{"as":"self","p":"p4"}],"type":"build_done"},"k":"ev","t":42464}
+{"args":{"city":"c5"},"bytes":168,"k":"obs","n":377,"rt":1,"seat":"p2","t":42499,"tool":"view_city","turn":9}
+{"args":{"city":"c8"},"bytes":168,"k":"obs","n":378,"rt":1,"seat":"p2","t":42499,"tool":"view_city","turn":9}
+{"args":{"city":"c6"},"bytes":169,"k":"obs","n":379,"rt":1,"seat":"p2","t":42499,"tool":"view_city","turn":9}
+{"e":{"data":{"building":"barracks","city":"c10","item":2,"level":1},"public":false,"t":42640,"to":[{"as":"self","p":"p6"}],"type":"build_done"},"k":"ev","t":42640}
+{"calls":7,"k":"turn","next":{"at":53475,"kind":"self"},"rounds":3,"seat":"p2","selfAt":53475,"t":42677,"thought":"rusher D1 11:48:19: nothing to do","turn":9,"why":"end_turn"}
+{"e":{"data":{"city":"c12","island":"i2","owner":"p2","slot":1},"public":true,"t":42711,"to":[{"as":"self","p":"p2"}],"type":"city_founded"},"k":"ev","t":42711}
+{"charge":"own","day":0,"k":"wake","reasons":["queue_empty c5"],"seat":"p5","t":42819,"turn":9,"urgent":false,"used":{"own":8,"social":0}}
+{"args":{"player":"p5"},"bytes":462,"k":"obs","n":380,"rt":0,"seat":"p5","t":42894,"tool":"view_player","turn":9}
+{"args":{},"bytes":3639,"k":"obs","n":381,"rt":0,"seat":"p5","t":42894,"tool":"view_map","turn":9}
+{"args":{"city":"c5"},"bytes":507,"k":"obs","n":382,"rt":0,"seat":"p5","t":42894,"tool":"view_city","turn":9}
+{"args":{"city":"c8"},"bytes":783,"k":"obs","n":383,"rt":0,"seat":"p5","t":42894,"tool":"view_city","turn":9}
+{"charge":"own","day":0,"k":"wake","reasons":["queue_empty c3"],"seat":"p3","t":42924,"turn":9,"urgent":false,"used":{"own":7,"social":1}}
+{"args":{"player":"p3"},"bytes":523,"k":"obs","n":384,"rt":0,"seat":"p3","t":42953,"tool":"view_player","turn":9}
+{"args":{},"bytes":3639,"k":"obs","n":385,"rt":0,"seat":"p3","t":42953,"tool":"view_map","turn":9}
+{"args":{"city":"c3"},"bytes":705,"k":"obs","n":386,"rt":0,"seat":"p3","t":42953,"tool":"view_city","turn":9}
+{"args":{"city":"c11"},"bytes":688,"k":"obs","n":387,"rt":0,"seat":"p3","t":42953,"tool":"view_city","turn":9}
+{"charge":"own","day":0,"k":"wake","reasons":["queue_empty c1"],"seat":"p1","t":42974,"turn":10,"urgent":false,"used":{"own":8,"social":1}}
+{"a":{"building":"wall","city":"c11","type":"build"},"i":0,"k":"act","n":388,"r":{"ok":true},"rt":1,"seat":"p3","t":42974,"tool":"build","turn":9}
+{"a":{"building":"quarry","city":"c8","type":"build"},"i":0,"k":"act","n":389,"r":{"ok":true},"rt":1,"seat":"p5","t":43064,"tool":"build","turn":9}
+{"calls":6,"k":"turn","next":{"at":51660,"kind":"self"},"rounds":3,"seat":"p3","selfAt":51660,"t":43064,"thought":"turtle D1 11:56:14: build c11 wall","turn":9,"why":"end_turn"}
+{"args":{"player":"p1"},"bytes":504,"k":"obs","n":390,"rt":0,"seat":"p1","t":43147,"tool":"view_player","turn":10}
+{"args":{},"bytes":3639,"k":"obs","n":391,"rt":0,"seat":"p1","t":43147,"tool":"view_map","turn":10}
+{"args":{"city":"c1"},"bytes":508,"k":"obs","n":392,"rt":0,"seat":"p1","t":43147,"tool":"view_city","turn":10}
+{"args":{"city":"c9"},"bytes":784,"k":"obs","n":393,"rt":0,"seat":"p1","t":43147,"tool":"view_city","turn":10}
+{"calls":6,"k":"turn","next":{"at":53898,"kind":"self"},"rounds":3,"seat":"p5","selfAt":53898,"t":43157,"thought":"expander D1 11:57:44: build c8 quarry","turn":9,"why":"end_turn"}
+{"h":"29713dcd4bc596dd","hour":12,"k":"ckpt","t":43200}
+{"a":{"building":"lumber","city":"c1","type":"build"},"i":0,"k":"act","n":394,"r":{"ok":true},"rt":1,"seat":"p1","t":43261,"tool":"build","turn":10}
+{"a":{"building":"quarry","city":"c9","type":"build"},"i":0,"k":"act","n":395,"r":{"ok":true},"rt":1,"seat":"p1","t":43261,"tool":"build","turn":10}
+{"calls":7,"k":"turn","next":{"at":54046,"kind":"self"},"rounds":3,"seat":"p1","selfAt":54046,"t":43361,"thought":"expander D1 12:01:01: build c1 lumber; build c9 quarry","turn":10,"why":"end_turn"}
+{"e":{"data":{"city":"c13","island":"i17","owner":"p4","slot":1},"public":true,"t":43582,"to":[{"as":"self","p":"p4"}],"type":"city_founded"},"k":"ev","t":43582}
+{"e":{"data":{"building":"quarry","city":"c8","item":2,"level":2},"public":false,"t":43722,"to":[{"as":"self","p":"p5"}],"type":"build_done"},"k":"ev","t":43722}
+{"e":{"data":{"building":"quarry","city":"c9","item":2,"level":2},"public":false,"t":43815,"to":[{"as":"self","p":"p1"}],"type":"build_done"},"k":"ev","t":43815}
+{"e":{"data":{"building":"hall","city":"c11","item":1,"level":2},"public":false,"t":44004,"to":[{"as":"self","p":"p3"}],"type":"build_done"},"k":"ev","t":44004}
+{"e":{"data":{"building":"lumber","city":"c3","item":14,"level":3},"public":false,"t":44124,"to":[{"as":"self","p":"p3"}],"type":"build_done"},"k":"ev","t":44124}
+{"e":{"data":{"building":"lumber","city":"c10","item":3,"level":2},"public":false,"t":45040,"to":[{"as":"self","p":"p6"}],"type":"build_done"},"k":"ev","t":45040}
+{"e":{"data":{"building":"barracks","city":"c11","item":2,"level":1},"public":false,"t":45504,"to":[{"as":"self","p":"p3"}],"type":"build_done"},"k":"ev","t":45504}
+{"e":{"data":{"building":"mine","city":"c8","item":3,"level":2},"public":false,"t":46122,"to":[{"as":"self","p":"p5"}],"type":"build_done"},"k":"ev","t":46122}
+{"e":{"data":{"building":"mine","city":"c9","item":3,"level":2},"public":false,"t":46215,"to":[{"as":"self","p":"p1"}],"type":"build_done"},"k":"ev","t":46215}
+{"e":{"data":{"building":"quarry","city":"c4","item":14,"level":4},"public":false,"t":46714,"to":[{"as":"self","p":"p4"}],"type":"build_done"},"k":"ev","t":46714}
+{"h":"ac115f89019cfa45","hour":13,"k":"ckpt","t":46800}
+{"e":{"data":{"building":"wall","city":"c11","item":3,"level":1},"public":false,"t":47004,"to":[{"as":"self","p":"p3"}],"type":"build_done"},"k":"ev","t":47004}
+{"e":{"data":{"city":"c11","queue":"build"},"public":false,"t":47004,"to":[{"as":"self","p":"p3"}],"type":"queue_empty"},"k":"ev","t":47004}
+{"e":{"data":{"building":"quarry","city":"c3","item":15,"level":3},"public":false,"t":47124,"to":[{"as":"self","p":"p3"}],"type":"build_done"},"k":"ev","t":47124}
+{"e":{"data":{"city":"c3","queue":"build"},"public":false,"t":47124,"to":[{"as":"self","p":"p3"}],"type":"queue_empty"},"k":"ev","t":47124}
+{"e":{"data":{"building":"quarry","city":"c10","item":4,"level":2},"public":false,"t":47440,"to":[{"as":"self","p":"p6"}],"type":"build_done"},"k":"ev","t":47440}
+{"e":{"data":{"city":"c10","queue":"build"},"public":false,"t":47440,"to":[{"as":"self","p":"p6"}],"type":"queue_empty"},"k":"ev","t":47440}
+{"e":{"data":{"building":"lumber","city":"c1","item":16,"level":4},"public":false,"t":47511,"to":[{"as":"self","p":"p1"}],"type":"build_done"},"k":"ev","t":47511}
+{"e":{"data":{"city":"c1","queue":"build"},"public":false,"t":47511,"to":[{"as":"self","p":"p1"}],"type":"queue_empty"},"k":"ev","t":47511}
+{"charge":"own","day":0,"k":"wake","reasons":["queue_empty c11","queue_empty c3"],"seat":"p3","t":47604,"turn":10,"urgent":false,"used":{"own":8,"social":1}}
+{"args":{"player":"p3"},"bytes":520,"k":"obs","n":396,"rt":0,"seat":"p3","t":47628,"tool":"view_player","turn":10}
+{"args":{},"bytes":3727,"k":"obs","n":397,"rt":0,"seat":"p3","t":47628,"tool":"view_map","turn":10}
+{"args":{"city":"c3"},"bytes":507,"k":"obs","n":398,"rt":0,"seat":"p3","t":47628,"tool":"view_city","turn":10}
+{"args":{"city":"c11"},"bytes":491,"k":"obs","n":399,"rt":0,"seat":"p3","t":47628,"tool":"view_city","turn":10}
+{"a":{"building":"mine","city":"c3","type":"build"},"i":0,"k":"act","n":400,"r":{"ok":true},"rt":1,"seat":"p3","t":47686,"tool":"build","turn":10}
+{"a":{"building":"lumber","city":"c11","type":"build"},"i":0,"k":"act","n":401,"r":{"ok":true},"rt":1,"seat":"p3","t":47686,"tool":"build","turn":10}
+{"a":{"building":"quarry","city":"c11","type":"build"},"i":1,"k":"act","n":402,"r":{"ok":true},"rt":1,"seat":"p3","t":47686,"tool":"build","turn":10}
+{"calls":7,"k":"turn","next":{"at":57365,"kind":"self"},"rounds":3,"seat":"p3","selfAt":57365,"t":47728,"thought":"turtle D1 13:14:46: build c3 mine; build c11 lumber,quarry","turn":10,"why":"end_turn"}
+{"charge":"own","day":0,"k":"wake","reasons":["queue_empty c10"],"seat":"p6","t":48040,"turn":12,"urgent":false,"used":{"own":10,"social":1}}
+{"charge":"own","day":0,"k":"wake","reasons":["queue_empty c1"],"seat":"p1","t":48111,"turn":11,"urgent":false,"used":{"own":9,"social":1}}
+{"args":{"player":"p6"},"bytes":464,"k":"obs","n":403,"rt":0,"seat":"p6","t":48111,"tool":"view_player","turn":12}
+{"args":{},"bytes":3727,"k":"obs","n":404,"rt":0,"seat":"p6","t":48111,"tool":"view_map","turn":12}
+{"args":{"city":"c6"},"bytes":509,"k":"obs","n":405,"rt":0,"seat":"p6","t":48111,"tool":"view_city","turn":12}
+{"args":{"city":"c10"},"bytes":484,"k":"obs","n":406,"rt":0,"seat":"p6","t":48111,"tool":"view_city","turn":12}
+{"args":{"player":"p1"},"bytes":504,"k":"obs","n":407,"rt":0,"seat":"p1","t":48256,"tool":"view_player","turn":11}
+{"args":{},"bytes":3727,"k":"obs","n":408,"rt":0,"seat":"p1","t":48256,"tool":"view_map","turn":11}
+{"args":{"city":"c1"},"bytes":508,"k":"obs","n":409,"rt":0,"seat":"p1","t":48256,"tool":"view_city","turn":11}
+{"args":{"city":"c9"},"bytes":689,"k":"obs","n":410,"rt":0,"seat":"p1","t":48256,"tool":"view_city","turn":11}
+{"args":{"city":"c1"},"bytes":169,"k":"obs","n":411,"rt":1,"seat":"p6","t":48265,"tool":"view_city","turn":12}
+{"args":{"city":"c9"},"bytes":169,"k":"obs","n":412,"rt":1,"seat":"p6","t":48265,"tool":"view_city","turn":12}
+{"args":{"city":"c2"},"bytes":168,"k":"obs","n":413,"rt":1,"seat":"p6","t":48265,"tool":"view_city","turn":12}
+{"a":{"building":"quarry","city":"c1","type":"build"},"i":0,"k":"act","n":414,"r":{"ok":true},"rt":1,"seat":"p1","t":48288,"tool":"build","turn":11}
+{"a":{"building":"mine","city":"c1","type":"build"},"i":1,"k":"act","n":415,"r":{"ok":true},"rt":1,"seat":"p1","t":48288,"tool":"build","turn":11}
+{"a":{"building":"mine","city":"c9","type":"build"},"i":0,"k":"act","n":416,"r":{"ok":true},"rt":1,"seat":"p1","t":48288,"tool":"build","turn":11}
+{"calls":7,"k":"turn","next":{"at":60992,"kind":"self"},"rounds":3,"seat":"p1","selfAt":60992,"t":48356,"thought":"expander D1 13:24:48: build c1 quarry,mine; build c9 mine","turn":11,"why":"end_turn"}
+{"calls":8,"k":"turn","next":{"at":67333,"kind":"self"},"rounds":3,"seat":"p6","selfAt":67333,"t":48363,"thought":"rusher D1 13:24:25: nothing to do","turn":12,"why":"end_turn"}
+{"e":{"data":{"building":"harbor","city":"c4","item":15,"level":1},"public":false,"t":48714,"to":[{"as":"self","p":"p4"}],"type":"build_done"},"k":"ev","t":48714}
+{"e":{"data":{"city":"c4","queue":"build"},"public":false,"t":48714,"to":[{"as":"self","p":"p4"}],"type":"queue_empty"},"k":"ev","t":48714}
+{"charge":"own","day":0,"k":"wake","reasons":["queue_empty c4","self"],"seat":"p4","t":49266,"turn":10,"urgent":false,"used":{"own":8,"social":1}}
+{"args":{"player":"p4"},"bytes":549,"k":"obs","n":417,"rt":0,"seat":"p4","t":49414,"tool":"view_player","turn":10}
+{"args":{"fromCity":"c13"},"bytes":5628,"k":"obs","n":418,"rt":0,"seat":"p4","t":49414,"tool":"view_map","turn":10}
+{"args":{"city":"c4"},"bytes":493,"k":"obs","n":419,"rt":0,"seat":"p4","t":49414,"tool":"view_city","turn":10}
+{"args":{"city":"c13"},"bytes":491,"k":"obs","n":420,"rt":0,"seat":"p4","t":49414,"tool":"view_city","turn":10}
+{"args":{},"bytes":1164,"k":"obs","n":421,"rt":1,"seat":"p4","t":49441,"tool":"leaderboard","turn":10}
+{"a":{"city":"c4","count":1,"type":"recruit","unit":"transport"},"i":0,"k":"act","n":422,"r":{"ok":true},"rt":2,"seat":"p4","t":49574,"tool":"recruit","turn":10}
+{"a":{"building":"warehouse","city":"c4","type":"build"},"i":0,"k":"act","n":423,"r":{"ok":true},"rt":2,"seat":"p4","t":49574,"tool":"build","turn":10}
+{"a":{"building":"mine","city":"c4","type":"build"},"i":1,"k":"act","n":424,"r":{"ok":true},"rt":2,"seat":"p4","t":49574,"tool":"build","turn":10}
+{"a":{"building":"lumber","city":"c13","type":"build"},"i":0,"k":"act","n":425,"r":{"ok":true},"rt":2,"seat":"p4","t":49574,"tool":"build","turn":10}
+{"a":{"building":"quarry","city":"c13","type":"build"},"i":1,"k":"act","n":426,"r":{"ok":true},"rt":2,"seat":"p4","t":49574,"tool":"build","turn":10}
+{"a":{"building":"mine","city":"c13","type":"build"},"i":2,"k":"act","n":427,"r":{"ok":true},"rt":2,"seat":"p4","t":49574,"tool":"build","turn":10}
+{"a":{"building":"lumber","city":"c13","type":"build"},"i":3,"k":"act","n":428,"r":{"ok":true},"rt":2,"seat":"p4","t":49574,"tool":"build","turn":10}
+{"a":{"building":"quarry","city":"c13","type":"build"},"i":4,"k":"act","n":429,"r":{"ok":true},"rt":2,"seat":"p4","t":49574,"tool":"build","turn":10}
+{"k":"note","mode":"replace","n":430,"seat":"p4","t":49618,"text":"{\"v\":2,\"s\":\"opportunist\",\"h\":\"65c93fbe27a0341d:6\",\"f\":{},\"m\":[\"ally p1 since D1\",\"pact p3 since D1\"],\"x\":{\"pr\":1,\"tr\":1},\"k\":[]}","turn":10}
+{"calls":10,"k":"turn","next":{"at":58781,"kind":"self"},"rounds":4,"seat":"p4","selfAt":58781,"t":49618,"thought":"opportunist D1 13:46:14: recruit c4 1 transport; build c4 warehouse,mine; build c13 lumber,quarry,mine,lumber,quarry","turn":10,"why":"end_turn"}
+{"e":{"data":{"building":"lumber","city":"c8","item":4,"level":3},"public":false,"t":49722,"to":[{"as":"self","p":"p5"}],"type":"build_done"},"k":"ev","t":49722}
+{"e":{"data":{"building":"lumber","city":"c9","item":4,"level":3},"public":false,"t":49815,"to":[{"as":"self","p":"p1"}],"type":"build_done"},"k":"ev","t":49815}
+{"e":{"data":{"building":"lumber","city":"c11","item":4,"level":2},"public":false,"t":49867,"to":[{"as":"self","p":"p3"}],"type":"build_done"},"k":"ev","t":49867}
+{"h":"e631790b73a7d96f","hour":14,"k":"ckpt","t":50400}
+{"e":{"data":{"building":"mine","city":"c3","item":16,"level":3},"public":false,"t":50686,"to":[{"as":"self","p":"p3"}],"type":"build_done"},"k":"ev","t":50686}
+{"e":{"data":{"city":"c3","queue":"build"},"public":false,"t":50686,"to":[{"as":"self","p":"p3"}],"type":"queue_empty"},"k":"ev","t":50686}
+{"e":{"data":{"city":"c4","count":1,"item":16,"queue":"harbor","unit":"transport"},"public":false,"t":50774,"to":[{"as":"self","p":"p4"}],"type":"recruit_done"},"k":"ev","t":50774}
+{"e":{"data":{"city":"c4","queue":"harbor"},"public":false,"t":50774,"to":[{"as":"self","p":"p4"}],"type":"queue_empty"},"k":"ev","t":50774}
+{"charge":"own","day":0,"k":"wake","reasons":["queue_empty c3"],"seat":"p3","t":51286,"turn":11,"urgent":false,"used":{"own":9,"social":1}}
+{"args":{"player":"p3"},"bytes":523,"k":"obs","n":431,"rt":0,"seat":"p3","t":51308,"tool":"view_player","turn":11}
+{"args":{},"bytes":3727,"k":"obs","n":432,"rt":0,"seat":"p3","t":51308,"tool":"view_map","turn":11}
+{"args":{"city":"c3"},"bytes":507,"k":"obs","n":433,"rt":0,"seat":"p3","t":51308,"tool":"view_city","turn":11}
+{"args":{"city":"c11"},"bytes":589,"k":"obs","n":434,"rt":0,"seat":"p3","t":51308,"tool":"view_city","turn":11}
+{"a":{"building":"lumber","city":"c3","type":"build"},"i":0,"k":"act","n":435,"r":{"ok":true},"rt":1,"seat":"p3","t":51365,"tool":"build","turn":11}
+{"a":{"building":"quarry","city":"c3","type":"build"},"i":1,"k":"act","n":436,"r":{"ok":true},"rt":1,"seat":"p3","t":51365,"tool":"build","turn":11}
+{"a":{"building":"mine","city":"c11","type":"build"},"i":0,"k":"act","n":437,"r":{"ok":true},"rt":1,"seat":"p3","t":51365,"tool":"build","turn":11}
+{"charge":"own","day":0,"k":"wake","reasons":["queue_empty c4"],"seat":"p4","t":51374,"turn":11,"urgent":false,"used":{"own":9,"social":1}}
+{"calls":7,"k":"turn","next":{"at":63044,"kind":"self"},"rounds":3,"seat":"p3","selfAt":63044,"t":51450,"thought":"turtle D1 14:16:05: build c3 lumber,quarry; build c11 mine","turn":11,"why":"end_turn"}
+{"args":{"player":"p4"},"bytes":566,"k":"obs","n":438,"rt":0,"seat":"p4","t":51512,"tool":"view_player","turn":11}
+{"args":{},"bytes":3727,"k":"obs","n":439,"rt":0,"seat":"p4","t":51512,"tool":"view_map","turn":11}
+{"args":{"city":"c4"},"bytes":708,"k":"obs","n":440,"rt":0,"seat":"p4","t":51512,"tool":"view_city","turn":11}
+{"args":{"city":"c13"},"bytes":983,"k":"obs","n":441,"rt":0,"seat":"p4","t":51512,"tool":"view_city","turn":11}
+{"args":{},"bytes":1164,"k":"obs","n":442,"rt":1,"seat":"p4","t":51624,"tool":"leaderboard","turn":11}
+{"calls":6,"k":"turn","next":{"at":63216,"kind":"self"},"rounds":3,"seat":"p4","selfAt":63216,"t":51652,"thought":"opportunist D1 14:20:24: nothing to do","turn":11,"why":"end_turn"}
+{"e":{"data":{"building":"warehouse","city":"c4","item":17,"level":3},"public":false,"t":51974,"to":[{"as":"self","p":"p4"}],"type":"build_done"},"k":"ev","t":51974}
+{"e":{"data":{"building":"lumber","city":"c13","item":1,"level":2},"public":false,"t":51974,"to":[{"as":"self","p":"p4"}],"type":"build_done"},"k":"ev","t":51974}
+{"e":{"data":{"building":"quarry","city":"c11","item":5,"level":2},"public":false,"t":52048,"to":[{"as":"self","p":"p3"}],"type":"build_done"},"k":"ev","t":52048}
+{"e":{"data":{"building":"quarry","city":"c1","item":17,"level":4},"public":false,"t":52538,"to":[{"as":"self","p":"p1"}],"type":"build_done"},"k":"ev","t":52538}
+{"e":{"data":{"building":"quarry","city":"c8","item":5,"level":3},"public":false,"t":53322,"to":[{"as":"self","p":"p5"}],"type":"build_done"},"k":"ev","t":53322}
+{"e":{"data":{"city":"c8","queue":"build"},"public":false,"t":53322,"to":[{"as":"self","p":"p5"}],"type":"queue_empty"},"k":"ev","t":53322}
+{"e":{"data":{"building":"quarry","city":"c9","item":5,"level":3},"public":false,"t":53415,"to":[{"as":"self","p":"p1"}],"type":"build_done"},"k":"ev","t":53415}
+{"charge":"own","day":0,"k":"wake","reasons":["self"],"seat":"p2","t":53475,"turn":10,"urgent":false,"used":{"own":9,"social":0}}
+{"args":{"player":"p2"},"bytes":446,"k":"obs","n":443,"rt":0,"seat":"p2","t":53578,"tool":"view_player","turn":10}
+{"args":{"fromCity":"c12"},"bytes":5628,"k":"obs","n":444,"rt":0,"seat":"p2","t":53578,"tool":"view_map","turn":10}
+{"args":{"city":"c2"},"bytes":508,"k":"obs","n":445,"rt":0,"seat":"p2","t":53578,"tool":"view_city","turn":10}
+{"args":{"city":"c12"},"bytes":481,"k":"obs","n":446,"rt":0,"seat":"p2","t":53578,"tool":"view_city","turn":10}
+{"args":{"city":"c5"},"bytes":168,"k":"obs","n":447,"rt":1,"seat":"p2","t":53684,"tool":"view_city","turn":10}
+{"args":{"city":"c8"},"bytes":168,"k":"obs","n":448,"rt":1,"seat":"p2","t":53684,"tool":"view_city","turn":10}
+{"args":{"city":"c6"},"bytes":169,"k":"obs","n":449,"rt":1,"seat":"p2","t":53684,"tool":"view_city","turn":10}
+{"a":{"building":"hall","city":"c12","type":"build"},"i":0,"k":"act","n":450,"r":{"ok":true},"rt":2,"seat":"p2","t":53752,"tool":"build","turn":10}
+{"a":{"building":"barracks","city":"c12","type":"build"},"i":1,"k":"act","n":451,"r":{"ok":true},"rt":2,"seat":"p2","t":53752,"tool":"build","turn":10}
+{"a":{"building":"hall","city":"c12","type":"build"},"i":2,"k":"act","n":452,"r":{"ok":true},"rt":2,"seat":"p2","t":53752,"tool":"build","turn":10}
+{"a":{"building":"harbor","city":"c12","type":"build"},"i":3,"k":"act","n":453,"r":{"ok":true},"rt":2,"seat":"p2","t":53752,"tool":"build","turn":10}
+{"a":{"city":"c2","count":3,"type":"recruit","unit":"guard"},"i":0,"k":"act","n":454,"r":{"ok":true},"rt":2,"seat":"p2","t":53752,"tool":"recruit","turn":10}
+{"a":{"city":"c2","count":9,"type":"recruit","unit":"raider"},"i":1,"k":"act","n":455,"r":{"ok":true},"rt":2,"seat":"p2","t":53752,"tool":"recruit","turn":10}
+{"charge":"own","day":0,"k":"wake","reasons":["queue_empty c8","self"],"seat":"p5","t":53898,"turn":10,"urgent":false,"used":{"own":9,"social":0}}
+{"k":"note","mode":"replace","n":456,"seat":"p2","t":53907,"text":"{\"v\":2,\"s\":\"rusher\",\"h\":\"65c93fbe27a0341d:6\",\"f\":{},\"m\":[],\"x\":{},\"k\":[]}","turn":10}
+{"calls":11,"k":"turn","next":{"at":64635,"kind":"self"},"rounds":4,"seat":"p2","selfAt":64635,"t":53907,"thought":"rusher D1 14:55:52: build c12 hall,barracks,hall,harbor; recruit c2 3 guard,9 raider","turn":10,"why":"end_turn"}
+{"h":"e9da3935ab9471e0","hour":15,"k":"ckpt","t":54000}
+{"args":{"player":"p5"},"bytes":445,"k":"obs","n":457,"rt":0,"seat":"p5","t":54048,"tool":"view_player","turn":10}
+{"args":{},"bytes":3727,"k":"obs","n":458,"rt":0,"seat":"p5","t":54048,"tool":"view_map","turn":10}
+{"args":{"city":"c5"},"bytes":507,"k":"obs","n":459,"rt":0,"seat":"p5","t":54048,"tool":"view_city","turn":10}
+{"args":{"city":"c8"},"bytes":491,"k":"obs","n":460,"rt":0,"seat":"p5","t":54048,"tool":"view_city","turn":10}
+{"a":{"building":"mine","city":"c8","type":"build"},"i":0,"k":"act","n":461,"r":{"ok":true},"rt":1,"seat":"p5","t":54129,"tool":"build","turn":10}
+{"a":{"building":"hall","city":"c8","type":"build"},"i":1,"k":"act","n":462,"r":{"ok":true},"rt":1,"seat":"p5","t":54129,"tool":"build","turn":10}
+{"a":{"building":"barracks","city":"c8","type":"build"},"i":2,"k":"act","n":463,"r":{"ok":true},"rt":1,"seat":"p5","t":54129,"tool":"build","turn":10}
+{"a":{"city":"c5","count":4,"type":"recruit","unit":"guard"},"i":0,"k":"act","n":464,"r":{"ok":true},"rt":1,"seat":"p5","t":54129,"tool":"recruit","turn":10}
+{"a":{"city":"c5","count":4,"type":"recruit","unit":"raider"},"i":1,"k":"act","n":465,"r":{"ok":true},"rt":1,"seat":"p5","t":54129,"tool":"recruit","turn":10}
+{"calls":7,"k":"turn","next":{"at":64886,"kind":"self"},"rounds":3,"seat":"p5","selfAt":64886,"t":54163,"thought":"expander D1 15:02:09: build c8 mine,hall,barracks; recruit c5 4 guard,4 raider","turn":10,"why":"end_turn"}
+{"e":{"data":{"building":"mine","city":"c11","item":6,"level":2},"public":false,"t":54229,"to":[{"as":"self","p":"p3"}],"type":"build_done"},"k":"ev","t":54229}
+{"e":{"data":{"city":"c11","queue":"build"},"public":false,"t":54229,"to":[{"as":"self","p":"p3"}],"type":"queue_empty"},"k":"ev","t":54229}
+{"e":{"data":{"building":"quarry","city":"c13","item":2,"level":2},"public":false,"t":54374,"to":[{"as":"self","p":"p4"}],"type":"build_done"},"k":"ev","t":54374}
+{"e":{"data":{"city":"c2","count":3,"item":16,"queue":"barracks","unit":"guard"},"public":false,"t":54568,"to":[{"as":"self","p":"p2"}],"type":"recruit_done"},"k":"ev","t":54568}
+{"charge":"own","day":0,"k":"wake","reasons":["queue_empty c11"],"seat":"p3","t":54829,"turn":12,"urgent":false,"used":{"own":10,"social":1}}
+{"args":{"player":"p3"},"bytes":524,"k":"obs","n":466,"rt":0,"seat":"p3","t":54935,"tool":"view_player","turn":12}
+{"args":{},"bytes":3727,"k":"obs","n":467,"rt":0,"seat":"p3","t":54935,"tool":"view_map","turn":12}
+{"args":{"city":"c3"},"bytes":706,"k":"obs","n":468,"rt":0,"seat":"p3","t":54935,"tool":"view_city","turn":12}
+{"args":{"city":"c11"},"bytes":494,"k":"obs","n":469,"rt":0,"seat":"p3","t":54935,"tool":"view_city","turn":12}
+{"a":{"building":"mine","city":"c3","type":"build"},"i":0,"k":"act","n":470,"r":{"ok":true},"rt":1,"seat":"p3","t":54958,"tool":"build","turn":12}
+{"calls":6,"k":"turn","next":{"at":70679,"kind":"self"},"rounds":3,"seat":"p3","selfAt":70679,"t":55013,"thought":"turtle D1 15:15:58: build c3 mine","turn":12,"why":"end_turn"}
+{"e":{"data":{"city":"c5","count":4,"item":16,"queue":"barracks","unit":"guard"},"public":false,"t":55217,"to":[{"as":"self","p":"p5"}],"type":"recruit_done"},"k":"ev","t":55217}
+{"e":{"data":{"building":"lumber","city":"c3","item":17,"level":4},"public":false,"t":55615,"to":[{"as":"self","p":"p3"}],"type":"build_done"},"k":"ev","t":55615}
+{"e":{"data":{"building":"mine","city":"c4","item":18,"level":4},"public":false,"t":56224,"to":[{"as":"self","p":"p4"}],"type":"build_done"},"k":"ev","t":56224}
+{"e":{"data":{"city":"c4","queue":"build"},"public":false,"t":56224,"to":[{"as":"self","p":"p4"}],"type":"queue_empty"},"k":"ev","t":56224}
+{"e":{"data":{"city":"c5","count":4,"item":17,"queue":"barracks","unit":"raider"},"public":false,"t":56305,"to":[{"as":"self","p":"p5"}],"type":"recruit_done"},"k":"ev","t":56305}
+{"e":{"data":{"city":"c5","queue":"barracks"},"public":false,"t":56305,"to":[{"as":"self","p":"p5"}],"type":"queue_empty"},"k":"ev","t":56305}
+{"e":{"data":{"building":"hall","city":"c12","item":1,"level":2},"public":false,"t":56632,"to":[{"as":"self","p":"p2"}],"type":"build_done"},"k":"ev","t":56632}
+{"e":{"data":{"building":"mine","city":"c13","item":3,"level":2},"public":false,"t":56774,"to":[{"as":"self","p":"p4"}],"type":"build_done"},"k":"ev","t":56774}
+{"e":{"data":{"building":"mine","city":"c1","item":18,"level":4},"public":false,"t":56788,"to":[{"as":"self","p":"p1"}],"type":"build_done"},"k":"ev","t":56788}
+{"e":{"data":{"city":"c1","queue":"build"},"public":false,"t":56788,"to":[{"as":"self","p":"p1"}],"type":"queue_empty"},"k":"ev","t":56788}
+{"charge":"own","day":0,"k":"wake","reasons":["queue_empty c4"],"seat":"p4","t":56824,"turn":12,"urgent":false,"used":{"own":10,"social":1}}
+{"args":{"player":"p4"},"bytes":567,"k":"obs","n":471,"rt":0,"seat":"p4","t":56868,"tool":"view_player","turn":12}
+{"args":{},"bytes":3727,"k":"obs","n":472,"rt":0,"seat":"p4","t":56868,"tool":"view_map","turn":12}
+{"args":{"city":"c4"},"bytes":508,"k":"obs","n":473,"rt":0,"seat":"p4","t":56868,"tool":"view_city","turn":12}
+{"args":{"city":"c13"},"bytes":691,"k":"obs","n":474,"rt":0,"seat":"p4","t":56868,"tool":"view_city","turn":12}
+{"charge":"own","day":0,"k":"wake","reasons":["queue_empty c5"],"seat":"p5","t":56905,"turn":11,"urgent":false,"used":{"own":10,"social":0}}
+{"args":{},"bytes":1164,"k":"obs","n":475,"rt":1,"seat":"p4","t":56939,"tool":"leaderboard","turn":12}
+{"args":{"player":"p5"},"bytes":463,"k":"obs","n":476,"rt":0,"seat":"p5","t":56952,"tool":"view_player","turn":11}
+{"args":{},"bytes":3727,"k":"obs","n":477,"rt":0,"seat":"p5","t":56952,"tool":"view_map","turn":11}
+{"args":{"city":"c5"},"bytes":519,"k":"obs","n":478,"rt":0,"seat":"p5","t":56952,"tool":"view_city","turn":11}
+{"args":{"city":"c8"},"bytes":785,"k":"obs","n":479,"rt":0,"seat":"p5","t":56952,"tool":"view_city","turn":11}
+{"e":{"data":{"building":"mine","city":"c9","item":6,"level":3},"public":false,"t":57015,"to":[{"as":"self","p":"p1"}],"type":"build_done"},"k":"ev","t":57015}
+{"e":{"data":{"city":"c9","queue":"build"},"public":false,"t":57015,"to":[{"as":"self","p":"p1"}],"type":"queue_empty"},"k":"ev","t":57015}
+{"e":{"data":{"city":"c2","count":9,"item":17,"queue":"barracks","unit":"raider"},"public":false,"t":57016,"to":[{"as":"self","p":"p2"}],"type":"recruit_done"},"k":"ev","t":57016}
+{"e":{"data":{"city":"c2","queue":"barracks"},"public":false,"t":57016,"to":[{"as":"self","p":"p2"}],"type":"queue_empty"},"k":"ev","t":57016}
+{"a":{"city":"c5","count":3,"type":"recruit","unit":"guard"},"i":0,"k":"act","n":480,"r":{"ok":true},"rt":1,"seat":"p5","t":57094,"tool":"recruit","turn":11}
+{"a":{"city":"c5","count":3,"type":"recruit","unit":"raider"},"i":1,"k":"act","n":481,"r":{"ok":true},"rt":1,"seat":"p5","t":57094,"tool":"recruit","turn":11}
+{"a":{"building":"mine","city":"c13","type":"build"},"i":0,"k":"act","n":482,"r":{"ok":true},"rt":2,"seat":"p4","t":57111,"tool":"build","turn":12}
+{"a":{"city":"c4","count":3,"type":"recruit","unit":"guard"},"i":0,"k":"act","n":483,"r":{"ok":true},"rt":2,"seat":"p4","t":57111,"tool":"recruit","turn":12}
+{"a":{"city":"c4","count":6,"type":"recruit","unit":"raider"},"i":1,"k":"act","n":484,"r":{"ok":true},"rt":2,"seat":"p4","t":57111,"tool":"recruit","turn":12}
+{"calls":6,"k":"turn","next":{"at":71747,"kind":"self"},"rounds":3,"seat":"p5","selfAt":71747,"t":57229,"thought":"expander D1 15:51:34: recruit c5 3 guard,3 raider","turn":11,"why":"end_turn"}
+{"calls":8,"k":"turn","next":{"at":71756,"kind":"self"},"rounds":4,"seat":"p4","selfAt":71756,"t":57234,"thought":"opportunist D1 15:51:51: build c13 mine; recruit c4 3 guard,6 raider","turn":12,"why":"end_turn"}
+{"charge":"own","day":0,"k":"wake","reasons":["queue_empty c1","queue_empty c9"],"seat":"p1","t":57388,"turn":12,"urgent":false,"used":{"own":10,"social":1}}
+{"args":{"player":"p1"},"bytes":505,"k":"obs","n":485,"rt":0,"seat":"p1","t":57411,"tool":"view_player","turn":12}
+{"args":{},"bytes":3727,"k":"obs","n":486,"rt":0,"seat":"p1","t":57411,"tool":"view_map","turn":12}
+{"args":{"city":"c1"},"bytes":508,"k":"obs","n":487,"rt":0,"seat":"p1","t":57411,"tool":"view_city","turn":12}
+{"args":{"city":"c9"},"bytes":492,"k":"obs","n":488,"rt":0,"seat":"p1","t":57411,"tool":"view_city","turn":12}
+{"a":{"building":"lumber","city":"c9","type":"build"},"i":0,"k":"act","n":489,"r":{"ok":true},"rt":1,"seat":"p1","t":57451,"tool":"build","turn":12}
+{"a":{"building":"quarry","city":"c9","type":"build"},"i":1,"k":"act","n":490,"r":{"ok":true},"rt":1,"seat":"p1","t":57451,"tool":"build","turn":12}
+{"a":{"building":"mine","city":"c9","type":"build"},"i":2,"k":"act","n":491,"r":{"ok":true},"rt":1,"seat":"p1","t":57451,"tool":"build","turn":12}
+{"calls":6,"k":"turn","next":{"at":71926,"kind":"self"},"rounds":3,"seat":"p1","selfAt":71926,"t":57500,"thought":"expander D1 15:57:31: build c9 lumber,quarry,mine","turn":12,"why":"end_turn"}
+{"h":"9d1ed33c223555c0","hour":16,"k":"ckpt","t":57600}
+{"charge":"own","day":0,"k":"wake","reasons":["queue_empty c2"],"seat":"p2","t":57616,"turn":11,"urgent":false,"used":{"own":10,"social":0}}
+{"args":{"player":"p2"},"bytes":464,"k":"obs","n":492,"rt":0,"seat":"p2","t":57632,"tool":"view_player","turn":11}
+{"args":{},"bytes":3727,"k":"obs","n":493,"rt":0,"seat":"p2","t":57632,"tool":"view_map","turn":11}
+{"args":{"city":"c2"},"bytes":519,"k":"obs","n":494,"rt":0,"seat":"p2","t":57632,"tool":"view_city","turn":11}
+{"args":{"city":"c12"},"bytes":776,"k":"obs","n":495,"rt":0,"seat":"p2","t":57632,"tool":"view_city","turn":11}
+{"args":{"city":"c5"},"bytes":168,"k":"obs","n":496,"rt":1,"seat":"p2","t":57695,"tool":"view_city","turn":11}
+{"args":{"city":"c8"},"bytes":168,"k":"obs","n":497,"rt":1,"seat":"p2","t":57695,"tool":"view_city","turn":11}
+{"args":{"city":"c6"},"bytes":169,"k":"obs","n":498,"rt":1,"seat":"p2","t":57695,"tool":"view_city","turn":11}
+{"e":{"data":{"building":"mine","city":"c8","item":6,"level":3},"public":false,"t":57729,"to":[{"as":"self","p":"p5"}],"type":"build_done"},"k":"ev","t":57729}
+{"a":{"from":"c2","gold":300,"to":"c5","type":"spy"},"i":0,"k":"act","n":499,"r":{"ok":true},"rt":2,"seat":"p2","t":57872,"tool":"spy","turn":11}
+{"a":{"building":"lumber","city":"c12","type":"build"},"i":0,"k":"act","n":500,"r":{"ok":true},"rt":2,"seat":"p2","t":57872,"tool":"build","turn":11}
+{"a":{"city":"c2","count":1,"type":"recruit","unit":"transport"},"i":0,"k":"act","n":501,"r":{"ok":true},"rt":2,"seat":"p2","t":57872,"tool":"recruit","turn":11}
+{"e":{"data":{"city":"c5","count":3,"item":18,"queue":"barracks","unit":"guard"},"public":false,"t":57910,"to":[{"as":"self","p":"p5"}],"type":"recruit_done"},"k":"ev","t":57910}
+{"e":{"data":{"city":"c4","count":3,"item":19,"queue":"barracks","unit":"guard"},"public":false,"t":57927,"to":[{"as":"self","p":"p4"}],"type":"recruit_done"},"k":"ev","t":57927}
+{"k":"note","mode":"replace","n":502,"seat":"p2","t":58023,"text":"{\"v\":2,\"s\":\"rusher\",\"h\":\"65c93fbe27a0341d:6\",\"f\":{},\"m\":[],\"x\":{\"sc5\":57695},\"k\":[]}","turn":11}
+{"calls":12,"k":"turn","next":{"at":72136,"kind":"self"},"rounds":4,"seat":"p2","selfAt":72136,"t":58023,"thought":"rusher D1 16:04:32: spy c5; build c12 lumber; recruit c2 1 transport","turn":11,"why":"end_turn"}
+{"e":{"data":{"building":"barracks","city":"c12","item":2,"level":1},"public":false,"t":58132,"to":[{"as":"self","p":"p2"}],"type":"build_done"},"k":"ev","t":58132}
+{"e":{"data":{"city":"c5","count":3,"item":19,"queue":"barracks","unit":"raider"},"public":false,"t":58726,"to":[{"as":"self","p":"p5"}],"type":"recruit_done"},"k":"ev","t":58726}
+{"e":{"data":{"city":"c5","queue":"barracks"},"public":false,"t":58726,"to":[{"as":"self","p":"p5"}],"type":"queue_empty"},"k":"ev","t":58726}
+{"e":{"data":{"city":"c2","count":1,"item":18,"queue":"harbor","unit":"transport"},"public":false,"t":59072,"to":[{"as":"self","p":"p2"}],"type":"recruit_done"},"k":"ev","t":59072}
+{"e":{"data":{"city":"c2","queue":"harbor"},"public":false,"t":59072,"to":[{"as":"self","p":"p2"}],"type":"queue_empty"},"k":"ev","t":59072}
+{"charge":"own","day":0,"k":"wake","reasons":["queue_empty c5"],"seat":"p5","t":59326,"turn":12,"urgent":false,"used":{"own":11,"social":0}}
+{"args":{"player":"p5"},"bytes":463,"k":"obs","n":503,"rt":0,"seat":"p5","t":59354,"tool":"view_player","turn":12}
+{"args":{},"bytes":3727,"k":"obs","n":504,"rt":0,"seat":"p5","t":59354,"tool":"view_map","turn":12}
+{"args":{"city":"c5"},"bytes":519,"k":"obs","n":505,"rt":0,"seat":"p5","t":59354,"tool":"view_city","turn":12}
+{"args":{"city":"c8"},"bytes":688,"k":"obs","n":506,"rt":0,"seat":"p5","t":59354,"tool":"view_city","turn":12}
+{"a":{"building":"hall","city":"c8","type":"build"},"i":0,"k":"act","n":507,"r":{"ok":true},"rt":1,"seat":"p5","t":59487,"tool":"build","turn":12}
+{"e":{"data":{"city":"c4","count":6,"item":20,"queue":"barracks","unit":"raider"},"public":false,"t":59559,"to":[{"as":"self","p":"p4"}],"type":"recruit_done"},"k":"ev","t":59559}
+{"e":{"data":{"city":"c4","queue":"barracks"},"public":false,"t":59559,"to":[{"as":"self","p":"p4"}],"type":"queue_empty"},"k":"ev","t":59559}
+{"calls":6,"k":"turn","next":{"at":86400,"kind":"self"},"rounds":3,"seat":"p5","selfAt":86400,"t":59568,"thought":"expander D1 16:31:27: build c8 hall","turn":12,"why":"end_turn"}
+{"charge":"own","day":0,"k":"wake","reasons":["queue_empty c2"],"seat":"p2","t":59672,"turn":12,"urgent":false,"used":{"own":11,"social":0}}
+{"args":{"player":"p2"},"bytes":712,"k":"obs","n":508,"rt":0,"seat":"p2","t":59740,"tool":"view_player","turn":12}
+{"args":{},"bytes":3727,"k":"obs","n":509,"rt":0,"seat":"p2","t":59740,"tool":"view_map","turn":12}
+{"args":{"city":"c2"},"bytes":767,"k":"obs","n":510,"rt":0,"seat":"p2","t":59740,"tool":"view_city","turn":12}
+{"args":{"city":"c12"},"bytes":774,"k":"obs","n":511,"rt":0,"seat":"p2","t":59740,"tool":"view_city","turn":12}
+{"e":{"data":{"building":"quarry","city":"c3","item":18,"level":4},"public":false,"t":59865,"to":[{"as":"self","p":"p3"}],"type":"build_done"},"k":"ev","t":59865}
+{"args":{"city":"c5"},"bytes":168,"k":"obs","n":512,"rt":1,"seat":"p2","t":59885,"tool":"view_city","turn":12}
+{"args":{"city":"c8"},"bytes":168,"k":"obs","n":513,"rt":1,"seat":"p2","t":59885,"tool":"view_city","turn":12}
+{"args":{"city":"c6"},"bytes":169,"k":"obs","n":514,"rt":1,"seat":"p2","t":59885,"tool":"view_city","turn":12}
+{"a":{"from":"c2","gold":131,"to":"c8","type":"spy"},"i":0,"k":"act","n":515,"r":{"ok":true},"rt":2,"seat":"p2","t":59991,"tool":"spy","turn":12}
+{"a":{"building":"quarry","city":"c12","type":"build"},"i":0,"k":"act","n":516,"r":{"ok":true},"rt":2,"seat":"p2","t":59991,"tool":"build","turn":12}
+{"k":"note","mode":"replace","n":517,"seat":"p2","t":60011,"text":"{\"v\":2,\"s\":\"rusher\",\"h\":\"65c93fbe27a0341d:6\",\"f\":{},\"m\":[],\"x\":{\"sc5\":57695,\"sc8\":59885},\"k\":[]}","turn":12}
+{"calls":11,"k":"turn","next":{"at":86400,"kind":"self"},"rounds":4,"seat":"p2","selfAt":86400,"t":60011,"thought":"rusher D1 16:39:51: spy c8; build c12 quarry","turn":12,"why":"end_turn"}
+{"charge":"own","day":0,"k":"wake","reasons":["queue_empty c4"],"seat":"p4","t":60159,"turn":13,"urgent":false,"used":{"own":11,"social":1}}
+{"args":{"player":"p4"},"bytes":567,"k":"obs","n":518,"rt":0,"seat":"p4","t":60223,"tool":"view_player","turn":13}
+{"args":{},"bytes":3727,"k":"obs","n":519,"rt":0,"seat":"p4","t":60223,"tool":"view_map","turn":13}
+{"args":{"city":"c4"},"bytes":520,"k":"obs","n":520,"rt":0,"seat":"p4","t":60223,"tool":"view_city","turn":13}
+{"args":{"city":"c13"},"bytes":788,"k":"obs","n":521,"rt":0,"seat":"p4","t":60223,"tool":"view_city","turn":13}
+{"args":{},"bytes":1164,"k":"obs","n":522,"rt":1,"seat":"p4","t":60303,"tool":"leaderboard","turn":13}
+{"a":{"building":"lumber","city":"c13","type":"build"},"i":0,"k":"act","n":523,"r":{"ok":true},"rt":2,"seat":"p4","t":60321,"tool":"build","turn":13}
+{"a":{"city":"c4","count":1,"type":"recruit","unit":"transport"},"i":0,"k":"act","n":524,"r":{"ok":true},"rt":2,"seat":"p4","t":60321,"tool":"recruit","turn":13}
+{"e":{"data":{"building":"lumber","city":"c13","item":4,"level":3},"public":false,"t":60374,"to":[{"as":"self","p":"p4"}],"type":"build_done"},"k":"ev","t":60374}
+{"calls":8,"k":"turn","next":{"at":86400,"kind":"self"},"rounds":4,"seat":"p4","selfAt":86400,"t":60459,"thought":"opportunist D1 16:45:21: build c13 lumber; recruit c4 1 transport","turn":13,"why":"end_turn"}
+{"e":{"data":{"building":"hall","city":"c8","item":7,"level":2},"public":false,"t":60609,"to":[{"as":"self","p":"p5"}],"type":"build_done"},"k":"ev","t":60609}
+{"h":"9519078c4ed42acf","hour":17,"k":"ckpt","t":61200}
+{"e":{"data":{"city":"c4","count":1,"item":21,"queue":"harbor","unit":"transport"},"public":false,"t":61521,"to":[{"as":"self","p":"p4"}],"type":"recruit_done"},"k":"ev","t":61521}
+{"e":{"data":{"city":"c4","queue":"harbor"},"public":false,"t":61521,"to":[{"as":"self","p":"p4"}],"type":"queue_empty"},"k":"ev","t":61521}
+{"e":{"data":{"building":"barracks","city":"c8","item":8,"level":1},"public":false,"t":62109,"to":[{"as":"self","p":"p5"}],"type":"build_done"},"k":"ev","t":62109}
+{"charge":"own","day":0,"k":"wake","reasons":["queue_empty c4"],"seat":"p4","t":62121,"turn":14,"urgent":false,"used":{"own":12,"social":1}}
+{"args":{"player":"p4"},"bytes":564,"k":"obs","n":525,"rt":0,"seat":"p4","t":62270,"tool":"view_player","turn":14}
+{"args":{},"bytes":3727,"k":"obs","n":526,"rt":0,"seat":"p4","t":62270,"tool":"view_map","turn":14}
+{"args":{"city":"c4"},"bytes":520,"k":"obs","n":527,"rt":0,"seat":"p4","t":62270,"tool":"view_city","turn":14}
+{"args":{"city":"c13"},"bytes":788,"k":"obs","n":528,"rt":0,"seat":"p4","t":62270,"tool":"view_city","turn":14}
+{"args":{},"bytes":1164,"k":"obs","n":529,"rt":1,"seat":"p4","t":62280,"tool":"leaderboard","turn":14}
+{"a":{"building":"quarry","city":"c13","type":"build"},"i":0,"k":"act","n":530,"r":{"ok":true},"rt":2,"seat":"p4","t":62418,"tool":"build","turn":14}
+{"e":{"data":{"building":"hall","city":"c12","item":3,"level":3},"public":false,"t":62452,"to":[{"as":"self","p":"p2"}],"type":"build_done"},"k":"ev","t":62452}
+{"calls":7,"k":"turn","next":{"at":86400,"kind":"self"},"rounds":4,"seat":"p4","selfAt":86400,"t":62547,"thought":"opportunist D1 17:20:18: build c13 quarry","turn":14,"why":"end_turn"}
+{"e":{"data":{"building":"lumber","city":"c9","item":7,"level":4},"public":false,"t":62551,"to":[{"as":"self","p":"p1"}],"type":"build_done"},"k":"ev","t":62551}
+{"e":{"data":{"buildings":{"barracks":2,"hall":3,"harbor":1,"lumber":3,"mine":3,"quarry":3,"wall":0,"warehouse":3},"city":"c5","island":"i7","owner":"p5","queues":[],"report":"rdk5ck","siege":null,"stock":{"gold":553,"stone":528,"wood":519},"units":[{"owner":"p5","role":"home","units":{"guard":15,"raider":7,"transport":1}}],"wall":0},"public":false,"t":63252,"to":[{"as":"self","p":"p2"}],"type":"spy_report"},"k":"ev","t":63252}
+{"charge":"own","day":0,"k":"wake","reasons":["spy_report rdk5ck"],"seat":"p2","t":63852,"turn":13,"urgent":false,"used":{"own":12,"social":0}}
+{"args":{"player":"p2"},"bytes":709,"k":"obs","n":531,"rt":0,"seat":"p2","t":63958,"tool":"view_player","turn":13}
+{"args":{},"bytes":3727,"k":"obs","n":532,"rt":0,"seat":"p2","t":63958,"tool":"view_map","turn":13}
+{"args":{"city":"c2"},"bytes":767,"k":"obs","n":533,"rt":0,"seat":"p2","t":63958,"tool":"view_city","turn":13}
+{"args":{"city":"c12"},"bytes":778,"k":"obs","n":534,"rt":0,"seat":"p2","t":63958,"tool":"view_city","turn":13}
+{"args":{"city":"c5"},"bytes":581,"k":"obs","n":535,"rt":1,"seat":"p2","t":63967,"tool":"view_city","turn":13}
+{"args":{"city":"c8"},"bytes":168,"k":"obs","n":536,"rt":1,"seat":"p2","t":63967,"tool":"view_city","turn":13}
+{"args":{"city":"c6"},"bytes":169,"k":"obs","n":537,"rt":1,"seat":"p2","t":63967,"tool":"view_city","turn":13}
+{"e":{"data":{"building":"quarry","city":"c13","item":5,"level":3},"public":false,"t":63974,"to":[{"as":"self","p":"p4"}],"type":"build_done"},"k":"ev","t":63974}
+{"a":{"from":"c2","gold":180,"to":"c6","type":"spy"},"i":0,"k":"act","n":538,"r":{"ok":true},"rt":2,"seat":"p2","t":64082,"tool":"spy","turn":13}
+{"a":{"building":"mine","city":"c12","type":"build"},"i":0,"k":"act","n":539,"r":{"ok":true},"rt":2,"seat":"p2","t":64082,"tool":"build","turn":13}
+{"k":"note","mode":"replace","n":540,"seat":"p2","t":64093,"text":"{\"v\":2,\"s\":\"rusher\",\"h\":\"65c93fbe27a0341d:6\",\"f\":{},\"m\":[],\"x\":{\"sc5\":57695,\"sc6\":63967,\"sc8\":59885},\"k\":[]}","turn":13}
+{"calls":11,"k":"turn","next":{"at":86400,"kind":"self"},"rounds":4,"seat":"p2","selfAt":86400,"t":64093,"thought":"rusher D1 17:48:02: spy c6; build c12 mine","turn":13,"why":"end_turn"}
+{"e":{"data":{"building":"mine","city":"c3","item":19,"level":4},"public":false,"t":64115,"to":[{"as":"self","p":"p3"}],"type":"build_done"},"k":"ev","t":64115}
+{"e":{"data":{"city":"c3","queue":"build"},"public":false,"t":64115,"to":[{"as":"self","p":"p3"}],"type":"queue_empty"},"k":"ev","t":64115}
+{"charge":"own","day":0,"k":"wake","reasons":["queue_empty c3"],"seat":"p3","t":64715,"turn":13,"urgent":false,"used":{"own":11,"social":1}}
+{"h":"7d1b49975ae01417","hour":18,"k":"ckpt","t":64800}
+{"e":{"data":{"building":"harbor","city":"c12","item":4,"level":1},"public":false,"t":64852,"to":[{"as":"self","p":"p2"}],"type":"build_done"},"k":"ev","t":64852}
+{"args":{"player":"p3"},"bytes":524,"k":"obs","n":541,"rt":0,"seat":"p3","t":64868,"tool":"view_player","turn":13}
+{"args":{},"bytes":3727,"k":"obs","n":542,"rt":0,"seat":"p3","t":64868,"tool":"view_map","turn":13}
+{"args":{"city":"c3"},"bytes":507,"k":"obs","n":543,"rt":0,"seat":"p3","t":64868,"tool":"view_city","turn":13}
+{"args":{"city":"c11"},"bytes":494,"k":"obs","n":544,"rt":0,"seat":"p3","t":64868,"tool":"view_city","turn":13}
+{"a":{"building":"lumber","city":"c11","type":"build"},"i":0,"k":"act","n":545,"r":{"ok":true},"rt":1,"seat":"p3","t":64944,"tool":"build","turn":13}
+{"a":{"building":"quarry","city":"c11","type":"build"},"i":1,"k":"act","n":546,"r":{"ok":true},"rt":1,"seat":"p3","t":64944,"tool":"build","turn":13}
+{"a":{"building":"mine","city":"c11","type":"build"},"i":2,"k":"act","n":547,"r":{"ok":true},"rt":1,"seat":"p3","t":64944,"tool":"build","turn":13}
+{"calls":6,"k":"turn","next":{"at":86400,"kind":"self"},"rounds":3,"seat":"p3","selfAt":86400,"t":65027,"thought":"turtle D1 18:02:24: build c11 lumber,quarry,mine","turn":13,"why":"end_turn"}
+{"e":{"data":{"buildings":{"barracks":1,"hall":2,"harbor":0,"lumber":3,"mine":3,"quarry":3,"wall":0,"warehouse":1},"city":"c8","island":"i7","owner":"p5","queues":[{"building":"hall","end":66429,"item":9,"level":3,"queue":"build"}],"report":"rfnr1g","siege":null,"stock":{"gold":596,"stone":324,"wood":412},"units":[{"owner":"p5","role":"home","units":{"guard":2}}],"wall":0},"public":false,"t":65371,"to":[{"as":"self","p":"p2"}],"type":"spy_report"},"k":"ev","t":65371}
+{"e":{"data":{"building":"hall","city":"c8","item":9,"level":3},"public":false,"t":66429,"to":[{"as":"self","p":"p5"}],"type":"build_done"},"k":"ev","t":66429}
+{"e":{"data":{"city":"c8","queue":"build"},"public":false,"t":66429,"to":[{"as":"self","p":"p5"}],"type":"queue_empty"},"k":"ev","t":66429}
+{"charge":"own","day":0,"k":"wake","reasons":["queue_empty c8"],"seat":"p5","t":67029,"turn":13,"urgent":false,"used":{"own":12,"social":0}}
+{"e":{"data":{"building":"lumber","city":"c12","item":5,"level":2},"public":false,"t":67033,"to":[{"as":"self","p":"p2"}],"type":"build_done"},"k":"ev","t":67033}
+{"args":{"player":"p5"},"bytes":460,"k":"obs","n":548,"rt":0,"seat":"p5","t":67095,"tool":"view_player","turn":13}
+{"args":{},"bytes":3727,"k":"obs","n":549,"rt":0,"seat":"p5","t":67095,"tool":"view_map","turn":13}
+{"args":{"city":"c5"},"bytes":519,"k":"obs","n":550,"rt":0,"seat":"p5","t":67095,"tool":"view_city","turn":13}
+{"args":{"city":"c8"},"bytes":492,"k":"obs","n":551,"rt":0,"seat":"p5","t":67095,"tool":"view_city","turn":13}
+{"a":{"building":"warehouse","city":"c8","type":"build"},"i":0,"k":"act","n":552,"r":{"ok":true},"rt":1,"seat":"p5","t":67184,"tool":"build","turn":13}
+{"a":{"city":"c5","count":4,"type":"recruit","unit":"guard"},"i":0,"k":"act","n":553,"r":{"ok":true},"rt":1,"seat":"p5","t":67184,"tool":"recruit","turn":13}
+{"a":{"city":"c5","count":4,"type":"recruit","unit":"raider"},"i":1,"k":"act","n":554,"r":{"ok":true},"rt":1,"seat":"p5","t":67184,"tool":"recruit","turn":13}
+{"calls":7,"k":"turn","next":{"at":86400,"kind":"self"},"rounds":3,"seat":"p5","selfAt":86400,"t":67272,"thought":"expander D1 18:39:44: build c8 warehouse; recruit c5 4 guard,4 raider","turn":13,"why":"end_turn"}
+{"charge":"own","day":0,"k":"wake","reasons":["self"],"seat":"p6","t":67333,"turn":13,"urgent":false,"used":{"own":11,"social":1}}
+{"args":{"player":"p6"},"bytes":447,"k":"obs","n":555,"rt":0,"seat":"p6","t":67358,"tool":"view_player","turn":13}
+{"args":{},"bytes":3727,"k":"obs","n":556,"rt":0,"seat":"p6","t":67358,"tool":"view_map","turn":13}
+{"args":{"city":"c6"},"bytes":512,"k":"obs","n":557,"rt":0,"seat":"p6","t":67358,"tool":"view_city","turn":13}
+{"args":{"city":"c10"},"bytes":484,"k":"obs","n":558,"rt":0,"seat":"p6","t":67358,"tool":"view_city","turn":13}
+{"args":{"city":"c1"},"bytes":169,"k":"obs","n":559,"rt":1,"seat":"p6","t":67518,"tool":"view_city","turn":13}
+{"args":{"city":"c9"},"bytes":169,"k":"obs","n":560,"rt":1,"seat":"p6","t":67518,"tool":"view_city","turn":13}
+{"args":{"city":"c2"},"bytes":168,"k":"obs","n":561,"rt":1,"seat":"p6","t":67518,"tool":"view_city","turn":13}
+{"e":{"data":{"building":"mine","city":"c13","item":6,"level":3},"public":false,"t":67574,"to":[{"as":"self","p":"p4"}],"type":"build_done"},"k":"ev","t":67574}
+{"a":{"building":"warehouse","city":"c6","type":"build"},"i":0,"k":"act","n":562,"r":{"ok":true},"rt":2,"seat":"p6","t":67598,"tool":"build","turn":13}
+{"a":{"building":"warehouse","city":"c10","type":"build"},"i":0,"k":"act","n":563,"r":{"ok":true},"rt":2,"seat":"p6","t":67598,"tool":"build","turn":13}
+{"a":{"building":"hall","city":"c10","type":"build"},"i":1,"k":"act","n":564,"r":{"ok":true},"rt":2,"seat":"p6","t":67598,"tool":"build","turn":13}
+{"a":{"building":"harbor","city":"c10","type":"build"},"i":2,"k":"act","n":565,"r":{"ok":true},"rt":2,"seat":"p6","t":67598,"tool":"build","turn":13}
+{"a":{"building":"mine","city":"c10","type":"build"},"i":3,"k":"act","n":566,"r":{"ok":true},"rt":2,"seat":"p6","t":67598,"tool":"build","turn":13}
+{"a":{"building":"lumber","city":"c10","type":"build"},"i":4,"k":"act","n":567,"r":{"ok":true},"rt":2,"seat":"p6","t":67598,"tool":"build","turn":13}
+{"a":{"city":"c6","count":4,"type":"recruit","unit":"guard"},"i":0,"k":"act","n":568,"r":{"ok":true},"rt":2,"seat":"p6","t":67598,"tool":"recruit","turn":13}
+{"a":{"city":"c6","count":16,"type":"recruit","unit":"raider"},"i":1,"k":"act","n":569,"r":{"ok":true},"rt":2,"seat":"p6","t":67598,"tool":"recruit","turn":13}
+{"e":{"data":{"building":"quarry","city":"c9","item":8,"level":4},"public":false,"t":67651,"to":[{"as":"self","p":"p1"}],"type":"build_done"},"k":"ev","t":67651}
+{"calls":11,"k":"turn","next":{"at":86400,"kind":"self"},"rounds":4,"seat":"p6","selfAt":86400,"t":67723,"thought":"rusher D1 18:46:38: build c6 warehouse; build c10 warehouse,hall,harbor,mine,lumber; recruit c6 4 guard,16 raider","turn":13,"why":"end_turn"}
+{"e":{"data":{"building":"lumber","city":"c11","item":7,"level":3},"public":false,"t":68216,"to":[{"as":"self","p":"p3"}],"type":"build_done"},"k":"ev","t":68216}
+{"e":{"data":{"city":"c5","count":4,"item":20,"queue":"barracks","unit":"guard"},"public":false,"t":68272,"to":[{"as":"self","p":"p5"}],"type":"recruit_done"},"k":"ev","t":68272}
+{"h":"f76190b07aee4256","hour":19,"k":"ckpt","t":68400}
+{"e":{"data":{"city":"c6","count":4,"item":16,"queue":"barracks","unit":"guard"},"public":false,"t":68686,"to":[{"as":"self","p":"p6"}],"type":"recruit_done"},"k":"ev","t":68686}
+{"e":{"data":{"building":"warehouse","city":"c8","item":10,"level":2},"public":false,"t":68784,"to":[{"as":"self","p":"p5"}],"type":"build_done"},"k":"ev","t":68784}
+{"e":{"data":{"city":"c8","queue":"build"},"public":false,"t":68784,"to":[{"as":"self","p":"p5"}],"type":"queue_empty"},"k":"ev","t":68784}
+{"e":{"data":{"building":"quarry","city":"c12","item":6,"level":2},"public":false,"t":69214,"to":[{"as":"self","p":"p2"}],"type":"build_done"},"k":"ev","t":69214}
+{"e":{"data":{"building":"warehouse","city":"c10","item":5,"level":2},"public":false,"t":69343,"to":[{"as":"self","p":"p6"}],"type":"build_done"},"k":"ev","t":69343}
+{"e":{"data":{"city":"c5","count":4,"item":21,"queue":"barracks","unit":"raider"},"public":false,"t":69360,"to":[{"as":"self","p":"p5"}],"type":"recruit_done"},"k":"ev","t":69360}
+{"e":{"data":{"city":"c5","queue":"barracks"},"public":false,"t":69360,"to":[{"as":"self","p":"p5"}],"type":"queue_empty"},"k":"ev","t":69360}
+{"e":{"data":{"buildings":{"barracks":2,"hall":3,"harbor":1,"lumber":3,"mine":3,"quarry":3,"wall":0,"warehouse":2},"city":"c6","island":"i27","owner":"p6","queues":[{"building":"warehouse","end":69998,"item":15,"level":3,"queue":"build"},{"count":16,"done":2,"end":73038,"item":17,"queue":"barracks","unit":"raider"}],"report":"r243ap","siege":null,"stock":{"gold":283,"stone":736,"wood":367},"units":[{"owner":"p6","role":"home","units":{"guard":14,"raider":2,"transport":1}}],"wall":0},"public":false,"t":69500,"to":[{"as":"self","p":"p2"}],"type":"spy_report"},"k":"ev","t":69500}
+{"e":{"data":{"building":"warehouse","city":"c6","item":15,"level":3},"public":false,"t":69998,"to":[{"as":"self","p":"p6"}],"type":"build_done"},"k":"ev","t":69998}
+{"e":{"data":{"city":"c6","queue":"build"},"public":false,"t":69998,"to":[{"as":"self","p":"p6"}],"type":"queue_empty"},"k":"ev","t":69998}
+{"charge":"own","day":0,"k":"wake","reasons":["queue_empty c6"],"seat":"p6","t":70598,"turn":14,"urgent":false,"used":{"own":12,"social":1}}
+{"args":{"player":"p6"},"bytes":461,"k":"obs","n":570,"rt":0,"seat":"p6","t":70655,"tool":"view_player","turn":14}
+{"args":{},"bytes":3727,"k":"obs","n":571,"rt":0,"seat":"p6","t":70655,"tool":"view_map","turn":14}
+{"args":{"city":"c6"},"bytes":625,"k":"obs","n":572,"rt":0,"seat":"p6","t":70655,"tool":"view_city","turn":14}
+{"args":{"city":"c10"},"bytes":875,"k":"obs","n":573,"rt":0,"seat":"p6","t":70655,"tool":"view_city","turn":14}
+{"args":{"city":"c1"},"bytes":169,"k":"obs","n":574,"rt":1,"seat":"p6","t":70783,"tool":"view_city","turn":14}
+{"args":{"city":"c9"},"bytes":169,"k":"obs","n":575,"rt":1,"seat":"p6","t":70783,"tool":"view_city","turn":14}
+{"args":{"city":"c2"},"bytes":168,"k":"obs","n":576,"rt":1,"seat":"p6","t":70783,"tool":"view_city","turn":14}
+{"a":{"from":"c6","gold":300,"to":"c1","type":"spy"},"i":0,"k":"act","n":577,"r":{"ok":true},"rt":2,"seat":"p6","t":70831,"tool":"spy","turn":14}
+{"a":{"building":"quarry","city":"c10","type":"build"},"i":0,"k":"act","n":578,"r":{"ok":true},"rt":2,"seat":"p6","t":70831,"tool":"build","turn":14}
+{"k":"note","mode":"replace","n":579,"seat":"p6","t":70997,"text":"{\"v\":2,\"s\":\"rusher\",\"h\":\"65c93fbe27a0341d:6\",\"f\":{},\"m\":[],\"x\":{\"sc1\":70783},\"k\":[\"qa6gks\"]}","turn":14}
+{"calls":11,"k":"turn","next":{"at":86400,"kind":"self"},"rounds":4,"seat":"p6","selfAt":86400,"t":70997,"thought":"rusher D1 19:40:31: spy c1; build c10 quarry","turn":14,"why":"end_turn"}
+{"e":{"data":{"building":"mine","city":"c12","item":7,"level":2},"public":false,"t":71214,"to":[{"as":"self","p":"p2"}],"type":"build_done"},"k":"ev","t":71214}
+{"e":{"data":{"city":"c12","queue":"build"},"public":false,"t":71214,"to":[{"as":"self","p":"p2"}],"type":"queue_empty"},"k":"ev","t":71214}
+{"e":{"data":{"building":"quarry","city":"c11","item":8,"level":3},"public":false,"t":71488,"to":[{"as":"self","p":"p3"}],"type":"build_done"},"k":"ev","t":71488}
+{"charge":"own","day":0,"k":"wake","reasons":["self"],"seat":"p1","t":71926,"turn":13,"urgent":false,"used":{"own":11,"social":1}}
+{"h":"9c7a57f3f6707e86","hour":20,"k":"ckpt","t":72000}
+{"args":{"player":"p1"},"bytes":488,"k":"obs","n":580,"rt":0,"seat":"p1","t":72056,"tool":"view_player","turn":13}
+{"args":{},"bytes":3727,"k":"obs","n":581,"rt":0,"seat":"p1","t":72056,"tool":"view_map","turn":13}
+{"args":{"city":"c1"},"bytes":511,"k":"obs","n":582,"rt":0,"seat":"p1","t":72056,"tool":"view_city","turn":13}
+{"args":{"city":"c9"},"bytes":588,"k":"obs","n":583,"rt":0,"seat":"p1","t":72056,"tool":"view_city","turn":13}
+{"a":{"city":"c1","count":1,"type":"recruit","unit":"settler"},"i":0,"k":"act","n":584,"r":{"ok":true},"rt":1,"seat":"p1","t":72088,"tool":"recruit","turn":13}
+{"a":{"building":"warehouse","city":"c9","type":"build"},"i":0,"k":"act","n":585,"r":{"ok":true},"rt":1,"seat":"p1","t":72088,"tool":"build","turn":13}
+{"a":{"building":"hall","city":"c9","type":"build"},"i":1,"k":"act","n":586,"r":{"ok":true},"rt":1,"seat":"p1","t":72088,"tool":"build","turn":13}
+{"a":{"building":"barracks","city":"c9","type":"build"},"i":2,"k":"act","n":587,"r":{"ok":true},"rt":1,"seat":"p1","t":72088,"tool":"build","turn":13}
+{"a":{"building":"hall","city":"c9","type":"build"},"i":3,"k":"act","n":588,"r":{"ok":true},"rt":1,"seat":"p1","t":72088,"tool":"build","turn":13}
+{"calls":7,"k":"turn","next":{"at":86400,"kind":"self"},"rounds":3,"seat":"p1","selfAt":86400,"t":72147,"thought":"expander D1 20:01:28: recruit c1 1 settler; build c9 warehouse,hall,barracks,hall","turn":13,"why":"end_turn"}
+{"e":{"data":{"building":"lumber","city":"c13","item":7,"level":4},"public":false,"t":72674,"to":[{"as":"self","p":"p4"}],"type":"build_done"},"k":"ev","t":72674}
+{"e":{"data":{"building":"mine","city":"c9","item":9,"level":4},"public":false,"t":72751,"to":[{"as":"self","p":"p1"}],"type":"build_done"},"k":"ev","t":72751}
+{"e":{"data":{"city":"c6","count":16,"item":17,"queue":"barracks","unit":"raider"},"public":false,"t":73038,"to":[{"as":"self","p":"p6"}],"type":"recruit_done"},"k":"ev","t":73038}
+{"e":{"data":{"city":"c6","queue":"barracks"},"public":false,"t":73038,"to":[{"as":"self","p":"p6"}],"type":"queue_empty"},"k":"ev","t":73038}
+{"e":{"data":{"building":"hall","city":"c10","item":6,"level":3},"public":false,"t":73270,"to":[{"as":"self","p":"p6"}],"type":"build_done"},"k":"ev","t":73270}
+{"e":{"data":{"building":"warehouse","city":"c9","item":10,"level":2},"public":false,"t":74671,"to":[{"as":"self","p":"p1"}],"type":"build_done"},"k":"ev","t":74671}
+{"e":{"data":{"building":"mine","city":"c11","item":9,"level":3},"public":false,"t":74760,"to":[{"as":"self","p":"p3"}],"type":"build_done"},"k":"ev","t":74760}
+{"e":{"data":{"city":"c11","queue":"build"},"public":false,"t":74760,"to":[{"as":"self","p":"p3"}],"type":"queue_empty"},"k":"ev","t":74760}
+{"charge":"own","day":0,"k":"wake","reasons":["queue_empty c11"],"seat":"p3","t":75360,"turn":14,"urgent":false,"used":{"own":12,"social":1}}
+{"e":{"data":{"building":"harbor","city":"c10","item":7,"level":1},"public":false,"t":75451,"to":[{"as":"self","p":"p6"}],"type":"build_done"},"k":"ev","t":75451}
+{"args":{"player":"p3"},"bytes":521,"k":"obs","n":589,"rt":0,"seat":"p3","t":75486,"tool":"view_player","turn":14}
+{"args":{},"bytes":3727,"k":"obs","n":590,"rt":0,"seat":"p3","t":75486,"tool":"view_map","turn":14}
+{"args":{"city":"c3"},"bytes":510,"k":"obs","n":591,"rt":0,"seat":"p3","t":75486,"tool":"view_city","turn":14}
+{"args":{"city":"c11"},"bytes":494,"k":"obs","n":592,"rt":0,"seat":"p3","t":75486,"tool":"view_city","turn":14}
+{"h":"336129e16037c37d","hour":21,"k":"ckpt","t":75600}
+{"a":{"building":"warehouse","city":"c11","type":"build"},"i":0,"k":"act","n":593,"r":{"ok":true},"rt":1,"seat":"p3","t":75647,"tool":"build","turn":14}
+{"a":{"building":"lumber","city":"c11","type":"build"},"i":1,"k":"act","n":594,"r":{"ok":true},"rt":1,"seat":"p3","t":75647,"tool":"build","turn":14}
+{"a":{"building":"quarry","city":"c11","type":"build"},"i":2,"k":"act","n":595,"r":{"ok":true},"rt":1,"seat":"p3","t":75647,"tool":"build","turn":14}
+{"calls":6,"k":"turn","next":{"at":86400,"kind":"self"},"rounds":3,"seat":"p3","selfAt":86400,"t":75824,"thought":"turtle D1 21:00:47: build c11 warehouse,lumber,quarry","turn":14,"why":"end_turn"}
+{"e":{"data":{"buildings":{"barracks":2,"hall":3,"harbor":1,"lumber":4,"mine":4,"quarry":4,"wall":0,"warehouse":3},"city":"c1","island":"i22","owner":"p1","queues":[{"count":1,"done":0,"end":76997,"item":19,"queue":"barracks","unit":"settler"}],"report":"r0s5k6","siege":null,"stock":{"gold":299,"stone":701,"wood":768},"units":[{"owner":"p1","role":"home","units":{"guard":8,"transport":1}}],"wall":0},"public":false,"t":76247,"to":[{"as":"self","p":"p6"}],"type":"spy_report"},"k":"ev","t":76247}
+{"e":{"data":{"city":"c1","count":1,"item":19,"queue":"barracks","unit":"settler"},"public":false,"t":76997,"to":[{"as":"self","p":"p1"}],"type":"recruit_done"},"k":"ev","t":76997}
+{"e":{"data":{"city":"c1","queue":"barracks"},"public":false,"t":76997,"to":[{"as":"self","p":"p1"}],"type":"queue_empty"},"k":"ev","t":76997}
+{"e":{"data":{"building":"warehouse","city":"c11","item":10,"level":2},"public":false,"t":77392,"to":[{"as":"self","p":"p3"}],"type":"build_done"},"k":"ev","t":77392}
+{"e":{"data":{"building":"hall","city":"c9","item":11,"level":2},"public":false,"t":77551,"to":[{"as":"self","p":"p1"}],"type":"build_done"},"k":"ev","t":77551}
+{"charge":"own","day":0,"k":"wake","reasons":["queue_empty c1"],"seat":"p1","t":77597,"turn":14,"urgent":false,"used":{"own":12,"social":1}}
+{"e":{"data":{"building":"mine","city":"c10","item":8,"level":2},"public":false,"t":77632,"to":[{"as":"self","p":"p6"}],"type":"build_done"},"k":"ev","t":77632}
+{"args":{"player":"p1"},"bytes":504,"k":"obs","n":596,"rt":0,"seat":"p1","t":77633,"tool":"view_player","turn":14}
+{"args":{},"bytes":3727,"k":"obs","n":597,"rt":0,"seat":"p1","t":77633,"tool":"view_map","turn":14}
+{"args":{"city":"c1"},"bytes":520,"k":"obs","n":598,"rt":0,"seat":"p1","t":77633,"tool":"view_city","turn":14}
+{"args":{"city":"c9"},"bytes":691,"k":"obs","n":599,"rt":0,"seat":"p1","t":77633,"tool":"view_city","turn":14}
+{"a":{"from":"c1","island":"i19","slot":null,"type":"found_city","units":{"guard":2,"settler":1,"transport":1}},"i":0,"k":"act","n":600,"r":{"ok":true},"rt":1,"seat":"p1","t":77647,"tool":"found_city","turn":14}
+{"a":{"city":"c1","count":1,"type":"recruit","unit":"transport"},"i":0,"k":"act","n":601,"r":{"ok":true},"rt":1,"seat":"p1","t":77647,"tool":"recruit","turn":14}
+{"a":{"building":"warehouse","city":"c1","type":"build"},"i":0,"k":"act","n":602,"r":{"ok":true},"rt":1,"seat":"p1","t":77647,"tool":"build","turn":14}
+{"k":"note","mode":"replace","n":603,"seat":"p1","t":77693,"text":"{\"v\":2,\"s\":\"expander\",\"h\":\"65c93fbe27a0341d:6\",\"f\":{\"i19\":[83264]},\"m\":[],\"x\":{},\"k\":[\"q9syyk\"]}","turn":14}
+{"calls":9,"k":"turn","next":{"at":86400,"kind":"self"},"rounds":3,"seat":"p1","selfAt":86400,"t":77693,"thought":"expander D1 21:34:07: found i19 from c1; recruit c1 1 transport; build c1 warehouse","turn":14,"why":"end_turn"}
+{"e":{"data":{"building":"quarry","city":"c13","item":8,"level":4},"public":false,"t":77774,"to":[{"as":"self","p":"p4"}],"type":"build_done"},"k":"ev","t":77774}
+{"e":{"data":{"city":"c13","queue":"build"},"public":false,"t":77774,"to":[{"as":"self","p":"p4"}],"type":"queue_empty"},"k":"ev","t":77774}
+{"e":{"data":{"city":"c1","count":1,"item":20,"queue":"harbor","unit":"transport"},"public":false,"t":78847,"to":[{"as":"self","p":"p1"}],"type":"recruit_done"},"k":"ev","t":78847}
+{"e":{"data":{"city":"c1","queue":"harbor"},"public":false,"t":78847,"to":[{"as":"self","p":"p1"}],"type":"queue_empty"},"k":"ev","t":78847}
+{"e":{"data":{"building":"barracks","city":"c9","item":12,"level":1},"public":false,"t":79051,"to":[{"as":"self","p":"p1"}],"type":"build_done"},"k":"ev","t":79051}
+{"h":"c316d15bbb0a69b3","hour":22,"k":"ckpt","t":79200}
+{"e":{"data":{"building":"lumber","city":"c10","item":9,"level":3},"public":false,"t":80904,"to":[{"as":"self","p":"p6"}],"type":"build_done"},"k":"ev","t":80904}
+{"e":{"data":{"building":"warehouse","city":"c1","item":21,"level":4},"public":false,"t":81047,"to":[{"as":"self","p":"p1"}],"type":"build_done"},"k":"ev","t":81047}
+{"e":{"data":{"city":"c1","queue":"build"},"public":false,"t":81047,"to":[{"as":"self","p":"p1"}],"type":"queue_empty"},"k":"ev","t":81047}
+{"e":{"data":{"building":"lumber","city":"c11","item":11,"level":4},"public":false,"t":82028,"to":[{"as":"self","p":"p3"}],"type":"build_done"},"k":"ev","t":82028}
+{"h":"5446090825d80bc3","hour":23,"k":"ckpt","t":82800}
+{"e":{"data":{"city":"c14","island":"i19","owner":"p1","slot":0},"public":true,"t":83264,"to":[{"as":"self","p":"p1"}],"type":"city_founded"},"k":"ev","t":83264}
+{"e":{"data":{"building":"hall","city":"c9","item":13,"level":3},"public":false,"t":83371,"to":[{"as":"self","p":"p1"}],"type":"build_done"},"k":"ev","t":83371}
+{"e":{"data":{"city":"c9","queue":"build"},"public":false,"t":83371,"to":[{"as":"self","p":"p1"}],"type":"queue_empty"},"k":"ev","t":83371}
+{"e":{"data":{"building":"quarry","city":"c10","item":10,"level":3},"public":false,"t":84176,"to":[{"as":"self","p":"p6"}],"type":"build_done"},"k":"ev","t":84176}
+{"e":{"data":{"city":"c10","queue":"build"},"public":false,"t":84176,"to":[{"as":"self","p":"p6"}],"type":"queue_empty"},"k":"ev","t":84176}
+{"e":{"data":{"reason":"time","winners":["p1"]},"public":true,"t":86400,"to":[],"type":"match_ended"},"k":"ev","t":86400}
+{"h":"251c4a2163559ea4","k":"end","result":{"endedAt":86400,"reason":"time","standings":[{"alive":true,"cities":3,"parts":{"battleScore":0,"cityPoints":345},"player":"p1","rank":1,"score":345},{"alive":true,"cities":2,"parts":{"battleScore":0,"cityPoints":238},"player":"p3","rank":2,"score":238},{"alive":true,"cities":2,"parts":{"battleScore":0,"cityPoints":234},"player":"p4","rank":3,"score":234},{"alive":true,"cities":2,"parts":{"battleScore":0,"cityPoints":233},"player":"p5","rank":4,"score":233},{"alive":true,"cities":2,"parts":{"battleScore":0,"cityPoints":233},"player":"p6","rank":5,"score":233},{"alive":true,"cities":2,"parts":{"battleScore":0,"cityPoints":230},"player":"p2","rank":6,"score":230}],"winners":["p1"]},"t":86400}
