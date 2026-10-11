@@ -2301,3 +2301,111 @@ Every gap was applied: the freeze-guard test in the default suite (§13.5), the 
 9. **Same-second order in real time: receipt order, a deliberate deviation from the brief.** The brief says same-second actions are applied "in a seeded order, recorded in the log". Lockstep does that. Real time applies receipt order, which is logged, so replay is unaffected; seeding the order would mean holding every action until its second ends, which delays every real-time result. `docs/brief.md` ("Game loop") still says "seeded order"; its owner should update it.
 10. **Hand-offs: runtime support now**, not only a reserved line kind. `RunMatchOptions.handoffs` plus the `controller` line let Level G rebuild a handed-off match, and the log format is cheapest to extend before the goldens exist.
 11. **ASCII names and ASCII case folding** (found while applying the approximated-maths fix): Unicode property classes and full case mapping depend on the runtime's Unicode tables, like `Intl`.
+
+---
+
+## 17. Deviations
+
+Every place where the code differs from this document, or adds to it, as of the phase-1 freeze (T17). Each one is also noted where it is defined and pinned by a test. Where this document and the code disagree, the code and this section win until the sections above are amended.
+
+### 17.1 Recorded by earlier tasks
+
+- **Gateway seat functions (§8.2, §8.4, §8.5, §10.5; T07, T16).** The full list is in the header of `gateway/src/seat/index.ts`. In short:
+  - `requestSelfWake(seat, at, now)` and `writeNote(s, text, mode, max, t)` take the call time. The clamp range of §8.3 starts at the `end_turn` call time, and every `ToolResult` carries `t`.
+  - The folds of §10.5 are `wake.begin` then `briefed`, `closeTurn`, `recordAct` and `recordGw`.
+  - `WakeScheduler` also has `rules` and `peek(seat)`. The state adds `SeatWake.urgentReasons`, `SeatWake.deferTo`, `SeatState.lastBriefingE` and `SeatState.turnFailures`.
+  - A seat's news is the feed after the delivery number of its last briefing, not after a time, and leaves out events already in its inbox.
+  - `lastTurn.unseen` folds repeated `TURN_OVER` and `CALLS_CAP` rejections into one entry per code, with a `count`.
+  - `wake.begin` drains an urgent reason only once its `urgentMinGap` has passed.
+  - `deliver` eliminates the seat on `player_eliminated`.
+  - `seatErrorText` words the gateway's own cap codes, so the rebuild can regenerate them.
+- **`read_notes` numbering (§8.4; T16).** `ArchiveHit.e` and `ArchiveEntry.e` number only the entries the seat can read (its archive and the public feed), not the global delivery number, which let a seat count hidden events between two of its entries (P15).
+- **`INTERNAL` in the rebuild (§10.5; T16).** An `INTERNAL` whose explainer throws is regenerated with the host's fixed `INTERNAL_FALLBACK` text, as the live host words it, not as the bare code.
+- **`TurnHandle.close(failure?)` (§9.1; T08).** It takes the agent failure instead of `error?: string`, so a timed-out round is logged as `why: "timeout"`.
+- **Gateway presentation additions (§8.1, §8.2; T13).**
+  - `view_city` of an own or allied city lists `outgoing` movements, as far as `movementAccess` grants.
+  - Briefing `events` and `news` entries carry `at`, the time the event happened.
+  - `more` also names a call for truncated `events`.
+  - When even the newest message does not fit with a 300-character cut, it is kept, cut shorter (down to `MESSAGE_MIN_CUT`).
+- **Boundary scan (§13.4; T16).** The `read_notes` scope literal `"mine"` collides with the `perfidia-1` building id. It is allowed in `seat/archive.ts` and `present/briefing.ts` only; §13.4 excepts only `build`.
+- **`perfidia-1` standings while the match runs (ruleset §13.2; T16).** Ties are broken by cities, then the public tie-break order. Battle points, which §12 keeps private, break ties only in the final ranking of §13.4. Under P10 the order of tied players showed raw battle points. This is a clarification of `perfidia-1@1.0.0`, frozen in its fingerprint; ruleset §13.2 should say so.
+- **`perfidia-1` config bounds (§16; T06).** The schema adds upper bounds (table sizes, tiles, paces, jitter) so that no schema-valid config makes `compile` or `createWorld` throw or lose integer exactness (§3.6).
+- **`sim run --trace-hashes` (§5.3, §12.1; T15).** `runMatch` has no option to forward the engine's trace, so the trace is computed by a Level E replay of the written log. A test checks that it agrees with the engine's own trace.
+- **`sim batch` and test rulesets (§12.1; T15).** `batch` runs test rulesets such as `sandbox-1` without `--allow-test` and prints a note, since the batch table of §12.2 compares them with `perfidia-1`.
+
+### 17.2 Introduced by T17
+
+- **`scenario-late` overrides (§13.5).** The scenario is `sim/src/exit/scenario.ts`: one scripted agent per seat (label `scenario:late@1`), seed 1, six seats, lockstep, strict, step invariants. It ends by domination at t = 15600, in about 4 h 20. The overrides change only numbers, but they are not the example set of §13.5:
+  - `time.matchEnd=86400`, `time.protectionEnd=0`, `time.capitalImmunityEnd=3600`, `time.siegeDuration=7200`, `time.pactDuration=7200`, `time.dominationStart=7200` and `time.dominationHold=3600`.
+  - `siegeDuration` is 7200, not 3600, so that a relief and a homecoming launched at the siege start land before its end (travel is at least `minTravel`).
+  - `units.transport.seaPace=20` and `movement.homeboundPace=20` put neighbouring capitals 1 h apart.
+  - `start.capital.units={"guard":10,"raider":200,"settler":4,"transport":20}` gives every capital an army in its seed: one object-valued override of the seed's unit counts.
+  - `victory.dominationPm=375` and `victory.dominationMinPerPlayer=0` set the domination threshold to 3 of the 8 cities.
+- **Writing `scenario-late` (§12.1, §13.5).** `sim golden --update` writes it through the same add-only writer as the bot goldens. A `GoldenSpec` is either a bot run or a scripted scenario. A scenario golden is kept when its name exists, and a changed script needs a new name. Its coverage (siege, relief, homecoming, a capital conquered from a player who keeps a fallback city, with that player's army abroad re-homed there, elimination, pact expiry, superseded pact, domination start, cancel and win) is asserted from its lines in `golden.test.ts`. So is a re-run of the scenario, byte for byte (normalised). Both run in the default suite.
+- **Bot tuning (§11.2, before the first goldens).** The `expander` accepts every pact and one alliance while it has none; before, it declined every alliance. Only opportunists offer alliances, and both the expander and the rusher declined them. On `perfidia-1`, 12 seats, 7 days, `time.dominationStart=604801`, seeds 1–10:
+  - matches with an alliance went from 5/10 to 7/10;
+  - matches with a betrayal went from 3/10 to 7/10.
+
+  Labels stay `@1`: no golden existed before the change (§11.1).
+
+- **Exit suite details (§13.7, §13.8).**
+  - Seed 1 for every run.
+  - The system-clock runs use speed 86400 (one game day per wall second), at which the bots still play whole turns.
+  - The CI limits of §13.8 are asserted; the targets are printed.
+  - The exit suite also runs `batch` twice with its variant order reversed at full scale: `perfidia-1` and `sandbox-1`, 2 seeds, 12 seats, 7 days.
+  - The CI `exit` job (20 min timeout) also runs `bun run sim -- golden --check`, as the merge gate does.
+- **Placeholders (§2.2, §15.1).** `PROTOCOL_PACKAGE`, `ENGINE_PACKAGE`, `GATEWAY_PACKAGE` and `BOTS_PACKAGE` are removed, and tests assert that they are gone.
+
+### 17.3 Measured at the freeze
+
+**Exit runs (§13.7, §13.8).** Seed 1, 12 seats (3 of each bot), 7 game days, on an Apple M4 Pro laptop; `bun run test:exit` took 49 s, and the timed runs follow a 1-day warm-up match of each ruleset. Every run ended at t = 604800 by time, with no `fatal` and no `INTERNAL`, and passed Level E. Lockstep and virtual-clock second runs were identical; system-clock runs depend on wall time and vary from run to run. The published defaults run started no domination countdown: at day 7 the threshold, `max(2N, 40%)` of about 73 cities, is 30, and no bloc reached it.
+
+| Run                             | Wall   | Level E | Battles | Conquests | Alliances | Betrayals |
+| ------------------------------- | ------ | ------- | ------- | --------- | --------- | --------- |
+| `perfidia-1` lockstep           | 2.48 s | 0.37 s  | 62      | 6         | 2         | 1         |
+| `perfidia-1` virtual, speed 3   | 2.32 s | 0.38 s  | 65      | 7         | 2         | 2         |
+| `perfidia-1` system, 86400×     | 7.07 s | 0.42 s  | 88      | 6         | 2         | 2         |
+| `sandbox-1` lockstep            | 1.26 s | 0.24 s  | 29      | 5         | 2         | 0         |
+| `sandbox-1` virtual, speed 3    | 1.25 s | 0.23 s  | 36      | 8         | 2         | 0         |
+| `sandbox-1` system, 86400×      | 7.07 s | 0.24 s  | 45      | 6         | 2         | 0         |
+| `perfidia-1` published defaults | 2.19 s | 0.38 s  | 62      | 6         | 2         | 1         |
+
+Against the budget of §13.8, every target is met:
+
+- lockstep 2.5 s (target 5 s, CI limit 20 s);
+- real time under `VirtualTime` 2.3 s (10 s, 40 s);
+- Level E replay of a 7-day log 0.37 s (3 s, 15 s);
+- full state hash at day 7 0.96 ms, p95 of 20 (10 ms);
+- briefing build p95 0.14 ms (1 ms);
+- default `bun test` suite 50 s, the golden replays included (90 s).
+
+**Pacing report (`perfidia-1` §19.5, §13.9), reported and never asserted.** `sim batch --pacing`, `perfidia-1@1.0.0` defaults, the four bots, seeds 1–10, 7 days. Each cell is the mean over the 10 matches, measured at the end of the day. The min and max of cities are over every player of every match. Battles and sieges count that day's events only. The table shows days 1, 3, 5 and 7.
+
+| N   | Day | Cities / player (min–max) | Free slots | Army pop | Score | Battles | Sieges started / held / broken |
+| --- | --- | ------------------------- | ---------- | -------- | ----- | ------- | ------------------------------ |
+| 6   | D1  | 2.0 (2–2)                 | 30.0       | 19.6     | 232.9 | 0.1     | 0 / 0 / 0                      |
+| 6   | D3  | 3.6 (2–5)                 | 20.3       | 217.0    | 474.4 | 8.2     | 0 / 0 / 0                      |
+| 6   | D5  | 5.0 (2–8)                 | 11.7       | 693.0    | 709.7 | 7.2     | 1.9 / 1.8 / 0                  |
+| 6   | D7  | 6.2 (2–11)                | 4.6        | 1445.3   | 910.7 | 15.5    | 0.5 / 0.5 / 0                  |
+| 8   | D1  | 2.0 (2–2)                 | 32.0       | 18.8     | 233.7 | 0.1     | 0 / 0 / 0                      |
+| 8   | D3  | 3.9 (2–5)                 | 17.0       | 213.3    | 506.5 | 8.9     | 0 / 0 / 0                      |
+| 8   | D5  | 5.2 (2–8)                 | 6.1        | 719.3    | 734.8 | 9.6     | 1.7 / 1.5 / 0.2                |
+| 8   | D7  | 6.0 (3–10)                | 0.1        | 1507.3   | 885.6 | 11.8    | 1.1 / 1.1 / 0                  |
+| 12  | D1  | 2.0 (2–2)                 | 48.0       | 18.9     | 233.7 | 0.2     | 0 / 0 / 0                      |
+| 12  | D3  | 3.8 (2–5)                 | 26.2       | 216.6    | 499.3 | 15.0    | 0.1 / 0.1 / 0                  |
+| 12  | D5  | 5.2 (2–8)                 | 9.3        | 727.3    | 733.3 | 16.7    | 2.0 / 2.0 / 0                  |
+| 12  | D7  | 6.0 (2–10)                | 0.1        | 1481.6   | 886.4 | 19.6    | 0.6 / 0.5 / 0.1                |
+
+Winners by strategy:
+
+- N = 6: expander 7, opportunist 3;
+- N = 8: expander 6, opportunist 4;
+- N = 12: opportunist 7, expander 3.
+
+There were no eliminations. Against the §19.5 criteria:
+
+- **Free land gone by day 4–5: missed.** At the end of D5, 11.7 (N = 6), 6.1 (N = 8) and 9.3 (N = 12) free slots are left. Land is nearly gone (0.1 slot left) only at the end of D7 for N = 8 and 12, and 4.6 slots are still free then for N = 6.
+- **At least one siege per player-pair border by day 5: missed.** By the end of D5, matches have started 2.2 (N = 6, 6 borders), 2.2 (N = 8, 8 borders) and 3.3 (N = 12, 12 borders) sieges.
+- **No bot type winning more than 60% of seeds: missed for N = 6 and 12, met for N = 8.** The expander wins 70% at N = 6 and 60% at N = 8, and the opportunist wins 70% at N = 12. The rusher and the turtle never win.
+
+These numbers are proposals for `perfidia-1@1.1.0`. `perfidia-1@1.0.0` does not change. Bots alone may miss the criteria (§13.9), so the gap is a property of these bots and these rules together.

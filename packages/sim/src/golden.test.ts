@@ -1,0 +1,234 @@
+// The freeze guard (docs/architecture.md §13.5, §13.6), in the default suite on purpose: every
+// `bun test` replays every committed golden at Level E (and Level G when its controllers are bots
+// of this build), recomputes the ruleset fingerprints, and checks that every published ref keeps a
+// golden and a fingerprint entry. The same check must fail on a tampered temporary copy of the
+// fixtures and on a `perfidia-1` descriptor whose cheat sheet changed. The goldens' coverage claims
+// of §13.5 are asserted from their own lines.
+
+import { describe, expect, test } from "bun:test";
+import { cpSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { RULESETS, getRuleset, verifyLog, type AnyRuleset } from "@perfidia/engine";
+import type { EvLine, LogLine } from "@perfidia/protocol";
+import { SCENARIO_LATE_LABEL, runScenarioLate } from "./exit/scenario.ts";
+import { FIXTURES_DIR } from "./golden/index.ts";
+import {
+  FINGERPRINTS_FILE,
+  checkGoldens,
+  jsonlText,
+  listGoldens,
+  normalisedText,
+  readFingerprints,
+  readJsonl,
+  type GoldenFile,
+} from "./harness/index.ts";
+
+const PERFIDIA = "perfidia-1@1.0.0";
+const SANDBOX = "sandbox-1@1.0.0";
+
+function golden(ref: string, name: string): GoldenFile {
+  const g = listGoldens(FIXTURES_DIR).find((x) => x.ref === ref && x.name === name);
+  if (g === undefined) throw new Error(`golden ${ref}/${name} is not committed`);
+  return g;
+}
+
+/** A temporary copy of the committed fixtures. */
+function fixturesCopy(): string {
+  const dir = mkdtempSync(join(tmpdir(), "perfidia-golden-guard-"));
+  cpSync(FIXTURES_DIR, dir, { recursive: true });
+  return dir;
+}
+
+const evs = (lines: readonly LogLine[], type: string): EvLine[] =>
+  lines.filter((l): l is EvLine => l.k === "ev" && l.e.type === type);
+
+const field = (l: EvLine, key: string): unknown =>
+  Object.hasOwn(l.e.data, key) ? l.e.data[key] : undefined;
+
+describe("the freeze guard", () => {
+  test("every golden replays with its recorded final hash, and every fingerprint matches", async () => {
+    const report = await checkGoldens(FIXTURES_DIR, RULESETS);
+    expect(report.problems).toEqual([]);
+    expect(report.ok).toBe(true);
+    // The goldens of §13.5; Level G runs for the bot goldens, not for the scripted scenario.
+    expect(report.goldens.map((g) => `${g.ref}/${g.name} ${g.levelG}`)).toEqual([
+      `${PERFIDIA}/lockstep-6p-4d pass`,
+      `${PERFIDIA}/rt-virtual-6p-1d pass`,
+      `${PERFIDIA}/scenario-late skipped`,
+      `${SANDBOX}/lockstep-6p-3d pass`,
+      `${SANDBOX}/rt-virtual-6p-1d pass`,
+    ]);
+    // Every published ref of the registry has at least one golden and a fingerprint entry.
+    const fp = readFingerprints(FIXTURES_DIR);
+    const published = RULESETS.filter((rs) => rs.status === "published");
+    expect(published.map((rs) => rs.ref)).toContain(PERFIDIA);
+    for (const rs of published) {
+      expect(report.goldens.some((g) => g.ref === rs.ref)).toBe(true);
+      expect(fp[rs.ref]?.artefacts).toBe(report.fingerprints[rs.ref] ?? "");
+      expect(Object.keys(fp[rs.ref]?.goldens ?? {}).length).toBeGreaterThan(0);
+    }
+    for (const g of report.goldens) expect(fp[g.ref]?.goldens[g.name]).toBe(g.finalHash ?? "");
+  }, 60000);
+
+  test("a tampered copy of the fixtures fails: a flipped result, then a deleted golden", async () => {
+    const dir = fixturesCopy();
+    try {
+      const g = listGoldens(dir).find((x) => x.ref === PERFIDIA && x.name === "scenario-late");
+      if (g === undefined) throw new Error("no scenario-late in the copy");
+      const lines = readJsonl(g.path);
+      const at = lines.findIndex((l) => l.k === "act" && l.r.ok);
+      const act = lines[at];
+      if (act?.k !== "act") throw new Error("no accepted action");
+      writeFileSync(
+        g.path,
+        jsonlText(lines.with(at, { ...act, r: { ok: false, code: "QUEUE_FULL" } })),
+      );
+      const flipped = await checkGoldens(dir, RULESETS, { levelG: false });
+      expect(flipped.ok).toBe(false);
+      expect(flipped.problems).toEqual([
+        `golden ${PERFIDIA}/scenario-late: Level E: result divergence at t = ${act.t} (n ${act.n}): expected {"code":"QUEUE_FULL","ok":false}, got {"ok":true}`,
+      ]);
+
+      rmSync(g.path);
+      const deleted = await checkGoldens(dir, RULESETS, { levelG: false });
+      expect(deleted.ok).toBe(false);
+      expect(deleted.problems).toEqual([
+        `golden ${PERFIDIA}/scenario-late is recorded in ${FINGERPRINTS_FILE} but missing`,
+      ]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }, 60000);
+
+  test("a perfidia-1 descriptor whose cheat sheet changed fails", async () => {
+    const original = getRuleset(PERFIDIA);
+    const altered: AnyRuleset = {
+      ...original,
+      cheatSheet: (config, rules) => `${original.cheatSheet(config, rules)}\n`,
+    };
+    const rulesets = RULESETS.map((rs) => (rs.ref === PERFIDIA ? altered : rs));
+    const report = await checkGoldens(FIXTURES_DIR, rulesets, { levelG: false });
+    expect(report.ok).toBe(false);
+    expect(report.problems).toHaveLength(1);
+    expect(report.problems[0]).toContain(`${FINGERPRINTS_FILE}: ${PERFIDIA}'s artefacts changed`);
+  }, 60000);
+});
+
+describe("what the goldens cover (§13.5)", () => {
+  test("lockstep-6p-4d: the default config with the four bots, past capital immunity and the domination opening", () => {
+    const lines = readJsonl(golden(PERFIDIA, "lockstep-6p-4d").path);
+    const header = lines[0];
+    if (header?.k !== "header") throw new Error("no header");
+    expect(header.setup.overrides).toEqual({ "time.matchEnd": 345600 });
+    expect(header.clock).toEqual({ kind: "lockstep", maxTurnsPerSecond: 3 });
+    expect(new Set(Object.values(header.controllers))).toEqual(
+      new Set(["bot:expander@1", "bot:rusher@1", "bot:turtle@1", "bot:opportunist@1"]),
+    );
+    const end = lines.at(-1);
+    if (end?.k !== "end") throw new Error("no end line");
+    expect(end.t).toBeGreaterThanOrEqual(259200);
+    expect(evs(lines, "battle").length).toBeGreaterThan(0);
+  });
+
+  test("rt-virtual-6p-1d: real time under VirtualTime, speed 3, latency 2–60 s", () => {
+    for (const ref of [PERFIDIA, SANDBOX]) {
+      const header = readJsonl(golden(ref, "rt-virtual-6p-1d").path)[0];
+      expect(header).toMatchObject({
+        k: "header",
+        clock: { kind: "realtime", speed: [3, 1], time: "virtual", latencyMs: [2000, 60000] },
+      });
+    }
+  });
+
+  test("sandbox-1 lockstep-6p-3d runs past hill_open", () => {
+    const end = readJsonl(golden(SANDBOX, "lockstep-6p-3d").path).at(-1);
+    if (end?.k !== "end") throw new Error("no end line");
+    expect(end.t).toBeGreaterThan(172800);
+  });
+
+  test("scenario-late: siege, relief, homecoming, capital conquest with re-homing, elimination, pact expiry and supersession, domination start, cancel and win", () => {
+    const lines = readJsonl(golden(PERFIDIA, "scenario-late").path);
+    const header = lines[0];
+    if (header?.k !== "header") throw new Error("no header");
+    expect(new Set(Object.values(header.controllers))).toEqual(new Set([SCENARIO_LATE_LABEL]));
+
+    expect(evs(lines, "siege_started").length).toBeGreaterThanOrEqual(1);
+    const kinds = evs(lines, "battle").map((l) => field(l, "kind"));
+    expect(kinds).toContain("relief");
+    expect(kinds).toContain("homecoming");
+    expect(evs(lines, "incoming_attack").some((l) => field(l, "homecoming") === true)).toBe(true);
+    // The siege held through both: no siege was broken.
+    expect(evs(lines, "siege_broken")).toEqual([]);
+    expect(evs(lines, "player_eliminated").length).toBeGreaterThanOrEqual(1);
+    expect(evs(lines, "pact_expired").length).toBeGreaterThanOrEqual(1);
+    expect(evs(lines, "pact_ended").map((l) => field(l, "cause"))).toContain("superseded");
+
+    // A capital conquered from a player who keeps another city: units of the former owner homed in
+    // the capital and stationed elsewhere are re-homed to its fallback city (its oldest city left).
+    const eliminated = new Set(evs(lines, "player_eliminated").map((l) => field(l, "player")));
+    const conquest = evs(lines, "city_conquered").find((l) => {
+      const city = String(field(l, "city"));
+      const from = field(l, "from");
+      return /^c[1-6]$/.test(city) && typeof from === "string" && !eliminated.has(from);
+    });
+    if (conquest === undefined) throw new Error("no capital conquered from a surviving player");
+    const capital = String(field(conquest, "city"));
+    const owner = String(field(conquest, "from"));
+    const groups = (state: {
+      cities: Readonly<Record<string, { stationed: readonly { owner: string; home: string }[] }>>;
+    }): string[] =>
+      Object.entries(state.cities).flatMap(([id, c]) =>
+        c.stationed.filter((g) => g.owner === owner).map((g) => `${g.home}@${id}`),
+      );
+    let before: string[] = [];
+    let after: string[] = [];
+    let fallback: string | null = null;
+    let seen = false;
+    const report = verifyLog(lines, {
+      onLine: (line, r) => {
+        if (line === conquest) {
+          seen = true;
+          const own = Object.values(r.state.cities)
+            .filter((c) => c.owner === owner)
+            .map((c) => c.id)
+            .toSorted((a, b) => Number(a.slice(1)) - Number(b.slice(1)));
+          fallback = own[0] ?? null;
+        }
+        if (!seen) before = groups(r.state);
+        else after = groups(r.state);
+      },
+    });
+    expect(report.ok).toBe(true);
+    expect(fallback).not.toBeNull();
+    const abroad = before.filter((g) => g.startsWith(`${capital}@`));
+    expect(abroad.length).toBeGreaterThan(0);
+    expect(after.filter((g) => g.startsWith(`${capital}@`))).toEqual([]);
+    for (const g of abroad) expect(after).toContain(g.replace(`${capital}@`, `${fallback}@`));
+
+    // Domination: a countdown starts, is cancelled, and a later one wins.
+    const started = evs(lines, "domination_started");
+    const cancelled = evs(lines, "domination_cancelled");
+    expect(started.length).toBeGreaterThanOrEqual(2);
+    expect(cancelled.length).toBeGreaterThanOrEqual(1);
+    const firstStart = started[0];
+    const lastStart = started.at(-1);
+    const cancel = cancelled[0];
+    if (firstStart === undefined || lastStart === undefined || cancel === undefined)
+      throw new Error("unreachable");
+    expect(field(cancel, "key")).toBe(field(firstStart, "key"));
+    expect(cancel.t).toBeGreaterThanOrEqual(firstStart.t);
+    expect(lastStart.t).toBeGreaterThanOrEqual(cancel.t);
+    const end = lines.at(-1);
+    if (end?.k !== "end") throw new Error("no end line");
+    expect(end.result.reason).toBe("domination");
+    expect(end.result.winners as unknown).toEqual(field(lastStart, "members"));
+    expect(end.t).toBe(Number(field(lastStart, "endsAt")));
+  });
+
+  test("the scenario agent still plays scenario-late byte for byte", async () => {
+    const lines = readJsonl(golden(PERFIDIA, "scenario-late").path);
+    const again = await runScenarioLate();
+    expect(normalisedText(again.lines)).toBe(normalisedText(lines));
+  });
+});

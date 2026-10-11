@@ -10,6 +10,3 @@ export * from "./runtime/index.ts";
 // progress) keeps the name here, the clock's (why a driver closed a turn) is renamed.
 export type { TurnFailure } from "./seat/index.ts";
 export type { TurnFailure as ClockTurnFailure } from "./clock/index.ts";
-
-// Placeholder kept until T17 removes it (§15.1); new code never imports it.
-export const GATEWAY_PACKAGE = "@perfidia/gateway";

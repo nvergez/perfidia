@@ -82,7 +82,7 @@ describe("the bound API", () => {
     expect(typeof engine.stockAt).toBe("function");
     expect(typeof engine.recruitMax).toBe("function");
     expect(engine.ENGINE_VERSION).toBe("0.1.0");
-    expect(engine.ENGINE_PACKAGE).toBe("@perfidia/engine");
+    expect("ENGINE_PACKAGE" in engine).toBe(false);
     expect(Object.keys(engine.domain.actions)).toEqual(ACTION_TYPES.filter((t) => t !== "ext"));
     expect(Object.keys(engine.domain.events)).toEqual([
       "build_done",

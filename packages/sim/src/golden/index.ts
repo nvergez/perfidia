@@ -5,7 +5,9 @@ export {
   GOLDEN_SPECS,
   checkFixtures,
   updateGoldens,
+  type BotGoldenSpec,
   type GoldenSpec,
+  type ScenarioGoldenSpec,
   type GoldenUpdate,
 } from "./golden.ts";
 export { GOLDEN_USAGE, goldenCommand } from "./command.ts";

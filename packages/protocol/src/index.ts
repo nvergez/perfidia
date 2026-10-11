@@ -18,6 +18,3 @@ export * from "./briefing.ts";
 export * from "./tools.ts";
 export * from "./log.ts";
 export type * from "./agent.ts";
-
-// Placeholder kept until T17 removes it (§15.1); new code never imports it.
-export const PROTOCOL_PACKAGE = "@perfidia/protocol";
