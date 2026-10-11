@@ -665,6 +665,17 @@ function schemaError(env: ToolEnv, error: z.ZodError): ToolError {
 }
 
 /**
+ * The wording of `INTERNAL` when the explainer itself fails; `rebuildGatewayState` (§10.5)
+ * regenerates the same `lastTurn` message from it.
+ */
+export const INTERNAL_FALLBACK: { readonly message: string; readonly hint: string } = Object.freeze(
+  {
+    message: "The gateway failed on this call; nothing was applied.",
+    hint: "Send the call again; if it fails again, do something else.",
+  },
+);
+
+/**
  * The `INTERNAL` result of a call whose gateway code threw before it changed anything (§7.3):
  * explained when the explainer works, else a fixed text.
  */
@@ -673,13 +684,7 @@ export function internalError(match: Match, seat: PlayerId, gw: GatewayState): T
     return toolError(violation("INTERNAL", {}), { r: match.read(), seat, gw });
   } catch (e) {
     if (isFatal(e)) throw e;
-    return {
-      ok: false,
-      t: match.now,
-      code: "INTERNAL",
-      message: "The gateway failed on this call; nothing was applied.",
-      hint: "Send the call again; if it fails again, do something else.",
-    };
+    return { ok: false, t: match.now, code: "INTERNAL", ...INTERNAL_FALLBACK };
   }
 }
 

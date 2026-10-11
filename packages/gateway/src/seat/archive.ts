@@ -100,10 +100,28 @@ function pool(gw: GatewayState, seat: PlayerId, scope: "mine" | "public" | "all"
   return merged;
 }
 
-function toHit(d: Delivered): ArchiveHit {
+/**
+ * The number each entry the seat can read (its archive and the public feed) shows as `e`: its
+ * position among those entries in delivery order, from 1. The gateway's own delivery number counts
+ * every delivered event, the private events of other seats included, so showing it would let a
+ * seat count hidden activity between two of its entries (P15, found by the T16 hardening).
+ */
+function readableNumbers(gw: GatewayState, seat: PlayerId): Map<number, number> {
+  const numbers = new Map<number, number>();
+  for (const [i, d] of pool(gw, seat, "all").entries()) numbers.set(d.e, i + 1);
+  return numbers;
+}
+
+function numberOf(numbers: ReadonlyMap<number, number>, d: Delivered): number {
+  const n = numbers.get(d.e);
+  if (n === undefined) throw new Error(`archive: delivery ${d.e} is not readable by the seat`);
+  return n;
+}
+
+function toHit(d: Delivered, numbers: ReadonlyMap<number, number>): ArchiveHit {
   const ev = d.event;
   return {
-    e: d.e,
+    e: numberOf(numbers, d),
     t: [ev.t, fmtTime(ev.t)],
     type: ev.type,
     public: ev.public,
@@ -148,7 +166,11 @@ export function searchArchivePage(
     return true;
   });
   matches.sort((a, b) => b.event.t - a.event.t || b.e - a.e);
-  return { hits: matches.slice(0, limit).map(toHit), more: matches.length > limit };
+  const numbers = readableNumbers(gw, seat);
+  return {
+    hits: matches.slice(0, limit).map((d) => toHit(d, numbers)),
+    more: matches.length > limit,
+  };
 }
 
 /** `searchArchivePage`'s hits alone: newest first by `(t, e)`, at most 20 (§8.4). */
@@ -163,11 +185,13 @@ export function searchArchive(gw: GatewayState, seat: PlayerId, q: ArchiveQuery)
  * recipients are routing metadata, never shown (see `involves`).
  */
 export function openArchive(gw: GatewayState, seat: PlayerId, id: string): ArchiveEntry | null {
-  const d = pool(gw, seat, "all").find((entry) => entryId(entry.event) === id);
+  const all = pool(gw, seat, "all");
+  const i = all.findIndex((entry) => entryId(entry.event) === id);
+  const d = all[i];
   if (d === undefined) return null;
   const ev = copyEvent(d.event);
   return {
-    e: d.e,
+    e: i + 1,
     t: [ev.t, fmtTime(ev.t)],
     type: ev.type,
     public: ev.public,

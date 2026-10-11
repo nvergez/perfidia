@@ -20,7 +20,7 @@ import {
 } from "./domination.ts";
 import { DOMINATION_CANCELLED, DOMINATION_STARTED, type CountdownCancelReason } from "./events.ts";
 import { type BlocKey, type PairKey, pairKey } from "./ext.ts";
-import { computeStandings, scoreRows, timeWinner } from "./scoring.ts";
+import { computeStandings, scoreRows, standingsOf, timeWinner } from "./scoring.ts";
 import { announceHomecoming, breakSiege, garrisonSettlers } from "./siege.ts";
 
 // Victory and the bookkeeping that runs after every step (perfidia-1 §8.8, §9.3, §13): relation
@@ -241,9 +241,19 @@ export function onDominationEnd(ctx: PCtx, ev: ScheduledEvent): void {
   });
 }
 
-/** `hooks.standings`: public score parts only (§13.2), the winners first once the match is over. */
+/**
+ * `hooks.standings`: public score parts only (§13.2). While the match runs, players with the same
+ * score are ordered by public data only (cities, then the public tie-break order): raw battle
+ * points, the third key of the final ranking (§13.4), would otherwise show through the order of
+ * tied players (§12). Once the match is over, the final ranking, the winners first.
+ */
 export function standings(r: PRead): Standing[] {
-  return computeStandings(r.config, r.state, r.ext(), r.state.result?.winners ?? []);
+  const result = r.state.result;
+  if (result !== null) return computeStandings(r.config, r.state, r.ext(), result.winners);
+  const rows = scoreRows(r.config, r.state, r.ext()).map((row) =>
+    Object.assign(row, { battlePoints: 0 }),
+  );
+  return standingsOf(rows, [], r.ext().tiebreak);
 }
 
 /**

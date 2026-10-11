@@ -870,3 +870,46 @@ describe("hand-off and agent bookkeeping", () => {
     expect(String(otherRuleset)).toContain("setup.ruleset");
   });
 });
+
+describe("boundary copies to the sink (§6.6, P16)", () => {
+  test("a sink that changes the lines it receives changes neither the log nor the gateway state", async () => {
+    const setup = setupOf(SANDBOX, 2, { "time.matchEnd": 7200 });
+    const play = async (vandal: boolean): Promise<{ text: string; gw: string }> => {
+      const p1 = script([
+        [
+          [
+            call("send_message", { to: ["p2"], text: "hello" }),
+            call("write_note", { text: "kept", mode: "append" }),
+            call("view_city", { city: "c999" }),
+            call("end_turn", { nextWakeIn: 1800 }),
+          ],
+        ],
+      ]);
+      const memory = new MemorySink();
+      const sink: LogSink = vandal
+        ? {
+            write(line) {
+              memory.write(line);
+              // Everything the line holds, the events of ev lines included.
+              const l: Record<string, unknown> = line;
+              for (const key of Object.keys(l)) if (key !== "k") l[key] = null;
+            },
+          }
+        : memory;
+      const out = await runMatch({
+        setup,
+        ruleset: SANDBOX,
+        agents: agentsFor(setup, { p1 }),
+        clock: { kind: "lockstep" },
+        sink,
+        strict: true,
+      });
+      return { text: memory.text(), gw: JSON.stringify(out.gateway) };
+    };
+    const clean = await play(false);
+    const vandalised = await play(true);
+    expect(vandalised.text).toBe(clean.text);
+    expect(vandalised.gw).toBe(clean.gw);
+    expect(clean.gw).toContain("hello");
+  });
+});

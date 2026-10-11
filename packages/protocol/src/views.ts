@@ -287,7 +287,10 @@ export type LeaderboardView = z.infer<typeof LeaderboardViewSchema>;
 
 /** One entry of the seat's archive or of the public feed, as `read_notes` search lists it. */
 export const ArchiveHitSchema = z.looseObject({
-  /** Delivery number, in `ev`-line order. */
+  /**
+   * The entry's number among the entries the seat can read (its archive and the public feed), in
+   * delivery order from 1: it counts no event hidden from the seat.
+   */
   e: Count,
   t: TimePairSchema,
   type: EventTypeSchema,
@@ -301,6 +304,7 @@ export type ArchiveHit = z.infer<typeof ArchiveHitSchema>;
 
 /** A full archive entry, as `read_notes {open: id}` returns it. */
 export const ArchiveEntrySchema = z.looseObject({
+  /** As in `ArchiveHitSchema`. */
   e: Count,
   t: TimePairSchema,
   type: EventTypeSchema,

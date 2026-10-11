@@ -1,5 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import { ArchiveEntrySchema, ArchiveHitSchema, type ArchiveHit } from "@perfidia/protocol";
+import {
+  ArchiveEntrySchema,
+  ArchiveHitSchema,
+  type ArchiveHit,
+  type DomainEvent,
+} from "@perfidia/protocol";
 import {
   entryId,
   involves,
@@ -32,42 +37,61 @@ const R1 = oid("r", 1);
  * e2 t=100 public message by p3    e5 t=300 message p3 → p2 (hidden from p1)
  * e3 t=200 battle_report to p1     e6 t=300 queue_empty p1
  */
-function world(): GatewayState {
+function worldEvents(): DomainEvent[] {
+  return [
+    message(100, P2, [P1], 1, "Hello there, shall we talk?"),
+    publicMessage(100, P3, 2, "Big NEWS from the east"),
+    event(200, "battle_report", [[P1, "self"]], {
+      report: R1,
+      city: "c7",
+      attacker: P1,
+      defender: P3,
+      kind: "city",
+      winner: "attacker",
+      units: { raider: 12, guard: 3 },
+    }),
+    event(200, "city_conquered", [[P1, "target"]], { city: "c3", from: P1, to: P2 }, true),
+    message(300, P3, [P2], 3, "a secret plan"),
+    queueEmpty(300, P1),
+  ];
+}
+
+function world(events: readonly DomainEvent[] = worldEvents()): GatewayState {
   const gw = createGatewayState([P1, P2, P3]);
-  const wake = createWakeScheduler(gw, RULES);
-  deliver(
-    gw,
-    [
-      message(100, P2, [P1], 1, "Hello there, shall we talk?"),
-      publicMessage(100, P3, 2, "Big NEWS from the east"),
-      event(200, "battle_report", [[P1, "self"]], {
-        report: R1,
-        city: "c7",
-        attacker: P1,
-        defender: P3,
-        kind: "city",
-        winner: "attacker",
-        units: { raider: 12, guard: 3 },
-      }),
-      event(200, "city_conquered", [[P1, "target"]], { city: "c3", from: P1, to: P2 }, true),
-      message(300, P3, [P2], 3, "a secret plan"),
-      queueEmpty(300, P1),
-    ],
-    wake,
-  );
+  deliver(gw, events, createWakeScheduler(gw, RULES));
   return gw;
 }
 
 const es = (hits: readonly ArchiveHit[]): number[] => hits.map((h) => h.e);
 
+const p1Hits = (gw: GatewayState) =>
+  searchArchive(gw, P1, {}).map((h) => [h.e, h.type, h.t[0]] as const);
+
 describe("searchArchive", () => {
+  // `e` numbers the entries a seat can read (its archive and the feed) from 1 in delivery order:
+  // p1 reads e1–e4 and e6 (numbered 1–5), p2 reads e1, e2, e4 and e5 (numbered 1–4).
   test("scopes: mine (archive), public (feed), all (both, each event once), newest first by (t, e)", () => {
     const gw = world();
-    expect(es(searchArchive(gw, P1, { scope: "mine" }))).toEqual([6, 4, 3, 1]);
+    expect(es(searchArchive(gw, P1, { scope: "mine" }))).toEqual([5, 4, 3, 1]);
     expect(es(searchArchive(gw, P1, { scope: "public" }))).toEqual([4, 2]);
-    expect(es(searchArchive(gw, P1, { scope: "all" }))).toEqual([6, 4, 3, 2, 1]);
-    expect(es(searchArchive(gw, P1, {}))).toEqual([6, 4, 3, 2, 1]);
-    expect(es(searchArchive(gw, P2, {}))).toEqual([5, 4, 2, 1]);
+    expect(es(searchArchive(gw, P1, { scope: "all" }))).toEqual([5, 4, 3, 2, 1]);
+    expect(es(searchArchive(gw, P1, {}))).toEqual([5, 4, 3, 2, 1]);
+    expect(es(searchArchive(gw, P2, {}))).toEqual([4, 3, 2, 1]);
+  });
+
+  test("e counts only what the seat can read: other seats' private events change no number", () => {
+    const quiet = world();
+    const events = worldEvents();
+    const busy = world([
+      ...events.slice(0, 1),
+      message(100, P3, [P2], 9, "between us"),
+      message(100, P2, [P3], 8, "and us"),
+      ...events.slice(1),
+    ]);
+    expect(p1Hits(busy)).toEqual(p1Hits(quiet));
+    expect(openArchive(busy, P1, R1)?.e).toBe(openArchive(quiet, P1, R1)?.e);
+    // The delivery numbers themselves differ: two hidden messages came first.
+    expect(seatOf(busy, P1).archive.at(-1)?.e).not.toBe(seatOf(quiet, P1).archive.at(-1)?.e);
   });
 
   test("hits are protocol archive hits with time pairs, ids and summaries", () => {
@@ -83,17 +107,17 @@ describe("searchArchive", () => {
       summary: `battle_report attacker=p1 city=c7 defender=p3 kind=city report=${R1} units={guard:3,raider:12} winner=attacker`,
     });
     expect(hits.find((h) => h.e === 1)?.id).toBe(oid("g", 1));
-    expect(hits.find((h) => h.e === 6)?.id).toBeNull();
+    expect(hits.find((h) => h.e === 5)?.id).toBeNull();
   });
 
   test("filters: kinds, counterpart, time range", () => {
     const gw = world();
     expect(es(searchArchive(gw, P1, { kinds: ["message"] }))).toEqual([2, 1]);
-    expect(es(searchArchive(gw, P1, { kinds: [] }))).toEqual([6, 4, 3, 2, 1]);
+    expect(es(searchArchive(gw, P1, { kinds: [] }))).toEqual([5, 4, 3, 2, 1]);
     expect(es(searchArchive(gw, P1, { with: P3 }))).toEqual([3, 2]);
     expect(es(searchArchive(gw, P1, { with: P2 }))).toEqual([4, 1]);
     expect(es(searchArchive(gw, P1, { since: 150, until: 250 }))).toEqual([4, 3]);
-    expect(es(searchArchive(gw, P1, { since: 300 }))).toEqual([6]);
+    expect(es(searchArchive(gw, P1, { since: 300 }))).toEqual([5]);
     expect(es(searchArchive(gw, P1, { scope: "mine", kinds: ["message"], since: 100 }))).toEqual([
       1,
     ]);
@@ -106,7 +130,7 @@ describe("searchArchive", () => {
     expect(es(searchArchive(gw, P1, { text: "City_Conquered" }))).toEqual([4]);
     expect(es(searchArchive(gw, P1, { text: "raider:12" }))).toEqual([3]);
     expect(es(searchArchive(gw, P1, { text: "secret" }))).toEqual([]);
-    expect(es(searchArchive(gw, P2, { text: "SECRET" }))).toEqual([5]);
+    expect(es(searchArchive(gw, P2, { text: "SECRET" }))).toEqual([4]);
     // the full text is searched, not only the part the summary quotes
     const long = createGatewayState([P1, P2]);
     deliver(
@@ -265,7 +289,7 @@ describe("openArchive", () => {
     const gw = world();
     expect(openArchive(gw, P1, oid("g", 3))).toBeNull();
     expect(openArchive(gw, P1, oid("g", 99))).toBeNull();
-    expect(openArchive(gw, P2, oid("g", 3))?.e).toBe(5);
+    expect(openArchive(gw, P2, oid("g", 3))?.e).toBe(4);
   });
 
   test("the entry is a copy", () => {
