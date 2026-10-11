@@ -49,6 +49,18 @@ describe("checkRules", () => {
     expect(paths(rules)).toEqual(["units.0.queue", "newCity.stock.gold"]);
   });
 
+  test("diplomacy durations are at least 1 s (pactDuration may be null)", () => {
+    const rules = fixtureRules();
+    rules.diplomacy.proposalTtl = 0;
+    rules.diplomacy.pactDuration = 0;
+    expect(paths(rules)).toEqual(["diplomacy.proposalTtl", "diplomacy.pactDuration"]);
+    rules.diplomacy.proposalTtl = 1;
+    rules.diplomacy.pactDuration = null;
+    expect(paths(rules)).toEqual([]);
+    rules.diplomacy.pactDuration = 1;
+    expect(paths(rules)).toEqual([]);
+  });
+
   test("MatchConfigError lists every issue with its path", () => {
     const e = new MatchConfigError([
       { path: "time.matchEnd", message: "is 0" },

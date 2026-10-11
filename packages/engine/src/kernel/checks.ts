@@ -199,16 +199,36 @@ function checkGateway(rules: Rules, out: Issues): void {
 }
 
 /**
+ * The diplomacy durations the default handlers schedule from: a proposal expires `proposalTtl`
+ * after it is made, a pact `pactDuration` after it is signed. A 0 would schedule an event at `now`,
+ * which the kernel refuses mid-match (an `EngineBug`), so it is rejected here with its path.
+ */
+function checkDiplomacy(rules: Rules, out: Issues): void {
+  const d = rules.diplomacy;
+  if (d.proposalTtl < 1) {
+    out.add("diplomacy.proposalTtl", `is ${d.proposalTtl}; every duration must be at least 1 s`);
+  }
+  if (d.pactDuration !== null && d.pactDuration < 1) {
+    out.add(
+      "diplomacy.pactDuration",
+      `is ${d.pactDuration}; use null for pacts without expiry, or at least 1 s`,
+    );
+  }
+}
+
+/**
  * The generic checks of §3.6 on one compiled rule set: every build and recruit time ≥ 1 s and the
  * queue and level tables covering every `maxLevel`; the new-city stock within its storage cap;
  * `time.matchEnd ≥ 1`, `time.minTravel ≥ 1` and `gateway.urgentMinGap < time.minTravel`; the
- * self-wake range, the safety wake, the per-turn caps and both daily wake budgets. Pure; an empty
- * list means the rules pass.
+ * self-wake range, the safety wake, the per-turn caps and both daily wake budgets; the diplomacy
+ * durations (`proposalTtl ≥ 1`, `pactDuration` null or ≥ 1). Pure; an empty list means the rules
+ * pass.
  */
 export function checkRules(rules: DeepReadonly<CompiledRules>): ConfigIssue[] {
   const out = new Issues();
   checkTime(rules, out);
   checkGateway(rules, out);
+  checkDiplomacy(rules, out);
   checkBuildings(rules, out);
   checkUnits(rules, out);
   checkLevelTables(rules, out);

@@ -1,8 +1,8 @@
 // @perfidia/engine: the top barrel (docs/architecture.md §2.2). Nothing inside the engine imports it.
-// It exports the core, the contract types, the kernel, `std`, the default domain module and the
-// bound `createMatch`, `loadMatch` and `verifyLog`, which fill in the domain module (§5.3). The
-// ruleset registry and a `verifyLog(lines, opts)` resolving through it come with the registry
-// (§3.5, §15 T14); until then `verifyLog` takes the resolver as an argument.
+// It exports the core, the contract types, the kernel, `std`, the default domain module, the
+// ruleset registry (§3.5) and the bound `createMatch`, `loadMatch` and `verifyLog`, which fill in
+// the domain module (§5.3); `verifyLog(lines, opts)` resolves the header's ruleset through the
+// registry, and `verifyLog(lines, resolve, opts)` through a resolver of the caller's.
 
 import type { AnyRuleset } from "./contracts/index.ts";
 import { domain } from "./domain/index.ts";
@@ -15,6 +15,7 @@ import {
   type ReplayReport,
   type VerifyOptions,
 } from "./kernel/index.ts";
+import { findRuleset } from "./rulesets/index.ts";
 import type { LogLine, MatchSetup, Snapshot } from "@perfidia/protocol";
 
 export * from "./core/index.ts";
@@ -75,6 +76,15 @@ export {
 } from "./kernel/index.ts";
 export * from "./std/index.ts";
 export * from "./domain/index.ts";
+export {
+  RULESETS,
+  RegistryError,
+  UnknownRuleset,
+  findRuleset,
+  getRuleset,
+  parseRulesetRef,
+  validateRegistry,
+} from "./rulesets/index.ts";
 
 /**
  * Creates a match of `ruleset` with the default domain module (§5.3 "Creation"). Throws
@@ -90,15 +100,23 @@ export function loadMatch(snap: Snapshot, ruleset: AnyRuleset, opts?: MatchOptio
 }
 
 /**
- * Level E verification of a log (§10.4) with the default domain module; `resolve` maps the header's
- * ruleset ref to a ruleset (the registry's `findRuleset` once it exists).
+ * Level E verification of a log (§10.4) with the default domain module. The header's ruleset ref is
+ * resolved through the registry (`findRuleset`), or through `resolve` when one is given (tests with
+ * their own rulesets).
  */
+export function verifyLog(lines: Iterable<LogLine>, opts?: VerifyOptions): ReplayReport;
 export function verifyLog(
   lines: Iterable<LogLine>,
   resolve: (ref: string) => AnyRuleset | undefined,
   opts?: VerifyOptions,
+): ReplayReport;
+export function verifyLog(
+  lines: Iterable<LogLine>,
+  second?: ((ref: string) => AnyRuleset | undefined) | VerifyOptions,
+  third?: VerifyOptions,
 ): ReplayReport {
-  return verifyKernelLog(lines, resolve, domain, opts);
+  if (typeof second === "function") return verifyKernelLog(lines, second, domain, third);
+  return verifyKernelLog(lines, (ref) => findRuleset(ref), domain, second);
 }
 
 // Placeholder still imported by the gateway placeholder; removed once nothing imports it (§15.1).
