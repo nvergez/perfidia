@@ -1096,8 +1096,9 @@ const CASES: Record<string, Case> = {
     valid: [
       logLines.gw,
       { ...clone(logLines.gw), r: { ok: false, code: "INTERNAL" }, error: "boom" },
+      { ...clone(logLines.gw), i: 1 },
     ],
-    invalid: [bad(logLines.gw, ["r", "ok"], true)],
+    invalid: [bad(logLines.gw, ["r", "ok"], true), bad(logLines.gw, ["i"], -1)],
   },
   ObsLineSchema: {
     schema: protocol.ObsLineSchema,

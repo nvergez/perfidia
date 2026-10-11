@@ -87,6 +87,13 @@ export interface Match {
   advanceTo(t: GameTime): StepOutput;
   /** Validates and applies one action at the current `now`. */
   apply(seat: PlayerId, a: Action): ApplyOutput;
+  /**
+   * The violation `apply(seat, a)` would return at the current `now`, or null when it would be
+   * accepted; changes nothing (P3). The same pipeline as `apply` (`hooks.guard`, then the handler's
+   * `validate`), guarded the same way: a throw in either is an `EngineBug`. The gateway uses it to
+   * name the binding constraint of a `"max"` count that resolves to 0 (§7.4).
+   */
+  validate(seat: PlayerId, a: Action): Violation | null;
   /** FNV-1a 64 of the canonical state. */
   hash(): Hash64;
   /** A canonical copy, never a reference to the live state. */
@@ -255,10 +262,50 @@ class KernelMatch implements Match {
 
   apply(seat: PlayerId, a: Action): ApplyOutput {
     this.assertUsable("apply");
+    const checked = this.check("apply", seat, a);
+    if (!checked.ok) return checked;
+    const { action, handler, plan, warnings } = checked;
+    return this.guarded(() => {
+      const state = this.state;
+      const ctx = new StepCtx(this.env, state);
+      const data = asEngineBug(`${action.type}.apply`, () => handler.apply(ctx, seat, plan));
+      const copy = asEngineBug(`${action.type}.apply result`, () => jsonCopy(data));
+      this.afterStep(ctx, { kind: "action", seat, action });
+      this.finishStep(ctx);
+      const result: ApplyOutput = { ok: true, data: copy, events: ctx.events, warnings };
+      if (this.trace) result.h = this.canonical(() => stateHash(state));
+      return result;
+    });
+  }
+
+  validate(seat: PlayerId, a: Action): Violation | null {
+    this.assertUsable("validate");
+    const checked = this.check("validate", seat, a);
+    return checked.ok ? null : checked.violation;
+  }
+
+  /**
+   * The validation half of `apply`, which writes nothing: the seat, the action's shape, the match
+   * end, elimination, `hooks.guard`, then the handler's `validate`.
+   */
+  private check(
+    what: "apply" | "validate",
+    seat: PlayerId,
+    a: Action,
+  ):
+    | { ok: false; violation: Violation }
+    | {
+        ok: true;
+        action: Action;
+        handler: ActionHandler;
+        plan: unknown;
+        warnings: Violation[];
+      } {
     const state = this.state;
     const player = Object.hasOwn(state.players, seat) ? state.players[seat] : undefined;
-    if (player === undefined) throw new EngineMisuse(`apply: ${seat} is not a seat of this match`);
-    const action = parseAction(a);
+    if (player === undefined)
+      throw new EngineMisuse(`${what}: ${seat} is not a seat of this match`);
+    const action = parseAction(what, a);
     if (state.status === "ended" || state.now >= this.rules.time.matchEnd) {
       return {
         ok: false,
@@ -302,16 +349,7 @@ class KernelMatch implements Match {
       const warnings = (verdict.warnings ?? []).map((w) =>
         copyViolation(w, `${action.type}.validate`),
       );
-      const ctx = new StepCtx(this.env, state);
-      const data = asEngineBug(`${action.type}.apply`, () =>
-        handler.apply(ctx, seat, verdict.plan),
-      );
-      const copy = asEngineBug(`${action.type}.apply result`, () => jsonCopy(data));
-      this.afterStep(ctx, { kind: "action", seat, action });
-      this.finishStep(ctx);
-      const result: ApplyOutput = { ok: true, data: copy, events: ctx.events, warnings };
-      if (this.trace) result.h = this.canonical(() => stateHash(state));
-      return result;
+      return { ok: true, action, handler, plan: verdict.plan, warnings };
     });
   }
 
@@ -455,19 +493,19 @@ class KernelMatch implements Match {
  * caller's object) whose record keys are in canonical order, as in the logged `act` line, so a live
  * run and its replay hand handlers the same object.
  */
-function parseAction(a: Action): Action {
+function parseAction(what: "apply" | "validate", a: Action): Action {
   let text: string;
   try {
     text = canonicalJson(a);
   } catch (error) {
-    throw new EngineMisuse(`apply: the action is not canonical JSON (${errorMessage(error)})`);
+    throw new EngineMisuse(`${what}: the action is not canonical JSON (${errorMessage(error)})`);
   }
   const parsed = ActionSchema.safeParse(JSON.parse(text));
   if (!parsed.success) {
     const issue = parsed.error.issues[0];
     const path = issue?.path.map((p) => String(p)).join(".") ?? "";
     throw new EngineMisuse(
-      `apply: malformed action (${path === "" ? "" : `${path}: `}${issue?.message ?? "invalid"}); the gateway validates actions before the engine`,
+      `${what}: malformed action (${path === "" ? "" : `${path}: `}${issue?.message ?? "invalid"}); the gateway validates actions before the engine`,
     );
   }
   return parsed.data;

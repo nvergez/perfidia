@@ -69,7 +69,13 @@ export interface Ctx<C = unknown, X = unknown> {
    * `loadMatch`).
    */
   rng(stream: string): Rng;
-  /** `status = "ended"`; nothing else is processed. */
+  /**
+   * `status = "ended"`; nothing else is processed afterwards (no `afterStep`, no further event).
+   * The kernel emits the standard `match_ended` event `{reason, winners}` itself, exactly once: a
+   * ruleset never emits it (`emit` refuses it). The result is validated (`MatchResultSchema`,
+   * `endedAt = now`, winners and standings naming players of the match, each once); an invalid one
+   * is an `EngineBug`.
+   */
   endMatch(result: MatchResult): void;
 }
 

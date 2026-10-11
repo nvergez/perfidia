@@ -1,13 +1,12 @@
 // Shared fixtures for the presentation tests (no tests here): a hand-built fixture-ruleset world
-// with four players, a perfidia-1 test descriptor assembled from the wave-3 modules with T11's
-// visibility extras emulated (the real descriptor is T11's), gateway states fed with events, and
+// with four players, the published perfidia-1 descriptor, gateway states fed with events, and
 // helpers to compare outputs.
 
-import { canonicalJson, fmtTime, idKeyFromSeed } from "@perfidia/engine/core";
-import type { AnyRuleset, ReadCtx, Ruleset, Visibility } from "@perfidia/engine/contracts";
+import { canonicalJson, idKeyFromSeed } from "@perfidia/engine/core";
+import type { AnyRuleset, ReadCtx, Ruleset } from "@perfidia/engine/contracts";
 import { createMatch, type Match } from "@perfidia/engine/kernel";
 import * as p1 from "@perfidia/engine/rulesets/perfidia-1";
-import { defaultVisibility, relation, sortedIds } from "@perfidia/engine/std";
+import { relation } from "@perfidia/engine/std";
 import {
   addAlliance,
   addBuildItem,
@@ -458,102 +457,8 @@ export function feedP1(gw: GatewayState, wake: WakeScheduler, r: ReadCtx): void 
 
 // perfidia-1 -----------------------------------------------------------------------------------------
 
-const noop = (): void => undefined;
-const unimplemented = (): never => {
-  throw new Error("a wave-4 hook (T11)");
-};
-
-type PerfidiaRead = ReadCtx<p1.PerfidiaConfig, p1.PerfidiaExt>;
-
-function pair(t: number): [number, string] {
-  return [t, fmtTime(t)];
-}
-
-/** perfidia-1 §13.2: every running countdown with the bloc's cities against the threshold. */
-function countdowns(r: PerfidiaRead): JsonObject[] {
-  const need = p1.dominationThreshold(r.config, r.rules.players, p1.totalCities(r.state));
-  return r.ext().domination.countdowns.map((c) => ({
-    key: c.bloc,
-    members: [...c.members],
-    cities: p1.blocCities(r.state, c.members),
-    need,
-    ends: pair(c.endsAt),
-  }));
-}
-
-/**
- * perfidia-1's visibility extras (§12), as T11's descriptor renders them: city points, the Crown
- * flag and the siege on every city; the tie-break position of every player; the tie-break order
- * and the domination state of the match; and, in the briefing, the sieges the seat holds and every
- * running countdown. The budget tests measure the briefing with them (they count in §8.2's 2,400).
- */
-const perfidiaVisibility: Visibility<p1.PerfidiaConfig, p1.PerfidiaExt> = {
-  cityAccess: (r, viewer, city) => defaultVisibility.cityAccess(r, viewer, city),
-  movementAccess: (r, viewer, m) => defaultVisibility.movementAccess(r, viewer, m),
-  publicCity(r, _viewer, city) {
-    const c = r.state.cities[city];
-    if (c === undefined) return {};
-    let levels = 0;
-    for (const b of p1.BUILDING_IDS) levels += c.buildings[b] ?? 0;
-    const crown = c.tag === p1.CROWN_TAG;
-    const out: JsonObject = { points: p1.cityPoints(r.config, levels, crown) };
-    if (crown) out["crown"] = true;
-    const siege = p1.siegeOf(r.ext(), city);
-    if (siege !== null) out["siege"] = { by: siege.by, ends: pair(siege.endsAt) };
-    return out;
-  },
-  publicPlayer: (r, p) => ({ tiebreak: p1.tiebreakPosition(r.ext(), p) + 1 }),
-  publicMatch(r) {
-    const x = r.ext();
-    return {
-      tiebreak: [...x.tiebreak],
-      domination: {
-        open: x.domination.open,
-        need: p1.dominationThreshold(r.config, r.rules.players, p1.totalCities(r.state)),
-        countdowns: countdowns(r),
-      },
-    };
-  },
-  briefing(r, viewer) {
-    const holding = sortedIds(r.ext().sieges).flatMap((city) => {
-      const siege = p1.siegeOf(r.ext(), city);
-      if (siege === null || siege.by !== viewer) return [];
-      return [{ city, owner: r.state.cities[city]?.owner ?? null, ends: pair(siege.endsAt) }];
-    });
-    return { holding, countdowns: countdowns(r) };
-  },
-};
-
-/**
- * A test-only perfidia-1 descriptor from the wave-3 modules, with T11's visibility extras emulated
- * (the real descriptor is T11's `perfidia1_1_0_0`; T14 should point the tests at it).
- */
-export const perfidiaRuleset: Ruleset<p1.PerfidiaConfig, p1.PerfidiaExt> = {
-  id: p1.PERFIDIA_1_ID,
-  version: p1.PERFIDIA_1_VERSION,
-  ref: p1.PERFIDIA_1_REF,
-  status: "published",
-  title: "Perfidia V1",
-  configSchema: p1.PerfidiaConfigSchema,
-  defaults: p1.PERFIDIA_1_DEFAULTS,
-  extSchema: p1.PerfidiaExtSchema,
-  players: p1.playerRange,
-  compile: p1.compileRules,
-  check: p1.checkConfig,
-  cheatSheet: p1.renderCheatSheet,
-  hooks: {
-    createWorld: p1.createWorld,
-    travelTime: p1.travelTime,
-    arrive: { attack: unimplemented, spy: unimplemented },
-    on: { siege_end: noop, domination_open: noop, domination_end: noop },
-    standings: (r) => p1.computeStandings(r.config, r.state, r.ext()),
-    finish: unimplemented,
-    visibility: perfidiaVisibility,
-  },
-  errors: p1.PERFIDIA_1_ERRORS,
-  errorSamples: p1.PERFIDIA_1_ERROR_SAMPLES,
-  eventSchemas: {},
-};
+/** The published perfidia-1 descriptor (T11's), with its visibility extras (§12). */
+export const perfidiaRuleset: Ruleset<p1.PerfidiaConfig, p1.PerfidiaExt> = p1.perfidia1_1_0_0;
 
 export function perfidiaSetup(players: number, seed = 42): MatchSetup {
   return {
