@@ -1,7 +1,9 @@
 import { join } from "node:path";
 import { RULESETS, type AnyRuleset } from "@perfidia/engine";
 import { canonicalJson, sha256Hex } from "@perfidia/engine/core";
+import type { LogLine } from "@perfidia/protocol";
 import { UsageError, errorText } from "../args.ts";
+import { SCENARIO_LATE_NAME, SCENARIO_LATE_REF, runScenarioLate } from "../exit/scenario.ts";
 import {
   GoldenExists,
   addFingerprints,
@@ -16,25 +18,37 @@ import {
 import { readFirstLine } from "../io/index.ts";
 
 // `sim golden` (docs/architecture.md §3.5, §12.1, §13.5, §13.6): `--check` runs the harness's
-// freeze guard over the committed fixtures; `--update` only adds: a golden for each spec below that
-// has none for the current bot labels (a later bot version gets a new golden, suffixed with a hash
-// of its labels, and the old one keeps its Level E check), then fingerprint entries for every ref
-// and golden without one. Nothing is ever rewritten; naming an existing golden is refused.
+// freeze guard over the committed fixtures; `--update` only adds: a golden for each bot spec below
+// that has none for the current bot labels (a later bot version gets a new golden, suffixed with a
+// hash of its labels, and the old one keeps its Level E check), the scripted scenario goldens that
+// do not exist yet, then fingerprint entries for every ref and golden without one. Nothing is ever
+// rewritten; naming an existing golden is refused.
 
 /** `packages/sim/fixtures`: the committed goldens and `fingerprints.json`. */
 export const FIXTURES_DIR = join(import.meta.dir, "..", "..", "fixtures");
 
 /** A golden the CLI can (re)create from bots: its ref, its name and the match it records. */
-export interface GoldenSpec {
+export interface BotGoldenSpec {
   readonly ref: string;
   readonly name: string;
   readonly run: Omit<BotRunSpec, "ruleset">;
 }
 
 /**
- * The bot goldens of §13.5. `scenario-late` needs the scripted scenario agent of the exit suite,
- * which is not a registered bot, so it is written by its own test code through the same harness.
+ * A golden recorded by a scripted scenario (§13.5 `scenario-late`): its agents are not registered
+ * bots, so the golden is checked at Level E only. A changed script is a new scenario name.
  */
+export interface ScenarioGoldenSpec {
+  readonly ref: string;
+  readonly name: string;
+  play(): Promise<readonly LogLine[]>;
+}
+
+export type GoldenSpec = BotGoldenSpec | ScenarioGoldenSpec;
+
+const isScenario = (s: GoldenSpec): s is ScenarioGoldenSpec => !("run" in s);
+
+/** The goldens of §13.5: four bot goldens and the scripted `scenario-late`. */
 export const GOLDEN_SPECS: readonly GoldenSpec[] = Object.freeze([
   {
     ref: "perfidia-1@1.0.0",
@@ -51,6 +65,11 @@ export const GOLDEN_SPECS: readonly GoldenSpec[] = Object.freeze([
       clock: { kind: "virtual", speed: { num: 3, den: 1 }, latencyMs: [2000, 60000] },
       strict: true,
     },
+  },
+  {
+    ref: SCENARIO_LATE_REF,
+    name: SCENARIO_LATE_NAME,
+    play: async (): Promise<readonly LogLine[]> => (await runScenarioLate()).lines,
   },
   {
     ref: "sandbox-1@1.0.0",
@@ -83,8 +102,8 @@ export interface GoldenUpdate {
   readonly fingerprints: string[];
 }
 
-/** The controller labels a spec's match gives each seat. */
-function labelsOf(rs: AnyRuleset, spec: GoldenSpec): Record<string, string> {
+/** The controller labels a bot spec's match gives each seat. */
+function labelsOf(rs: AnyRuleset, spec: BotGoldenSpec): Record<string, string> {
   const prepared = prepareBotRun({ ...spec.run, ruleset: rs });
   const out: Record<string, string> = {};
   for (const [seat, agent] of prepared.options.agents) out[seat] = agent.label;
@@ -99,6 +118,34 @@ function goldenLabels(path: string): Record<string, string> | null {
   } catch {
     return null;
   }
+}
+
+/**
+ * The existing golden that records `spec` (a bot spec: one of its family played by the same bot
+ * labels; a scenario: the golden of its name), and the name a new golden of it gets.
+ */
+function existing(
+  fixturesDir: string,
+  rs: AnyRuleset,
+  spec: GoldenSpec,
+): { readonly current: string | null; readonly name: string } {
+  const goldens = listGoldens(fixturesDir).filter((g) => g.ref === spec.ref);
+  if (isScenario(spec)) {
+    const found = goldens.some((g) => g.name === spec.name);
+    return { current: found ? `${spec.ref}/${spec.name}` : null, name: spec.name };
+  }
+  const labels = canonicalJson(labelsOf(rs, spec));
+  const family = goldens.filter(
+    (g) => g.name === spec.name || g.name.startsWith(`${spec.name}-bots-`),
+  );
+  const current = family.find((g) => {
+    const l = goldenLabels(g.path);
+    return l !== null && canonicalJson(l) === labels;
+  });
+  const name = family.some((g) => g.name === spec.name)
+    ? `${spec.name}-bots-${sha256Hex(labels).slice(0, 8)}`
+    : spec.name;
+  return { current: current === undefined ? null : `${current.ref}/${current.name}`, name };
 }
 
 /**
@@ -133,29 +180,20 @@ export async function updateGoldens(
       throw new UsageError(
         `golden spec ${spec.ref}/${spec.name}: ${spec.ref} is not in this build`,
       );
-    const labels = canonicalJson(labelsOf(rs, spec));
-    const family = listGoldens(fixturesDir).filter(
-      (g) =>
-        g.ref === spec.ref && (g.name === spec.name || g.name.startsWith(`${spec.name}-bots-`)),
-    );
-    const current = family.find((g) => {
-      const l = goldenLabels(g.path);
-      return l !== null && canonicalJson(l) === labels;
-    });
-    if (current !== undefined) {
-      const id = `${current.ref}/${current.name}`;
-      report.kept.push(id);
-      if (only.includes(`${spec.ref}/${spec.name}`)) report.refused.push(id);
+    const { current, name } = existing(fixturesDir, rs, spec);
+    if (current !== null) {
+      report.kept.push(current);
+      if (only.includes(`${spec.ref}/${spec.name}`)) report.refused.push(current);
       continue;
     }
-    const name = family.some((g) => g.name === spec.name)
-      ? `${spec.name}-bots-${sha256Hex(labels).slice(0, 8)}`
-      : spec.name;
     o.progress?.(`running ${spec.ref}/${name} …`);
     try {
+      const played = isScenario(spec)
+        ? spec.play()
+        : runBots({ ...spec.run, ruleset: rs }).then((out) => out.lines);
       // oxlint-disable-next-line no-await-in-loop -- one match at a time
-      const out = await runBots({ ...spec.run, ruleset: rs });
-      addGolden(fixturesDir, spec.ref, name, out.lines);
+      const lines = await played;
+      addGolden(fixturesDir, spec.ref, name, lines);
       report.added.push(`${spec.ref}/${name}`);
     } catch (error) {
       if (error instanceof GoldenExists) throw error;

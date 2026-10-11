@@ -6,6 +6,3 @@ export { hintsFor, NO_HINTS, RULESET_HINTS, type StrategyHints } from "./hints.t
 export { botFromLabel, botLabel, createBot, isBotStrategy, parseBotLabel } from "./registry.ts";
 export { BOT_STRATEGIES, type BotStrategy } from "./strategies/strategy.ts";
 export { thinkLatencyMs, withThinkTime, type ThinkTimeOptions } from "./think.ts";
-
-// Placeholder kept until T17 removes it (§15.1); new code never imports it.
-export const BOTS_PACKAGE = "@perfidia/bots";

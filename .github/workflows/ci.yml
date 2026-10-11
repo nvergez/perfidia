@@ -18,3 +18,17 @@ jobs:
           bun-version: 1.4.3
       - run: bun install --frozen-lockfile
       - run: bun run check
+
+  # The phase-1 exit criterion (docs/architecture.md §13.7): 7-day matches of both rulesets under
+  # every clock, with the performance figures of §13.8. Skipped by the default `bun test`.
+  exit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.3
+      - run: bun install --frozen-lockfile
+      - run: bun run test:exit
+      - run: bun run sim -- golden --check

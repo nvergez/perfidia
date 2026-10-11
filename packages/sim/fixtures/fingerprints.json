@@ -1,0 +1,17 @@
+{
+  "perfidia-1@1.0.0": {
+    "artefacts": "e25044aecd4b1ab58f2af838fdcc1dbd09d4706912046b3fe971c999da843f1b",
+    "goldens": {
+      "lockstep-6p-4d": "6e13c38102a9d5b6",
+      "rt-virtual-6p-1d": "251c4a2163559ea4",
+      "scenario-late": "9fc3d52c00047efc"
+    }
+  },
+  "sandbox-1@1.0.0": {
+    "artefacts": "e83848d0d6e2cbb8ae10d859b986a9bf214ee5d194d59cb56db4952f8960bdfc",
+    "goldens": {
+      "lockstep-6p-3d": "61690c75d7642a90",
+      "rt-virtual-6p-1d": "04791dbeba2d9573"
+    }
+  }
+}

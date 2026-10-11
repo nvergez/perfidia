@@ -6,13 +6,12 @@ import {
   ActionSchema,
   DOMAIN_ERROR_CODES,
   MatchSetupSchema,
-  PROTOCOL_PACKAGE,
   z,
   type ZodType,
 } from "./index.ts";
 
-test("PROTOCOL_PACKAGE is still exported and the placeholder schema is gone", () => {
-  expect(PROTOCOL_PACKAGE).toBe("@perfidia/protocol");
+test("the placeholders are gone: no PROTOCOL_PACKAGE, no placeholder schema", () => {
+  expect("PROTOCOL_PACKAGE" in protocol).toBe(false);
   expect("PackageNameSchema" in protocol).toBe(false);
 });
 

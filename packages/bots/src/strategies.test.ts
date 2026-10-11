@@ -104,6 +104,26 @@ function alliedPair(shape: Shape, day: number): FakeGame {
   return game;
 }
 
+/** At t = 5000, p2 and p4 offer p1 an alliance and p3 offers it a pact. */
+function offerTwoAlliancesAndAPact(game: FakeGame): void {
+  game.t = 5000;
+  for (const [id, from, kind] of [
+    ["q0000a", "p2", "alliance"],
+    ["q0000b", "p3", "pact"],
+    ["q0000c", "p4", "alliance"],
+  ] as const) {
+    game.proposals.push({
+      id,
+      from,
+      to: "p1",
+      kind,
+      name: kind === "alliance" ? "North" : null,
+      text: "join",
+      expires: pair(40000),
+    });
+  }
+}
+
 function bot(strategy: BotStrategy, seat: PlayerId = "p1", seed = 11) {
   return createBot(strategy, { seat, seed, strict: true });
 }
@@ -775,6 +795,26 @@ describe.each(SHAPES)("$name", (shape) => {
       city: "c21",
       orders: [{ unit: shape.defender, count: "max" }],
     });
+  });
+
+  test("expander accepts every pact and one alliance while it has none", async () => {
+    const free = shape.game();
+    offerTwoAlliancesAndAPact(free);
+    expect(callsTo(await playTurn(bot("expander"), free, "p1"), "answer_proposal")).toEqual([
+      { id: "q0000a", accept: true },
+      { id: "q0000b", accept: true },
+      { id: "q0000c", accept: false },
+    ]);
+    const allied = shape.game();
+    offerTwoAlliancesAndAPact(allied);
+    allied.alliance.set("p1", "a1");
+    allied.alliance.set("p5", "a1");
+    allied.relations.set("p1", [{ player: "p5", kind: "ally", until: null }]);
+    expect(callsTo(await playTurn(bot("expander"), allied, "p1"), "answer_proposal")).toEqual([
+      { id: "q0000a", accept: false },
+      { id: "q0000b", accept: true },
+      { id: "q0000c", accept: false },
+    ]);
   });
 
   test("turtle accepts every alliance and pact proposal", async () => {

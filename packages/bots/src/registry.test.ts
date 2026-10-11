@@ -1,7 +1,7 @@
 // The registry (docs/architecture.md §11): versioned labels and the factory sim uses for Level G.
 
 import { expect, test } from "bun:test";
-import { BOTS_PACKAGE } from "./index.ts";
+import * as bots from "./index.ts";
 import { botFromLabel, botLabel, createBot, isBotStrategy, parseBotLabel } from "./registry.ts";
 import { BOT_STRATEGIES } from "./strategies/strategy.ts";
 
@@ -38,6 +38,6 @@ test("each createBot call is a new instance", () => {
   expect(a).not.toBe(b);
 });
 
-test("the placeholder constant is kept until T17", () => {
-  expect(BOTS_PACKAGE).toBe("@perfidia/bots");
+test("the placeholder constant is gone (T17)", () => {
+  expect("BOTS_PACKAGE" in bots).toBe(false);
 });
