@@ -39,4 +39,5 @@ Dependency direction: `protocol` ← `engine` ← `gateway` ← `bots` ← `sim`
 - Stay inside the files/packages your task owns. Do not edit root config, lockfile or another package unless your task says so.
 - Do not run `git commit`, `git push` or create branches; the orchestrator handles git.
 - Do not run `bun install`/`bun add` unless your task says you own dependencies.
+- Never spawn `lint`, `tsc`, `check` or `bun test` as a subprocess from inside a test.
 - Report honestly: if something fails or is skipped, say so with the output.
