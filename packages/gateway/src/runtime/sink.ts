@@ -10,6 +10,10 @@ export interface LogSink {
   write(line: LogLine): void;
   /** Serialises at once. */
   snapshot?(snap: Snapshot): void;
+  /**
+   * Makes what was written durable. The host calls it after every engine step that wrote `ckpt`
+   * lines (so before the snapshot of that hour), after the end line and after a fatal line.
+   */
   flush?(): void;
 }
 

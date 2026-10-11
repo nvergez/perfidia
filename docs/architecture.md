@@ -437,7 +437,7 @@ export const RULESETS: readonly AnyRuleset[]; // [perfidia1_1_0_0, sandbox1_1_0_
 export function findRuleset(refOrId: string): AnyRuleset | undefined; // bare id: latest published, else latest test
 export function getRuleset(refOrId: string): AnyRuleset; // throws UnknownRuleset listing RULESETS
 export function parseRulesetRef(s: string): { id: string; version: string } | null;
-export function validateRegistry(): void; // throws on the first problem; run by a test and by getRuleset once
+export function validateRegistry(): void; // throws on the first problem; run by a test and on every getRuleset call (no module state, §6.5)
 ```
 
 - A ruleset is identified by `id@MAJOR.MINOR.PATCH`. `validateRegistry` rejects: duplicate refs; defaults that do not parse; for every N in `players(defaults)`, a `compile` output that fails the checks of §3.6; an `eventClasses` map missing a domain or ruleset kind, or where `match_end` shares its class with another kind; an `intelEvents` entry that is not a key of `eventSchemas`; an extra tool whose name collides with `TOOL_NAMES` or another extra, whose `args` do not convert with `z.toJSONSchema` or convert to anything but a root `type: "object"` (§3.7), or which is a `write` tool while `hooks.actions.ext` is missing.
@@ -495,7 +495,8 @@ export class MatchConfigError extends Error {
   - `time.matchEnd ≥ 1` and `gateway.urgentMinGap < time.minTravel`;
   - `gateway.selfWake.min ≥ 1`, `selfWake.min ≤ selfWake.max` and `gateway.safetyWake ≥ selfWake.min` (otherwise clamping breaks, and a 0 s safety wake wakes every seat every second);
   - `gateway.roundTripsPerWake ≥ 1`, `gateway.toolCallsPerRoundTrip ≥ 1`, `gateway.toolCallsPerWake` null or ≥ 1 (otherwise every turn is empty);
-  - `gateway.ownWakesPerDay ≥ 1` and `gateway.socialWakesPerDay ≥ 1` (an exhausted budget moves a wake to the next day, which with a budget of 0 would repeat forever).
+  - `gateway.ownWakesPerDay ≥ 1` and `gateway.socialWakesPerDay ≥ 1` (an exhausted budget moves a wake to the next day, which with a budget of 0 would repeat forever);
+  - `diplomacy.proposalTtl ≥ 1` and `diplomacy.pactDuration` null or ≥ 1 (a 0 s duration would schedule an expiry at `now`, an `EngineBug` mid-match).
 
   `perfidia-1`'s `check` adds `siegeDuration > recallWindow` and `sameIslandTravel ≥ minTravel` (ruleset §16).
 
@@ -865,6 +866,7 @@ export interface Match {
   nextEventTime(): GameTime | null; // null once ended
   advanceTo(t: GameTime): StepOutput; // t >= now, else EngineMisuse
   apply(seat: PlayerId, a: Action): ApplyOutput; // at the current `now`
+  validate(seat: PlayerId, a: Action): Violation | null; // steps 1–3 of apply below, guarded alike; writes nothing
   hash(): Hash64; // FNV-1a 64 of canonical state
   snapshot(afterN: number): Snapshot; // a canonical copy, never a reference to the live state
   checkInvariants(level: "step" | "checkpoint"): void; // throws EngineBug
@@ -908,6 +910,8 @@ if status = running: now = t
 2. `ruleset.hooks.guard?.(r, seat, a)`; a violation rejects.
 3. `handler = ruleset.hooks.actions?.[a.type] ?? domain.actions[a.type]`; with no handler (an `ext` action of a ruleset without one) reject `INVALID_ARGS`. `validate` (pure). A violation rejects; the state is untouched.
 4. `apply`; `afterStep({cause: action, events})`; `invariants("step")`; optional trace hash. The result carries the validation warnings.
+
+`validate(seat, a)` runs steps 1–3 only and returns the violation `apply` would return, or `null`. A throw in the guard or the handler's `validate` is an `EngineBug` there too. The gateway uses it to name the binding constraint of a `"max"` count that resolves to 0 (§7.4), so it never calls a ruleset hook outside the kernel's guard.
 
 Engine errors fall into four classes: **player errors** are `Violation` data; **`MatchConfigError`** and **`SnapshotMismatch`** reject a setup or a snapshot before anything runs; **`EngineMisuse`** (a driver bug, e.g. time going backwards) and **`EngineBug`** (an invariant failure or a handler throwing) are thrown and abort the match.
 
@@ -1118,7 +1122,7 @@ export type Action =
 | 2   | Schema                             | gateway runtime (`ToolSpec.args.safeParse`) | `INVALID_ARGS` with the Zod path and the expected shape; also an optional field the ruleset does not support (§3.7)                                                         | `gw`                       |
 | 3   | Ids and visibility (fog)           | gateway runtime, via the seat's view        | `UNKNOWN_ID` (a hidden id reads exactly like a missing one), `NOT_OWNER`                                                                                                    | `gw`                       |
 | 4   | Interface caps                     | gateway seat logic                          | `DAILY_CAP` (attacks, messages), `NOTE_TOO_LONG`                                                                                                                            | `gw`                       |
-| 5   | Normalisation                      | gateway runtime                             | – (batch expansion; `"max"` counts resolved per item; `end_turn` times clamped; the log stores resolved numbers)                                                            | –                          |
+| 5   | Normalisation                      | gateway runtime                             | – (batch expansion; `"max"` counts resolved per item; `end_turn` times clamped; the log stores resolved numbers); a `"max"` item resolved to 0 fails (§7.4)                 | `gw` with `i` (that item)  |
 | 6   | Authoritative validation and apply | engine (`guard`, then the handler)          | engine `Violation`s                                                                                                                                                         | `act` line with its result |
 
 - **Fog-safe validation**: whether an engine action is valid may depend only on the actor's own state and public state. For example, a shipment to a full warehouse is accepted, and the overflow is reported on arrival to the recipient only (§8.6). Violation `details` contain only own or public facts; non-interference properties P10 and P15 check every code and event.
@@ -1147,7 +1151,8 @@ export type ToolResult =
 
 - **Every result carries `t`**, the game second at which the call was applied, so an agent always knows "now" in real time.
 - **Domain codes** (closed enum in protocol): `INVALID_ARGS`, `UNKNOWN_ID`, `NOT_OWNER`, `TURN_OVER`, `ROUND_TRIP_CAP`, `CALLS_CAP`, `DAILY_CAP`, `MATCH_ENDED`, `ELIMINATED`, `NOTE_TOO_LONG`, `INSUFFICIENT_RESOURCES`, `EXCEEDS_STORAGE`, `INSUFFICIENT_POPULATION`, `REQUIREMENT_MISSING`, `MAX_LEVEL`, `QUEUE_FULL`, `QUEUE_ITEM`, `BATCH_LIMIT`, `INSUFFICIENT_UNITS`, `NO_UNITS`, `TRANSPORT_CAPACITY`, `SHIPMENT_CAPACITY`, `ATTACK_PROTECTION`, `INVALID_TARGET`, `NO_FREE_SLOT`, `SETTLER_REQUIRED`, `SPY_GOLD`, `NOT_RECALLABLE`, `NOTHING_STATIONED`, `AMBIGUOUS_GROUP`, `TEXT_TOO_LONG`, `PROPOSAL_LIMIT`, `PROPOSAL_NOT_FOUND`, `ALREADY_ALLIED`, `ALLIANCE_FULL`, `NOT_IN_ALLIANCE`, `PACT_LIMIT`, `PACT_NOT_FOUND`, `INTERNAL`. `perfidia-1` adds the violations `CITY_BESIEGED` and `NOT_BESIEGER`.
-- **`INTERNAL`** is returned only by the gateway, when its own code throws unexpectedly before anything reached the engine: a read tool, a gateway tool (`write_note`, `read_notes`, `end_turn`), an extra read tool, or layers 1–5 of an engine tool. The state is untouched, and a `gw` line records the call with `code: "INTERNAL"` and the error message (§10.2). In strict mode (tests) it is fatal. Anything thrown inside the engine (`validate`, `apply`, `advanceTo`, a ruleset hook) is never `INTERNAL`: it is an `EngineBug` and aborts the match with a `fatal` line (§5.3). The exit test counts `INTERNAL` `gw` lines and requires zero.
+- **`INTERNAL`** is returned only by the gateway, when its own code throws unexpectedly before anything reached the engine: a read tool, a gateway tool (`write_note`, `read_notes`, `end_turn`), an extra read tool, or layers 1–5 of an engine tool (the turn gate included). The state is untouched, and a `gw` line records the call with `code: "INTERNAL"` and the error message (§10.2). In strict mode (tests) it is fatal. Anything thrown inside the engine (`validate`, `apply`, `advanceTo`, a ruleset hook) is never `INTERNAL`: it is an `EngineBug` and aborts the match with a `fatal` line (§5.3). The exit test counts `INTERNAL` `gw` lines and requires zero.
+- **After the call changed something** (an engine action was submitted, a batch item's `gw` line was written, the notebook was rewritten or `end_turn` set the wake and ended the turn), a gateway throw is never `INTERNAL`, whose "nothing was applied" would be false and whose retry could apply an attack twice: it is a `HostFailure`, which aborts the match with a `fatal` line of kind `driver`. So that wording bugs cannot cause it, explanations given after such a change (an engine rejection, a batch item, a warning) fall back to the bare code as their message when their explainer throws, as `recordAct` does for `lastTurn`; a gateway line that was written but could not be recorded (`recordGw`) is a `HostFailure` too.
 - **Warnings** are accepted actions with a caveat. Gateway warnings: `WAKE_CLAMPED` (`end_turn`, §8.3). Ruleset warnings come from `DepartureVerdict.warnings` or `validate`; `perfidia-1` emits `CAPITAL_IMMUNE` when an attack carrying settlers will land on a capital before t = 172800 ("a win will be a raid; the settlers come back").
 - **Details conventions** (bots rely on them, never on prose): details are flat; resources use `need_wood`, `have_wood`, `rate_wood` (same for stone and gold); any time-gated rejection carries `availableAt` (game time, `null` = never); unit shortages carry `unit`, `requested`, `home` and, when units are away, `backAt`; `QUEUE_ITEM` carries `city`, `item`.
 - **Wording**: `gateway/present/explain.ts` maps each domain code to `{message, hint}` with numbers and game times; ruleset codes and warnings use `ruleset.errors[code]`. Both receive the deterministic formatter `fmt: Fmt` from `core/format.ts`. For `QUEUE_ITEM`, the explainer looks up the seat's archive: "#12 of c14 completed at D3 14:02:10" or "c14 has no item #12; queued: #13, #14".
@@ -1169,7 +1174,7 @@ With 1210 gold exactly in stock (S = 1210 · 3600) at t = 223320 and +310 gold/h
 ### 7.4 High-level actions
 
 - `build(city, buildings[])` and `recruit(city, orders[])` expand to one engine action per item, applied as consecutive actions (consecutive `n` in the log), as `perfidia-1` §1.4 requires. Every item is attempted, and the result reports each item: `{ok: true, t, data: {items: [{ok: true, item: 7, building: "hall", level: 3, end: [7200, "D1 02:00"]}, {ok: false, code, message, hint}]}}`. The top-level `ok` is `false` only when layers 1–4 reject the whole call. Batches are not atomic; the `interface` block of the `rules` tool says so (§8.1).
-- **`"max"` counts** are resolved for each item just before it is submitted, after the earlier items of the batch were applied, as the minimum of: affordable by current stock, free pop under the cap (queued pop included), the queue's `maxCount`, the unit's `maxPerOrder`, and nothing if the queue is full. If it resolves to 0, the item fails with the error of the binding constraint and no engine action is sent. The log stores the resolved count.
+- **`"max"` counts** are resolved for each item just before it is submitted, after the earlier items of the batch were applied, as the minimum of: affordable by current stock, free pop under the cap (queued pop included), the queue's `maxCount`, the unit's `maxPerOrder`, and nothing if the queue is full. If it resolves to 0, the item fails with the error of the binding constraint (the violation `Match.validate` gives a count of 1, §5.3) and no engine action is sent: a `gw` line with the item's index `i`, the code and its details records it, numbered in sequence with the batch's `act` lines, so the summary counts it and `lastTurn` lists it exactly as it lists the engine's rejection of the same order with an explicit count (§8.2, §10.2). The log stores the resolved count of every order that reached the engine.
 - `recall_troops` has three modes, exactly one per call: `{movement}` → `recall`, `{stationedAt, home?, units?}` → `recall_stationed`, `{dismiss: {city, player}}` → `dismiss`. They are optional fields of one object (§3.7); a call naming no mode or two modes, or `home`/`units` without `stationedAt`, is `INVALID_ARGS`.
 - Every success result carries the useful consequences: ids, queue item numbers, completion or arrival times (as pairs), and the cost paid.
 
@@ -1293,7 +1298,7 @@ Pure functions of `(match.read(), seat, gatewayState)` that always build fresh o
 - Other lists are truncated with a `"more"` count that names the exact call to dig further: `moves` → `view_player` on yourself; `msgs` → `read_notes {search: {scope: "mine", kinds: ["message"], since}}`; `news` → `read_notes {search: {scope: "public", since}}`.
 - `proposals` lists **every** open proposal to and from the seat, with its text (taken from the seat's archive) and name.
 - Player-authored text (message and proposal texts, alliance and city names) is a typed field, never part of the instructions; control characters are stripped. A message body is cut at 300 characters in the briefing (`"cut": true`); `read_notes {open: id}` returns the full text.
-- `lastTurn` says how the previous turn ended (`end_turn`, `empty_round`, `round_cap`, `timeout`, `error`, `match_ended`), lists the failed results the agent never saw (the last round's failures, calls rejected with `TURN_OVER` or `CALLS_CAP`), and gives the effective next wake. Repeated `TURN_OVER` and `CALLS_CAP` rejections are folded into one entry per code with a `count`, so the list stays bounded however many calls an agent sends.
+- `lastTurn` says how the previous turn ended (`end_turn`, `empty_round`, `round_cap`, `timeout`, `error`, `match_ended`, `eliminated`), lists the failed results the agent never saw (the last round's failures, batch items included, and calls rejected with `TURN_OVER` or `CALLS_CAP`), and gives the effective next wake. Repeated `TURN_OVER` and `CALLS_CAP` rejections are folded into one entry per code with a `count`, so the list stays bounded however many calls an agent sends.
 
 ### 8.3 Tools (`runtime/tools.ts`)
 
@@ -1347,9 +1352,15 @@ export interface ToolEnv {
   readonly match: Match;
   readonly seat: PlayerId;
   readonly gw: GatewayState;
+  readonly gatewayRules: GatewayRules; // daily caps, self-wake range
   readonly turn: { index: number; round: number; call: number };
   submit(a: Action, i: number): ApplyOutput; // writes the `act` line; host routes events
+  rejectItem(i: number, error: ToolError): void; // a batch item that never reached the engine ("max" = 0): its `gw` line with `i`
+  note(mode: "append" | "replace", text: string): void; // the `note` line of an accepted write_note
+  endTurn(wakeAt: GameTime | null): { at: GameTime; clamped: boolean } | null; // sets the self-wake (null keeps it), ends the turn after the round
 }
+// Every change of state a tool makes goes through submit, rejectItem, note or endTurn: invokeTool
+// tracks them to tell INTERNAL (nothing changed) from a HostFailure (§7.3).
 export interface ToolDefinition {
   readonly name: string;
   readonly description: string;
@@ -1529,7 +1540,7 @@ export interface Recipient {
 export interface LogSink {
   write(line: LogLine): void; // synchronous; serialises the line at once (canonical JSON)
   snapshot?(snap: Snapshot): void; // serialises at once
-  flush?(): void;
+  flush?(): void; // called after each step that wrote ckpt lines, after the end line and after a fatal line (§10.1)
 }
 export class MemorySink implements LogSink {
   readonly lines: string[]; // canonical JSON text, one per line, byte-identical to the file sink
@@ -1587,7 +1598,7 @@ export function runMatch(
 ```
 
 - `MatchHost` lives in gateway sources, where `Date` and `performance` are banned: it gets wall-clock values only through `wall`, and lockstep turn durations only through the optional `time`.
-- On an `EngineBug`, `EngineMisuse` or (strict) agent error, the host writes a `fatal` line, flushes and rethrows. A `MatchConfigError` is thrown before the header line is written.
+- On an `EngineBug`, `EngineMisuse`, `HostFailure` (a sink that failed, or a gateway throw after the call changed something, §7.3) or (strict) agent error or `INTERNAL`, the host writes a `fatal` line, flushes and rethrows. A `MatchConfigError` is thrown before the header line is written.
 
 ---
 
@@ -1730,7 +1741,7 @@ runTurn(seat):
 ### 9.4 Time sources and fast real-time tests
 
 - **`VirtualTime`** (`clock/virtual.ts`, pure): implements `TimeSource` with timers ordered by `(ms, insertion seq)`; `cancel()` removes a timer. `run(main)` loops: `await yieldMacrotask()` (injected; the `sim` harness passes `() => new Promise(r => setImmediate(r))`), return if `main` settled, otherwise jump `nowMs` to the earliest timer and resolve it. One macrotask yield drains every microtask chain, so in-process agents interleave deterministically. If `main` is pending with no timer left, it throws `VirtualTimeDeadlock` (an agent awaited something virtual time does not drive, such as real I/O). Several matches may each run their own `VirtualTime` in one process (§13.4).
-- **`SystemTime`** (`sim/src/harness/system-time.ts`): `Math.floor(performance.now())` and a cancellable `setTimeout`. Used for smoke runs at very high speed (e.g. 100800×: 7 game days in about 6 s).
+- **`SystemTime`** (`sim/src/harness/time.ts`, with the `VirtualTime` wiring): `Math.floor(performance.now())` and a cancellable `setTimeout`. Used for smoke runs at very high speed (e.g. 100800×: 7 game days in about 6 s).
 - **Bots in real time** are wrapped by `withThinkTime(agent, {time, latencyMs, seed})` (bots package): each round sleeps a seeded latency (e.g. 2–60 s of wall time), so turns span game time and seats overlap. Under `VirtualTime` a 7-day match at speed 3 runs in seconds and is reproducible (Level G); under `SystemTime` it is not reproducible, but Level E must pass, which proves the log captures real async interleavings.
 - Driver tests use a scripted `FakeHost`. The game-to-wall mapping is monotone and `gameAt(wallAt(g)) = g` for speeds up to 1000 game-seconds per wall-second (property; above that a wall millisecond spans several game seconds and `gameAt(wallAt(g)) ≥ g`, so a wake can open a few game seconds late, e.g. up to 100 at 100800×); interleavings of a small scenario are explored with `fc.scheduler` (every round resolves once, log order is consistent, replay passes).
 
@@ -1751,7 +1762,7 @@ runs/<name>/
   summary.json          §12.2
 ```
 
-`LogSink` is synchronous (`write(line)`, `snapshot(snap)`, `flush()`) and serialises at `write`: the file sink buffers the text and flushes at checkpoints and at the end; `MemorySink` keeps the same text in an array for tests, so a golden built in memory is byte-identical to a CLI file.
+`LogSink` is synchronous (`write(line)`, `snapshot(snap)`, `flush()`) and serialises at `write`: the file sink buffers the text and appends it at each `flush`, and the host calls `flush` after every engine step that wrote `ckpt` lines (so before that hour's snapshot), after the `end` line (before the final snapshot) and after a `fatal` line. A killed run therefore keeps its log up to its last checkpoint, and no snapshot file exists without its `ckpt` line on disk. `MemorySink` keeps the same text in an array for tests, so a golden built in memory is byte-identical to a CLI file.
 
 ### 10.2 Line kinds (`protocol/src/log.ts`)
 
@@ -1779,7 +1790,7 @@ Keys starting with `wall` are informational, present only when the host has a `w
 {"k":"fatal","t":5400,"error":{"kind":"invariant"|"engine"|"driver"|"agent","message":"…","details":{}}}
 ```
 
-- `n` is a global sequence over `act`, `gw`, `obs` and `note` lines. `act` lines exist exactly for calls that reached the engine, accepted or rejected; `i` is the item index of an expanded batch. A `gw` line records a call rejected by the gateway (layers 1–4 of §7.2, with the `details` its explanation needs) or an `INTERNAL` failure (with `error`).
+- `n` is a global sequence over `act`, `gw`, `obs` and `note` lines. `act` lines exist exactly for calls that reached the engine, accepted or rejected; `i` is the item index of an expanded batch. A `gw` line records a call rejected by the gateway (layers 1–4 of §7.2, with the `details` its explanation needs), an `INTERNAL` failure (with `error`), or, with the item index `i`, a batch item the gateway failed before it reached the engine (a `"max"` count resolved to 0, §7.4), in sequence with the batch's `act` lines.
 - Every engine event gets an `ev` line (needed by summaries, the gateway rebuild and the future spectator view; covered by `evHash`). The batch line records the seeded lockstep order (§9.2).
 - `turn.selfAt` is the self-wake pending after the turn (or `null`); `next` is the effective next wake, which may be an earlier urgent or social one. `defer` records a seat moved to `to` by the lockstep per-second turn cap. `controller` records a hand-off (§8.7); the header's `controllers` are the controllers at t = 0.
 - **Line order.** The host writes lines in the order it changes state: an `act` line comes before the `ev` lines of the events its action emitted; the `ev` and `ckpt` lines produced by `advanceTo(t)` come before the next `act`, `wake`, `batch`, `defer` or `controller` line stamped `t`; a `ckpt` line follows the `ev` lines of every event at or before its hour boundary. `verifyLog` with `compareEvents` and `rebuildGatewayState` rely on this order.
@@ -1858,7 +1869,7 @@ export function rebuildGatewayState(
 ): { gw: GatewayState; report: ReplayReport };
 ```
 
-- It runs the engine's `verifyLog` (Level E, so the engine re-run supplies the violation details that the `lastTurn` messages need) and folds every line through `onLine`, calling the same `seat/` functions as the live host: `ev` → `deliver`; `wake` → `begin` (checking the line's reasons, charge and budgets), then `briefed`; `act` → `recordAct` (daily counters and the round's failures); `gw` → `recordGw` (the round's failures); `note` → `writeNote`; `turn` → `closeTurn` (`end`, `selfAt` and `lastTurn`); `defer` → `defer`. `obs`, `batch`, `controller`, `ckpt` and `end` change no gateway state.
+- It runs the engine's `verifyLog` (Level E, so the engine re-run supplies the violation details that the `lastTurn` messages need) and folds every line through `onLine`, calling the same `seat/` functions as the live host: `ev` → `deliver`; `wake` → `begin` (checking the line's reasons, charge and budgets), then `briefed`; `act` → `recordAct` (daily counters and the round's failures); `gw` → `recordGw` (the round's failures, batch items with `i` included; the message is regenerated from the code and details, and is the bare code when the explainer throws, as in the live host, §7.3); `note` → `writeNote`; `turn` → `closeTurn` (`end`, `selfAt` and `lastTurn`); `defer` → `defer`. `obs`, `batch`, `controller`, `ckpt` and `end` change no gateway state.
 - **Test** (T16, in `sim/src/hardening/` with the four bots, since `gateway` cannot depend on `bots`): at the end of 1-day lockstep and `VirtualTime` runs of both rulesets, the rebuilt state equals the live one returned by `runMatch` (canonical JSON). A drift means a gateway-state change that no line records; the fix is a line, never a special case in the rebuild.
 - A turn still open at the end of the log (a crash) is reported in the result (`inTurn: true`); closing it is the resuming host's job.
 
@@ -2006,7 +2017,7 @@ All tests use `bun:test` and live next to the code as `*.test.ts` under `src/`; 
 | `sandbox-1@1.0.0`  | `lockstep-6p-3d`   | past `hill_open` (172800)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
 |                    | `rt-virtual-6p-1d` | as above                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
 
-- **Level E** of every golden runs in every `bun test`, forever, through `packages/sim/src/golden.test.ts` (T17; default suite, outside `exit/`). It replays logged actions, so it does not depend on the bots. The test walks `fixtures/golden/**`, runs Level E on each golden and Level G when its labels exist, recomputes the fingerprints of §13.6, and asserts that every published ref in `RULESETS` has at least one golden and a fingerprint entry. It also runs the same checks on a tampered temporary copy of a golden and on a `perfidia-1` descriptor whose cheat sheet is altered, and asserts that both fail.
+- **Level E** of every golden runs in every `bun test`, forever, through `packages/sim/src/golden.test.ts` (T17; default suite, outside `exit/`). It replays logged actions, so it does not depend on the bots. The test walks `fixtures/golden/**`, runs Level E on each golden and Level G when it replays and its labels exist (a re-simulation that throws is reported as that golden's problem), recomputes the fingerprints of §13.6, and asserts that every published ref in `RULESETS` has at least one golden and a fingerprint entry, and that every golden a fingerprint entry records is still on disk (a deleted golden fails the guard). It also runs the same checks on a tampered temporary copy of a golden and on a `perfidia-1` descriptor whose cheat sheet is altered, and asserts that both fail.
 - **Level G** runs only for goldens whose controller labels all exist in the current bots registry (the scenario agent is not a registered bot, so `scenario-late` is Level E only). A bot behaviour change bumps its label (§11.1); the new label gets new goldens, and the old ones keep their Level E check.
 - **Append-only**: `sim golden --update` writes only goldens that do not exist yet (a new ref or a new bot label). Nothing rewrites a committed golden, whatever `ENGINE_VERSION` says. A log-format change keeps a reader for the old format.
 

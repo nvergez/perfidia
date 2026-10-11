@@ -3,9 +3,10 @@
 // fatal paths, snapshots, hand-offs and the lockstep per-second cap, with scripted agents.
 
 import { describe, expect, test } from "bun:test";
-import { verifyLog, type AnyRuleset } from "@perfidia/engine";
+import { createMatch, verifyLog, type AnyRuleset } from "@perfidia/engine";
 import { EngineBug, MatchConfigError } from "@perfidia/engine/kernel";
 import { AgentRoundError } from "@perfidia/gateway/clock";
+import { seatOf } from "@perfidia/gateway/seat";
 import {
   ToolResultSchema,
   type CityId,
@@ -14,13 +15,18 @@ import {
   type PlayerId,
   type RoundInput,
   type SeatAgent,
+  type Snapshot,
+  type ToolError,
   type ToolResult,
 } from "@perfidia/protocol";
 import {
   GatewayInternalError,
+  HostFailure,
+  MatchHost,
   MemorySink,
   createToolRegistry,
   runMatch,
+  type LogSink,
   type ToolRegistry,
   type ToolSpec,
 } from "./index.ts";
@@ -97,6 +103,60 @@ function throwingViewMap(ruleset: AnyRuleset): ToolRegistry {
   };
   tools.set("view_map", broken);
   return tools;
+}
+
+/** The ruleset's tools, with `name` made to run its real handler and then throw (a test double). */
+function throwingAfter(ruleset: AnyRuleset, name: string): ToolRegistry {
+  const tools = new Map(createToolRegistry(ruleset));
+  const real = tools.get(name);
+  if (real === undefined) throw new Error(`no ${name}`);
+  const broken: ToolSpec = {
+    ...real,
+    handle(env, args) {
+      real.handle(env, args);
+      throw new Error("explaining the result failed");
+    },
+  };
+  tools.set(name, broken);
+  return tools;
+}
+
+/** A host whose turn gate throws (a test double of layer 1). */
+class BrokenGate extends MatchHost {
+  override gate(): ToolError | null {
+    throw new Error("the gate is stuck");
+  }
+}
+
+function brokenGateHost(strict: boolean): { host: MatchHost; sink: MemorySink } {
+  const setup = setupOf(SANDBOX, 2);
+  const sink = new MemorySink();
+  const host = new BrokenGate({
+    match: createMatch(setup, SANDBOX, { invariants: "step" }),
+    sink,
+    agents: agentsFor(setup, {}),
+    clock: { kind: "lockstep", maxTurnsPerSecond: 3 },
+    strict,
+  });
+  host.start();
+  return { host, sink };
+}
+
+/** A sink that records the order of writes, flushes and snapshots. */
+class Recording implements LogSink {
+  readonly events: string[] = [];
+
+  write(line: LogLine): void {
+    this.events.push(line.k === "ckpt" ? `ckpt ${line.hour}` : line.k);
+  }
+
+  snapshot(snap: Snapshot): void {
+    this.events.push(`snapshot ${snap.hour}`);
+  }
+
+  flush(): void {
+    this.events.push("flush");
+  }
 }
 
 /** Reads the map every hour. */
@@ -315,7 +375,7 @@ describe("batches and max", () => {
     ]);
   });
 
-  test('"max" that resolves to 0 sends nothing and names the binding constraint', () => {
+  test('"max" that resolves to 0 sends nothing, names the binding constraint and is logged as a gw item for lastTurn', () => {
     const setup = setupOf(PERFIDIA, 6, {
       "start.capital.buildings.barracks": 1,
       "start.capital.stock.stone": 0,
@@ -327,18 +387,45 @@ describe("batches and max", () => {
       { unit: "guard", count: "max" },
       { unit: "raider", count: "max" },
     ];
-    h.execute({ calls: [call("recruit", { city, orders })] });
+    h.execute({ calls: [call("recruit", { city, orders }), call("end_turn")] });
     const [r] = h.input().results;
     if (!r?.ok) throw new Error("the call failed as a whole");
     // No stone: a guard (30/60/30) is unaffordable, so "max" is 0 and a count of 1 names the
-    // shortage; raiders (50/20/60) need stone too. No act line is written for either.
+    // shortage; raiders (50/20/60) need stone too. No act line is written for either: each item
+    // gets a gw line with its index and the details, numbered like the items of a batch.
     expect(r.data["items"]).toMatchObject([
       { ok: false, code: "INSUFFICIENT_RESOURCES", details: { unit: "guard", need_stone: 60 } },
       { ok: false, code: "INSUFFICIENT_RESOURCES", details: { unit: "raider", need_stone: 20 } },
     ]);
-    expect(sink.parsed().filter((l) => l.k === "act")).toEqual([]);
-    h.execute({ calls: [] });
+    const lines = sink.parsed();
+    expect(lines.filter((l) => l.k === "act")).toEqual([]);
+    const gw = linesOf(lines, "gw");
+    expect(gw.map((l) => [l.n, l.i, l.tool, l.r.code, l.r.details?.["unit"]])).toEqual([
+      [1, 0, "recruit", "INSUFFICIENT_RESOURCES", "guard"],
+      [2, 1, "recruit", "INSUFFICIENT_RESOURCES", "raider"],
+    ]);
+    expect(gw.every((l) => l.error === undefined)).toBe(true);
     h.close();
+    // The agent never saw these results (its last round): lastTurn lists both, as it lists the
+    // engine's rejection of the same order with an explicit count.
+    const unseen = seatOf(host.gw, "p1").lastTurn?.unseen ?? [];
+    expect(unseen.map((u) => [u.tool, u.code, u.count])).toEqual([
+      ["recruit", "INSUFFICIENT_RESOURCES", undefined],
+      ["recruit", "INSUFFICIENT_RESOURCES", undefined],
+    ]);
+    expect(unseen[0]?.message).toContain("guard");
+    expect(unseen[1]?.message).toContain("raider");
+
+    const explicit = manualHost(PERFIDIA, setup);
+    const h2 = explicit.host.openTurn("p1");
+    const one = [
+      { unit: "guard", count: 1 },
+      { unit: "raider", count: 1 },
+    ];
+    h2.execute({ calls: [call("recruit", { city, orders: one }), call("end_turn")] });
+    h2.close();
+    expect(explicit.sink.parsed().filter((l) => l.k === "act")).toHaveLength(2);
+    expect(seatOf(explicit.host.gw, "p1").lastTurn?.unseen).toEqual(unseen);
   });
 });
 
@@ -399,6 +486,129 @@ describe("INTERNAL and fatal paths", () => {
     const fatal = lines.at(-1);
     expect(fatal).toMatchObject({ k: "fatal", t: 0, error: { kind: "driver" } });
     expect(fatal?.k === "fatal" ? fatal.error.message : "").toContain("the map is on fire");
+  });
+
+  test("a tool that throws after it changed the match is a HostFailure, never INTERNAL", () => {
+    const setup = setupOf(SANDBOX, 2);
+    const cases: [string, (city: CityId) => unknown][] = [
+      ["build", (city) => ({ city, buildings: ["sawmill"] })],
+      ["write_note", () => ({ text: "plan", mode: "replace" })],
+      ["end_turn", () => ({ nextWakeIn: 3600 })],
+    ];
+    for (const [tool, args] of cases) {
+      const tools = throwingAfter(SANDBOX, tool);
+      const { host, match, sink } = manualHost(SANDBOX, setup, { tools });
+      const h = host.openTurn("p1");
+      const city = h.input().briefing.cities[0]?.id ?? "c0";
+      const before = match.hash();
+      expect(() => h.execute({ calls: [call(tool, args(city))] })).toThrow(HostFailure);
+      const lines = sink.parsed();
+      // What the call did stays done and logged, and no gw line claims that nothing was applied.
+      expect(lines.filter((l) => l.k === "gw")).toEqual([]);
+      const s = seatOf(host.gw, "p1");
+      if (tool === "build") {
+        expect(linesOf(lines, "act").map((l) => l.r)).toEqual([{ ok: true }]);
+        expect(match.hash()).not.toBe(before);
+      } else if (tool === "write_note") {
+        expect(linesOf(lines, "note").map((l) => l.text)).toEqual(["plan"]);
+        expect(s.notes).toBe("plan");
+      } else {
+        expect(s.wake.selfAt).toBe(3600);
+      }
+    }
+  });
+
+  test("runMatch aborts on such a failure with a fatal line after the applied action, strict or not", async () => {
+    const setup = setupOf(SANDBOX, 2);
+    let city: CityId = "c0";
+    const p1 = new Scripted("test:builder", (input) => {
+      city = own(input);
+      return { calls: [call("build", { city, buildings: ["sawmill"] })] };
+    });
+    for (const strict of [false, true]) {
+      const sink = new MemorySink();
+      const run = runMatch({
+        setup,
+        ruleset: SANDBOX,
+        agents: agentsFor(setup, { p1 }),
+        clock: { kind: "lockstep" },
+        sink,
+        strict,
+        tools: throwingAfter(SANDBOX, "build"),
+      });
+      // oxlint-disable-next-line no-await-in-loop -- one mode at a time, each with its own sink
+      expect(await rejection(run)).toBeInstanceOf(HostFailure);
+      const lines = sink.parsed();
+      expect(linesOf(lines, "act").map((l) => [l.tool, l.r])).toEqual([["build", { ok: true }]]);
+      const fatal = lines.at(-1);
+      expect(fatal).toMatchObject({ k: "fatal", error: { kind: "driver" } });
+      expect(fatal?.k === "fatal" ? fatal.error.message : "").toContain(
+        "cannot be reported as INTERNAL",
+      );
+      expect(lines.some((l) => l.k === "gw")).toBe(false);
+    }
+  });
+
+  test("a turn gate that throws gives INTERNAL with a gw line, runs nothing, and is fatal in strict mode", () => {
+    const { host, sink } = brokenGateHost(false);
+    const h = host.openTurn("p1");
+    h.execute({ calls: [call("view_map"), call("end_turn")] });
+    const results = h.input().results;
+    expect(results.map((r) => (r.ok ? "ok" : r.code))).toEqual(["INTERNAL", "INTERNAL"]);
+    const lines = sink.parsed();
+    expect(linesOf(lines, "gw").map((l) => [l.n, l.tool, l.r, l.error])).toEqual([
+      [1, "view_map", { ok: false, code: "INTERNAL" }, "Error: the gate is stuck"],
+      [2, "end_turn", { ok: false, code: "INTERNAL" }, "Error: the gate is stuck"],
+    ]);
+    expect(lines.some((l) => l.k === "obs")).toBe(false);
+    expect(h.done).toBe(false);
+
+    const strict = brokenGateHost(true);
+    const h2 = strict.host.openTurn("p1");
+    expect(() => h2.execute({ calls: [call("view_map")] })).toThrow(GatewayInternalError);
+    expect(strict.sink.parsed().at(-1)).toMatchObject({ k: "gw", r: { code: "INTERNAL" } });
+  });
+
+  test("an explainer that throws on an engine rejection gives the bare code, never INTERNAL", () => {
+    const wordless: AnyRuleset = {
+      ...SANDBOX,
+      errors: {
+        ...SANDBOX.errors,
+        CITY_NAME_INVALID: () => {
+          throw new Error("no words");
+        },
+      },
+    };
+    const setup = setupOf(SANDBOX, 2);
+    const match = createMatch(setup, wordless, { invariants: "step" });
+    const sink = new MemorySink();
+    const host = new MatchHost({
+      match,
+      sink,
+      agents: agentsFor(setup, {}),
+      clock: { kind: "lockstep", maxTurnsPerSecond: 3 },
+      strict: true,
+    });
+    host.start();
+    const h = host.openTurn("p1");
+    const city = h.input().briefing.cities[0]?.id ?? "c0";
+    h.execute({ calls: [call("rename_city", { city, name: "A".repeat(20) }), call("end_turn")] });
+    const [renamed] = h.input().results;
+    expect(renamed).toMatchObject({
+      ok: false,
+      code: "CITY_NAME_INVALID",
+      message: "CITY_NAME_INVALID",
+      details: { city, reason: "length" },
+    });
+    h.close();
+    const lines = sink.parsed();
+    expect(linesOf(lines, "act").map((l) => l.r)).toEqual([
+      { ok: false, code: "CITY_NAME_INVALID" },
+    ]);
+    expect(lines.some((l) => l.k === "gw")).toBe(false);
+    expect(seatOf(host.gw, "p1").lastTurn?.unseen).toEqual([
+      { tool: "rename_city", code: "CITY_NAME_INVALID", message: "CITY_NAME_INVALID" },
+    ]);
   });
 
   test("an agent error in strict mode writes a fatal line of kind agent and rethrows", async () => {
@@ -512,6 +722,33 @@ describe("snapshots, hand-offs and the per-second cap", () => {
     }
     const final = snaps.at(-1);
     expect(lines.at(-1)).toMatchObject({ k: "end", h: final?.hash });
+  });
+
+  test("the sink is flushed after every step that wrote checkpoint lines, before their snapshot, and around the final one", async () => {
+    const setup = setupOf(SANDBOX, 2, { "time.matchEnd": 6 * 3600 });
+    const sink = new Recording();
+    await runMatch({
+      setup,
+      ruleset: SANDBOX,
+      agents: agentsFor(setup, { p1: hourly(), p2: hourly() }),
+      clock: { kind: "lockstep" },
+      sink,
+      strict: true,
+      snapshotEvery: 2,
+    });
+    const ev = sink.events;
+    const ckpts = ev.flatMap((e, i) => (e.startsWith("ckpt ") ? [i] : []));
+    expect(ckpts).toHaveLength(5);
+    // After a ckpt line, only the step's other ev and ckpt lines come before the flush.
+    for (const i of ckpts) {
+      const next = ev.slice(i + 1).find((e) => e !== "ev" && !e.startsWith("ckpt "));
+      expect([ev[i], next]).toEqual([ev[i], "flush"]);
+    }
+    for (const hour of [2, 4]) {
+      const at = ev.indexOf(`snapshot ${hour}`);
+      expect(ev.slice(ev.indexOf(`ckpt ${hour}`), at)).toContain("flush");
+    }
+    expect(ev.slice(-4)).toEqual(["end", "flush", "snapshot 5", "flush"]);
   });
 
   test("a hand-off writes a controller line at the seat's first turn at or after its time", async () => {

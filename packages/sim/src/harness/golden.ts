@@ -32,6 +32,9 @@ const GOLDEN_NAME = /^[a-z0-9][a-z0-9-]*$/;
 
 const byCodeUnit = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
 
+const errorText = (error: unknown): string =>
+  error instanceof Error ? error.message : String(error);
+
 export const FingerprintEntrySchema = z.strictObject({
   artefacts: Sha256Schema,
   /** Golden name → final hash at Level E. */
@@ -188,10 +191,12 @@ function firstDifference(a: string, b: string): number | null {
 
 /**
  * The freeze guard (§13.5, §13.6): every golden replays at Level E with the final hash its
- * fingerprint entry records, and re-simulates byte for byte (normalised) at Level G when its
- * controllers are bots of this build and its clock is reproducible (`levelG: false` skips it);
- * every fingerprint entry of a ref of `rulesets` matches the recomputed artefacts; every published
- * ref of `rulesets` has at least one golden and an entry. `ok` when there is no problem.
+ * fingerprint entry records, and re-simulates byte for byte (normalised) at Level G when it
+ * replays, its ruleset is one of `rulesets`, its controllers are bots of this build and its clock
+ * is reproducible (`levelG: false` skips it; a re-simulation that throws is a problem of that
+ * golden); every fingerprint entry of a ref of `rulesets` matches the recomputed artefacts, and
+ * every golden it records is still on disk; every published ref of `rulesets` has at least one
+ * golden and an entry. `ok` when there is no problem; the check itself never throws on a golden.
  */
 export async function checkGoldens(
   fixturesDir: string,
@@ -204,13 +209,14 @@ export async function checkGoldens(
   const fingerprints: Record<string, Sha256> = {};
   for (const rs of rulesets) fingerprints[rs.ref] = rulesetFingerprint(rs);
 
-  for (const g of listGoldens(fixturesDir)) {
+  const files = listGoldens(fixturesDir);
+  for (const g of files) {
     const where = `golden ${g.ref}/${g.name}`;
     let lines: LogLine[];
     try {
       lines = readJsonl(g.path);
     } catch (error) {
-      problems.push(`${where}: ${error instanceof Error ? error.message : String(error)}`);
+      problems.push(`${where}: ${errorText(error)}`);
       checks.push({ ref: g.ref, name: g.name, finalHash: null, levelG: "skipped" });
       continue;
     }
@@ -225,13 +231,26 @@ export async function checkGoldens(
     else if (e.hash !== null && e.hash !== recorded) {
       problems.push(`${where}: final hash ${e.hash}, ${FINGERPRINTS_FILE} records ${recorded}`);
     }
+    // Level G re-runs a golden that replays (a failed Level E is already a problem) of a ruleset of
+    // `rulesets`; a re-simulation that cannot run is a problem of this golden, not of the check.
     let levelG: GoldenCheck["levelG"] = "skipped";
-    if ((o.levelG ?? true) && header?.k === "header" && resimProblem(header, lines) === null) {
-      // oxlint-disable-next-line no-await-in-loop -- one re-simulation at a time keeps memory bounded
-      const again = await resimulate(lines, { rulesets });
-      const diff = firstDifference(normalisedText(lines), normalisedText(again.lines));
-      levelG = diff === null ? "pass" : "fail";
-      if (diff !== null) problems.push(`${where}: Level G re-simulation differs at line ${diff}`);
+    if (
+      (o.levelG ?? true) &&
+      header?.k === "header" &&
+      e.problem === null &&
+      rulesets.some((rs) => rs.ref === header.setup.ruleset) &&
+      resimProblem(header, lines) === null
+    ) {
+      try {
+        // oxlint-disable-next-line no-await-in-loop -- one re-simulation at a time keeps memory bounded
+        const again = await resimulate(lines, { rulesets });
+        const diff = firstDifference(normalisedText(lines), normalisedText(again.lines));
+        levelG = diff === null ? "pass" : "fail";
+        if (diff !== null) problems.push(`${where}: Level G re-simulation differs at line ${diff}`);
+      } catch (error) {
+        levelG = "fail";
+        problems.push(`${where}: Level G re-simulation failed: ${errorText(error)}`);
+      }
     }
     checks.push({ ref: g.ref, name: g.name, finalHash: e.hash, levelG });
   }
@@ -244,6 +263,12 @@ export async function checkGoldens(
       problems.push(
         `${FINGERPRINTS_FILE}: ${ref}'s artefacts changed (${entry.artefacts} recorded, ${now} now): a published version must not change (§3.5)`,
       );
+    }
+    // Goldens are append-only (§13.5): a recorded golden must still be on disk.
+    for (const name of Object.keys(entry.goldens).toSorted(byCodeUnit)) {
+      if (!files.some((g) => g.ref === ref && g.name === name)) {
+        problems.push(`golden ${ref}/${name} is recorded in ${FINGERPRINTS_FILE} but missing`);
+      }
     }
   }
   for (const rs of rulesets.filter((x) => x.status === "published")) {

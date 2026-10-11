@@ -1,10 +1,9 @@
 import { canonicalJson, utf8Encode } from "@perfidia/engine/core";
 import type { AnyRuleset, ExtraTool, ReadCtx } from "@perfidia/engine/contracts";
-import { domain, recruitMax } from "@perfidia/engine/domain";
+import { recruitMax } from "@perfidia/engine/domain";
 import { EngineBug, EngineMisuse, type ApplyOutput, type Match } from "@perfidia/engine/kernel";
 import { describeError } from "@perfidia/gateway/clock";
 import {
-  explain,
   leaderboard,
   rulesInfo,
   timePair,
@@ -23,7 +22,6 @@ import {
   seatOf,
   writeNote,
   type GatewayState,
-  type WakeScheduler,
 } from "@perfidia/gateway/seat";
 import {
   ActionSchema,
@@ -34,6 +32,8 @@ import {
   z,
   type Action,
   type CityId,
+  type GameTime,
+  type GatewayRules,
   type Json,
   type JsonObject,
   type PlayerId,
@@ -44,6 +44,7 @@ import {
   type ToolKind,
   type ToolName,
   type ToolResult,
+  type ToolWarning,
   type UnitCounts,
   type Violation,
   type ViolationDetails,
@@ -61,25 +62,37 @@ import { TOOL_DESCRIPTIONS } from "./descriptions.ts";
 //   4 interface caps attack launches and messages per game day, the notebook's size
 //   5 normalisation  batch expansion into consecutive actions, "max" counts, end_turn clamping
 //
-// then the engine (layer 6). Layer 1, the turn gate, is the turn handle's (`host.ts`). A tool never
-// throws on player input (P12); anything else its gateway code throws becomes `INTERNAL`, never an
-// engine error, which aborts the match (§7.3).
+// then the engine (layer 6). Layer 1, the turn gate, is the host's (`host.ts`). A tool never throws
+// on player input (P12). What its gateway code throws before the call changed anything becomes
+// `INTERNAL` (§7.3); once the call changed something (an engine action, a `gw` line of a batch item,
+// the notebook, the turn's end), a throw is a `HostFailure` that aborts the match, since `INTERNAL`
+// ("nothing was applied") would be false and a retry could apply the action twice. Engine errors
+// always abort the match.
 
 /** What a tool can do while it runs: the match, the seat's gateway state and the host's lines. */
 export interface ToolEnv {
   readonly match: Match;
   readonly seat: PlayerId;
   readonly gw: GatewayState;
-  /** The match's wake scheduler (`end_turn` sets the self-wake). An addition to §8.3's `ToolEnv`. */
-  readonly wake: WakeScheduler;
+  /** The match's gateway rules: the daily caps and the self-wake range. */
+  readonly gatewayRules: GatewayRules;
   /** The seat's turn number, the round (from 0) and the call's index in the round. */
   readonly turn: { readonly index: number; readonly round: number; readonly call: number };
   /** Applies engine action `a`, item `i` of the call: writes its `act` line and delivers its events. */
   submit(a: Action, i: number): ApplyOutput;
-  /** Writes the `note` line of an accepted `write_note` (an addition to §8.3's `ToolEnv`). */
+  /**
+   * Item `i` of a batch failed in the gateway and never reached the engine (a `"max"` count that
+   * resolved to 0, §7.4): writes its `gw` line (with `i` and the details) and records the failure
+   * for `lastTurn`.
+   */
+  rejectItem(i: number, error: ToolError): void;
+  /** Writes the `note` line of an accepted `write_note`. */
   note(mode: "append" | "replace", text: string): void;
-  /** `end_turn` ran: the turn ends after this round (an addition to §8.3's `ToolEnv`). */
-  endTurn(): void;
+  /**
+   * `end_turn`: sets the self-wake to `wakeAt` clamped into the self-wake range (`null` keeps the
+   * pending one) and ends the turn after this round. Returns the wake set, or `null`.
+   */
+  endTurn(wakeAt: GameTime | null): { readonly at: GameTime; readonly clamped: boolean } | null;
 }
 
 export interface ToolSpec<A = unknown> {
@@ -150,23 +163,61 @@ function explainEnv(env: ToolEnv): ExplainEnv {
   return { r: env.match.read(), seat: env.seat, gw: env.gw };
 }
 
+/** Errors that stop the match whatever the call: the engine's, and a host line that failed. */
+export function isFatal(e: unknown): boolean {
+  return e instanceof EngineBug || e instanceof EngineMisuse || e instanceof HostFailure;
+}
+
 /** The `ToolError` of a violation, worded for the seat at the current time. */
 export function fail(env: ToolEnv, v: Violation): ToolError {
   return toolError(v, explainEnv(env));
 }
 
+const CODE_ONLY_HINT = "The rules tool explains the rules behind this code.";
+
+/**
+ * `fail` for a result given once the call has changed state (an engine verdict, a batch item):
+ * when the explainer throws, the message is the bare code, as `recordAct` keeps it, instead of an
+ * error that could only be a `HostFailure` at that point.
+ */
+function rejection(env: ToolEnv, v: Violation): ToolError {
+  try {
+    return fail(env, v);
+  } catch (e) {
+    if (isFatal(e)) throw e;
+    const details = { ...v.details };
+    return {
+      ok: false,
+      t: env.match.now,
+      code: v.code,
+      message: v.code,
+      hint: CODE_ONLY_HINT,
+      details,
+    };
+  }
+}
+
+/** A warning on an accepted call (always after a change of state): the bare code if its explainer throws. */
+function warning(env: ToolEnv, w: Violation): ToolWarning {
+  try {
+    return toolWarning(w, explainEnv(env));
+  } catch (e) {
+    if (isFatal(e)) throw e;
+    return { code: w.code, message: w.code };
+  }
+}
+
 function ok(env: ToolEnv, data: unknown, warnings: readonly Violation[] = []): ToolResult {
   const t = env.match.now;
   if (warnings.length === 0) return { ok: true, t, data: jsonData(data) };
-  const e = explainEnv(env);
-  return { ok: true, t, data: jsonData(data), warnings: warnings.map((w) => toolWarning(w, e)) };
+  return { ok: true, t, data: jsonData(data), warnings: warnings.map((w) => warning(env, w)) };
 }
 
 const violation = (code: string, details: ViolationDetails): Violation => ({ code, details });
 
 /** The result of one engine action: its data and warnings, or its explained rejection. */
 function outcome(env: ToolEnv, out: ApplyOutput): ToolResult {
-  return out.ok ? ok(env, out.data, out.warnings) : fail(env, out.violation);
+  return out.ok ? ok(env, out.data, out.warnings) : rejection(env, out.violation);
 }
 
 function single(env: ToolEnv, a: Action): ToolResult {
@@ -220,48 +271,40 @@ function unsupported(env: ToolEnv, field: string): ToolError {
 
 /** Layer 4: today's allowance of attack launches or messages. */
 function dailyCap(env: ToolEnv, kind: "attacks" | "messages"): ToolError | null {
-  return checkDailyCap(seatOf(env.gw, env.seat), env.wake.rules, kind, env.match.now);
+  return checkDailyCap(seatOf(env.gw, env.seat), env.gatewayRules, kind, env.match.now);
 }
 
 // Batches (layer 5) ------------------------------------------------------------------------------
 
 /** One item of a batch: the action's data with `ok: true`, or the explained rejection. */
 function itemOf(env: ToolEnv, out: ApplyOutput): JsonObject {
-  if (!out.ok) return itemError(env, out.violation);
+  if (!out.ok) return itemError(rejection(env, out.violation));
   const item: JsonObject = { ok: true, ...jsonData(out.data) };
-  if (out.warnings.length > 0) {
-    const e = explainEnv(env);
-    item["warnings"] = out.warnings.map((w) => ({ ...toolWarning(w, e) }));
-  }
+  if (out.warnings.length > 0) item["warnings"] = out.warnings.map((w) => ({ ...warning(env, w) }));
   return item;
 }
 
-function itemError(env: ToolEnv, v: Violation): JsonObject {
-  const { message, hint } = explain(v, explainEnv(env));
-  return { ok: false, code: v.code, message, hint, details: { ...v.details } };
+/** A failed item of a batch: its code, message, hint and details. */
+function itemError(e: ToolError): JsonObject {
+  return { ok: false, code: e.code, message: e.message, hint: e.hint, details: { ...e.details } };
 }
 
 /**
  * `"max"` for `unit` in `city`, resolved just before its order is submitted (§7.4): the minimum of
  * what the stock pays for, the free population, the queue's `maxCount` and the unit's
- * `maxPerOrder` (`recruitMax`). At 0 no action is sent: the order fails with the violation a
- * count of 1 meets, which names the binding constraint.
+ * `maxPerOrder` (`recruitMax`). At 0 no action is sent: the order fails with the violation the
+ * engine would give a count of 1 (`Match.validate`, guarded like `apply`), which names the
+ * binding constraint.
  */
 function resolveMax(
   env: ToolEnv,
   city: CityId,
   unit: string,
 ): { readonly count: number } | { readonly violation: Violation } {
-  const r = env.match.read();
-  const count = recruitMax(r, city, unit);
+  const count = recruitMax(env.match.read(), city, unit);
   if (count > 0) return { count };
-  const probe: Action = { type: "recruit", city, unit, count: 1 };
-  const hooks = r.ruleset.hooks;
-  const guarded = hooks.guard === undefined ? null : hooks.guard(r, env.seat, probe);
-  if (guarded !== null) return { violation: guarded };
-  const handler = hooks.actions?.recruit ?? domain.actions.recruit;
-  const verdict = handler.validate(r, env.seat, probe);
-  if (!verdict.ok) return { violation: verdict.violation };
+  const v = env.match.validate(env.seat, { type: "recruit", city, unit, count: 1 });
+  if (v !== null) return { violation: v };
   throw new Error(`"max" of ${unit} in ${city} resolved to 0, yet a count of 1 is valid`);
 }
 
@@ -338,15 +381,14 @@ const gatewayTools = {
   }),
   end_turn: spec("end_turn", (env, a) => {
     const now = env.match.now;
-    const s = seatOf(env.gw, env.seat);
     if (a.nextWakeIn === undefined && a.wakeAt === undefined) {
-      env.endTurn();
-      const pending = s.wake.selfAt;
+      env.endTurn(null);
+      const pending = seatOf(env.gw, env.seat).wake.selfAt;
       return ok(env, { wakeAt: pending === null ? null : timePair(pending), clamped: false });
     }
     const requested = a.wakeAt ?? now + (a.nextWakeIn ?? 0);
-    const set = env.wake.requestSelfWake(env.seat, requested, now);
-    env.endTurn();
+    const set = env.endTurn(requested);
+    if (set === null) throw new Error("end_turn: the host set no self-wake");
     const warnings = set.clamped
       ? [
           violation("WAKE_CLAMPED", {
@@ -385,7 +427,11 @@ const engineTools = {
       let count: number;
       if (order.count === "max") {
         const max = resolveMax(env, a.city, order.unit);
-        if ("violation" in max) return itemError(env, max.violation);
+        if ("violation" in max) {
+          const error = rejection(env, max.violation);
+          env.rejectItem(i, error);
+          return itemError(error);
+        }
         count = max.count;
       } else {
         count = order.count;
@@ -595,7 +641,8 @@ export interface CallOutcome {
   readonly result: ToolResult;
   /**
    * `gw`: a gateway rejection (layers 2–4, nothing reached the engine) or `INTERNAL`; `obs`: a read
-   * tool's answer; `null`: the tool wrote its own lines (`act`, `note`) or none.
+   * tool's answer; `null`: the tool wrote its own lines (`act`, the `gw` lines of batch items,
+   * `note`) or none.
    */
   readonly line: "gw" | "obs" | null;
   /** The parsed arguments (for the `obs` line). */
@@ -617,13 +664,18 @@ function schemaError(env: ToolEnv, error: z.ZodError): ToolError {
   return fail(env, violation("INVALID_ARGS", details));
 }
 
-function internal(env: ToolEnv): ToolResult {
+/**
+ * The `INTERNAL` result of a call whose gateway code threw before it changed anything (§7.3):
+ * explained when the explainer works, else a fixed text.
+ */
+export function internalError(match: Match, seat: PlayerId, gw: GatewayState): ToolError {
   try {
-    return fail(env, violation("INTERNAL", {}));
-  } catch {
+    return toolError(violation("INTERNAL", {}), { r: match.read(), seat, gw });
+  } catch (e) {
+    if (isFatal(e)) throw e;
     return {
       ok: false,
-      t: env.match.now,
+      t: match.now,
       code: "INTERNAL",
       message: "The gateway failed on this call; nothing was applied.",
       hint: "Send the call again; if it fails again, do something else.",
@@ -631,30 +683,38 @@ function internal(env: ToolEnv): ToolResult {
   }
 }
 
-/** Errors that stop the match whatever the call: the engine's, and a host line that failed. */
-function isFatal(e: unknown): boolean {
-  return e instanceof EngineBug || e instanceof EngineMisuse || e instanceof HostFailure;
-}
-
 /**
  * Runs one call through layers 2–6: the tool (an unknown name is `INVALID_ARGS` with reason
- * `no_handler`: no such tool in this ruleset), its schema, then its handler. A gateway error is
- * `INTERNAL` (a `gw` line with the error); an engine error or a failed host line propagates.
+ * `no_handler`: no such tool in this ruleset), its schema, then its handler. A gateway error
+ * thrown before the call changed anything is `INTERNAL` (a `gw` line with the error); after a
+ * change (`submit`, `rejectItem`, `note` or `endTurn` was called) it is a `HostFailure`, since
+ * the agent cannot be told that nothing was applied. An engine error or a failed host line
+ * propagates.
  */
 export function invokeTool(tools: ToolRegistry, env: ToolEnv, call: ToolCall): CallOutcome {
-  let submitted = 0;
-  const counted: ToolEnv = {
+  let changed = false;
+  const tracked: ToolEnv = {
     match: env.match,
     seat: env.seat,
     gw: env.gw,
-    wake: env.wake,
+    gatewayRules: env.gatewayRules,
     turn: env.turn,
     submit(a, i) {
-      submitted += 1;
+      changed = true;
       return env.submit(a, i);
     },
-    note: (mode, text) => env.note(mode, text),
-    endTurn: () => env.endTurn(),
+    rejectItem(i, error) {
+      changed = true;
+      env.rejectItem(i, error);
+    },
+    note(mode, text) {
+      changed = true;
+      env.note(mode, text);
+    },
+    endTurn(wakeAt) {
+      changed = true;
+      return env.endTurn(wakeAt);
+    },
   };
   try {
     const t = tools.get(call.tool);
@@ -692,14 +752,24 @@ export function invokeTool(tools: ToolRegistry, env: ToolEnv, call: ToolCall): C
       );
       return { result, line: "gw" };
     }
-    const result = jsonResult(t.handle(counted, args));
+    const result = jsonResult(t.handle(tracked, args));
     if (t.kind === "read")
       return result.ok ? { result, line: "obs", args } : { result, line: "gw" };
-    if (!result.ok && submitted === 0) return { result, line: "gw" };
+    if (!result.ok && !changed) return { result, line: "gw" };
     return { result, line: null };
   } catch (e) {
     if (isFatal(e)) throw e;
-    return { result: internal(env), line: "gw", error: describeError(e) };
+    if (changed) {
+      throw new HostFailure(
+        `${env.seat}: ${call.tool} threw inside the gateway after the call changed the match, so it cannot be reported as INTERNAL: ${describeError(e)}`,
+        e,
+      );
+    }
+    return {
+      result: internalError(env.match, env.seat, env.gw),
+      line: "gw",
+      error: describeError(e),
+    };
   }
 }
 

@@ -88,7 +88,10 @@ export const ActLineSchema = z.strictObject({
   r: ActResultSchema,
 });
 
-/** A call rejected by the gateway (layers 1–4 of §7.2, with its details) or an `INTERNAL` failure (with `error`). */
+/**
+ * A call rejected by the gateway (layers 1–4 of §7.2, with its details), an `INTERNAL` failure
+ * (with `error`), or a batch item the gateway failed before it reached the engine (with `i`).
+ */
 export const GwLineSchema = z.strictObject({
   k: z.literal("gw"),
   n: N,
@@ -97,6 +100,8 @@ export const GwLineSchema = z.strictObject({
   turn: Turn,
   rt: Round,
   tool: ToolName,
+  /** Item index of a batch item that never reached the engine: a `"max"` count resolved to 0 (§7.4). */
+  i: Int.optional(),
   r: z.strictObject({
     ok: z.literal(false),
     code: ErrorCodeSchema,

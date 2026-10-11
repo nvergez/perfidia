@@ -855,6 +855,44 @@ describe("only EngineMisuse and EngineBug leave the kernel (§5.3)", () => {
     );
   });
 
+  test("validate answers as apply would, changes nothing, and is guarded like apply", () => {
+    const m = fixtureMatch({ players: 3 });
+    const before = m.hash();
+    const rename: Action = {
+      type: "ext",
+      tool: "fixture_rename",
+      args: { city: "c1", name: "Home" },
+    };
+    const probes: Action[] = [
+      rename,
+      { type: "build", city: "c2", building: "tower" },
+      { type: "recruit", city: "c1", unit: "soldier", count: 500 },
+      { type: "build", city: "c1", building: "tower" },
+    ];
+    const verdicts = probes.map((a) => m.validate("p1", a));
+    expect(m.hash()).toBe(before);
+    expect(verdicts[0]).toEqual({ code: "FIXTURE_CLOSED", details: { availableAt: 7200 } });
+    expect(verdicts[3]).toBeNull();
+    for (const [i, a] of probes.entries()) {
+      const out = m.apply("p1", a);
+      expect(out.ok ? null : out.violation).toEqual(verdicts[i] ?? null);
+    }
+    expect(() => m.validate("p7", rename)).toThrow(EngineMisuse);
+
+    const throwing = withHooks({
+      guard: () => {
+        throw new Error("guard exploded");
+      },
+    });
+    const broken = createMatch(fixtureSetup(), throwing, fakeDomain, { invariants: "step" });
+    const bug = bugOf(() =>
+      broken.validate("p1", { type: "build", city: "c1", building: "tower" }),
+    );
+    expect(bug.kind).toBe("engine");
+    expect(bug.message).toContain("guard exploded");
+    expect(() => broken.advanceTo(10)).toThrow(EngineMisuse);
+  });
+
   test("any other error thrown inside the kernel becomes an EngineBug of kind engine", () => {
     const m = fixtureMatch();
     const bug = bugOf(() =>

@@ -53,7 +53,7 @@ class Bench {
       match: this.match,
       seat,
       gw: this.gw,
-      wake: this.wake,
+      gatewayRules: this.wake.rules,
       turn: { index: 1, round: 0, call: 0 },
       submit: (a) => {
         this.submitted += 1;
@@ -61,8 +61,10 @@ class Bench {
         if (out.ok) deliver(this.gw, out.events, this.wake);
         return out;
       },
+      rejectItem: () => undefined,
       note: () => undefined,
-      endTurn: () => undefined,
+      endTurn: (wakeAt) =>
+        wakeAt === null ? null : this.wake.requestSelfWake(seat, wakeAt, this.match.now),
     };
   }
 

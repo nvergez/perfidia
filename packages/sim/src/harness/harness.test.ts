@@ -8,12 +8,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { RULESETS, getRuleset, verifyLog, type AnyRuleset } from "@perfidia/engine";
 import { idKeyFromSeed } from "@perfidia/engine/core";
+import type { LogSink } from "@perfidia/gateway";
 import type { LogLine } from "@perfidia/protocol";
 import {
   FINGERPRINTS_FILE,
   botAgents,
   GoldenExists,
   JsonlError,
+  JsonlFileSink,
   addFingerprints,
   addGolden,
   checkGoldens,
@@ -23,12 +25,15 @@ import {
   normalisedHash,
   optionsFromHeader,
   parseJsonl,
+  prepareBotRun,
   readFingerprints,
   readJsonl,
   resimProblem,
   rulesetFingerprint,
   runBots,
+  runPrepared,
   setupFor,
+  snapshotFileName,
   writeJsonl,
 } from "./index.ts";
 
@@ -244,7 +249,98 @@ describe("goldens", () => {
       expect(broken.problems[0]).toContain(
         `Level E: result divergence at t = ${first.t} (n ${first.n})`,
       );
+      // A golden that does not replay is not re-simulated.
+      expect(broken.goldens.map((g) => g.levelG)).toEqual(["skipped"]);
       expect(existsSync(path)).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }, 30000);
+
+  test("a deleted golden, a golden of a ruleset outside the list and a failing re-simulation are problems, never throws", async () => {
+    const dir = tempDir();
+    try {
+      const lines = await shortLog(5);
+      addGolden(dir, SANDBOX.ref, "lockstep-3p", lines);
+      const second = addGolden(dir, SANDBOX.ref, "lockstep-3p-b", await shortLog(6));
+      addFingerprints(dir, [SANDBOX]);
+      expect((await checkGoldens(dir, [SANDBOX], { levelG: false })).ok).toBe(true);
+
+      // Deleting a committed golden fails the freeze guard even though the ref keeps another one.
+      rmSync(second);
+      const deleted = await checkGoldens(dir, [SANDBOX], { levelG: false });
+      expect(deleted.ok).toBe(false);
+      expect(deleted.problems).toEqual([
+        `golden ${SANDBOX.ref}/lockstep-3p-b is recorded in ${FINGERPRINTS_FILE} but missing`,
+      ]);
+
+      // Checked against another ruleset list, the sandbox golden fails Level E and is not re-simulated.
+      const other = await checkGoldens(dir, [PERFIDIA]);
+      expect(other.ok).toBe(false);
+      expect(other.goldens.map((g) => [g.name, g.finalHash, g.levelG])).toEqual([
+        ["lockstep-3p", null, "skipped"],
+      ]);
+      expect(other.problems).toContain(
+        `${FINGERPRINTS_FILE}: ${SANDBOX.ref} is not a ruleset of this build`,
+      );
+
+      // A golden that replays but whose re-simulation throws (a hand-off to a seat the match does
+      // not have) reports the failure as a problem of that golden.
+      const path = listGoldens(dir)[0]?.path ?? "";
+      const handed: LogLine[] = [
+        ...lines.slice(0, 1),
+        { k: "controller", t: 0, seat: "p9", label: "bot:turtle@1" },
+        ...lines.slice(1),
+      ];
+      expect(verifyLog(handed).ok).toBe(true);
+      writeFileSync(path, jsonlText(handed));
+      const resim = await checkGoldens(dir, [SANDBOX]);
+      expect(resim.goldens.map((g) => g.levelG)).toEqual(["fail"]);
+      expect(resim.problems).toEqual([
+        `golden ${SANDBOX.ref}/lockstep-3p: Level G re-simulation failed: hand-off to p9, which is not a seat`,
+        `golden ${SANDBOX.ref}/lockstep-3p-b is recorded in ${FINGERPRINTS_FILE} but missing`,
+      ]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }, 30000);
+});
+
+describe("the file sink", () => {
+  test("holds every line up to a checkpoint before that hour's snapshot file exists", async () => {
+    const dir = tempDir();
+    try {
+      const path = join(dir, "match.jsonl");
+      const snapshotsDir = join(dir, "snapshots");
+      const file = new JsonlFileSink(path, { snapshotsDir });
+      const seen: [number, string | undefined][] = [];
+      const sink: LogSink = {
+        write: (line) => file.write(line),
+        flush: () => file.flush(),
+        snapshot(snap) {
+          const name = snapshotFileName(snap);
+          expect(existsSync(join(snapshotsDir, name))).toBe(false);
+          const onDisk = readJsonl(path);
+          const last = onDisk.at(-1);
+          seen.push([snap.hour, last?.k === "ckpt" ? `ckpt ${last.hour}` : last?.k]);
+          file.snapshot(snap);
+        },
+      };
+      const prepared = prepareBotRun({
+        ruleset: SANDBOX,
+        seed: 3,
+        players: 3,
+        overrides: { "time.matchEnd": 6 * 3600 },
+        clock: { kind: "lockstep" },
+        snapshotEvery: 2,
+      });
+      await runPrepared(prepared, sink);
+      // Each checkpoint snapshot finds its own ckpt line last on disk; the final one the end line.
+      expect(seen).toEqual([
+        [2, "ckpt 2"],
+        [4, "ckpt 4"],
+        [5, "end"],
+      ]);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

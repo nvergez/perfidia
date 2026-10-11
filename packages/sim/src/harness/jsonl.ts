@@ -80,9 +80,12 @@ export function snapshotFileName(snap: Snapshot): string {
 }
 
 /**
- * A `LogSink` that appends to a `.jsonl` file: each line is serialised at `write` and buffered,
- * and the buffer is appended at every `flush` (the host flushes at the end and on a fatal error).
- * Snapshots go to `snapshotsDir` when one is given. The file is created empty at construction.
+ * A `LogSink` that appends to a `.jsonl` file (§10.1): each line is serialised at `write` and
+ * buffered, and the buffer is appended at every `flush`. The host flushes after every engine step
+ * that wrote checkpoint lines (so before the snapshot of that hour), after the end line and after
+ * a fatal line: a killed run keeps its log up to its last checkpoint, and no snapshot file exists
+ * without its `ckpt` line on disk. Snapshots go to `snapshotsDir` when one is given, written at
+ * once. The file is created empty at construction.
  */
 export class JsonlFileSink implements LogSink {
   readonly path: string;

@@ -6,7 +6,12 @@ import {
   type Match,
   type StepOutput,
 } from "@perfidia/engine/kernel";
-import type { AgentFailure, ClockHost, TurnHandle } from "@perfidia/gateway/clock";
+import {
+  describeError,
+  type AgentFailure,
+  type ClockHost,
+  type TurnHandle,
+} from "@perfidia/gateway/clock";
 import { buildBriefing, explain, gatewayRulesCopy, toolError } from "@perfidia/gateway/present";
 import {
   briefed,
@@ -49,7 +54,9 @@ import {
   copyOf,
   createToolRegistry,
   canonicalBytes,
+  internalError,
   invokeTool,
+  isFatal,
   jsonData,
   type ToolEnv,
   type ToolRegistry,
@@ -58,11 +65,12 @@ import {
 // The match host (docs/architecture.md §8.7, §9.1): the `ClockHost` the drivers run. It owns the
 // engine match, the gateway state, the wake scheduler, the tool registry and the log sink, and
 // writes every line of §10.2 in the order it changes state: `advanceTo` runs the engine step (split
-// at snapshot hours, §10.3), writes the `ev` and `ckpt` lines and delivers the events; `openTurn`
-// applies a due hand-off (`controller` line), opens the wake (`wake` line) and builds the briefing;
-// a turn's `execute` runs the turn gate (layer 1 of §7.2) and each call's tool (`act`, `gw`, `obs`,
-// `note` lines); `close` writes the `turn` line; `defer` and `logBatch` write theirs. Everything
-// handed to an agent is a canonical copy (§6.6).
+// at snapshot hours, §10.3), writes the `ev` and `ckpt` lines, flushes the sink after checkpoint
+// lines (§10.1) and delivers the events; `openTurn` applies a due hand-off (`controller` line),
+// opens the wake (`wake` line) and builds the briefing; a turn's `execute` runs the turn gate
+// (layer 1 of §7.2) and each call's tool (`act`, `gw`, `obs`, `note` lines); `close` writes the
+// `turn` line; `defer` and `logBatch` write theirs. Everything handed to an agent is a canonical
+// copy (§6.6).
 
 /** A seat handed to another controller (§8.7): applied when its first turn at or after `at` opens. */
 export interface Handoff {
@@ -284,6 +292,9 @@ export class MatchHost implements ClockHost {
   private step(t: GameTime): void {
     const out = this.match.advanceTo(t);
     for (const line of stepLines(out)) this.write(line);
+    // A file sink holds whole hours: a killed run keeps every line up to its last checkpoint, and
+    // a snapshot file never exists without its `ckpt` line on disk (§10.1, §10.3).
+    if (out.checkpoints.length > 0) this.flush();
     this.deliver(out.events);
   }
 
@@ -360,6 +371,8 @@ export class MatchHost implements ClockHost {
     this.write({ k: "end", t: m.now, h: m.hash(), result });
     // Nothing may follow the end line, not even a fatal line for a failing snapshot or flush.
     this.finished = true;
+    // The end line is durable before the final snapshot exists, as each ckpt line is before its own.
+    this.flush();
     this.takeSnapshot();
     this.flush();
     return result;
@@ -483,17 +496,44 @@ export class MatchHost implements ClockHost {
     return checkRoundTrip(this.wake.rules, turn.round, t) ?? checkCallCap(this.wake.rules, used, t);
   }
 
-  /** Runs one call that passed the gate: its tool, and the `gw` or `obs` line it needs. */
-  runCall(turn: HostTurn, call: ToolCall, index: number): ToolResult {
+  /**
+   * One call of `turn`: the turn gate (layer 1), then its tool (layers 2–6) and the `gw` or `obs`
+   * line it needs. A gateway error thrown by the gate or by a tool before the call changed anything
+   * is `INTERNAL` (§7.3): a `gw` line with the error, fatal in strict mode. `ran` says whether the
+   * call passed the gate (and counts against the round's and the wake's call caps).
+   */
+  runCall(
+    turn: HostTurn,
+    call: ToolCall,
+    index: number,
+    used: { round: number; wake: number },
+  ): { readonly result: ToolResult; readonly ran: boolean } {
+    let rejected: ToolError | null;
+    try {
+      rejected = this.gate(turn, used);
+    } catch (e) {
+      if (isFatal(e)) throw e;
+      return { result: this.internal(turn, call.tool, describeError(e)), ran: false };
+    }
+    if (rejected !== null) {
+      this.writeGw(turn, call.tool, rejected);
+      return { result: copyOf(rejected), ran: false };
+    }
     const env: ToolEnv = {
       match: this.match,
       seat: turn.seat,
       gw: this.gw,
-      wake: this.wake,
+      gatewayRules: this.wake.rules,
       turn: { index: turn.turn, round: turn.round, call: index },
       submit: (a, i) => this.submit(turn, call.tool, a, i),
+      rejectItem: (i, error) => this.writeGw(turn, call.tool, error, { i }),
       note: (mode, text) => this.writeNote(turn, mode, text),
-      endTurn: () => turn.markEndTurn(),
+      endTurn: (wakeAt) => {
+        const set =
+          wakeAt === null ? null : this.wake.requestSelfWake(turn.seat, wakeAt, this.match.now);
+        turn.markEndTurn();
+        return set;
+      },
     };
     const out = invokeTool(this.tools, env, call);
     if (out.line === "obs") {
@@ -509,17 +549,39 @@ export class MatchHost implements ClockHost {
         bytes: canonicalBytes(out.result),
       });
     } else if (out.line === "gw") {
-      this.writeGw(turn, call.tool, out.result, out.error);
+      this.writeGw(
+        turn,
+        call.tool,
+        out.result,
+        out.error === undefined ? {} : { error: out.error },
+      );
       if (out.error !== undefined && this.strict) {
         throw new GatewayInternalError(turn.seat, call.tool, out.error);
       }
     }
-    return out.result;
+    return { result: out.result, ran: true };
   }
 
-  /** The `gw` line of a call the gateway rejected (or `INTERNAL`), and its turn bookkeeping. */
-  writeGw(turn: HostTurn, tool: string, result: ToolResult, error?: string): void {
-    if (result.ok) throw new Error("writeGw: the call succeeded");
+  /** `INTERNAL` for a call whose gateway code threw: its `gw` line with the error; fatal in strict mode. */
+  private internal(turn: HostTurn, tool: string, error: string): ToolResult {
+    const result = internalError(this.match, turn.seat, this.gw);
+    this.writeGw(turn, tool, result, { error });
+    if (this.strict) throw new GatewayInternalError(turn.seat, tool, error);
+    return copyOf(result);
+  }
+
+  /**
+   * The `gw` line of a call the gateway rejected (or `INTERNAL`, with `error`), or of batch item
+   * `i` that never reached the engine, and its turn bookkeeping. Once the line is written, a
+   * failure to record it is a `HostFailure`: the log already holds the line.
+   */
+  private writeGw(
+    turn: HostTurn,
+    tool: string,
+    result: ToolResult,
+    o: { readonly error?: string; readonly i?: number } = {},
+  ): void {
+    if (result.ok) throw new HostFailure(`writeGw: ${turn.seat}'s ${tool} call succeeded`);
     const details = result.details;
     const line: LogLine = {
       k: "gw",
@@ -534,9 +596,14 @@ export class MatchHost implements ClockHost {
           ? { ok: false, code: result.code }
           : { ok: false, code: result.code, details: { ...details } },
     };
-    if (error !== undefined) line.error = error;
+    if (o.i !== undefined) line.i = o.i;
+    if (o.error !== undefined) line.error = o.error;
     this.write(line);
-    recordGw(this.gw, line, result.message);
+    try {
+      recordGw(this.gw, line, result.message);
+    } catch (e) {
+      throw new HostFailure(`recording ${turn.seat}'s ${tool} rejection failed`, e);
+    }
   }
 
   /** `ToolEnv.submit`: one engine action, its `act` line, then the `ev` lines and delivery of its events. */
@@ -701,15 +768,12 @@ export class HostTurn implements TurnHandle {
     let ranThisRound = 0;
     for (const [index, call] of out.calls.entries()) {
       this.calls += 1;
-      const rejected = this.host.gate(this, { round: ranThisRound, wake: this.run });
-      if (rejected !== null) {
-        this.host.writeGw(this, call.tool, rejected);
-        results.push(copyOf(rejected));
-        continue;
+      const done = this.host.runCall(this, call, index, { round: ranThisRound, wake: this.run });
+      if (done.ran) {
+        ranThisRound += 1;
+        this.run += 1;
       }
-      ranThisRound += 1;
-      this.run += 1;
-      results.push(this.host.runCall(this, call, index));
+      results.push(done.result);
     }
     if (out.thought !== undefined) this.thought = out.thought;
     this.results = results;
