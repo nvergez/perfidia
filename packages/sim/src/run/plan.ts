@@ -201,6 +201,23 @@ export function clockFor(req: RunRequest): ClockChoice {
 }
 
 /**
+ * Creates the match of `setup` once and drops it, so the creation checks of §3.6 (which may depend
+ * on the seed's world) run before anything is written; a `MatchConfigError` becomes a `UsageError`
+ * listing its issues, `what` naming the match.
+ */
+export function checkCreation(setup: MatchSetup, ruleset: AnyRuleset, what = ""): void {
+  try {
+    createMatch(setup, ruleset, { invariants: "checkpoint" });
+  } catch (error) {
+    if (error instanceof MatchConfigError) {
+      const list = error.issues.map((i) => `  ${i.path === "" ? "(setup)" : i.path}: ${i.message}`);
+      throw new UsageError(`the match${what} cannot be created:\n${list.join("\n")}`);
+    }
+    throw error;
+  }
+}
+
+/**
  * Checks a run request completely and returns its plan; throws `UsageError` (exit 3) on anything
  * wrong, naming the flag, the config path, the player range or the refs of the build. The match is
  * created once here, so the creation checks of §3.6 also run before any file is written.
@@ -240,15 +257,7 @@ export function planRun(req: RunRequest, o: { readonly randomKey?: () => string 
   const seatBots = parseSeatBots(req.seats ?? [], players);
   const clock = clockFor(req);
   const setup = setupFor(ruleset, { seed, players, overrides, idKey });
-  try {
-    createMatch(setup, ruleset, { invariants: "checkpoint" });
-  } catch (error) {
-    if (error instanceof MatchConfigError) {
-      const list = error.issues.map((i) => `  ${i.path === "" ? "(setup)" : i.path}: ${i.message}`);
-      throw new UsageError(`the match cannot be created:\n${list.join("\n")}`);
-    }
-    throw error;
-  }
+  checkCreation(setup, ruleset);
   return {
     ruleset,
     setup,

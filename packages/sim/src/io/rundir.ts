@@ -49,31 +49,65 @@ export function checkpointSnapshotName(hour: number): string {
   return `h${String(hour).padStart(4, "0")}.json`;
 }
 
+export interface LocatedLog {
+  readonly log: string;
+  /** Where the run's snapshots and summary live: the run directory, or the log file's directory. */
+  readonly dir: string;
+  /** Whether the target named a run directory (rather than a log file). */
+  readonly isRunDir: boolean;
+}
+
 /**
  * The log of `<run-dir | match.jsonl>`: a directory gives its `match.jsonl` (or `match.jsonl.gz`),
- * a file is taken as is. `dir` is where the run's snapshots and summary live. Throws `UsageError`
- * when there is no such log.
+ * a file is taken as is. Throws `UsageError` when there is no such log.
  */
-export function locateLog(target: string): { readonly log: string; readonly dir: string } {
+export function locateLog(target: string): LocatedLog {
   if (!existsSync(target)) throw new UsageError(`${target}: no such run directory or log file`);
   if (statSync(target).isDirectory()) {
     for (const name of [LOG_FILE, `${LOG_FILE}.gz`]) {
       const log = join(target, name);
-      if (existsSync(log)) return { log, dir: target };
+      if (existsSync(log)) return { log, dir: target, isRunDir: true };
     }
     throw new UsageError(`${target}: not a run directory (no ${LOG_FILE} in it)`);
   }
-  return { log: target, dir: dirname(target) };
+  return { log: target, dir: dirname(target), isRunDir: false };
 }
 
 /**
- * A directory for a new run: `base` when it holds no `match.jsonl`, else `base-2`, `base-3`, … A
- * run is never written over another one.
+ * What already makes `dir` hold a run, or null when a new run may be written there: a log
+ * (`match.jsonl` or `match.jsonl.gz`), a `summary.json`, a `trace.jsonl` or a non-empty
+ * `snapshots/`. A missing or empty directory, or one with other files only, is free.
+ */
+export function runDirContents(dir: string): string | null {
+  for (const name of [LOG_FILE, `${LOG_FILE}.gz`, SUMMARY_FILE, TRACE_FILE]) {
+    if (existsSync(join(dir, name))) return name;
+  }
+  const snapshots = join(dir, SNAPSHOTS_DIR);
+  if (!existsSync(snapshots)) return null;
+  if (!statSync(snapshots).isDirectory() || readdirSync(snapshots).length > 0) {
+    return `${SNAPSHOTS_DIR}/`;
+  }
+  return null;
+}
+
+/** Throws `UsageError` when `dir` already holds a run (`runDirContents`): runs are never overwritten. */
+export function assertFreeRunDir(dir: string): void {
+  const found = runDirContents(dir);
+  if (found !== null) {
+    throw new UsageError(
+      `${dir} already holds a run (${found}): runs are never overwritten, choose another --out`,
+    );
+  }
+}
+
+/**
+ * A directory for a new run: `base` when it holds no run (`runDirContents`), else `base-2`,
+ * `base-3`, … A run is never written over another one.
  */
 export function freeRunDir(base: string): string {
   for (let i = 1; ; i += 1) {
     const dir = i === 1 ? base : `${base}-${i}`;
-    if (!existsSync(join(dir, LOG_FILE))) return dir;
+    if (runDirContents(dir) === null) return dir;
   }
 }
 
@@ -90,7 +124,8 @@ export function writeFileAtomic(path: string, text: string): void {
  * to `match.jsonl` at every `flush` (the host flushes after each step that wrote checkpoint lines,
  * after the end line and after a fatal line). Snapshots go to `snapshots/`: a checkpoint snapshot
  * as `h0024.json`, the one taken after the end line as `final.json`. `match.jsonl` is created empty
- * at construction.
+ * at construction, and a directory that already holds a run is refused (`UsageError`), so a log is
+ * never truncated and a run directory never mixes the files of two matches.
  */
 export class RunDirSink implements LogSink {
   readonly paths: RunPaths;
@@ -98,6 +133,7 @@ export class RunDirSink implements LogSink {
   private ended = false;
 
   constructor(dir: string) {
+    assertFreeRunDir(dir);
     this.paths = runPaths(dir);
     mkdirSync(dir, { recursive: true });
     this.file = new JsonlFileSink(this.paths.log);

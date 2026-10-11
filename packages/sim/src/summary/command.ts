@@ -1,8 +1,8 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { RULESETS, findRuleset } from "@perfidia/engine";
 import { EXIT, parseFlags, usageText, type CliIo, type FlagSpecs } from "../args.ts";
-import { JsonlError } from "../harness/index.ts";
-import { SUMMARY_FILE, locateLog, readLogLines } from "../io/index.ts";
+import { SUMMARY_FILE, isCorruptLog, locateLog, readLogLines } from "../io/index.ts";
 import { formatSummary } from "./format.ts";
 import { LogShapeError, summarize } from "./summarize.ts";
 
@@ -36,11 +36,17 @@ export function summaryCommand(argv: readonly string[], io: CliIo): number {
   try {
     summary = summarize(readLogLines(log), { wallMs: recordedWallMs(dir) });
   } catch (error) {
-    if (error instanceof JsonlError || error instanceof LogShapeError) {
+    if (isCorruptLog(error) || error instanceof LogShapeError) {
       io.err(`${log}: ${error.message}\n`);
       return EXIT.divergence;
     }
     throw error;
+  }
+  // The summary needs no ruleset, but a ref this build lacks means `verify` cannot replay the log.
+  if (findRuleset(summary.ruleset) === undefined) {
+    io.err(
+      `warning: the log's ruleset ${summary.ruleset} is not in this build (it contains ${RULESETS.map((r) => r.ref).join(", ")}), so it cannot be verified here\n`,
+    );
   }
   io.out(flags.bool("json") ? `${JSON.stringify(summary, null, 2)}\n` : formatSummary(summary));
   return EXIT.ok;

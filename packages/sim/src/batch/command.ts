@@ -40,7 +40,10 @@ const FLAGS: FlagSpecs = {
   pacing: { type: "boolean", help: "replay each match and add the per-day pacing table (§13.9)" },
   json: { type: "string", value: "<out.json>", help: "write the results with their provenance" },
   out: { type: "string", value: "<dir>", help: "keep every match's run directory under <dir>" },
-  "allow-test": { type: "boolean", help: "allow test rulesets such as sandbox-1" },
+  "allow-test": {
+    type: "boolean",
+    help: "silence the note on test rulesets such as sandbox-1 (batch runs them anyway)",
+  },
 };
 export const BATCH_USAGE = usageText(
   'sim batch --variant "<label>: <ref> [key=value ...]" … --seeds <list> [flags]',
@@ -57,9 +60,15 @@ export async function batchCommand(argv: readonly string[], io: CliIo): Promise<
   const playersText = f.string("players");
   const { variants, players } = parseVariants(f.strings("variant"), {
     days,
-    allowTest: f.bool("allow-test"),
     players: playersText === undefined ? undefined : parseIntIn(playersText, "--players", 1, 1000),
   });
+  if (!f.bool("allow-test")) {
+    for (const v of variants.filter((x) => x.ruleset.status === "test")) {
+      io.err(
+        `note: variant "${v.text}" plays ${v.ruleset.ref}, a test ruleset (status "test"), not a game\n`,
+      );
+    }
+  }
   const bots = f.has("bots") ? parseBots(f.strings("bots")) : [...BOT_STRATEGIES];
   const total = variants.length * seeds.length;
   let done = 0;

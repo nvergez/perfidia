@@ -7,6 +7,7 @@ export {
   DEFAULT_SPEED,
   DEFAULT_VIRTUAL_LATENCY_MS,
   INVARIANT_LEVELS,
+  checkCreation,
   checkOverrides,
   clockFor,
   overridesFrom,
@@ -20,5 +21,5 @@ export {
   type RunRequest,
 } from "./plan.ts";
 export { executeRun, type RunOutcome } from "./run.ts";
-export { traceHashes, type TraceEntry } from "./trace.ts";
+export { traceHashes, writeTrace, type TraceEntry, type TraceOutcome } from "./trace.ts";
 export { RUN_USAGE, defaultRunDir, runCommand, runRequestOf } from "./command.ts";

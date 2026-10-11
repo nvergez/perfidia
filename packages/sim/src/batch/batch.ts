@@ -4,9 +4,10 @@ import { ENGINE_VERSION } from "@perfidia/engine";
 import { MemorySink, teeSink, type LogSink } from "@perfidia/gateway";
 import type { ClockSpec, Json, LogLine, PlayerId } from "@perfidia/protocol";
 import { errorText } from "../args.ts";
-import { normalisedHash, prepareBotRun, runPrepared } from "../harness/index.ts";
-import { RunDirSink, writeFileAtomic } from "../io/index.ts";
-import { summarize, type MatchSummary } from "../summary/index.ts";
+import { normalisedHash, prepareBotRun, runPrepared, setupFor } from "../harness/index.ts";
+import { RunDirSink, assertFreeRunDir, runPaths, writeFileAtomic } from "../io/index.ts";
+import { checkCreation } from "../run/index.ts";
+import { LogShapeError, summarize, type MatchSummary } from "../summary/index.ts";
 import { aggregatePacing, pacingOf, type PacingDay, type PacingRow } from "./pacing.ts";
 import type { Variant } from "./variants.ts";
 
@@ -15,7 +16,9 @@ import type { Variant } from "./variants.ts";
 // reproducible from its seed. Matches run one at a time and share nothing, so the results do not
 // depend on the variant order. The JSON records the provenance of every row: for each variant the
 // ref, overrides, `configHash`, `rulesHash`, `ENGINE_VERSION`, bot labels and seeds, and for each
-// match its final hash and end reason (plus the normalised log hash).
+// match its final hash and end reason (plus the normalised log hash). With `--out`, every match
+// keeps a full run directory (§10.1: log, snapshots, `summary.json`), and the whole batch is checked
+// before its first match, so a taken directory or a match that cannot be created writes nothing.
 
 export const BATCH_FORMAT = "perfidia-batch/1";
 
@@ -130,13 +133,35 @@ export function batchRunDir(out: string, variantIndex: number, seed: number): st
   return join(out, `v${variantIndex + 1}-s${seed}`);
 }
 
-/** One match of a variant: in memory, and into `dir` when given. */
+/**
+ * Checks a batch before any match runs, so a bad batch exits 3 having written nothing: every
+ * (variant, seed) match can be created (the creation checks of §3.6, as `run` does), and with
+ * `out`, no match's run directory already holds a run. Throws `UsageError`.
+ */
+export function preflightBatch(plan: BatchPlan, out?: string): void {
+  for (const [vi, v] of plan.variants.entries()) {
+    for (const seed of plan.seeds) {
+      const setup = setupFor(v.ruleset, { seed, players: plan.players, overrides: v.overrides });
+      checkCreation(setup, v.ruleset, ` of variant "${v.text}" with seed ${seed}`);
+      if (out !== undefined) assertFreeRunDir(batchRunDir(out, vi, seed));
+    }
+  }
+}
+
+/**
+ * One match of a variant: in memory, and into `dir` when given, with its `summary.json` (§10.1).
+ * The summary is null when the log has no header (the match failed before writing it).
+ */
 async function playMatch(
   plan: BatchPlan,
   v: Variant,
   seed: number,
   dir: string | null,
-): Promise<{ readonly lines: LogLine[]; readonly error: string | null }> {
+): Promise<{
+  readonly lines: LogLine[];
+  readonly summary: MatchSummary | null;
+  readonly error: string | null;
+}> {
   const prepared = prepareBotRun({
     ruleset: v.ruleset,
     seed,
@@ -148,22 +173,58 @@ async function playMatch(
   const memory = new MemorySink();
   const sink: LogSink = dir === null ? memory : teeSink(new RunDirSink(dir), memory);
   let error: string | null = null;
+  const t0 = performance.now();
   try {
     await runPrepared(prepared, sink);
   } catch (e) {
     error = errorText(e);
   }
+  const wallMs = Math.round(performance.now() - t0);
   sink.flush?.();
-  return { lines: memory.parsed(), error };
+  const lines = memory.parsed();
+  let summary: MatchSummary | null = null;
+  try {
+    summary = summarize(lines, { wallMs });
+  } catch (e) {
+    if (!(e instanceof LogShapeError)) throw e;
+    error ??= e.message;
+  }
+  if (dir !== null && summary !== null) {
+    writeFileAtomic(runPaths(dir).summary, `${JSON.stringify(summary, null, 2)}\n`);
+  }
+  return { lines, summary, error };
+}
+
+/** The row of a match whose log has no summary (it stopped before its header). */
+function failedRow(seed: number, lines: readonly LogLine[], error: string | null): MatchRow {
+  return {
+    seed,
+    status: "fatal",
+    error: error ?? "the match wrote no header line",
+    finalHash: null,
+    logHash: normalisedHash(lines),
+    reason: null,
+    endedAt: null,
+    endDay: null,
+    winners: [],
+    winnerStrategies: [],
+    battles: 0,
+    conquests: 0,
+    eliminations: 0,
+    foundings: 0,
+    wakesPerSeatPerDay: { mean: 0, max: 0 },
+    internal: 0,
+  };
 }
 
 function rowOf(
   seed: number,
   lines: readonly LogLine[],
+  s: MatchSummary | null,
   error: string | null,
   pacing: boolean,
 ): MatchRow {
-  const s = summarize(lines);
+  if (s === null) return failedRow(seed, lines, error);
   const winnerStrategies = [
     ...new Set(s.winners.map((w) => s.seats.find((x) => x.seat === w)?.strategy ?? w)),
   ].toSorted(byCodeUnit);
@@ -192,7 +253,8 @@ function rowOf(
 
 /**
  * Runs a batch. `progress` hears about each match as it ends; `out` keeps every match's run
- * directory (`<out>/v<i>-s<seed>`), else the logs stay in memory.
+ * directory (`<out>/v<i>-s<seed>`), else the logs stay in memory. The batch is checked first
+ * (`preflightBatch`): a `UsageError` there means no match ran and nothing was written.
  */
 export async function runBatch(
   plan: BatchPlan,
@@ -201,6 +263,7 @@ export async function runBatch(
     readonly progress?: (v: Variant, seed: number, row: MatchRow) => void;
   } = {},
 ): Promise<BatchResult> {
+  preflightBatch(plan, o.out);
   const results: VariantResult[] = [];
   let clock: ClockSpec = { kind: "lockstep", maxTurnsPerSecond: 3 };
   let controllers: Record<string, string> = {};
@@ -211,7 +274,7 @@ export async function runBatch(
     for (const seed of plan.seeds) {
       const dir = o.out === undefined ? null : batchRunDir(o.out, vi, seed);
       // oxlint-disable-next-line no-await-in-loop -- one match at a time: bounded memory, no shared state
-      const { lines, error } = await playMatch(plan, v, seed, dir);
+      const { lines, summary, error } = await playMatch(plan, v, seed, dir);
       const header = lines[0];
       if (header?.k === "header") {
         configHash ??= header.configHash;
@@ -219,7 +282,7 @@ export async function runBatch(
         clock = header.clock;
         controllers = { ...header.controllers };
       }
-      const row = rowOf(seed, lines, error, plan.pacing);
+      const row = rowOf(seed, lines, summary, error, plan.pacing);
       matches.push(row);
       o.progress?.(v, seed, row);
     }

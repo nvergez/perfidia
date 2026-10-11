@@ -23,7 +23,7 @@ const FLAGS: FlagSpecs = {
   },
   dump: {
     type: "boolean",
-    help: "on a divergence, write the state at the first divergent checkpoint and diff it",
+    help: "on a divergence, write the state at the first divergent checkpoint (into the run directory, or a temporary one for a log file) and diff it",
   },
   invariants: {
     type: "string",

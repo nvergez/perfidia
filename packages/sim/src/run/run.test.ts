@@ -1,18 +1,21 @@
 // `sim run` (docs/architecture.md §12.1, §15 T15): a run that `verify` and `summary` accept and that
 // repeats identically, a random id key in the header that `verify --resim` reproduces, the config
-// and usage errors (exit 3) that leave nothing behind, `--trace-hashes`, a system-clock run at very
-// high speed, and the plan's defaults. The CLI runs in-process through `main`.
+// and usage errors (exit 3) that leave nothing behind, run directories never written over (even
+// partial ones), `--trace-hashes` equal to the engine's own trace and kept for a fatal run, a
+// system-clock run at very high speed, and the plan's defaults. The CLI runs in-process.
 
 import { describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { createMatch, getRuleset, verifyLog } from "@perfidia/engine";
 import { idKeyFromSeed } from "@perfidia/engine/core";
+import type { LogLine } from "@perfidia/protocol";
 import { EXIT, memoryIo } from "../args.ts";
 import { main } from "../cli.ts";
-import { normalisedText } from "../harness/index.ts";
+import { jsonlText, normalisedText, runBots } from "../harness/index.ts";
 import { readLog, readLogLines } from "../io/index.ts";
-import { DEFAULT_VIRTUAL_LATENCY_MS, defaultRunDir, planRun } from "./index.ts";
+import { DEFAULT_VIRTUAL_LATENCY_MS, defaultRunDir, planRun, writeTrace } from "./index.ts";
 
 function tempDir(): string {
   return mkdtempSync(join(tmpdir(), "perfidia-sim-run-"));
@@ -54,6 +57,7 @@ describe("sim run", () => {
       expect(verified.out).toMatch(
         /^Level E: ok · \d+ actions · \d+ checkpoints · final hash [0-9a-f]{16}\n$/,
       );
+      expect(verifyLog(readLogLines(join(b, "match.jsonl"))).ok).toBe(true);
       const summary = await cli("summary", join(a, "match.jsonl"), "--json");
       expect(summary.code).toBe(EXIT.ok);
       const parsed: unknown = JSON.parse(summary.out);
@@ -119,6 +123,7 @@ describe("sim run", () => {
       const resim = await cli("verify", join(dir, "a"), "--resim");
       expect(resim.code).toBe(EXIT.ok);
       expect(resim.out).toContain("Level G: identical");
+      expect((await cli("verify", join(dir, "b"))).code).toBe(EXIT.ok);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -169,7 +174,7 @@ describe("sim run", () => {
     }
   });
 
-  test("an existing run is never overwritten; --trace-hashes traces every action", async () => {
+  test("an existing run is never overwritten; --trace-hashes traces every action as the engine's own trace", async () => {
     const dir = tempDir();
     try {
       const out = join(dir, "t");
@@ -183,23 +188,90 @@ describe("sim run", () => {
         out,
       );
       expect(traced.code).toBe(EXIT.ok);
-      const acts = readLog(join(out, "match.jsonl")).flatMap((l) => (l.k === "act" ? [l] : []));
+      const lines = readLog(join(out, "match.jsonl"));
+      const acts = lines.flatMap((l) => (l.k === "act" ? [l] : []));
       const trace = readFileSync(join(out, "trace.jsonl"), "utf8")
         .trimEnd()
         .split("\n")
         .map((l): unknown => JSON.parse(l));
       expect(trace.length).toBe(acts.length);
       expect(trace.length).toBeGreaterThan(0);
-      const first = trace[0];
-      expect(first).toMatchObject({ n: acts[0]?.n, t: acts[0]?.t });
-      const h = typeof first === "object" && first !== null && "h" in first ? first.h : null;
-      expect(h).toMatch(/^[0-9a-f]{16}$/);
       expect(traced.out).toContain(`trace: ${acts.length} actions`);
+
+      // The engine's own trace (`MatchOptions.traceHashes`, `ApplyOutput.h`), replaying the acts:
+      // the replay trace equals it entry by entry.
+      const header = lines[0];
+      if (header?.k !== "header") throw new Error("no header");
+      const m = createMatch(header.setup, getRuleset(header.setup.ruleset), { traceHashes: true });
+      const engine = acts.map((act) => {
+        m.advanceTo(act.t);
+        const o = m.apply(act.seat, act.a);
+        expect(o.ok).toBe(act.r.ok);
+        return { n: act.n, t: act.t, seat: act.seat, ok: o.ok, h: o.ok ? o.h : m.hash() };
+      });
+      expect(engine.some((e) => e.ok)).toBe(true);
+      expect(trace).toEqual(engine);
+
       const before = readFileSync(join(out, "match.jsonl"), "utf8");
       const again = await cli(...args, "--out", out);
       expect(again.code).toBe(EXIT.usage);
       expect(again.err).toContain("runs are never overwritten");
       expect(readFileSync(join(out, "match.jsonl"), "utf8")).toBe(before);
+      // A directory holding only part of a run (snapshots, a summary) is refused too.
+      for (const part of ["snapshots/h0024.json", "summary.json"]) {
+        const partial = join(dir, `partial-${part.length}`);
+        mkdirSync(join(partial, "snapshots"), { recursive: true });
+        writeFileSync(join(partial, part), "{}");
+        // oxlint-disable-next-line no-await-in-loop -- sequential, each is fast
+        const r = await cli(...args, "--out", partial);
+        expect(r.code).toBe(EXIT.usage);
+        expect(r.err).toContain(`${partial} already holds a run`);
+        expect(existsSync(join(partial, "match.jsonl"))).toBe(false);
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("the trace of a run that stopped on a fatal line covers every action before it", async () => {
+    const dir = tempDir();
+    try {
+      const { lines } = await runBots({
+        ruleset: "sandbox-1",
+        seed: 5,
+        players: 3,
+        overrides: { "time.matchEnd": 21600 },
+        clock: { kind: "lockstep" },
+      });
+      expect(verifyLog(lines).ok).toBe(true);
+      // The log of a run that died right after its 10th action, ending with the host's fatal line.
+      const actIndexes = lines.flatMap((l, i) => (l.k === "act" ? [i] : []));
+      const cut = actIndexes[9] ?? -1;
+      const tenth = lines[cut];
+      if (tenth?.k !== "act") throw new Error("fewer than 10 actions");
+      const fatal: LogLine = {
+        k: "fatal",
+        t: tenth.t,
+        error: { kind: "engine", message: "boom" },
+      };
+      const log = join(dir, "match.jsonl");
+      writeFileSync(log, jsonlText([...lines.slice(0, cut + 1), fatal]));
+      const out = writeTrace(log, join(dir, "trace.jsonl"));
+      expect(out).toEqual({ traced: 10, problem: null });
+      expect(readFileSync(join(dir, "trace.jsonl"), "utf8").trimEnd().split("\n")).toHaveLength(10);
+
+      // A replay that diverges before the fatal line is reported, and traces what it reached.
+      const first = lines.findIndex((l) => l.k === "act" && l.r.ok);
+      const act = lines[first];
+      if (act?.k !== "act") throw new Error("no accepted action");
+      const tampered = lines
+        .slice(0, cut + 1)
+        .with(first, { ...act, r: { ok: false, code: "QUEUE_FULL" } });
+      writeFileSync(log, jsonlText([...tampered, fatal]));
+      const bad = writeTrace(log, join(dir, "trace.jsonl"));
+      expect(bad.traced).toBeLessThan(10);
+      expect(bad.problem).toContain(`the trace replay diverged after ${bad.traced} action(s)`);
+      expect(bad.problem).toContain('"kind":"result"');
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

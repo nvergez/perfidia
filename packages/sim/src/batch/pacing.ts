@@ -1,6 +1,6 @@
 import { verifyLog, type ReadCtx, type ReplayReport } from "@perfidia/engine";
 import { DAY } from "@perfidia/engine/core";
-import { sortedIds, unitsPop } from "@perfidia/engine/std";
+import { sortedIds, unitsAtHome, unitsPop } from "@perfidia/engine/std";
 import type { LogLine } from "@perfidia/protocol";
 
 // The pacing measurement (docs/architecture.md §13.9, perfidia-1 §19.5): each run is replayed
@@ -63,11 +63,15 @@ export function measureState(r: ReadCtx): StateMeasures {
   const addArmy = (p: string, pop: number): void => {
     if (army.has(p)) army.set(p, (army.get(p) ?? 0) + pop);
   };
-  for (const c of Object.values(s.cities)) {
+  for (const id of sortedIds(s.cities)) {
+    const c = s.cities[id];
+    if (c === undefined) continue;
     used.set(c.island, (used.get(c.island) ?? 0) + 1);
     if (c.owner !== null) {
       if (cities.has(c.owner)) cities.set(c.owner, (cities.get(c.owner) ?? 0) + 1);
-      addArmy(c.owner, unitsPop(r.rules, c.units));
+      // Units at home through the std derivation (§4.3): trickled recruits not yet materialised
+      // into `c.units` count too.
+      addArmy(c.owner, unitsPop(r.rules, unitsAtHome(r, id)));
     }
     for (const g of c.stationed) addArmy(g.owner, unitsPop(r.rules, g.units));
   }

@@ -4,6 +4,7 @@
 // cases, and agreement with the host's own statistics on a real run.
 
 import { describe, expect, test } from "bun:test";
+import { verifyLog } from "@perfidia/engine";
 import { LogLineSchema, type LogLine } from "@perfidia/protocol";
 import { jsonlText, runBots } from "../harness/index.ts";
 import { LogShapeError, formatSummary, summarize, wakeClass } from "./index.ts";
@@ -310,6 +311,7 @@ describe("summarize", () => {
         clock: { kind: "lockstep" },
         strict: true,
       });
+      expect(verifyLog(out.lines).ok).toBe(true);
       const s = summarize(out.lines);
       for (const seat of s.seats) expect(seat.wakes).toEqual(out.run.stats.wakes[seat.seat] ?? []);
       expect(s.turns).toBe(out.run.stats.turns);

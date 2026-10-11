@@ -1,6 +1,8 @@
-// `sim golden` (docs/architecture.md §3.5, §12.1, §13.5, §13.6, §15 T15): `--update` adds the
-// missing goldens and fingerprint entries and refuses to overwrite an existing golden; `--check`
-// passes on what it wrote and fails on a tampered copy; a new bot version gets a new golden.
+// `sim golden` (docs/architecture.md §3.5, §12.1, §13.5, §13.6, §15 T15): `--update` adds a missing
+// golden and the fingerprint entries and refuses to overwrite an existing golden; `--check` passes
+// on what it wrote and fails on a tampered copy; a new bot version gets a new golden. Every match
+// here lasts at most 1 game day (§13): the CLI writes only the 1-day goldens of `GOLDEN_SPECS`,
+// named on its command line, and the multi-day ones are left to T17's exit work.
 
 import { describe, expect, test } from "bun:test";
 import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
@@ -11,7 +13,7 @@ import { EXIT, memoryIo } from "../args.ts";
 import { main } from "../cli.ts";
 import { FINGERPRINTS_FILE, jsonlText, listGoldens, readFingerprints } from "../harness/index.ts";
 import { readLog } from "../io/index.ts";
-import { GOLDEN_SPECS, updateGoldens, type GoldenSpec } from "./index.ts";
+import { GOLDEN_SPECS, checkFixtures, updateGoldens, type GoldenSpec } from "./index.ts";
 
 function tempDir(): string {
   return mkdtempSync(join(tmpdir(), "perfidia-sim-golden-"));
@@ -35,47 +37,56 @@ function snapshotFiles(dir: string): Record<string, string> {
 }
 
 describe("sim golden", () => {
-  test("--update adds the goldens of §13.5 once and refuses to overwrite; --check passes, then fails on a tampered golden", async () => {
+  test("the specs are the bot goldens of §13.5", () => {
+    expect(GOLDEN_SPECS.map((s) => [`${s.ref}/${s.name}`, s.run.days, s.run.clock.kind])).toEqual([
+      ["perfidia-1@1.0.0/lockstep-6p-4d", 4, "lockstep"],
+      ["perfidia-1@1.0.0/rt-virtual-6p-1d", 1, "virtual"],
+      ["sandbox-1@1.0.0/lockstep-6p-3d", 3, "lockstep"],
+      ["sandbox-1@1.0.0/rt-virtual-6p-1d", 1, "virtual"],
+    ]);
+  });
+
+  test("--update adds goldens once and refuses to overwrite them; --check passes, then fails on a tampered golden", async () => {
     const dir = tempDir();
+    // The 1-day goldens of each published ref: `--check` wants one golden per published ref.
+    const names = ["perfidia-1@1.0.0/rt-virtual-6p-1d", "sandbox-1@1.0.0/rt-virtual-6p-1d"];
+    const name = names[1] ?? "";
+    const specs = GOLDEN_SPECS.filter((s) => names.includes(`${s.ref}/${s.name}`));
+    expect(specs.map((s) => s.run.days)).toEqual([1, 1]);
     try {
-      const first = await cli("golden", "--update", "--fixtures", dir);
+      const first = await cli("golden", "--update", "--fixtures", dir, ...names);
       expect(first.code).toBe(EXIT.ok);
-      const names = GOLDEN_SPECS.map((s) => `${s.ref}/${s.name}`);
-      for (const n of names) expect(first.out).toContain(`added golden ${n}\n`);
+      expect(first.out).toBe(
+        [
+          ...names.map((n) => `added golden ${n}`),
+          "added fingerprint entry perfidia-1@1.0.0",
+          "added fingerprint entry perfidia-1@1.0.0/rt-virtual-6p-1d",
+          "added fingerprint entry sandbox-1@1.0.0",
+          "added fingerprint entry sandbox-1@1.0.0/rt-virtual-6p-1d",
+          "",
+        ].join("\n"),
+      );
       expect(listGoldens(dir).map((g) => `${g.ref}/${g.name}`)).toEqual(names);
       const fp = readFingerprints(dir);
       expect(Object.keys(fp)).toEqual(["perfidia-1@1.0.0", "sandbox-1@1.0.0"]);
-      expect(Object.keys(fp["perfidia-1@1.0.0"]?.goldens ?? {})).toEqual([
-        "lockstep-6p-4d",
-        "rt-virtual-6p-1d",
-      ]);
+      expect(Object.keys(fp["sandbox-1@1.0.0"]?.goldens ?? {})).toEqual(["rt-virtual-6p-1d"]);
 
       const before = snapshotFiles(dir);
-      const again = await cli("golden", "--update", "--fixtures", dir);
-      expect(again.code).toBe(EXIT.ok);
-      for (const n of names)
-        expect(again.out).toContain(`kept golden ${n} (it exists; goldens are append-only)`);
-      expect(again.out).not.toContain("added");
-      const named = await cli(
-        "golden",
-        "--update",
-        "--fixtures",
-        dir,
-        "sandbox-1@1.0.0/lockstep-6p-3d",
-      );
+      const named = await cli("golden", "--update", "--fixtures", dir, name);
       expect(named.code).toBe(EXIT.usage);
-      expect(named.err).toContain("refusing to overwrite sandbox-1@1.0.0/lockstep-6p-3d");
+      expect(named.out).toBe(`kept golden ${name} (it exists; goldens are append-only)\n`);
+      expect(named.err).toContain(`refusing to overwrite ${name}`);
       expect(snapshotFiles(dir)).toEqual(before);
 
       const check = await cli("golden", "--check", "--fixtures", dir);
       expect(check.code).toBe(EXIT.ok);
-      expect(check.out).toContain("perfidia-1@1.0.0/lockstep-6p-4d: Level E ");
+      for (const n of names) expect(check.out).toContain(`${n}: Level E `);
       expect(check.out).toContain(" · Level G pass");
-      expect(check.out).toContain("golden check: ok (4 golden(s))");
+      expect(check.out).toContain("golden check: ok (2 golden(s))");
 
-      // A tampered golden fails the check, and --update still does not touch it.
-      const g = listGoldens(dir).find((x) => x.name === "lockstep-6p-3d");
-      if (g === undefined) throw new Error("no sandbox golden");
+      // A tampered golden fails the check, and an update without names keeps it as it is.
+      const g = listGoldens(dir).find((x) => `${x.ref}/${x.name}` === name);
+      if (g === undefined) throw new Error("no golden");
       const lines = readLog(g.path);
       const at = lines.findIndex((l) => l.k === "act" && l.r.ok);
       const act = lines[at];
@@ -84,10 +95,9 @@ describe("sim golden", () => {
       writeFileSync(g.path, tampered);
       const broken = await cli("golden", "--check", "--fixtures", dir, "--no-resim");
       expect(broken.code).toBe(EXIT.divergence);
-      expect(broken.out).toContain(
-        "problem: golden sandbox-1@1.0.0/lockstep-6p-3d: Level E: result divergence",
-      );
-      expect((await cli("golden", "--update", "--fixtures", dir)).code).toBe(EXIT.ok);
+      expect(broken.out).toContain(`problem: golden ${name}: Level E: result divergence`);
+      const kept = await updateGoldens(dir, { specs });
+      expect([kept.added, kept.kept, kept.refused, kept.fingerprints]).toEqual([[], names, [], []]);
       expect(readFileSync(g.path, "utf8")).toBe(tampered);
       expect(readFileSync(join(dir, FINGERPRINTS_FILE), "latin1")).toBe(
         before[join(dir, FINGERPRINTS_FILE)] ?? "",
@@ -95,7 +105,7 @@ describe("sim golden", () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
-  }, 60000);
+  }, 30000);
 
   test("a new bot version gets a new golden next to the old one", async () => {
     const dir = tempDir();
@@ -125,6 +135,13 @@ describe("sim golden", () => {
         rulesets: [sandbox],
       });
       expect([three.added, three.kept.length, three.fingerprints]).toEqual([[], 2, []]);
+      // Both goldens replay (Level E, and Level G with their bots).
+      const check = await checkFixtures(dir, { rulesets: [sandbox] });
+      expect([check.ok, check.problems, check.goldens.map((x) => x.levelG)]).toEqual([
+        true,
+        [],
+        ["pass", "pass"],
+      ]);
       let refused: unknown = null;
       try {
         await updateGoldens(dir, { only: ["nope@1.0.0/x"] });

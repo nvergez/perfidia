@@ -1,10 +1,8 @@
-import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { DAY } from "@perfidia/engine/core";
 import {
   EXIT,
   UINT32_MAX,
-  UsageError,
   parseFlags,
   parseIntIn,
   parseLatency,
@@ -13,7 +11,7 @@ import {
   type CliIo,
   type FlagSpecs,
 } from "../args.ts";
-import { LOG_FILE, freeRunDir } from "../io/index.ts";
+import { assertFreeRunDir, freeRunDir } from "../io/index.ts";
 import { formatSummary } from "../summary/index.ts";
 import { planRun, type RunPlan, type RunRequest } from "./plan.ts";
 import { executeRun } from "./run.ts";
@@ -78,7 +76,7 @@ const FLAGS: FlagSpecs = {
   },
   "trace-hashes": {
     type: "boolean",
-    help: "write trace.jsonl: the state hash after every action (replays the log)",
+    help: "write trace.jsonl: the state hash after every action, from a replay of the written log (not the live engine)",
   },
   "allow-test": { type: "boolean", help: "allow a test ruleset such as sandbox-1" },
   out: {
@@ -152,11 +150,7 @@ export async function runCommand(argv: readonly string[], io: CliIo): Promise<nu
   let dir: string;
   if (out === undefined) dir = freeRunDir(defaultRunDir(plan));
   else {
-    if (existsSync(join(out, LOG_FILE))) {
-      throw new UsageError(
-        `${out} already holds a match log: runs are never overwritten, choose another --out`,
-      );
-    }
+    assertFreeRunDir(out);
     dir = out;
   }
   if (!quiet && !json) io.out(`run directory: ${dir}\n`);

@@ -1,5 +1,9 @@
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  RULESETS,
+  findRuleset,
   verifyLog,
   type InvariantLevel,
   type ReplayDivergence,
@@ -9,16 +13,19 @@ import {
 import { canonicalJson, fmtTime } from "@perfidia/engine/core";
 import type { LogLine, Snapshot } from "@perfidia/protocol";
 import { EXIT, UsageError, errorText, type CliIo, type ExitCode } from "../args.ts";
-import { JsonlError, normalisedText, resimProblem, resimulate } from "../harness/index.ts";
+import { normalisedText, resimProblem, resimulate } from "../harness/index.ts";
 import {
   checkpointSnapshotName,
+  isCorruptLog,
   listSnapshots,
   locateLog,
+  readFirstLine,
   readLog,
   readLogLines,
   readSnapshotFile,
   snapshotPathFor,
   writeFileAtomic,
+  type LocatedLog,
 } from "../io/index.ts";
 import { jsonDiff } from "./diff.ts";
 
@@ -26,7 +33,8 @@ import { jsonDiff } from "./diff.ts";
 // (streaming the log), resuming after a snapshot's checkpoint with `--from`; `--dump` writes the
 // replay's state at the first divergent checkpoint and prints a structural diff against the
 // nearest saved snapshot; `--resim` re-simulates the match through the harness (Level G) and
-// compares the normalised logs line by line.
+// compares the normalised logs line by line. A corrupt log file is a failed verification (exit 1,
+// naming the line); a header whose ruleset this build lacks is a usage error (exit 3, §3.5).
 
 export interface VerifyRequest {
   /** A run directory or a log file. */
@@ -87,14 +95,13 @@ export function divergentCheckpoint(
   return got === undefined ? null : { hour: d.hour, ...got };
 }
 
-/** `--dump`: writes the divergent checkpoint's state and prints its diff against the nearest snapshot. */
-function dump(
-  io: CliIo,
-  log: string,
-  dir: string,
-  base: VerifyOptions,
-  first: ReplayDivergence,
-): void {
+/**
+ * `--dump`: writes the divergent checkpoint's state and prints its diff against the nearest
+ * snapshot. The dump goes into the run directory when the target was one; for a log file (a
+ * committed golden, say) it goes into a fresh temporary directory, never next to the file.
+ */
+function dump(io: CliIo, located: LocatedLog, base: VerifyOptions, first: ReplayDivergence): void {
+  const { log, dir } = located;
   const ck = divergentCheckpoint(log, base, first);
   if (ck === null) {
     io.out(
@@ -102,7 +109,8 @@ function dump(
     );
     return;
   }
-  const path = join(dir, `dump-${checkpointSnapshotName(ck.hour)}`);
+  const into = located.isRunDir ? dir : mkdtempSync(join(tmpdir(), "perfidia-dump-"));
+  const path = join(into, `dump-${checkpointSnapshotName(ck.hour)}`);
   writeFileAtomic(path, ck.state);
   io.out(`--dump: the replay's state at hour ${ck.hour} (${fmtTime(ck.t)}) is in ${path}\n`);
   const snaps = listSnapshots(dir).filter((s) => s.hour !== null);
@@ -173,17 +181,35 @@ async function levelG(
   return EXIT.divergence;
 }
 
+/**
+ * The header's ruleset must be in this build (§3.5): an unknown ref is a usage error (exit 3)
+ * naming the refs the build contains, not a replay divergence. Anything else wrong with the first
+ * line is left to the replay.
+ */
+function checkHeaderRuleset(header: LogLine | undefined): void {
+  if (header?.k !== "header") return;
+  const ref = header.setup.ruleset;
+  if (findRuleset(ref) === undefined) {
+    throw new UsageError(
+      `the log's ruleset ${ref} is not in this build; it contains ${RULESETS.map((r) => r.ref).join(", ")}`,
+    );
+  }
+}
+
 /** Verifies a run (§12.1); returns the exit code. */
 export async function verifyRun(req: VerifyRequest, io: CliIo): Promise<ExitCode> {
-  const { log, dir } = locateLog(req.target);
-  const from =
-    req.from === undefined ? undefined : readSnapshotFile(snapshotPathFor(dir, req.from));
-  const base = options(req, from);
+  const located = locateLog(req.target);
+  const { log, dir } = located;
   let report: ReplayReport;
+  let base: VerifyOptions;
+  let from: Snapshot | undefined;
   try {
+    checkHeaderRuleset(readFirstLine(log));
+    from = req.from === undefined ? undefined : readSnapshotFile(snapshotPathFor(dir, req.from));
+    base = options(req, from);
     report = verifyLog(readLogLines(log), base);
   } catch (error) {
-    if (error instanceof JsonlError) {
+    if (isCorruptLog(error)) {
       io.out(`Level E: ${log}: ${error.message}\n`);
       return EXIT.divergence;
     }
@@ -195,7 +221,7 @@ export async function verifyRun(req: VerifyRequest, io: CliIo): Promise<ExitCode
   if (!report.ok || report.divergence !== undefined) {
     const d = report.divergence;
     io.out(`Level E: ${d === undefined ? "FAILED" : `DIVERGENCE: ${describeDivergence(d)}`}\n`);
-    if (req.dump === true && d !== undefined) dump(io, log, dir, base, d);
+    if (req.dump === true && d !== undefined) dump(io, located, base, d);
     if (req.resim === true) io.out("Level G: skipped (Level E failed)\n");
     return EXIT.divergence;
   }

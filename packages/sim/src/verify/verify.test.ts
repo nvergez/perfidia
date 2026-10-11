@@ -1,13 +1,25 @@
-// `sim verify` (docs/architecture.md §10.4, §12.1, §15 T15): a tampered log exits 1 naming the
-// divergence, `--from` a mid-run snapshot passes for both rulesets with a non-empty override and a
-// foreign snapshot is a divergence, `--resim` is byte-identical for lockstep and catches a changed
-// controller, a corrupt line reports its number, and `--dump` writes the divergent checkpoint and
-// diffs it against the nearest snapshot.
+// `sim verify` (docs/architecture.md §10.4, §12.1, §3.5, §15 T15): a tampered log exits 1 naming
+// the divergence, `--from` a mid-run snapshot passes for both rulesets with a non-empty override and
+// a foreign snapshot is a divergence, `--resim` is byte-identical for lockstep and catches a changed
+// controller, a corrupt line (bad JSON, invalid UTF-8 past the first chunk, a cut multi-byte
+// character) exits 1 naming its line for `verify` and `summary`, `--dump` writes the divergent
+// checkpoint (into the run directory, or a temporary one for a log file) and diffs it against the
+// nearest snapshot, a ruleset ref the build lacks exits 3 listing the refs, and diverging verifies
+// leave no file open.
 
 import { describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { RULESETS, verifyLog } from "@perfidia/engine";
 import type { LogLine } from "@perfidia/protocol";
 import { EXIT, memoryIo } from "../args.ts";
 import { main } from "../cli.ts";
@@ -52,7 +64,9 @@ async function runInto(
   );
   expect(r.err).toBe("");
   expect(r.code).toBe(EXIT.ok);
-  return readLog(join(out, "match.jsonl"));
+  const lines = readLog(join(out, "match.jsonl"));
+  expect(verifyLog(lines).ok).toBe(true);
+  return lines;
 }
 
 /** Writes `lines` with the line at `index` replaced. */
@@ -161,6 +175,23 @@ describe("sim verify", () => {
       expect(changed.out).toMatch(/--dump: structural diff, snapshot .*h00\d\d\.json/);
       expect(changed.out).toMatch(/\n {2}cities\.c\d+\./);
 
+      // A log file outside a run directory (a committed golden, say): the dump goes to a fresh
+      // temporary directory, never next to the file.
+      const loose = join(dir, "loose");
+      mkdirSync(loose);
+      const looseLog = join(loose, "golden.jsonl");
+      tamper(looseLog, lines, ci, { ...ck, h: "0".repeat(16) });
+      const fileDump = await cli("verify", looseLog, "--dump");
+      expect(fileDump.code).toBe(EXIT.divergence);
+      const m = /--dump: the replay's state at hour 12 \(D1 12:00\) is in (.+)\n/.exec(
+        fileDump.out,
+      );
+      const dumpPath = m?.[1] ?? "";
+      expect(dumpPath.startsWith(join(tmpdir(), "perfidia-dump-"))).toBe(true);
+      expect(JSON.parse(readFileSync(dumpPath, "utf8"))).toEqual(state);
+      expect(readdirSync(loose)).toEqual(["golden.jsonl"]);
+      rmSync(dirname(dumpPath), { recursive: true, force: true });
+
       // A clean log has nothing to dump.
       writeFileSync(log, jsonlText(lines));
       const clean = await cli("verify", out, "--dump");
@@ -192,18 +223,114 @@ describe("sim verify", () => {
       expect(unknown.code).toBe(EXIT.usage);
       expect(unknown.err).toContain("controller llm:somebody is not a bot of this build");
 
-      const rows = jsonlText(lines).split("\n");
-      writeFileSync(log, rows.with(41, (rows[41] ?? "").slice(0, 20)).join("\n"));
-      const corrupt = await cli("verify", out);
-      expect(corrupt.code).toBe(EXIT.divergence);
-      expect(corrupt.out).toContain("match.jsonl: line 42: not JSON");
-      const summary = await cli("summary", out);
-      expect(summary.code).toBe(EXIT.divergence);
-      expect(summary.err).toContain("line 42: not JSON");
+      const text = jsonlText(lines);
+      const rows = text.split("\n");
+      const corrupted = async (bytes: Uint8Array | string, what: string): Promise<void> => {
+        writeFileSync(log, bytes);
+        const verified = await cli("verify", out);
+        expect(verified.code).toBe(EXIT.divergence);
+        expect(verified.out).toStartWith(`Level E: ${log}: ${what}`);
+        const summary = await cli("summary", out);
+        expect(summary.code).toBe(EXIT.divergence);
+        expect(summary.err).toStartWith(`${log}: ${what}`);
+      };
+      await corrupted(
+        rows.with(41, (rows[41] ?? "").slice(0, 20)).join("\n"),
+        "line 42: not JSON (",
+      );
+      // An invalid byte inside a line past the first 64 KiB chunk names that line, not the first
+      // line of its chunk.
+      const bytes = Buffer.from(text);
+      let at = 0;
+      let index = 0;
+      while (at + Buffer.byteLength(rows[index] ?? "") + 1 < 100_000) {
+        at += Buffer.byteLength(rows[index] ?? "") + 1;
+        index += 1;
+      }
+      expect(at).toBeGreaterThan(65536);
+      const bad = Buffer.concat([
+        bytes.subarray(0, at + 5),
+        Buffer.from([0xff]),
+        bytes.subarray(at + 5),
+      ]);
+      await corrupted(
+        bad,
+        `line ${index + 1}: not UTF-8 (The encoded data was not valid for encoding utf-8)\n`,
+      );
+      // A log cut inside a multi-byte character (a killed write) names its last line.
+      await corrupted(
+        Buffer.concat([bytes, Buffer.from('{"k":"note","text":"ok '), Buffer.from([0xe2, 0x9c])]),
+        `line ${lines.length + 1}: not UTF-8 (The encoded data was not valid for encoding utf-8)\n`,
+      );
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
   }, 30000);
+
+  test("a log whose ruleset this build lacks exits 3 naming the refs it contains; summary warns", async () => {
+    const dir = tempDir();
+    try {
+      const out = join(dir, "run");
+      const lines = await runInto(out, "sandbox-1", "combat.lootPm=400");
+      const header = lines[0];
+      if (header?.k !== "header") throw new Error("no header");
+      tamper(join(out, "match.jsonl"), lines, 0, {
+        ...header,
+        setup: { ...header.setup, ruleset: "sandbox-1@9.9.9" },
+      });
+      const refs = RULESETS.map((r) => r.ref).join(", ");
+      for (const extra of [[], ["--resim"], ["--from", "h12"]]) {
+        // oxlint-disable-next-line no-await-in-loop -- sequential
+        const r = await cli("verify", out, ...extra);
+        expect({ extra, code: r.code }).toEqual({ extra, code: EXIT.usage });
+        expect(r.err).toBe(
+          `sim verify: the log's ruleset sandbox-1@9.9.9 is not in this build; it contains ${refs}\n`,
+        );
+        expect(r.out).toBe("");
+      }
+      const summary = await cli("summary", out);
+      expect(summary.code).toBe(EXIT.ok);
+      expect(summary.err).toBe(
+        `warning: the log's ruleset sandbox-1@9.9.9 is not in this build (it contains ${refs}), so it cannot be verified here\n`,
+      );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }, 30000);
+
+  test.skipIf(!existsSync("/dev/fd"))(
+    "diverging verifies leave no file open",
+    async () => {
+      const dir = tempDir();
+      try {
+        const out = join(dir, "run");
+        const lines = await runInto(out, "sandbox-1", "combat.lootPm=400");
+        const ai = lines.findIndex((l) => l.k === "act" && l.r.ok);
+        const act = lines[ai];
+        if (act?.k !== "act") throw new Error("no accepted action");
+        tamper(join(out, "match.jsonl"), lines, ai, {
+          ...act,
+          r: { ok: false, code: "QUEUE_FULL" },
+        });
+        // A log without its header: `summarize` stops at its first line.
+        const headless = join(dir, "headless.jsonl");
+        writeFileSync(headless, jsonlText(lines.slice(1)));
+        const before = readdirSync("/dev/fd").length;
+        for (let i = 0; i < 10; i += 1) {
+          // oxlint-disable-next-line no-await-in-loop -- sequential
+          expect((await cli("verify", out, "--dump")).code).toBe(EXIT.divergence);
+          // oxlint-disable-next-line no-await-in-loop -- sequential
+          const s = await cli("summary", headless);
+          expect(s.code).toBe(EXIT.divergence);
+          expect(s.err).toContain("a log starts with its header line");
+        }
+        expect(readdirSync("/dev/fd").length).toBeLessThanOrEqual(before + 1);
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    },
+    30000,
+  );
 
   test("usage errors", async () => {
     expect((await cli("verify")).code).toBe(EXIT.usage);

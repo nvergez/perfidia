@@ -13,6 +13,7 @@ export {
 export {
   BATCH_FORMAT,
   batchRunDir,
+  preflightBatch,
   runBatch,
   writeBatchJson,
   type BatchPlan,
