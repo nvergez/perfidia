@@ -33,7 +33,7 @@ const FLAGS: FlagSpecs = {
   bots: {
     type: "string",
     value: "<a,b,…>",
-    help: "bots cycled over the seats, the same for every variant (default all four)",
+    help: `bots cycled over the seats, the same for every variant (default ${DEFAULT_BOTS.join(",")})`,
   },
   days: { type: "string", value: "<N>", help: "match length in game days (time.matchEnd)" },
   "per-match": { type: "boolean", help: "one row per match instead of one per variant" },

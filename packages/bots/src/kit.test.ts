@@ -10,8 +10,10 @@ import {
   type JsonObject,
 } from "@perfidia/protocol";
 import { perfidiaGame, perfidiaRules, res, rulesInfo, sandboxRules } from "./fixtures.test.ts";
-import { NO_HINTS } from "./hints.ts";
+import { hintsFor, NO_HINTS } from "./hints.ts";
 import {
+  baseDefenseAt,
+  configInt,
   etaAfford,
   fmtTime,
   makeKit,
@@ -82,6 +84,30 @@ describe("roles from unit stats", () => {
   test("caps come from rules.gateway, not from the interface text", () => {
     expect(pKit.gateway.notesMaxChars).toBe(4000);
     expect(sKit.gateway.toolCallsPerWake).toBe(30);
+  });
+});
+
+describe("the effective config through the combat hints", () => {
+  test("baseDefenseAt: the quad (perfidia-1), n per level (sandbox-1), or null", () => {
+    const p = hintsFor("perfidia-1@1.0.0").combat?.baseDefense;
+    const s = hintsFor("sandbox-1@1.0.0").combat?.baseDefense;
+    const pConf = { ...pKit, config: { economy: { baseDefense: { a: 1, b: 20, c: 50 } } } };
+    expect(baseDefenseAt(pConf, p, 3)).toBe(9 + 60 + 50);
+    expect(baseDefenseAt({ ...sKit, config: { combat: { keepDefense: 10 } } }, s, 4)).toBe(40);
+    // A missing path, a malformed value or no hint: unknown.
+    expect(baseDefenseAt(pKit, p, 3)).toBeNull();
+    expect(baseDefenseAt({ ...pKit, config: { economy: { baseDefense: 7 } } }, p, 3)).toBeNull();
+    expect(baseDefenseAt(pConf, undefined, 3)).toBeNull();
+    expect(baseDefenseAt({ ...sKit, config: { combat: { keepDefense: 1.5 } } }, s, 4)).toBeNull();
+  });
+
+  test("configInt reads safe integers only", () => {
+    const kit = { ...pKit, config: { combat: { wallPmPerLevel: 50, x: "50", y: 0.5 } } };
+    expect(configInt(kit, ["combat", "wallPmPerLevel"])).toBe(50);
+    expect(configInt(kit, ["combat", "x"])).toBeNull();
+    expect(configInt(kit, ["combat", "y"])).toBeNull();
+    expect(configInt(kit, ["combat", "missing"])).toBeNull();
+    expect(configInt(kit, undefined)).toBeNull();
   });
 });
 

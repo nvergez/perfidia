@@ -7,7 +7,7 @@
 // rejected with the state unchanged. The intents reach alliances between pact partners (the pact
 // ends as superseded), recalls from cities holding the seat's groups from several homes, and, under
 // perfidia-1's time-compressing overrides, sieges, conquests and eliminations. And through the
-// gateway at the maximum of 12 seats: the four bots with chaos agents on a third of the seats,
+// gateway at the maximum of 12 seats: the default bots with chaos agents on a third of the seats,
 // under step invariants, lockstep and real time with `VirtualTime`, end without a fatal line or an
 // INTERNAL result and replay at Level E.
 

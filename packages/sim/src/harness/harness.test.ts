@@ -48,7 +48,7 @@ function tempDir(): string {
   return mkdtempSync(join(tmpdir(), "perfidia-harness-"));
 }
 
-/** A short sandbox-1 lockstep log of the four bots. */
+/** A short sandbox-1 lockstep log of the default bots (the first three). */
 async function shortLog(seed = 2): Promise<LogLine[]> {
   const out = await runBots({
     ruleset: SANDBOX,

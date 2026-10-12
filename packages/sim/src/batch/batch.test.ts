@@ -109,6 +109,7 @@ describe("sim batch", () => {
         "bot:rusher@2",
         "bot:turtle@1",
         "bot:opportunist@1",
+        "bot:conqueror@1",
       ]);
       expect(parsed.clock).toEqual({ kind: "lockstep", maxTurnsPerSecond: 3 });
       const rs = getRuleset("perfidia-1@1.0.0");
@@ -126,7 +127,12 @@ describe("sim batch", () => {
           configHash: resolved.ok ? resolved.hash : "",
           engine: ENGINE_VERSION,
           seeds: [1, 2],
-          controllers: { p1: "bot:expander@1", p2: "bot:rusher@2", p6: "bot:rusher@2" },
+          controllers: {
+            p1: "bot:expander@1",
+            p2: "bot:rusher@2",
+            p5: "bot:conqueror@1",
+            p6: "bot:expander@1",
+          },
         });
         expect(v.rulesHash).toMatch(/^[0-9a-f]{64}$/);
         expect(v.matches.map((m) => [m.seed, m.status, m.reason])).toEqual([

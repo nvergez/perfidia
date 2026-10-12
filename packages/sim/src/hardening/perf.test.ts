@@ -1,5 +1,5 @@
 // Performance printout of the 1-game-day runs (docs/architecture.md §13.8, §15 T16): for both
-// rulesets, 6 and 12 seats of the four bots, under lockstep and real time with `VirtualTime`, the
+// rulesets, 6 and 12 seats of the default bots, under lockstep and real time with `VirtualTime`, the
 // wall time of the run, of its Level E replay and of the gateway rebuild, with the log size, turns,
 // calls and engine events; and the time of a full state hash and of a briefing at the end. Printed,
 // never asserted (the 7-day budgets of §13.8 are the exit suite's); only completion is checked.
@@ -88,7 +88,7 @@ test("performance of the 1-game-day runs (printed, not asserted)", async () => {
       }
     }
   }
-  console.log("\nT16 performance, 1 game day, four bots (ms of wall time):");
+  console.log("\nT16 performance, 1 game day, default bots (ms of wall time):");
   console.table(rows);
   expect(rows).toHaveLength(8);
 }, 60000);

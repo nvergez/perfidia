@@ -10,7 +10,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { LogLineSchema, type EvLine, type LogLine } from "@perfidia/protocol";
 import { FIXTURES_DIR } from "../golden/index.ts";
-import { listGoldens, readLog } from "../harness/index.ts";
+import { DEFAULT_BOTS, listGoldens, readLog } from "../harness/index.ts";
 import {
   dayOf,
   fightTable,
@@ -136,7 +136,7 @@ describe("a real batch", () => {
           variants: [fight, dom],
           seeds: [2],
           players: 6,
-          bots: ["expander", "rusher", "turtle", "opportunist"],
+          bots: [...DEFAULT_BOTS],
           days: null,
           pacing: true,
         },

@@ -28,6 +28,20 @@ import {
 const PERFIDIA = "perfidia-1@1.0.0";
 const SANDBOX = "sandbox-1@1.0.0";
 
+/** The phase-1 bots: the controllers of the first bot goldens. */
+const PHASE1_BOTS = ["bot:expander@1", "bot:rusher@1", "bot:turtle@1", "bot:opportunist@1"];
+/** The default bots of this build, each at its latest version. */
+const DEFAULT_LABELS = [
+  "bot:expander@1",
+  "bot:rusher@2",
+  "bot:turtle@1",
+  "bot:opportunist@1",
+  "bot:conqueror@1",
+];
+/** The name suffixes of the goldens of the default bots: a hash of the seats' labels (§13.5). */
+const BOTS_6P = "bots-3cd67627";
+const BOTS_12P = "bots-c5bd73c9";
+
 function golden(ref: string, name: string): GoldenFile {
   const g = listGoldens(FIXTURES_DIR).find((x) => x.ref === ref && x.name === name);
   if (g === undefined) throw new Error(`golden ${ref}/${name} is not committed`);
@@ -52,13 +66,20 @@ describe("the freeze guard", () => {
     const report = await checkGoldens(FIXTURES_DIR, RULESETS);
     expect(report.problems).toEqual([]);
     expect(report.ok).toBe(true);
-    // The goldens of §13.5; Level G runs for the bot goldens, not for the scripted scenario.
+    // The goldens of §13.5; Level G runs for the bot goldens, not for the scripted scenario. Each
+    // bot golden exists for the phase-1 bots and, suffixed with a hash of its labels, for the
+    // default bots of this build (rusher@2, conqueror@1): the older ones keep their Level G check.
     expect(report.goldens.map((g) => `${g.ref}/${g.name} ${g.levelG}`)).toEqual([
+      `${PERFIDIA}/lockstep-12p-1d-${BOTS_12P} pass`,
       `${PERFIDIA}/lockstep-12p-1d pass`,
+      `${PERFIDIA}/lockstep-6p-4d-${BOTS_6P} pass`,
       `${PERFIDIA}/lockstep-6p-4d pass`,
+      `${PERFIDIA}/rt-virtual-6p-1d-${BOTS_6P} pass`,
       `${PERFIDIA}/rt-virtual-6p-1d pass`,
       `${PERFIDIA}/scenario-late skipped`,
+      `${SANDBOX}/lockstep-6p-3d-${BOTS_6P} pass`,
       `${SANDBOX}/lockstep-6p-3d pass`,
+      `${SANDBOX}/rt-virtual-6p-1d-${BOTS_6P} pass`,
       `${SANDBOX}/rt-virtual-6p-1d pass`,
     ]);
     // Every published ref of the registry has at least one golden and a fingerprint entry.
@@ -160,35 +181,68 @@ function swap(rs: AnyRuleset): AnyRuleset[] {
 }
 
 describe("what the goldens cover (§13.5)", () => {
-  test("lockstep-6p-4d: the default config with the four bots, past capital immunity and the domination opening", () => {
+  test("lockstep-6p-4d: the default config with the phase-1 bots, past capital immunity and the domination opening", () => {
     const lines = readLog(golden(PERFIDIA, "lockstep-6p-4d").path);
     const header = lines[0];
     if (header?.k !== "header") throw new Error("no header");
     expect(header.setup.overrides).toEqual({ "time.matchEnd": 345600 });
     expect(header.clock).toEqual({ kind: "lockstep", maxTurnsPerSecond: 3 });
-    expect(new Set(Object.values(header.controllers))).toEqual(
-      new Set(["bot:expander@1", "bot:rusher@1", "bot:turtle@1", "bot:opportunist@1"]),
-    );
+    expect(new Set(Object.values(header.controllers))).toEqual(new Set(PHASE1_BOTS));
     const end = lines.at(-1);
     if (end?.k !== "end") throw new Error("no end line");
     expect(end.t).toBeGreaterThanOrEqual(259200);
     expect(evs(lines, "battle").length).toBeGreaterThan(0);
   });
 
+  test(`lockstep-6p-4d-${BOTS_6P}: the same match with the default bots, sieges, conquests and an elimination played by bots`, () => {
+    const lines = readLog(golden(PERFIDIA, `lockstep-6p-4d-${BOTS_6P}`).path);
+    const header = lines[0];
+    if (header?.k !== "header") throw new Error("no header");
+    expect(header.setup.overrides).toEqual({ "time.matchEnd": 345600 });
+    expect(header.clock).toEqual({ kind: "lockstep", maxTurnsPerSecond: 3 });
+    expect(new Set(Object.values(header.controllers))).toEqual(new Set(DEFAULT_LABELS));
+    const end = lines.at(-1);
+    if (end?.k !== "end") throw new Error("no end line");
+    expect(end.t).toBe(345600);
+    expect(evs(lines, "battle").length).toBeGreaterThan(0);
+    expect(evs(lines, "siege_started").length).toBeGreaterThan(0);
+    expect(evs(lines, "city_conquered").length).toBeGreaterThan(0);
+    expect(evs(lines, "player_eliminated").length).toBeGreaterThan(0);
+  });
+
+  test("every bot golden of the default bots has their labels; the 12-seat one fights on day 1", () => {
+    for (const [ref, name] of [
+      [PERFIDIA, `lockstep-12p-1d-${BOTS_12P}`],
+      [PERFIDIA, `rt-virtual-6p-1d-${BOTS_6P}`],
+      [SANDBOX, `lockstep-6p-3d-${BOTS_6P}`],
+      [SANDBOX, `rt-virtual-6p-1d-${BOTS_6P}`],
+    ] as const) {
+      const header = readLog(golden(ref, name).path)[0];
+      if (header?.k !== "header") throw new Error(`no header in ${name}`);
+      expect(new Set(Object.values(header.controllers))).toEqual(new Set(DEFAULT_LABELS));
+    }
+    const twelve = readLog(golden(PERFIDIA, `lockstep-12p-1d-${BOTS_12P}`).path);
+    expect(evs(twelve, "battle").length).toBeGreaterThan(0);
+  });
+
   test("rt-virtual-6p-1d: real time under VirtualTime, speed 3, latency 2–60 s", () => {
     for (const ref of [PERFIDIA, SANDBOX]) {
-      const header = readLog(golden(ref, "rt-virtual-6p-1d").path)[0];
-      expect(header).toMatchObject({
-        k: "header",
-        clock: { kind: "realtime", speed: [3, 1], time: "virtual", latencyMs: [2000, 60000] },
-      });
+      for (const name of ["rt-virtual-6p-1d", `rt-virtual-6p-1d-${BOTS_6P}`]) {
+        const header = readLog(golden(ref, name).path)[0];
+        expect(header).toMatchObject({
+          k: "header",
+          clock: { kind: "realtime", speed: [3, 1], time: "virtual", latencyMs: [2000, 60000] },
+        });
+      }
     }
   });
 
   test("sandbox-1 lockstep-6p-3d runs past hill_open", () => {
-    const end = readLog(golden(SANDBOX, "lockstep-6p-3d").path).at(-1);
-    if (end?.k !== "end") throw new Error("no end line");
-    expect(end.t).toBeGreaterThan(172800);
+    for (const name of ["lockstep-6p-3d", `lockstep-6p-3d-${BOTS_6P}`]) {
+      const end = readLog(golden(SANDBOX, name).path).at(-1);
+      if (end?.k !== "end") throw new Error("no end line");
+      expect(end.t).toBeGreaterThan(172800);
+    }
   });
 
   test("scenario-late: siege, relief, homecoming, capital conquest with re-homing, elimination, pact expiry and supersession, domination start, cancel and win", () => {

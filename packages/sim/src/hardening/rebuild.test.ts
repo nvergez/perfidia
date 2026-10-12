@@ -1,5 +1,5 @@
 // The gateway state rebuild against the live state (docs/architecture.md §10.5, §15 T16): at the end
-// of 1-game-day runs of the four bots, under lockstep and under real time with `VirtualTime`, for
+// of 1-game-day runs of the default bots, under lockstep and under real time with `VirtualTime`, for
 // both rulesets, `rebuildGatewayState` over the log equals the gateway state `runMatch` returns
 // (canonical JSON). Also with chaos agents on two seats (many gateway rejections and failures), a
 // hand-off, and the lockstep per-second cap (defer lines); with perfidia-1's time-compressing
@@ -159,7 +159,7 @@ const hasEvent = (lines: readonly LogLine[], ...types: string[]): boolean =>
 describe("rebuilt gateway state = live gateway state (§10.5)", () => {
   for (const ref of REFS) {
     for (const clock of [LOCKSTEP, VIRTUAL]) {
-      test(`${ref}, four bots, ${clock.kind}`, async () => {
+      test(`${ref}, default bots, ${clock.kind}`, async () => {
         const out = await runBots(daySpec(ref, clock, 3));
         expect(out.lines.at(-1)?.k).toBe("end");
         expectRebuilt(out.lines, out.run.gateway);
@@ -180,7 +180,7 @@ describe("rebuilt gateway state = live gateway state (§10.5)", () => {
   }
 
   for (const ref of REFS) {
-    test(`${ref}, four bots, system clock at very high speed: Level E, and the rebuild too`, async () => {
+    test(`${ref}, default bots, system clock at very high speed: Level E, and the rebuild too`, async () => {
       const out = await runBots(
         daySpec(ref, { kind: "system", speed: { num: 864000, den: 1 } }, 3),
       );

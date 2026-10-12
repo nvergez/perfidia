@@ -230,6 +230,12 @@ export function stage(
       const endsAt = state.now + 21600;
       const seq = scheduleAt(state, rules, "siege_end", endsAt, city.id);
       pext(state).sieges[city.id] = { by, startedAt: state.now, endsAt, seq };
+      // A siege start tells the besieger of every return already heading into the city (perfidia-1
+      // §9.3, `announceHomecoming`): those returns record it as their party. Left untold, the
+      // engine would tell them at the next step, whose time depends on data hidden from X.
+      for (const mv of Object.values(state.movements)) {
+        if (mv.kind === "return" && mv.home === city.id && mv.owner !== by) mv.party = by;
+      }
       return city;
     };
     // A siege of the capital of one stranger by another, outside X's alliance.

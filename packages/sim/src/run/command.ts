@@ -11,6 +11,7 @@ import {
   type CliIo,
   type FlagSpecs,
 } from "../args.ts";
+import { DEFAULT_BOTS } from "../harness/index.ts";
 import { assertFreeRunDir, freeRunDir } from "../io/index.ts";
 import { formatSummary } from "../summary/index.ts";
 import { planRun, type RunPlan, type RunRequest } from "./plan.ts";
@@ -49,7 +50,7 @@ const FLAGS: FlagSpecs = {
   bots: {
     type: "string",
     value: "<a,b,…>",
-    help: "bots cycled over the seats (default expander,rusher,turtle,opportunist)",
+    help: `bots cycled over the seats (default ${DEFAULT_BOTS.join(",")})`,
   },
   seat: { type: "string", repeat: true, value: "<pN=bot>", help: "the bot of one seat" },
   clock: { type: "string", value: "lockstep|realtime", help: "clock (default lockstep)" },

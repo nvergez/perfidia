@@ -4,8 +4,8 @@
 // silently drop an old golden to Level E only. The re-simulation itself runs in `src/golden.test.ts`.
 
 import { expect, test } from "bun:test";
-import { botFromLabel, parseBotLabel } from "@perfidia/bots";
-import { listGoldens, resimProblem } from "../harness/index.ts";
+import { botFromLabel, botLabel, parseBotLabel } from "@perfidia/bots";
+import { DEFAULT_BOTS, listGoldens, resimProblem } from "../harness/index.ts";
 import { readLog } from "../io/index.ts";
 import { FIXTURES_DIR } from "./index.ts";
 
@@ -42,9 +42,11 @@ test("every bot label of every committed golden is a bot of this build", () => {
     }
   }
   expect(problems).toEqual([]);
-  // Not vacuous: the bot goldens of §13.5 are there, with the phase-1 labels.
-  expect(botGoldens).toBeGreaterThanOrEqual(5);
+  // Not vacuous: the bot goldens of §13.5 are there, with the phase-1 labels and with the latest
+  // version of every default bot.
+  expect(botGoldens).toBeGreaterThanOrEqual(10);
   for (const label of ["bot:expander@1", "bot:rusher@1", "bot:turtle@1", "bot:opportunist@1"]) {
     expect(seen.has(label)).toBe(true);
   }
+  for (const s of DEFAULT_BOTS) expect(seen.has(botLabel(s))).toBe(true);
 });

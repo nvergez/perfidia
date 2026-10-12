@@ -30,20 +30,22 @@ import {
 import { SystemTime, createVirtualTime, systemWall } from "./time.ts";
 
 // Running matches with bots through the gateway (docs/architecture.md §12.1): setups with the
-// seed-derived id key by default, the four bots cycled over the seats, the clock choices, and
+// seed-derived id key by default, the default bots cycled over the seats, the clock choices, and
 // `optionsFromHeader`, which rebuilds a run's options from its log for Level G (bots from the
 // header's controller labels, `controller` lines as hand-offs, the clock spec and latency model).
 // The CLI, the integration test, the hardening, golden and exit tests all run matches through here.
 
 /**
- * The four phase-1 bots, in the order `--bots` cycles them by default. Named here rather than taken
- * from `BOT_STRATEGIES`, so that a new strategy does not change the default seats.
+ * The default bots, each at its latest version, in the order `--bots` cycles them: the four
+ * phase-1 strategies and the conqueror. Named here rather than taken from `BOT_STRATEGIES`, so that
+ * a new strategy changes the default seats (and so adds goldens) only when it is added here.
  */
 export const DEFAULT_BOTS: readonly BotStrategy[] = Object.freeze([
   "expander",
   "rusher",
   "turtle",
   "opportunist",
+  "conqueror",
 ]);
 
 export interface SetupSpec {
@@ -93,7 +95,7 @@ export function agentFromLabel(
 }
 
 /**
- * One bot per seat: `strategies` cycled over the seats (default the four bots), except the seats
+ * One bot per seat: `strategies` cycled over the seats (default `DEFAULT_BOTS`), except the seats
  * `bySeat` names (`--seat p3=rusher`).
  */
 export function botAgents(
@@ -143,7 +145,7 @@ export type ClockChoice =
 export interface BotRunSpec extends SetupSpec {
   /** A ruleset, or a ref or id resolved through the registry. */
   readonly ruleset: AnyRuleset | string;
-  /** Cycled over the seats (default the four bots). */
+  /** Cycled over the seats (default `DEFAULT_BOTS`). */
   readonly bots?: readonly BotStrategy[];
   /** Strategies of particular seats, overriding `bots` for them. */
   readonly seatBots?: Readonly<Record<string, BotStrategy>>;

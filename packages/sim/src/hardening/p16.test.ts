@@ -1,7 +1,7 @@
 // P16 at match scale (docs/architecture.md §6.6, §13.2), through the harness for both rulesets,
-// under lockstep and real time with `VirtualTime`: the four bots play 1-game-day matches while every
-// object the gateway hands them (round inputs: briefings and tool results) is vandalised once the
-// bot has read its own copy, and again a round later; and the log sink vandalises every line and
+// under lockstep and real time with `VirtualTime`: the default bots play 1-game-day matches while
+// every object the gateway hands them (round inputs: briefings and tool results) is vandalised once
+// the bot has read its own copy, and again a round later; and the log sink vandalises every line and
 // snapshot it receives once it has stored them. The log, the snapshots, the final hash, the final
 // gateway state and every seat's inputs are byte-identical to the same match without vandalism, and
 // both logs pass Level E.

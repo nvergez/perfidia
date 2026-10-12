@@ -396,7 +396,9 @@ describe("P15 (b): hidden-only actions of other seats never change X's results",
       fc.assert(
         fc.property(fc.integer({ min: 1, max: n }), fc.nat(1_000_000), (xn, seed) => {
           const x: PlayerId = `p${xn}`;
-          const s = stage(snap, x, loadChecked(snap).rules);
+          // Without the staged countdown, as in (a): its bloc does not qualify, so the first
+          // accepted step cancels it, and the others' actions in `busy` come before X's first one.
+          const s = stage(snap, x, loadChecked(snap).rules, { countdown: false });
           const plain = loadChecked(s.snap);
           const busy = loadChecked(s.snap);
           const gwPlain = structuredClone(gw);

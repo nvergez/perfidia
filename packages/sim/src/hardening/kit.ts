@@ -53,7 +53,7 @@ export function rulesetOf(ref: Ref): AnyRuleset {
   return r;
 }
 
-/** A 1-game-day match of the four bots (strict), `players` seats. */
+/** A 1-game-day match of the default bots (strict), `players` seats. */
 export function daySpec(
   ref: string,
   clock: ClockChoice,
