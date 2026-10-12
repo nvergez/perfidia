@@ -153,7 +153,7 @@ describe("1-game-day matches of the default bots", () => {
       const header = first.lines[0];
       expect(header?.k === "header" && Object.values(header.controllers)).toEqual([
         "bot:expander@1",
-        "bot:rusher@2",
+        "bot:rusher@3",
         "bot:turtle@1",
         "bot:opportunist@1",
         "bot:conqueror@1",

@@ -11,6 +11,7 @@ import { expander } from "./strategies/expander.ts";
 import { opportunist } from "./strategies/opportunist.ts";
 import { rusher } from "./strategies/rusher.ts";
 import { rusher2 } from "./strategies/rusher2.ts";
+import { rusher3 } from "./strategies/rusher3.ts";
 import { BOT_STRATEGIES, type BotStrategy, type StrategyDef } from "./strategies/strategy.ts";
 import { turtle } from "./strategies/turtle.ts";
 
@@ -22,6 +23,7 @@ const PUBLISHED: readonly StrategyDef[] = Object.freeze([
   expander,
   rusher,
   rusher2,
+  rusher3,
   turtle,
   opportunist,
   conqueror,

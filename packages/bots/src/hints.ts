@@ -49,6 +49,11 @@ export interface CombatHints {
    * clamped to `[floor, 1000]`.
    */
   readonly morale?: { readonly perCity: ConfigPath; readonly floor: ConfigPath };
+  /**
+   * Stock of each resource a raid cannot take, per level of the storage building (`roles.storage`).
+   * Absent: every unit of stock counts as lootable. Read by `rusher@3` only.
+   */
+  readonly lootProtectPerLevel?: ConfigPath;
 }
 
 /** The empty hint set: generic play. */
@@ -63,7 +68,8 @@ export const RULESET_HINTS: Readonly<Record<string, StrategyHints>> = Object.fre
   // The reference bot of perfidia-1 §15.1: the free home slot, a frontier, the backyard, the inner
   // island, then the next frontier. The Crown is a neutral prize with a garrison bots cannot break.
   // A besieged own city shows `ext.siege` (§8.2) and can neither build nor send.
-  // Combat (§8.2, §8.5, §9.5): morale, the hall's base defense, the wall bonus, capital immunity.
+  // Combat (§8.2, §8.5, §8.7, §9.5): morale, the hall's base defense, the wall bonus, capital
+  // immunity, the stock a raid cannot take.
   "perfidia-1": Object.freeze({
     settleOrder: Object.freeze(["home", "frontier", "backyard", "inner", "frontier"]),
     avoidTags: Object.freeze(["crown"]),
@@ -79,6 +85,7 @@ export const RULESET_HINTS: Readonly<Record<string, StrategyHints>> = Object.fre
         perCity: Object.freeze(["combat", "moralePmPerCity"]),
         floor: Object.freeze(["combat", "moraleFloorPm"]),
       }),
+      lootProtectPerLevel: Object.freeze(["economy", "lootProtectPerLevel"]),
     }),
   }),
   // sandbox-1 §3.8: the home island's second slot, then the shared islands; capitals fall from
