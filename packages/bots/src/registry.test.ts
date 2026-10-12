@@ -15,6 +15,7 @@ import {
   isBotStrategy,
   parseBotLabel,
 } from "./registry.ts";
+import { conqueror } from "./strategies/conqueror.ts";
 import { expander } from "./strategies/expander.ts";
 import { opportunist } from "./strategies/opportunist.ts";
 import { rusher } from "./strategies/rusher.ts";
@@ -27,8 +28,14 @@ const P1 = { seat: "p1", seed: 1 } as const;
 const rusher2: StrategyDef = Object.freeze<StrategyDef>({ ...rusher, version: 2 });
 
 describe("the registry of this build", () => {
-  test("the four strategies, labelled bot:<strategy>@1", () => {
-    expect([...BOT_STRATEGIES]).toEqual(["expander", "rusher", "turtle", "opportunist"]);
+  test("the strategies, labelled bot:<strategy>@1", () => {
+    expect([...BOT_STRATEGIES]).toEqual([
+      "expander",
+      "rusher",
+      "turtle",
+      "opportunist",
+      "conqueror",
+    ]);
     for (const s of BOT_STRATEGIES) {
       expect(botLabel(s)).toBe(`bot:${s}@1`);
       expect(botVersions(s)).toEqual([1]);
@@ -79,7 +86,7 @@ describe("the registry of this build", () => {
 });
 
 describe("several versions of a strategy", () => {
-  const reg = createBotRegistry([expander, rusher2, rusher, turtle, opportunist]);
+  const reg = createBotRegistry([expander, rusher2, rusher, turtle, opportunist, conqueror]);
 
   test("unversioned calls use the latest version; every version stays registered", () => {
     expect(reg.versions("rusher")).toEqual([1, 2]);
@@ -95,6 +102,7 @@ describe("several versions of a strategy", () => {
       "bot:rusher@2",
       "bot:turtle@1",
       "bot:opportunist@1",
+      "bot:conqueror@1",
     ]);
   });
 
@@ -106,7 +114,7 @@ describe("several versions of a strategy", () => {
       expect(bot?.label).toBe(label);
       expect(bot).not.toBe(reg.fromLabel(label, P1));
     }
-    for (const bad of ["bot:rusher@3", "bot:turtle@2", "bot:rusher@0", "bot:conqueror@1"]) {
+    for (const bad of ["bot:rusher@3", "bot:turtle@2", "bot:rusher@0", "bot:conqueror@2"]) {
       expect(reg.parse(bad)).toBeNull();
       expect(reg.fromLabel(bad, P1)).toBeNull();
     }

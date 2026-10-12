@@ -9,6 +9,7 @@ import {
   type BuildingId,
   type GatewayRules,
   type Json,
+  type JsonObject,
   type QueueId,
   type Res,
   type ResourceId,
@@ -53,6 +54,8 @@ export interface Kit {
   readonly storage: BuildingId;
   readonly population: BuildingId;
   readonly wall: BuildingId | null;
+  /** The effective config (`RulesInfo.config`): ruleset-shaped, read only through hint paths. */
+  readonly config: JsonObject;
 }
 
 export const ZERO: Res = Object.freeze({ wood: 0, stone: 0, gold: 0 });
@@ -108,7 +111,30 @@ export function makeKit(info: RulesInfo): Kit {
     storage: rules.roles.storage,
     population: rules.roles.population,
     wall: rules.roles.wall,
+    config: info.config,
   };
+}
+
+/**
+ * The value at `path` in the effective config: a safe integer, an object of them (e.g. `{a, b, c}`),
+ * or null when the path is missing or holds anything else.
+ */
+export function configValue(kit: Kit, path: readonly string[]): Json | null {
+  let v: Json = kit.config;
+  for (const key of path) {
+    if (v === null || typeof v !== "object" || Array.isArray(v) || !Object.hasOwn(v, key)) {
+      return null;
+    }
+    v = v[key] ?? null;
+  }
+  return v;
+}
+
+/** The safe integer at `path` in the effective config, or null. */
+export function configInt(kit: Kit, path: readonly string[] | undefined): number | null {
+  if (path === undefined) return null;
+  const v = configValue(kit, path);
+  return typeof v === "number" && Number.isSafeInteger(v) ? v : null;
 }
 
 /** A typed tool call; the args are checked against the protocol schema by the caller's tests. */

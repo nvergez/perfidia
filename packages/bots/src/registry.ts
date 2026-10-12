@@ -6,6 +6,7 @@
 
 import type { SeatAgent } from "@perfidia/protocol";
 import { BotAgent, type BotOptions } from "./agent.ts";
+import { conqueror } from "./strategies/conqueror.ts";
 import { expander } from "./strategies/expander.ts";
 import { opportunist } from "./strategies/opportunist.ts";
 import { rusher } from "./strategies/rusher.ts";
@@ -16,7 +17,13 @@ import { turtle } from "./strategies/turtle.ts";
  * Every published (strategy, version), in any order. A new version or a new strategy (its name in
  * `BOT_STRATEGIES`) is one more entry; an entry is never removed or changed once goldens use it.
  */
-const PUBLISHED: readonly StrategyDef[] = Object.freeze([expander, rusher, turtle, opportunist]);
+const PUBLISHED: readonly StrategyDef[] = Object.freeze([
+  expander,
+  rusher,
+  turtle,
+  opportunist,
+  conqueror,
+]);
 
 /** One registered version of a strategy. */
 export interface BotVersion {

@@ -81,6 +81,11 @@ export interface Knobs {
   readonly escort: number;
   /** Builds its attackers' recruit building before the economy. */
   readonly militaryFirst: boolean;
+  /**
+   * Packs of the unit mix below which the surplus is kept for the next turn (default
+   * `MIN_PACKS`): fewer, larger batches empty their queue, and wake the seat, less often.
+   */
+  readonly minPacks?: number;
 }
 
 export interface BuildPlan {
@@ -300,6 +305,8 @@ export class Planner {
   readonly summary: string[] = [];
   /** The estimated arrival of each `found_city` call planned this turn. */
   readonly foundEtas = new Map<ToolCall, number>();
+  /** Times the strategy wants to act at (e.g. a timed launch), added to the self-wake's events. */
+  readonly wakes: number[] = [];
   memory: Memory;
   /** Foundings in flight when the turn began (arrivals still ahead), before this turn's own. */
   readonly startFoundings: Readonly<Record<string, readonly number[]>>;
@@ -530,6 +537,11 @@ export class Planner {
 
   recall(movement: MovementId): void {
     this.push(call("recall_troops", { movement }), `recall ${movement}`);
+  }
+
+  /** Recalls every group of the seat stationed in `city` (supports, or a siege garrison). */
+  recallStationed(city: CityId): void {
+    this.push(call("recall_troops", { stationedAt: city }), `recall from ${city}`);
   }
 
   message(to: readonly PlayerId[], text: string): boolean {
@@ -860,7 +872,7 @@ export class Planner {
           Math.floor(Math.max(0, free) / Math.max(1, packPop)),
         );
         // Batches are few (`maxBatches` per queue): small orders wait for a fuller budget.
-        if (packs >= MIN_PACKS) {
+        if (packs >= (k.minPacks ?? MIN_PACKS)) {
           for (const p of picks) {
             const row = kit.units.get(p.unit)!;
             const qmax = kit.queues.get(row.queue)?.maxCount ?? row.maxPerOrder;

@@ -791,6 +791,13 @@ export class FakeGame {
         return this.launch(seat, tool, c.args);
       case "recall_troops": {
         const a = TOOL_ARGS.recall_troops.parse(c.args);
+        if (a.stationedAt !== undefined) {
+          const at = this.city(a.stationedAt);
+          const mine = at.stationed.filter((g) => g.owner === seat);
+          if (mine.length === 0) return this.err("UNKNOWN_ID");
+          at.stationed = at.stationed.filter((g) => g.owner !== seat);
+          return this.ok(tool, { returns: [] });
+        }
         const m = this.moves.find((x) => x.id === a.movement && x.owner === seat);
         if (m === undefined) return this.err("UNKNOWN_ID");
         m.kind = "return";
@@ -884,7 +891,11 @@ export class FakeGame {
             units: m.units,
             recallableUntil: m.recallableUntil === null ? null : pair(m.recallableUntil),
           })),
-        stationed: [],
+        stationed: this.cities.flatMap((c) =>
+          c.stationed
+            .filter((g) => g.owner === seat)
+            .map((g) => ({ city: c.id, role: g.role, home: g.home, units: g.units })),
+        ),
         settler: { k, cost },
         proposals: [],
         today: {
