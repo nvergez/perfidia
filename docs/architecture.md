@@ -1952,6 +1952,16 @@ fast: perfidia-1@1.0.0 time.protectionEnd=21600
 sandbox-1@1.0.0                  10  rusher 6, expander 2, …              5.9    140.2       21.5    3.4   14.0 / 22
 ```
 
+**Fight times.** Because counts alone hide _when_ a match starts fighting, every batch row also records, from its `ev` lines by event type (`sim/src/batch/fights.ts`, ruleset-agnostic): `firstBattleT`, `firstConquestT` and `firstEliminationT` (game-seconds of the first `battle`, `city_conquered` and `player_eliminated`, `null` when none), `dominationCountdowns` (the `domination_started` events, i.e. countdowns opened; a ruleset without domination, such as `sandbox-1`, has none) and `firstDominationT`. Each variant aggregates them: `reasons` (ended runs per end reason: `time`, `domination`, `last_standing`, `hill`, …), `firstBattle`, `firstConquest` and `firstElimination` (`{runs, mean, min}`: the runs that had one, the mean rounded to the second and the earliest), `runsWithElimination` and `runsWithCountdown`. Every batch prints a fights table after its main table (per-variant or per-match); game times are printed on the game clock to the minute, `D1 13:12`, everywhere in the batch output, a mean over fewer runs than the variant has says so (`(4 of 6)`), and `--per-match` rows carry their own first battle, conquest, elimination and countdowns (`2 from D4 03:10`). Illustrative:
+
+```
+fights · game clock to the minute, mean / earliest over the runs that had one
+variant           runs  ends                  1st battle (mean / min)  1st conquest (mean / min)     1st elim (mean / min)  runs with elim  runs with countdown
+base: perfidia-1     6  time 5, domination 1  D1 21:40 / D1 13:05      D2 09:10 / D2 01:30 (4 of 6)  -                                   0                    1
+```
+
+The batch JSON carries `format: "perfidia-batch/<n>"` (`BATCH_FORMAT`); `n` is bumped whenever the JSON shape changes, so a reader can tell which fields to expect. `perfidia-batch/2` added the fight times above, the end reasons and the per-day conquests and eliminations of the pacing rows.
+
 `batch --pacing` replays each run through `verifyLog` with `onCheckpoint` and adds the per-day pacing table of §13.9. This is how rules get tuned with bots before any LLM spend.
 
 ---
@@ -2063,7 +2073,7 @@ The exit tests print these figures. Missing a target is reported before any desi
 
 ### 13.9 Pacing report (`perfidia-1` §19.5)
 
-`sim batch --pacing` replays each run with `verifyLog(…, {onCheckpoint})` and prints, per game day and per N: cities per player (mean, min, max), free slots left, army pop, score, battles, and sieges started, held and broken. The final task runs it for N = 6, 8 and 12 with the four bots and attaches the report. The §19.5 criteria are **reported, never asserted**: bots alone may miss them, and a missed criterion becomes a proposal for `perfidia-1@1.1.0`, never a change to 1.0.0.
+`sim batch --pacing` replays each run with `verifyLog(…, {onCheckpoint})` and prints, per game day and per N: cities per player (mean, min, max), free slots left, army pop, score, battles, conquests, eliminations, and sieges started, held and broken. The final task runs it for N = 6, 8 and 12 with the four bots and attaches the report. The §19.5 criteria are **reported, never asserted**: bots alone may miss them, and a missed criterion becomes a proposal for `perfidia-1@1.1.0`, never a change to 1.0.0.
 
 ---
 

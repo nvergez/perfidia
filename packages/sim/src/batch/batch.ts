@@ -8,6 +8,7 @@ import { normalisedHash, prepareBotRun, runPrepared, setupFor } from "../harness
 import { RunDirSink, assertFreeRunDir, runPaths, writeFileAtomic } from "../io/index.ts";
 import { checkCreation } from "../run/index.ts";
 import { LogShapeError, summarize, type MatchSummary } from "../summary/index.ts";
+import { fightTimes, firstTimeStat, type FightTimes, type FirstTimeStat } from "./fights.ts";
 import { aggregatePacing, pacingOf, type PacingDay, type PacingRow } from "./pacing.ts";
 import type { Variant } from "./variants.ts";
 
@@ -16,11 +17,17 @@ import type { Variant } from "./variants.ts";
 // reproducible from its seed. Matches run one at a time and share nothing, so the results do not
 // depend on the variant order. The JSON records the provenance of every row: for each variant the
 // ref, overrides, `configHash`, `rulesHash`, `ENGINE_VERSION`, bot labels and seeds, and for each
-// match its final hash and end reason (plus the normalised log hash). With `--out`, every match
-// keeps a full run directory (§10.1: log, snapshots, `summary.json`), and the whole batch is checked
-// before its first match, so a taken directory or a match that cannot be created writes nothing.
+// match its final hash and end reason (plus the normalised log hash), with its fight times (first
+// battle, conquest and elimination, domination countdowns) next to its counts. With `--out`, every
+// match keeps a full run directory (§10.1: log, snapshots, `summary.json`), and the whole batch is
+// checked before its first match, so a taken directory or a match that cannot be created writes
+// nothing.
 
-export const BATCH_FORMAT = "perfidia-batch/1";
+/**
+ * Bumped when the JSON shape changes (§12.2): 2 added the fight times, the end reasons and the
+ * pacing days' conquests and eliminations.
+ */
+export const BATCH_FORMAT = "perfidia-batch/2";
 
 export interface BatchPlan {
   readonly variants: readonly Variant[];
@@ -32,7 +39,7 @@ export interface BatchPlan {
   readonly pacing: boolean;
 }
 
-export interface MatchRow {
+export interface MatchRow extends FightTimes {
   readonly seed: number;
   readonly status: MatchSummary["status"];
   readonly error: string | null;
@@ -59,12 +66,22 @@ export interface MatchRow {
 export interface VariantAggregate {
   readonly runs: number;
   readonly fatal: number;
+  /** Ended matches per end reason (`time`, `domination`, `last_standing`, …), most frequent first. */
+  readonly reasons: Readonly<Record<string, number>>;
   /** Matches won per strategy (a strategy counts once per match it is among the winners). */
   readonly winners: Readonly<Record<string, number>>;
   readonly endDay: number;
   readonly battles: number;
   readonly conquests: number;
   readonly eliminations: number;
+  /** First battle, conquest and elimination: mean and earliest over the runs that had one. */
+  readonly firstBattle: FirstTimeStat;
+  readonly firstConquest: FirstTimeStat;
+  readonly firstElimination: FirstTimeStat;
+  /** Runs with at least one elimination. */
+  readonly runsWithElimination: number;
+  /** Runs where at least one domination countdown opened. */
+  readonly runsWithCountdown: number;
   readonly wakesPerSeatPerDay: { readonly mean: number; readonly max: number };
   readonly internal: number;
 }
@@ -102,24 +119,37 @@ const mean = (xs: readonly number[]): number =>
   xs.length === 0 ? 0 : round2(xs.reduce((a, b) => a + b, 0) / xs.length);
 const byCodeUnit = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
 
-function aggregate(matches: readonly MatchRow[]): VariantAggregate {
-  const wins: Record<string, number> = {};
-  for (const m of matches) for (const s of m.winnerStrategies) wins[s] = (wins[s] ?? 0) + 1;
+/** Counts by key, most frequent first (ties by code unit). */
+function countsByFrequency(keys: readonly string[]): Record<string, number> {
+  const counts: Record<string, number> = {};
+  for (const k of keys) counts[k] = (counts[k] ?? 0) + 1;
   const ordered: Record<string, number> = {};
-  for (const [s, n] of Object.entries(wins).toSorted(
+  for (const [k, n] of Object.entries(counts).toSorted(
     (a, b) => b[1] - a[1] || byCodeUnit(a[0], b[0]),
   )) {
-    ordered[s] = n;
+    ordered[k] = n;
   }
+  return ordered;
+}
+
+function aggregate(matches: readonly MatchRow[]): VariantAggregate {
   const ended = matches.filter((m) => m.endDay !== null);
   return {
     runs: matches.length,
     fatal: matches.filter((m) => m.status !== "ended").length,
-    winners: ordered,
+    reasons: countsByFrequency(
+      matches.flatMap((m) => (m.status === "ended" && m.reason !== null ? [m.reason] : [])),
+    ),
+    winners: countsByFrequency(matches.flatMap((m) => m.winnerStrategies)),
     endDay: mean(ended.map((m) => m.endDay ?? 0)),
     battles: mean(matches.map((m) => m.battles)),
     conquests: mean(matches.map((m) => m.conquests)),
     eliminations: mean(matches.map((m) => m.eliminations)),
+    firstBattle: firstTimeStat(matches.map((m) => m.firstBattleT)),
+    firstConquest: firstTimeStat(matches.map((m) => m.firstConquestT)),
+    firstElimination: firstTimeStat(matches.map((m) => m.firstEliminationT)),
+    runsWithElimination: matches.filter((m) => m.eliminations > 0).length,
+    runsWithCountdown: matches.filter((m) => m.dominationCountdowns > 0).length,
     wakesPerSeatPerDay: {
       mean: mean(matches.map((m) => m.wakesPerSeatPerDay.mean)),
       max: Math.max(0, ...matches.map((m) => m.wakesPerSeatPerDay.max)),
@@ -212,6 +242,7 @@ function failedRow(seed: number, lines: readonly LogLine[], error: string | null
     conquests: 0,
     eliminations: 0,
     foundings: 0,
+    ...fightTimes(lines),
     wakesPerSeatPerDay: { mean: 0, max: 0 },
     internal: 0,
   };
@@ -243,6 +274,7 @@ function rowOf(
     conquests: s.events.conquests,
     eliminations: s.events.eliminations,
     foundings: s.events.foundings,
+    ...fightTimes(lines),
     wakesPerSeatPerDay: s.wakes.perSeatPerDay,
     internal: s.internal,
   };

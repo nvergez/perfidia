@@ -12,7 +12,7 @@ import {
 } from "../args.ts";
 import { parseBots } from "../run/index.ts";
 import { runBatch, writeBatchJson } from "./batch.ts";
-import { matchTable, pacingTable, variantTable } from "./table.ts";
+import { fightTable, matchTable, pacingTable, variantTable } from "./table.ts";
 import { parseVariants } from "./variants.ts";
 
 // `sim batch` (docs/architecture.md §12.1, §12.2).
@@ -85,6 +85,7 @@ export async function batchCommand(argv: readonly string[], io: CliIo): Promise<
     },
   );
   io.out(f.bool("per-match") ? matchTable(result) : variantTable(result));
+  io.out(`\n${fightTable(result)}`);
   if (result.variants.some((v) => v.pacing !== undefined)) io.out(`\n${pacingTable(result)}`);
   const json = f.string("json");
   if (json !== undefined) {

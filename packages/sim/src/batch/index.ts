@@ -1,5 +1,5 @@
 // `sim batch` (docs/architecture.md §12.1, §12.2, §13.9): variants × seeds in lockstep, the batch
-// tables, the JSON with provenance and the pacing measurement.
+// tables, the JSON with provenance, the fight times and the pacing measurement.
 
 export { parseVariant, parseVariants, type Variant } from "./variants.ts";
 export {
@@ -22,5 +22,12 @@ export {
   type VariantAggregate,
   type VariantResult,
 } from "./batch.ts";
-export { matchTable, pacingTable, variantTable } from "./table.ts";
+export {
+  DOMINATION_STARTED,
+  fightTimes,
+  firstTimeStat,
+  type FightTimes,
+  type FirstTimeStat,
+} from "./fights.ts";
+export { gameClockText, fightTable, matchTable, pacingTable, variantTable } from "./table.ts";
 export { BATCH_USAGE, batchCommand } from "./command.ts";

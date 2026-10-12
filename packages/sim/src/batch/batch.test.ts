@@ -23,7 +23,14 @@ import { main } from "../cli.ts";
 import { runBots } from "../harness/index.ts";
 import { readLog } from "../io/index.ts";
 import { summarize } from "../summary/index.ts";
-import { pacingOf, parseVariant, parseVariants, runBatch, type BatchResult } from "./index.ts";
+import {
+  fightTimes,
+  pacingOf,
+  parseVariant,
+  parseVariants,
+  runBatch,
+  type BatchResult,
+} from "./index.ts";
 
 function tempDir(): string {
   return mkdtempSync(join(tmpdir(), "perfidia-sim-batch-"));
@@ -36,7 +43,7 @@ async function cli(...argv: string[]): Promise<{ code: number; out: string; err:
 }
 
 function isBatch(v: unknown): v is BatchResult {
-  return typeof v === "object" && v !== null && "format" in v && v.format === "perfidia-batch/1";
+  return typeof v === "object" && v !== null && "format" in v && v.format === "perfidia-batch/2";
 }
 
 /** Every file under `dir` with its bytes, for before/after comparisons. */
@@ -82,6 +89,11 @@ describe("sim batch", () => {
       expect(rows[1]).toMatch(/^perfidia-1@1\.0\.0 +2 +\S/);
       expect(rows[2]).toBe("fast: perfidia-1@1.0.0 time.protectionEnd=21600");
       expect(rows[3]).toMatch(/^ +2 +\S.* 1\.0 +\d+\.\d +\d+\.\d +\d+\.\d +\d+\.\d \/ \d+$/);
+      // The fights table follows, one row per variant.
+      expect(rows[4]).toBe("");
+      expect(rows[5]).toStartWith("fights · ");
+      expect(rows[6]).toMatch(/^variant +runs +ends +1st battle \(mean \/ min\) /);
+      expect(rows[7]).toMatch(/^perfidia-1@1\.0\.0 +2 +time 2 /);
       expect(r.out).toContain(`results with provenance: ${json}`);
 
       const parsed: unknown = JSON.parse(readFileSync(json, "utf8"));
@@ -121,6 +133,7 @@ describe("sim batch", () => {
           [1, "ended", "time"],
           [2, "ended", "time"],
         ]);
+        expect(v.aggregate.reasons).toEqual({ time: 2 });
         for (const m of v.matches) {
           // Each row reproduces from its seed: the same match run alone has the same final hash.
           // oxlint-disable-next-line no-await-in-loop -- one match at a time
@@ -139,6 +152,7 @@ describe("sim batch", () => {
             s.events.eliminations,
             s.winners,
           ]);
+          expect(m).toMatchObject(fightTimes(again.lines));
           // --out kept the match's run directory: it passes verify, and its summary.json is the
           // summary of its log.
           const runDir = join(runs, `v${i + 1}-s${m.seed}`);
@@ -186,13 +200,13 @@ describe("sim batch", () => {
       );
       const rows = r.out.split("\n");
       expect(rows[0]).toMatch(
-        /^variant +seed +end +winners +end day +battles +conquests +elims +wakes\/seat\/day +final hash$/,
+        /^variant +seed +end +winners +end day +battles +conquests +elims +1st battle +1st conquest +1st elim +countdowns +wakes\/seat\/day +final hash$/,
       );
       expect(rows[1]).toMatch(/^sandbox-1 time\.matchEnd=90000 +4 +time /);
       const at = rows.findIndex((l) => l.startsWith("pacing · N = 3 · 1 seed(s) per variant"));
       expect(at).toBeGreaterThan(0);
       expect(rows[at + 1]).toMatch(
-        /^variant +day +runs +cities\/player mean +min +max +free slots +army pop +score +battles +sieges started +held +broken$/,
+        /^variant +day +runs +cities\/player mean +min +max +free slots +army pop +score +battles +conquests +elims +sieges started +held +broken$/,
       );
       expect(rows[at + 2]).toMatch(/^sandbox-1 time\.matchEnd=90000 +D1 +1 +/);
       expect(rows[at + 3]).toMatch(/^ +D2 +1 +/);
