@@ -57,7 +57,7 @@ const RULESETS = ["perfidia-1@1.0.0", "sandbox-1@1.0.0"] as const;
 const LOCKSTEP: ClockChoice = { kind: "lockstep" };
 const VIRTUAL: ClockChoice = { kind: "virtual" };
 
-/** A 1-game-day match of the four bots, six seats. */
+/** A 1-game-day match of the default bots, six seats. */
 function day(ruleset: string, clock: ClockChoice, seed = 4): BotRunSpec {
   return { ruleset, seed, players: 6, days: 1, clock, strict: true };
 }
@@ -131,7 +131,7 @@ function renaming(bot: SeatAgent): SeatAgent {
   };
 }
 
-describe("1-game-day matches of the four bots", () => {
+describe("1-game-day matches of the default bots", () => {
   for (const ref of RULESETS) {
     test(`${ref}, lockstep: no fatal, Level E, and a second run is byte-identical`, async () => {
       const first = await runBots(day(ref, LOCKSTEP));
@@ -149,15 +149,15 @@ describe("1-game-day matches of the four bots", () => {
       expect(k["ckpt"]).toBe(23);
       // Act lines come before their ev lines (Level E checks the order of every one).
       expect(actsBeforeTheirEvents(first.lines)).toBeGreaterThan(0);
-      // The bots use the four strategies, and every seat got a turn each game hour or so.
+      // The bots use the five strategies at their latest version, cycled over the seats.
       const header = first.lines[0];
       expect(header?.k === "header" && Object.values(header.controllers)).toEqual([
         "bot:expander@1",
-        "bot:rusher@1",
+        "bot:rusher@2",
         "bot:turtle@1",
         "bot:opportunist@1",
+        "bot:conqueror@1",
         "bot:expander@1",
-        "bot:rusher@1",
       ]);
       expect(first.run.stats.turns).toBe(k["wake"] ?? -1);
     }, 30000);

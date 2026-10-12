@@ -6,8 +6,8 @@ import type { LogLine } from "@perfidia/protocol";
 // The pacing measurement (docs/architecture.md §13.9, perfidia-1 §19.5): each run is replayed
 // through `verifyLog` with `onCheckpoint`, and at the end of every game day (the checkpoint of hour
 // 24·d, or the final state for the day the match ends in) the state gives cities per player, free
-// slots, army pop and score; the day's battles and sieges come from its `ev` lines. Reported, never
-// asserted.
+// slots, army pop and score; the day's battles, conquests, eliminations and sieges come from its
+// `ev` lines. Reported, never asserted.
 
 export interface PacingDay {
   /** 1-based game day; its measures are taken at its end. */
@@ -23,6 +23,8 @@ export interface PacingDay {
   readonly scoreMean: number;
   /** Events of the day, `(d − 1)·86400 < t ≤ d·86400` (day 1 includes t = 0). */
   readonly battles: number;
+  readonly conquests: number;
+  readonly eliminations: number;
   readonly siegesStarted: number;
   readonly siegesHeld: number;
   readonly siegesBroken: number;
@@ -39,6 +41,8 @@ interface StateMeasures {
 
 interface EventMeasures {
   battles: number;
+  conquests: number;
+  eliminations: number;
   siegesStarted: number;
   siegesHeld: number;
   siegesBroken: number;
@@ -92,7 +96,7 @@ export function measureState(r: ReadCtx): StateMeasures {
   };
 }
 
-/** The battles and sieges of each day, from the `ev` lines. */
+/** The battles, conquests, eliminations and sieges of each day, from the `ev` lines. */
 function eventMeasures(lines: Iterable<LogLine>): Map<number, EventMeasures> {
   const out = new Map<number, EventMeasures>();
   const open = new Set<string>();
@@ -100,7 +104,14 @@ function eventMeasures(lines: Iterable<LogLine>): Map<number, EventMeasures> {
     const d = dayOf(t);
     let m = out.get(d);
     if (m === undefined) {
-      m = { battles: 0, siegesStarted: 0, siegesHeld: 0, siegesBroken: 0 };
+      m = {
+        battles: 0,
+        conquests: 0,
+        eliminations: 0,
+        siegesStarted: 0,
+        siegesHeld: 0,
+        siegesBroken: 0,
+      };
       out.set(d, m);
     }
     return m;
@@ -111,14 +122,17 @@ function eventMeasures(lines: Iterable<LogLine>): Map<number, EventMeasures> {
     const raw = Object.hasOwn(e.data, "city") ? e.data["city"] : undefined;
     const city = typeof raw === "string" ? raw : null;
     if (e.type === "battle") at(line.t).battles += 1;
+    else if (e.type === "player_eliminated") at(line.t).eliminations += 1;
     else if (e.type === "siege_started") {
       at(line.t).siegesStarted += 1;
       if (city !== null) open.add(city);
     } else if (e.type === "siege_broken") {
       at(line.t).siegesBroken += 1;
       if (city !== null) open.delete(city);
-    } else if (e.type === "city_conquered" && city !== null && open.delete(city)) {
-      at(line.t).siegesHeld += 1;
+    } else if (e.type === "city_conquered") {
+      const m = at(line.t);
+      m.conquests += 1;
+      if (city !== null && open.delete(city)) m.siegesHeld += 1;
     }
   }
   return out;
@@ -157,6 +171,8 @@ export function pacingOf(lines: readonly LogLine[]): {
         armyPopMean: s?.armyPopMean ?? 0,
         scoreMean: s?.scoreMean ?? 0,
         battles: e?.battles ?? 0,
+        conquests: e?.conquests ?? 0,
+        eliminations: e?.eliminations ?? 0,
         siegesStarted: e?.siegesStarted ?? 0,
         siegesHeld: e?.siegesHeld ?? 0,
         siegesBroken: e?.siegesBroken ?? 0,
@@ -196,6 +212,8 @@ export function aggregatePacing(matches: readonly (readonly PacingDay[])[]): Pac
         armyPopMean: avg((d) => d.armyPopMean),
         scoreMean: avg((d) => d.scoreMean),
         battles: avg((d) => d.battles),
+        conquests: avg((d) => d.conquests),
+        eliminations: avg((d) => d.eliminations),
         siegesStarted: avg((d) => d.siegesStarted),
         siegesHeld: avg((d) => d.siegesHeld),
         siegesBroken: avg((d) => d.siegesBroken),

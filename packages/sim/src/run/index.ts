@@ -11,6 +11,7 @@ export {
   checkOverrides,
   clockFor,
   overridesFrom,
+  parseBotChoice,
   parseBots,
   parseSeatBots,
   planRun,

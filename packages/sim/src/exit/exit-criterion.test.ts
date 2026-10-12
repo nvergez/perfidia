@@ -1,11 +1,12 @@
 // The phase-1 exit criterion (docs/architecture.md §13.7), with the performance figures of §13.8.
 // Exit suite only: every test skips unless PERFIDIA_EXIT=1 (`bun run test:exit`, a separate CI
 // job). For each of perfidia-1@1.0.0 (with time.dominationStart=604801, so that the full 7 days
-// normally run) and sandbox-1@1.0.0: 12 seats (3 of each bot), 7 game days, under lockstep, real
-// time with VirtualTime (speed 3, latency 2–60 s) and real time on the system clock at a very high
-// speed. Then one more perfidia-1 lockstep run on the unmodified published defaults, and a batch run
-// twice with its variant order reversed. Figures are printed at the end, measured after a 1-day
-// warm-up match of each ruleset; the CI limits of §13.8 are asserted, the targets only reported.
+// normally run) and sandbox-1@1.0.0: 12 seats (the default bots cycled), 7 game days, under
+// lockstep, real time with VirtualTime (speed 3, latency 2–60 s) and real time on the system clock
+// at a very high speed. Then one more perfidia-1 lockstep run on the unmodified published defaults,
+// and a batch run twice with its variant order reversed. Figures are printed at the end, measured
+// after a 1-day warm-up match of each ruleset; the CI limits of §13.8 are asserted, the targets
+// only reported.
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { getRuleset, loadMatch, verifyLog } from "@perfidia/engine";
@@ -14,6 +15,7 @@ import { buildBriefing } from "@perfidia/gateway";
 import type { Json, LogLine } from "@perfidia/protocol";
 import { parseVariant, runBatch } from "../batch/index.ts";
 import {
+  DEFAULT_BOTS,
   normalisedHash,
   runBots,
   type BotRun,
@@ -357,7 +359,7 @@ suite("phase-1 exit criterion (§13.7)", () => {
       const plan = {
         seeds: [1, 2],
         players: PLAYERS,
-        bots: ["expander", "rusher", "turtle", "opportunist"] as const,
+        bots: [...DEFAULT_BOTS],
         days: DAYS,
         pacing: false,
       };

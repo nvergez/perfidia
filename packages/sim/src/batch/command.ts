@@ -1,4 +1,4 @@
-import { BOT_STRATEGIES } from "@perfidia/bots";
+import { DEFAULT_BOTS } from "../harness/index.ts";
 import {
   EXIT,
   UsageError,
@@ -12,7 +12,7 @@ import {
 } from "../args.ts";
 import { parseBots } from "../run/index.ts";
 import { runBatch, writeBatchJson } from "./batch.ts";
-import { matchTable, pacingTable, variantTable } from "./table.ts";
+import { fightTable, matchTable, pacingTable, variantTable } from "./table.ts";
 import { parseVariants } from "./variants.ts";
 
 // `sim batch` (docs/architecture.md §12.1, §12.2).
@@ -33,7 +33,7 @@ const FLAGS: FlagSpecs = {
   bots: {
     type: "string",
     value: "<a,b,…>",
-    help: "bots cycled over the seats, the same for every variant (default all four)",
+    help: `bots cycled over the seats, the same for every variant, name or name@n (default ${DEFAULT_BOTS.join(",")}, each at its latest version)`,
   },
   days: { type: "string", value: "<N>", help: "match length in game days (time.matchEnd)" },
   "per-match": { type: "boolean", help: "one row per match instead of one per variant" },
@@ -69,7 +69,7 @@ export async function batchCommand(argv: readonly string[], io: CliIo): Promise<
       );
     }
   }
-  const bots = f.has("bots") ? parseBots(f.strings("bots")) : [...BOT_STRATEGIES];
+  const bots = f.has("bots") ? parseBots(f.strings("bots")) : [...DEFAULT_BOTS];
   const total = variants.length * seeds.length;
   let done = 0;
   const result = await runBatch(
@@ -85,6 +85,7 @@ export async function batchCommand(argv: readonly string[], io: CliIo): Promise<
     },
   );
   io.out(f.bool("per-match") ? matchTable(result) : variantTable(result));
+  io.out(`\n${fightTable(result)}`);
   if (result.variants.some((v) => v.pacing !== undefined)) io.out(`\n${pacingTable(result)}`);
   const json = f.string("json");
   if (json !== undefined) {

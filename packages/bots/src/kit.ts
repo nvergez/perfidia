@@ -9,6 +9,7 @@ import {
   type BuildingId,
   type GatewayRules,
   type Json,
+  type JsonObject,
   type QueueId,
   type Res,
   type ResourceId,
@@ -19,6 +20,7 @@ import {
   type UnitCounts,
   type UnitId,
 } from "@perfidia/protocol";
+import type { CombatHints } from "./hints.ts";
 
 export type BuildingRow = AgentRules["buildings"][number];
 export type UnitRow = AgentRules["units"][number];
@@ -53,6 +55,8 @@ export interface Kit {
   readonly storage: BuildingId;
   readonly population: BuildingId;
   readonly wall: BuildingId | null;
+  /** The effective config (`RulesInfo.config`): ruleset-shaped, read only through hint paths. */
+  readonly config: JsonObject;
 }
 
 export const ZERO: Res = Object.freeze({ wood: 0, stone: 0, gold: 0 });
@@ -108,6 +112,128 @@ export function makeKit(info: RulesInfo): Kit {
     storage: rules.roles.storage,
     population: rules.roles.population,
     wall: rules.roles.wall,
+    config: info.config,
+  };
+}
+
+/**
+ * The value at `path` in the effective config: a safe integer, an object of them (e.g. `{a, b, c}`),
+ * or null when the path is missing or holds anything else.
+ */
+export function configValue(kit: Kit, path: readonly string[]): Json | null {
+  let v: Json = kit.config;
+  for (const key of path) {
+    if (v === null || typeof v !== "object" || Array.isArray(v) || !Object.hasOwn(v, key)) {
+      return null;
+    }
+    v = v[key] ?? null;
+  }
+  return v;
+}
+
+/** The safe integer at `path` in the effective config, or null. */
+export function configInt(kit: Kit, path: readonly string[] | undefined): number | null {
+  if (path === undefined) return null;
+  const v = configValue(kit, path);
+  return typeof v === "number" && Number.isSafeInteger(v) ? v : null;
+}
+
+/**
+ * The base land defense at `level` of the hinted building (`CombatHints.baseDefense`): `a·L² + b·L
+ * + c` from the `{a, b, c}` at its `quad` path, else `n·L` from the integer at its `perLevel` path;
+ * null when the hint is absent or its numbers are missing.
+ */
+export function baseDefenseAt(
+  kit: Kit,
+  hint: CombatHints["baseDefense"],
+  level: number,
+): number | null {
+  if (hint === undefined) return null;
+  if (hint.quad !== undefined) {
+    const q = configValue(kit, hint.quad);
+    if (q === null || typeof q !== "object" || Array.isArray(q)) return null;
+    const { a, b, c } = q;
+    if (typeof a !== "number" || typeof b !== "number" || typeof c !== "number") return null;
+    const v = a * level * level + b * level + c;
+    return Number.isSafeInteger(v) ? v : null;
+  }
+  const n = configInt(kit, hint.perLevel);
+  if (n === null) return null;
+  const v = n * level;
+  return Number.isSafeInteger(v) ? v : null;
+}
+
+/** A number-valued record of a report's data (`buildings`), or empty. */
+export function levelsInReport(data: Readonly<Record<string, unknown>>): Record<string, number> {
+  const raw = data["buildings"];
+  const out: Record<string, number> = {};
+  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) return out;
+  for (const [k, v] of Object.entries(raw)) {
+    if (typeof v === "number" && Number.isSafeInteger(v) && v >= 0) out[k] = v;
+  }
+  return out;
+}
+
+/** The stock a report's data shows (`stock`), or null. */
+export function stockInReport(data: Readonly<Record<string, unknown>>): Res | null {
+  const raw = data["stock"];
+  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const out: Record<string, number> = {};
+  for (const [k, v] of Object.entries(raw)) {
+    if (typeof v === "number" && Number.isSafeInteger(v) && v >= 0) out[k] = v;
+  }
+  if (RESOURCE_IDS.some((r) => out[r] === undefined)) return null;
+  return res(out["wood"] ?? 0, out["stone"] ?? 0, out["gold"] ?? 0);
+}
+
+/**
+ * Share (‰) of a target's stock assumed spent on defenders once it sees an attack coming: bots
+ * spend most of their stock on a mix of units when they wake, about a third of it on defenders.
+ */
+export const REACTION_PM = 300;
+
+/**
+ * The defense a city can add once it sees an attack coming (every incoming attack wakes its owner,
+ * who spends its stock on units): `REACTION_PM` of its stock in defenders, when its buildings can
+ * train them.
+ */
+export function reactionDefense(
+  kit: Kit,
+  levels: Readonly<Record<string, number>>,
+  stock: Res | null,
+): number {
+  const def = kit.roles.defender;
+  const row = def === null ? undefined : kit.units.get(def);
+  if (row === undefined || stock === null || !meets(row.requires, levels)) return 0;
+  const q = kit.queues.get(row.queue);
+  if (q !== undefined && (levels[q.building] ?? 0) < 1) return 0;
+  const n = Math.min(row.maxPerOrder, timesAffordable(pmRes(stock, REACTION_PM), row.cost));
+  return n * row.defense;
+}
+
+/** The battle numbers of the combat hints, read in the effective config (so overrides count). */
+export interface CombatNumbers {
+  readonly base: NonNullable<CombatHints["baseDefense"]>;
+  /** Land defense bonus per wall level (‰); 0 when the hints name no wall bonus. */
+  readonly wallPm: number;
+  /** Morale lost per city of difference (‰); 0 (no morale) when the hints name none. */
+  readonly moralePm: number;
+  readonly moraleFloorPm: number;
+}
+
+/**
+ * What the combat hints mean, for every bot that weighs battles: null when the base defense cannot
+ * be resolved (no hints, or its numbers missing), and the bot falls back to its safety margins;
+ * otherwise a wall bonus or morale the hints do not name counts as none (sandbox-1 has neither).
+ */
+export function combatNumbers(kit: Kit, h: CombatHints | undefined): CombatNumbers | null {
+  const base = h?.baseDefense;
+  if (h === undefined || base === undefined || baseDefenseAt(kit, base, 0) === null) return null;
+  return {
+    base,
+    wallPm: configInt(kit, h.wallPmPerLevel) ?? 0,
+    moralePm: configInt(kit, h.morale?.perCity) ?? 0,
+    moraleFloorPm: configInt(kit, h.morale?.floor) ?? 1000,
   };
 }
 

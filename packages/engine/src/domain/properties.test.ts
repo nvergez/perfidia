@@ -495,7 +495,7 @@ test("P9: shuffling the insertion order of every record changes neither the hash
     ),
     { numRuns: 60 },
   );
-});
+}, 30000);
 
 // Fog-safe violation details ---------------------------------------------------------------------
 

@@ -25,6 +25,7 @@ import {
   cleanUnits,
   countOf,
   covers,
+  DAY,
   etaAfford,
   landPop,
   largest,
@@ -81,6 +82,11 @@ export interface Knobs {
   readonly escort: number;
   /** Builds its attackers' recruit building before the economy. */
   readonly militaryFirst: boolean;
+  /**
+   * Packs of the unit mix below which the surplus is kept for the next turn (default
+   * `MIN_PACKS`): fewer, larger batches empty their queue, and wake the seat, less often.
+   */
+  readonly minPacks?: number;
 }
 
 export interface BuildPlan {
@@ -268,6 +274,36 @@ export function intelAge(w: World, view: CityView | undefined): number | null {
   return view.intel === null ? null : Math.max(0, w.t - view.intel.at[0]);
 }
 
+/**
+ * The own wakes the seat can expect before `until`, today (the next game day has a fresh budget):
+ * each of its queues that empties and each report of its spies and attacks that lands (the spies
+ * planned this turn included), grouped as the gateway groups them (one wake per `groupWindow`).
+ * A strategy that must be awake at `until` (`Planner.wakeAt`) checks it against the own wakes left.
+ */
+export function ownWakesBefore(p: Planner, until: number): number {
+  const { w } = p;
+  const end = Math.min(until, (w.day + 1) * DAY);
+  const times: number[] = [];
+  for (const c of w.cities) {
+    for (const q of [c.build, ...Object.values(c.recruit)]) {
+      const last = q.reduce((t, b) => Math.max(t, b.end), 0);
+      if (last > w.t && last < end) times.push(last);
+    }
+  }
+  for (const m of w.self?.private?.movements ?? []) {
+    if (m.owner !== w.seat || (m.kind !== "spy" && m.kind !== "attack")) continue;
+    if (m.arrive[0] > w.t && m.arrive[0] < end) times.push(m.arrive[0]);
+  }
+  let groups = p.calls.filter((c) => c.tool === "spy").length;
+  let open: number | null = null;
+  for (const t of times.toSorted((a, b) => a - b)) {
+    if (open !== null && t <= open + w.kit.gateway.groupWindow) continue;
+    groups += 1;
+    open = t;
+  }
+  return groups;
+}
+
 /** The own city with the most land attack at home (ties: lowest id). */
 export function mainCity(w: World): OwnCity | null {
   let best: OwnCity | null = null;
@@ -300,6 +336,8 @@ export class Planner {
   readonly summary: string[] = [];
   /** The estimated arrival of each `found_city` call planned this turn. */
   readonly foundEtas = new Map<ToolCall, number>();
+  /** The times `wakeAt` collected this turn (read through `wakes`). */
+  private readonly firm: number[] = [];
   memory: Memory;
   /** Foundings in flight when the turn began (arrivals still ahead), before this turn's own. */
   readonly startFoundings: Readonly<Record<string, readonly number[]>>;
@@ -391,10 +429,30 @@ export class Planner {
     this.memory = { ...this.memory, x: { ...this.memory.x, [name]: value } };
     return true;
   }
+  /** Removes a flag (nothing when it is not set), so that the notes keep only what still matters. */
+  clearFlag(name: string): void {
+    if (!Object.hasOwn(this.memory.x, name)) return;
+    const x = Object.fromEntries(Object.entries(this.memory.x).filter(([k]) => k !== name));
+    this.memory = { ...this.memory, x };
+  }
   memo(line: string): void {
     const text = memoLine(line);
     if (!this.memory.m.includes(text))
       this.memory = { ...this.memory, m: [...this.memory.m, text] };
+  }
+  /**
+   * Asks to be awake at `t` (a firm self-wake, `chooseWake`): the earliest such time ahead wins over
+   * the cadence and the wake budget spread. Times not ahead of the world's time are ignored.
+   */
+  wakeAt(t: number): void {
+    if (Number.isSafeInteger(t) && t > this.w.t) this.firm.push(t);
+  }
+  /**
+   * Times this turn's plan must be awake at (a timed launch, an army coming home), whatever the
+   * cadence and the wake budget spread (`chooseWake`'s `firm`); only `wakeAt` adds to them.
+   */
+  get wakes(): readonly number[] {
+    return this.firm;
   }
   private push(c: ToolCall, note: string): void {
     this.calls.push(c);
@@ -530,6 +588,11 @@ export class Planner {
 
   recall(movement: MovementId): void {
     this.push(call("recall_troops", { movement }), `recall ${movement}`);
+  }
+
+  /** Recalls every group of the seat stationed in `city` (supports, or a siege garrison). */
+  recallStationed(city: CityId): void {
+    this.push(call("recall_troops", { stationedAt: city }), `recall from ${city}`);
   }
 
   message(to: readonly PlayerId[], text: string): boolean {
@@ -793,6 +856,47 @@ export class Planner {
   }
 
   /**
+   * `economy` with the strategy's own wishes: in a city where `own(c)` returns a list, that list
+   * (after the wishes the planner's moves added, such as a founder's unlock) replaces the generic
+   * economy wishes; where it returns null, the generic ones apply as in `economy`.
+   */
+  economyWith(own: (c: OwnCity) => readonly Wish[] | null): void {
+    const { w, k } = this;
+    for (const c of w.cities) {
+      if (c.blocked || c.levels === null) continue;
+      const extra = this.extra.get(c.id) ?? [];
+      const mine = own(c);
+      const wishes = mine === null ? economyWishes(this, c, extra) : [...extra, ...mine];
+      const plan = planBuilds(
+        w.kit,
+        c.levels,
+        c.build.map((b) => b.building),
+        wishes,
+        subRes(this.stockOf(c.id), this.reserved.get(c.id) ?? ZERO),
+        c.rate,
+        c.cap,
+        this.buildRoom.get(c.id) ?? 0,
+        k.cadence,
+      );
+      if (plan.items.length > 0) {
+        this.build(c, plan.items);
+        this.spend(c.id, plan.spent);
+      }
+      if (plan.saving !== null) this.saving.set(c.id, plan.saving);
+    }
+  }
+
+  /** Recruit batches the city's `queue` can still take this turn. */
+  batchRoomOf(id: CityId, queue: QueueId): number {
+    return this.batchRoom.get(id)?.get(queue) ?? 0;
+  }
+
+  /** Free pop of a city after this turn's orders. */
+  popFreeOf(id: CityId): number {
+    return this.popFree.get(id) ?? 0;
+  }
+
+  /**
    * Spends `spendPm` of what is left on units, in packs of the mix (explicit counts, so the mix
    * holds); keeps carriers for the attackers when the strategy ships them across water.
    */
@@ -860,7 +964,7 @@ export class Planner {
           Math.floor(Math.max(0, free) / Math.max(1, packPop)),
         );
         // Batches are few (`maxBatches` per queue): small orders wait for a fuller budget.
-        if (packs >= MIN_PACKS) {
+        if (packs >= (k.minPacks ?? MIN_PACKS)) {
           for (const p of picks) {
             const row = kit.units.get(p.unit)!;
             const qmax = kit.queues.get(row.queue)?.maxCount ?? row.maxPerOrder;

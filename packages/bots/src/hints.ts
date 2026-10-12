@@ -14,6 +14,41 @@ export interface StrategyHints {
   readonly avoidTags: readonly string[];
   /** Keys of a briefing city's `ext` that mean the city cannot build, recruit or send anything. */
   readonly blockedExt: readonly string[];
+  /**
+   * Where the effective config (`rules` → `config`) keeps the numbers of a battle, which the rules
+   * data does not carry; read by bots that weigh spy reports. Absent, or a path missing: they fall
+   * back to safety margins.
+   */
+  readonly combat?: CombatHints;
+}
+
+/** A path of keys into the effective config, e.g. `["time", "attackFrom"]`. */
+export type ConfigPath = readonly string[];
+
+/**
+ * Battle numbers a bot cannot derive from `CompiledRules`, as paths into the effective config (so
+ * overrides count). A city's land defense is `(Σ unit defense + base) × (1000 + wallPm × wall) /
+ * 1000`, the wall being `roles.wall`.
+ */
+export interface CombatHints {
+  /** Game time from which a capital can be taken (before it, a won conquest is only a raid). */
+  readonly capitalImmunityEnd?: ConfigPath;
+  /**
+   * A city's base land defense at level L of `building` (in the views' building levels):
+   * `a·L² + b·L + c` with `{a, b, c}` at `quad`, or `n·L` with the integer n at `perLevel`.
+   */
+  readonly baseDefense?: {
+    readonly building: string;
+    readonly quad?: ConfigPath;
+    readonly perLevel?: ConfigPath;
+  };
+  /** Land defense bonus per wall level, per mille. */
+  readonly wallPmPerLevel?: ConfigPath;
+  /**
+   * Morale (per mille of the attack kept): `1000 − perCity × (attacker's cities − foe's cities)`,
+   * clamped to `[floor, 1000]`.
+   */
+  readonly morale?: { readonly perCity: ConfigPath; readonly floor: ConfigPath };
 }
 
 /** The empty hint set: generic play. */
@@ -28,16 +63,38 @@ export const RULESET_HINTS: Readonly<Record<string, StrategyHints>> = Object.fre
   // The reference bot of perfidia-1 §15.1: the free home slot, a frontier, the backyard, the inner
   // island, then the next frontier. The Crown is a neutral prize with a garrison bots cannot break.
   // A besieged own city shows `ext.siege` (§8.2) and can neither build nor send.
+  // Combat (§8.2, §8.5, §9.5): morale, the hall's base defense, the wall bonus, capital immunity.
   "perfidia-1": Object.freeze({
     settleOrder: Object.freeze(["home", "frontier", "backyard", "inner", "frontier"]),
     avoidTags: Object.freeze(["crown"]),
     blockedExt: Object.freeze(["siege"]),
+    combat: Object.freeze({
+      capitalImmunityEnd: Object.freeze(["time", "capitalImmunityEnd"]),
+      baseDefense: Object.freeze({
+        building: "hall",
+        quad: Object.freeze(["economy", "baseDefense"]),
+      }),
+      wallPmPerLevel: Object.freeze(["combat", "wallPmPerLevel"]),
+      morale: Object.freeze({
+        perCity: Object.freeze(["combat", "moralePmPerCity"]),
+        floor: Object.freeze(["combat", "moraleFloorPm"]),
+      }),
+    }),
   }),
-  // sandbox-1 §3.8: the home island's second slot, then the shared islands.
+  // sandbox-1 §3.8: the home island's second slot, then the shared islands; capitals fall from
+  // `capitalImmunityEnd` on.
   "sandbox-1": Object.freeze({
     settleOrder: Object.freeze(["home", "shared", "shared"]),
     avoidTags: Object.freeze([]),
     blockedExt: Object.freeze([]),
+    // §3.8: 10 per keep level by default, no wall, no morale.
+    combat: Object.freeze({
+      capitalImmunityEnd: Object.freeze(["time", "capitalImmunityEnd"]),
+      baseDefense: Object.freeze({
+        building: "keep",
+        perLevel: Object.freeze(["combat", "keepDefense"]),
+      }),
+    }),
   }),
 });
 

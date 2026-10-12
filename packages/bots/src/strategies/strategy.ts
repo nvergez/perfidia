@@ -5,11 +5,16 @@ import type { Knobs, Planner } from "../plan.ts";
 import type { BotRng } from "../rng.ts";
 import type { World } from "../world.ts";
 
+/**
+ * The strategy names, in the order `sim` cycles them over the seats by default. A new strategy is
+ * appended here and its defs are added to the registry's `PUBLISHED` list (`registry.ts`).
+ */
 export const BOT_STRATEGIES = Object.freeze([
   "expander",
   "rusher",
   "turtle",
   "opportunist",
+  "conqueror",
 ] as const);
 export type BotStrategy = (typeof BOT_STRATEGIES)[number];
 
@@ -22,9 +27,13 @@ export interface Brain {
   plan(p: Planner): void;
 }
 
+/**
+ * One published version of a strategy. A behaviour change once goldens exist is a new def with the
+ * next version, registered beside the old one, which stays frozen (§11.1, §13.5).
+ */
 export interface StrategyDef {
   readonly name: BotStrategy;
-  /** Bumped on any behaviour change once goldens exist (§11.1, §13.5). */
+  /** An integer ≥ 1, unique per strategy. */
   readonly version: number;
   brain(rng: BotRng): Brain;
 }

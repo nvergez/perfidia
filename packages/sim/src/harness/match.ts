@@ -1,7 +1,7 @@
 import {
-  BOT_STRATEGIES,
   botFromLabel,
   botLabel,
+  isBotStrategy,
   parseBotLabel,
   withThinkTime,
   type BotStrategy,
@@ -31,13 +31,37 @@ import {
 import { SystemTime, createVirtualTime, systemWall } from "./time.ts";
 
 // Running matches with bots through the gateway (docs/architecture.md §12.1): setups with the
-// seed-derived id key by default, the four bots cycled over the seats, the clock choices, and
+// seed-derived id key by default, the default bots cycled over the seats, the clock choices, and
 // `optionsFromHeader`, which rebuilds a run's options from its log for Level G (bots from the
 // header's controller labels, `controller` lines as hand-offs, the clock spec and latency model).
 // The CLI, the integration test, the hardening, golden and exit tests all run matches through here.
 
-/** The four bots, in the order `--bots` cycles them by default. */
-export const DEFAULT_BOTS: readonly BotStrategy[] = BOT_STRATEGIES;
+/**
+ * The default bots, each at its latest version, in the order `--bots` cycles them: the four
+ * phase-1 strategies and the conqueror. Named here rather than taken from `BOT_STRATEGIES`, so that
+ * a new strategy changes the default seats (and so adds goldens) only when it is added here.
+ */
+export const DEFAULT_BOTS: readonly BotStrategy[] = Object.freeze([
+  "expander",
+  "rusher",
+  "turtle",
+  "opportunist",
+  "conqueror",
+]);
+
+/**
+ * A bot as `--bots` and `--seat` name it: a strategy, at its latest version, or `strategy@n`,
+ * exactly that registered version (e.g. `rusher@1`, to run a frozen bot beside the latest ones).
+ */
+export type BotChoice = BotStrategy | `${BotStrategy}@${number}`;
+
+/** The label of a bot choice; throws when the version it names is not registered. */
+export function choiceLabel(choice: BotChoice): string {
+  if (isBotStrategy(choice)) return botLabel(choice);
+  const label = `bot:${choice}`;
+  if (parseBotLabel(label) === null) throw new Error(`no bot named ${label} in this build`);
+  return label;
+}
 
 export interface SetupSpec {
   readonly seed: number;
@@ -86,14 +110,14 @@ export function agentFromLabel(
 }
 
 /**
- * One bot per seat: `strategies` cycled over the seats (default the four bots), except the seats
- * `bySeat` names (`--seat p3=rusher`).
+ * One bot per seat: `strategies` cycled over the seats (default `DEFAULT_BOTS`), except the seats
+ * `bySeat` names (`--seat p3=rusher`); a bare strategy is its latest version.
  */
 export function botAgents(
   setup: MatchSetup,
-  strategies: readonly BotStrategy[] = DEFAULT_BOTS,
+  strategies: readonly BotChoice[] = DEFAULT_BOTS,
   think?: ThinkTime,
-  bySeat: Readonly<Record<string, BotStrategy>> = {},
+  bySeat: Readonly<Record<string, BotChoice>> = {},
 ): Map<PlayerId, SeatAgent> {
   if (strategies.length === 0) throw new Error("botAgents: no strategy");
   for (const seat of Object.keys(bySeat)) {
@@ -106,7 +130,7 @@ export function botAgents(
         (Object.hasOwn(bySeat, s.id) ? bySeat[s.id] : undefined) ??
         strategies[i % strategies.length] ??
         "expander";
-      return [s.id, agentFromLabel(botLabel(strategy), s.id, setup.seed, think)];
+      return [s.id, agentFromLabel(choiceLabel(strategy), s.id, setup.seed, think)];
     }),
   );
 }
@@ -136,10 +160,10 @@ export type ClockChoice =
 export interface BotRunSpec extends SetupSpec {
   /** A ruleset, or a ref or id resolved through the registry. */
   readonly ruleset: AnyRuleset | string;
-  /** Cycled over the seats (default the four bots). */
-  readonly bots?: readonly BotStrategy[];
-  /** Strategies of particular seats, overriding `bots` for them. */
-  readonly seatBots?: Readonly<Record<string, BotStrategy>>;
+  /** Cycled over the seats (default `DEFAULT_BOTS`). */
+  readonly bots?: readonly BotChoice[];
+  /** Bots of particular seats, overriding `bots` for them. */
+  readonly seatBots?: Readonly<Record<string, BotChoice>>;
   readonly clock: ClockChoice;
   readonly handoffs?: readonly {
     readonly seat: PlayerId;

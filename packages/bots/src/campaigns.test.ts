@@ -1,8 +1,8 @@
 // Multi-day campaigns from the start position (docs/architecture.md §11.2): one bot plays against
 // the fake game (other seats idle, spies always succeed), turn after turn at its own self-wakes.
-// They check the behaviour a single fixture turn cannot: that the rusher gets its carriers and
-// raids across water whatever its city cap, and that the opportunist betrays a pact partner it
-// can only see through spy reports.
+// They check the behaviour a single fixture turn cannot: that the rusher (@1, frozen) gets its
+// carriers and raids across water whatever its city cap, and that the opportunist betrays a pact
+// partner it can only see through spy reports. rusher@2's campaigns are in rusher2.test.ts.
 
 import { describe, expect, test } from "bun:test";
 import { CityIdSchema } from "@perfidia/protocol";
@@ -16,7 +16,7 @@ import {
   strs,
   type FakeGame,
 } from "./fixtures.test.ts";
-import { createBot } from "./registry.ts";
+import { createBot, createBotVersion } from "./registry.ts";
 import { streamOf } from "./rng.ts";
 import { opportunist, opportunistParams } from "./strategies/opportunist.ts";
 import { rusher } from "./strategies/rusher.ts";
@@ -34,14 +34,20 @@ interface Act {
   readonly args: Record<string, unknown>;
 }
 
-/** Plays `strategy` for p1 from the game's current time until `until`; every call it made, timed. */
+/**
+ * Plays `strategy` (its latest version, or `version`) for p1 from the game's current time until
+ * `until`; every call it made, timed.
+ */
 async function campaign(
   game: FakeGame,
   strategy: BotStrategy,
   seed: number,
   until: number,
+  version?: number,
 ): Promise<Act[]> {
-  const bot = createBot(strategy, { seat: "p1", seed, strict: true });
+  const o = { seat: "p1", seed, strict: true } as const;
+  const bot =
+    version === undefined ? createBot(strategy, o) : createBotVersion(strategy, version, o);
   const acts: Act[] = [];
   let turn = 0;
   while (game.t < until) {
@@ -60,7 +66,7 @@ async function campaign(
 }
 
 describe.each(SHAPES)("$name", (shape) => {
-  test("the rusher unlocks carriers early and raids across water, whatever its city cap", async () => {
+  test("rusher@1 unlocks carriers early and raids across water, whatever its city cap", async () => {
     // Seeds 1 to 3 cap the rusher at 2 cities (its second on its own island), seed 4 at 3.
     const caps = [1, 2, 3, 4].map(
       (seed) => rusher.brain(streamOf(seed, "p1", "rusher", "params")).knobs.maxCities,
@@ -71,7 +77,7 @@ describe.each(SHAPES)("$name", (shape) => {
       const home = game.city("c1").island;
       const carrier = game.rules.units.find((u) => u.capacity > 0)!;
       // oxlint-disable-next-line no-await-in-loop -- one campaign at a time
-      const acts = await campaign(game, "rusher", seed, 3 * DAY);
+      const acts = await campaign(game, "rusher", seed, 3 * DAY, 1);
       const carrierBuild = acts.find(
         (a) => a.tool === "build" && strs(a.args["buildings"]).includes(carrier.queue),
       );

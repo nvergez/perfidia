@@ -54,6 +54,19 @@ describe("chooseWake", () => {
     expect(chooseWake({ ...tight, events: [3600 + 100] })).toBe(3600 + 700);
   });
 
+  test("a firm time sooner than the choice wins over the budget spread, within selfWake", () => {
+    const spread = { ...base, ownWakesLeft: 12, events: [3600 + 1000] };
+    // The budget spread alone would wake at 3600 + 6900; the earliest firm time ahead is kept.
+    expect(chooseWake({ ...spread, firm: [3600 + 5000, 3600 + 2000, 3000] })).toBe(3600 + 2000);
+    // Never sooner than selfWake.min (with the real-time margin), never later than the choice.
+    expect(chooseWake({ ...spread, firm: [3600 + 100] })).toBe(3600 + 600);
+    expect(chooseWake({ ...spread, step: 10, firm: [3600 + 100] })).toBe(3600 + 600 + WAKE_MARGIN);
+    expect(chooseWake({ ...spread, firm: [3600 + 9000] })).toBe(3600 + 6900);
+    // No firm time ahead, or none at all: the choice as before.
+    expect(chooseWake({ ...spread, firm: [3600, 100] })).toBe(3600 + 6900);
+    expect(chooseWake({ ...spread, firm: [] })).toBe(chooseWake(spread));
+  });
+
   test("without the rules: the cadence", () => {
     expect(chooseWake({ ...base, selfWake: null, events: [3700] })).toBe(3600 + 7200);
   });

@@ -48,7 +48,7 @@ function tempDir(): string {
   return mkdtempSync(join(tmpdir(), "perfidia-harness-"));
 }
 
-/** A short sandbox-1 lockstep log of the four bots. */
+/** A short sandbox-1 lockstep log of the default bots (the first three). */
 async function shortLog(seed = 2): Promise<LogLine[]> {
   const out = await runBots({
     ruleset: SANDBOX,
@@ -74,11 +74,11 @@ describe("setups", () => {
     const agents = botAgents(setup, ["turtle", "rusher"], undefined, { p4: "opportunist" });
     expect([...agents.values()].map((a) => a.label)).toEqual([
       "bot:turtle@1",
-      "bot:rusher@1",
+      "bot:rusher@2",
       "bot:turtle@1",
       "bot:opportunist@1",
       "bot:turtle@1",
-      "bot:rusher@1",
+      "bot:rusher@2",
     ]);
     expect(() => botAgents(setup, ["turtle"], undefined, { p9: "rusher" })).toThrow("not a seat");
   });
@@ -151,7 +151,7 @@ describe("normalised logs and the system clock", () => {
     expect(prepared.options.clock).toEqual({ kind: "lockstep", maxTurnsPerSecond: 3 });
     expect([...prepared.options.agents.values()].map((a) => a.label)).toEqual([
       "bot:expander@1",
-      "bot:rusher@1",
+      "bot:rusher@2",
       "bot:turtle@1",
     ]);
     const renamed = { ...header, controllers: { ...header.controllers, p2: "llm:somebody" } };

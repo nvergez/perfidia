@@ -23,12 +23,20 @@ export interface WakeInput {
   readonly ownWakesLeft: number;
   /** Times worth waking at: queue ends, `availableAt` of rejected calls and items, landings. */
   readonly events: readonly number[];
+  /**
+   * Times the strategy must be awake at (a timed launch, a launch window opening, its army coming
+   * home): the earliest one ahead is kept even when the cadence or the wake budget spread would
+   * wake later, clamped below by `selfWake.min` (and the real-time margin) only. Omitted or empty:
+   * no such time.
+   */
+  readonly firm?: readonly number[];
 }
 
 /**
  * The `wakeAt` to request: the earliest event after `now` and before `now + cadence` (else the
  * cadence), clamped below by the wake budget (the rest of the game day spread over the own wakes
- * left) and `selfWake.min`, above by `selfWake.max`.
+ * left) and `selfWake.min`, above by `selfWake.max`; or the earliest `firm` time ahead when that is
+ * sooner (clamped to the self-wake range only).
  *
  * The gateway clamps against the second at which `end_turn` is applied. In lockstep that is `now`.
  * In real time it is one round's think time later, so the lower bound keeps a margin of twice the
@@ -45,5 +53,9 @@ export function chooseWake(i: WakeInput): number {
   const margin = i.step > 0 ? Math.min(max - min, Math.max(WAKE_MARGIN, 2 * i.step)) : 0;
   const lo = now + Math.max(min + margin, Math.min(gap, max));
   const hi = now + max;
-  return Math.min(hi, Math.max(lo, want));
+  const chosen = Math.min(hi, Math.max(lo, want));
+  let firm: number | null = null;
+  for (const e of i.firm ?? []) if (e > now && (firm === null || e < firm)) firm = e;
+  if (firm === null) return chosen;
+  return Math.min(chosen, Math.min(hi, Math.max(now + min + margin, firm)));
 }
