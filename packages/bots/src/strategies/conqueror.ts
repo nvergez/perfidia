@@ -12,8 +12,12 @@
 //   an assault landing in one second from the founders' island (clearing waves, the founders' wave,
 //   then a garrison of the rest that joins the siege), or a train when that is not enough: helpers
 //   from other islands leave first and the founders' island's waves are timed, from the travel
-//   times, to land a minute after them (perfidia-1 §8.11, §15.2). Battles are estimated from spy
-//   reports with the config's base defense, wall bonus and morale (hints), never from prose.
+//   times, to land a minute after them (perfidia-1 §8.11, §15.2); a train leaves only when the
+//   own wakes left today cover what will wake the seat before its timed launch, and the seat
+//   queues nothing while it waits. Battles are estimated from spy reports with the config's base
+//   defense, wall bonus and morale (hints, `combatNumbers`), never from prose, plus what the
+//   owner's other cities on the island can walk over; within a day of a report that showed more
+//   (an army away comes home) or of a strike lost there, the defense is taken as at least that.
 // - Founders are recruited just in time (with one spare once conquering) in the city best placed
 //   to lead the strike, other cities shipping what its price lacks; a strike carries two, the one
 //   left over staying with the garrison in the city taken, to lead the next conquest from there.
@@ -22,12 +26,14 @@
 // - Diplomacy: pacts (and one alliance) with anyone but its victim. Its own threatened cities get
 //   support.
 //
-// Memory (notes, §11.1): flags `vp` the victim's seat number, `vc` 1 once a conquest wave left for
-// it, `tc`/`ta` a planned train (target city number, landing time of its founders' island's
-// waves), `sp<city>`/`sf<city>` the last spy on a city and the failures in a row, `ox<seat>` when a
-// victim went out of reach, `ha<seat>` the last attack a player launched at the seat; handled ids
-// `h<movement>` (an attack on a siege answered) and `g<city>` (a siege reinforced); memo lines for
-// spectators (victim changes, trains, sieges given up).
+// Memory (notes, §11.1): flags `av` the victim's seat number, `ac` 1 once a conquest wave left for
+// it, `at`/`aw` a planned train (target city number, landing time of its founders' island's waves),
+// named to sort first so that a notebook cut to its cap drops them last; per city of the victim
+// `sp`/`sf` the last spy and the failures in a row, `dm`/`dt` the least defense to assume and when
+// it was seen, `dk` the attack of the last strike there; `gr<city>` a siege held and reinforced;
+// `ox<seat>` when a victim went out of reach, `ha<seat>` the last attack a player launched at the
+// seat. Flags that no longer matter are dropped every turn (`tidy`). Handled ids `h<movement>` (an
+// attack on a siege answered); memo lines for spectators (victim changes, trains, sieges given up).
 
 import {
   compareIds,
@@ -43,6 +49,7 @@ import {
 import {
   baseDefenseAt,
   call,
+  combatNumbers,
   configInt,
   countOf,
   covers,
@@ -50,10 +57,13 @@ import {
   fmtTime,
   landPop,
   largest,
+  levelsInReport,
   meets,
   pmRes,
   power,
+  reactionDefense,
   res,
+  stockInReport,
   storageLevelFor,
   subRes,
   timesAffordable,
@@ -63,6 +73,7 @@ import {
 import {
   estimateDefense,
   intelAge,
+  ownWakesBefore,
   projectedLevels,
   unlockWishes,
   type Knobs,
@@ -134,6 +145,8 @@ const TRAIN_WINDOW = 2 * 3600;
 const TRAIN_EXPIRY = 6 * 3600;
 /** Waves in a train at most (attack launches are capped per day). */
 const TRAIN_MAX = 4;
+/** Own wakes a train keeps in hand beyond the one its timed launch needs. */
+const TRAIN_SPARE = 1;
 /** Spy gold multiplier after 0, 1, 2 and 3+ failed missions on a city. */
 const SPY_DOUBLING: readonly number[] = Object.freeze([1, 2, 4, 8]);
 
@@ -177,7 +190,7 @@ function reachOf(w: World, rows: readonly CityRow[]): number | null {
 
 /** The current victim from memory, or null. */
 function remembered(w: World): PlayerId | null {
-  const n = w.memory.x["vp"] ?? 0;
+  const n = w.memory.x["av"] ?? 0;
   return n > 0 ? `p${n}` : null;
 }
 
@@ -216,7 +229,7 @@ export function pickVictim(w: World, prm: ConquerorParams): PlayerId | null {
       best = { q, score, tie };
     }
   }
-  const committed = (w.memory.x["vc"] ?? 0) > 0;
+  const committed = (w.memory.x["ac"] ?? 0) > 0;
   const curCities = cur === null ? 0 : (owners.get(cur)?.length ?? 0);
   if (cur !== null && committed && curOk && (fewest === null || curCities < fewest + OUT_CITIES)) {
     return cur;
@@ -242,14 +255,14 @@ function settleVictim(p: Planner, prm: ConquerorParams): PlayerId | null {
   const before = remembered(w);
   const v = pickVictim(w, prm);
   if (v === before) return v;
-  if (before !== null && (w.memory.x["vc"] ?? 0) > 0) {
+  if (before !== null && (w.memory.x["ac"] ?? 0) > 0) {
     const gone = !citiesByOwner(w).has(before);
     p.memo(`${before} ${gone ? "gone" : "out of reach"} ${fmtTime(w.t)}`);
     const n = seatNumber(before);
     if (!gone && n !== null) p.setFlag(`ox${n}`, w.t);
   }
-  p.setFlag("vp", v === null ? 0 : (seatNumber(v) ?? 0));
-  p.setFlag("vc", 0);
+  p.setFlag("av", v === null ? 0 : (seatNumber(v) ?? 0));
+  p.setFlag("ac", 0);
   if (v !== null) p.memo(`victim ${v} ${fmtTime(w.t)}`);
   return v;
 }
@@ -339,45 +352,129 @@ function levelIn(data: Json | null, building: string | null): number | null {
 }
 
 /**
- * A city's estimated defense from the latest intel (an unknown building level counts as its
- * maximum), with the unit part grown by `growthPm` per hour of age; null when nothing usable is
- * known.
+ * The defense of the units a spy report shows in the city's recruit queues (entries with a `unit`,
+ * a `count`, the units already `done` and an `end`) that are trained by `until`.
  */
-export function defenseOf(w: World, view: CityView, growthPm: number): Defense | null {
-  const est = estimateDefense(w, view);
+function queuedDefense(kit: Kit, data: Json | null, until: number): number {
+  const queues =
+    data !== null && typeof data === "object" && !Array.isArray(data) ? data["queues"] : null;
+  if (!Array.isArray(queues)) return 0;
+  const units: Record<string, number> = {};
+  for (const q of queues) {
+    if (q === null || typeof q !== "object" || Array.isArray(q)) continue;
+    const { unit, count, done, end } = q;
+    if (typeof unit !== "string" || !kit.units.has(unit)) continue;
+    if (typeof count !== "number" || typeof end !== "number" || end > until) continue;
+    units[unit] = (units[unit] ?? 0) + Math.max(0, count - (typeof done === "number" ? done : 0));
+  }
+  return power(kit, units, "defense", true);
+}
+
+/**
+ * A city's estimated defense from the latest intel (an unknown building level counts as its
+ * maximum) for waves landing `ahead` seconds from now: the units a spy report saw, those its queues
+ * train by then and those its stock trains on warning (`reactionDefense`, as rusher@2 counts it),
+ * grown by `growthPm` per hour of the intel's age at landing; null when nothing usable is known.
+ * Without a base defense in the hints (`combatNumbers`), the units are padded instead.
+ */
+export function defenseOf(w: World, view: CityView, growthPm: number, ahead = 0): Defense | null {
+  const seen = estimateDefense(w, view);
   const age = intelAge(w, view);
-  if (est === null || age === null) return null;
+  if (seen === null || age === null) return null;
   const kit = w.kit;
-  const grown = est + DEFENSE_PAD + Math.floor((est * growthPm * Math.floor(age / 3600)) / 1000);
   const data = view.access === "public" && view.intel !== null ? view.intel.data : null;
-  const combat = w.hints.combat;
+  const spy = data !== null && view.access === "public" && view.intel?.type === "spy_report";
+  const react = spy ? reactionDefense(kit, levelsInReport(data), stockInReport(data)) : 0;
+  const est = seen + queuedDefense(kit, data, w.t + ahead) + react;
+  const hours = Math.floor((age + ahead) / 3600);
+  const grown = est + DEFENSE_PAD + Math.floor((est * growthPm * hours) / 1000);
   const maxLevel = (b: string | null): number =>
     b === null ? 0 : (kit.buildings.get(b)?.maxLevel ?? 0);
-  const baseHint = combat?.baseDefense;
-  const wallPm = configInt(kit, combat?.wallPmPerLevel);
-  const base =
-    baseHint === undefined
-      ? null
-      : baseDefenseAt(
-          kit,
-          baseHint,
-          levelIn(data, baseHint.building) ?? maxLevel(baseHint.building),
-        );
-  if (base === null || wallPm === null) {
+  const h = combatNumbers(kit, w.hints.combat);
+  if (h === null) {
     return { units: grown + Math.floor((grown * 3) / 10) + 100, base: 0, wall: 0, wallPm: 0, age };
   }
+  const base =
+    baseDefenseAt(kit, h.base, levelIn(data, h.base.building) ?? maxLevel(h.base.building)) ?? 0;
   const wall = kit.wall === null ? 0 : (levelIn(data, kit.wall) ?? maxLevel(kit.wall));
-  return { units: grown, base, wall, wallPm, age };
+  return { units: grown, base, wall, wallPm: h.wallPm, age };
 }
 
 /** The seat's morale (‰) against a foe with `foeCities`, counting the sieges it holds as its cities. */
 function moraleAgainst(w: World, foeCities: number): number {
-  const m = w.hints.combat?.morale;
-  const perCity = configInt(w.kit, m?.perCity);
-  const floor = configInt(w.kit, m?.floor);
-  if (perCity === null || floor === null) return FALLBACK_MORALE_PM;
+  const h = combatNumbers(w.kit, w.hints.combat);
+  if (h === null) return FALLBACK_MORALE_PM;
+  if (h.moralePm <= 0) return 1000;
   const mine = w.cities.length + holdCities(w).size;
-  return clamp(1000 - perCity * (mine - foeCities), floor, 1000);
+  return clamp(1000 - h.moralePm * (mine - foeCities), h.moraleFloorPm, 1000);
+}
+
+/** `d` with its units raised so that its value is at least `floor`. */
+function atLeast(d: Defense, floor: number): Defense {
+  if (defenseValue(d) >= floor) return d;
+  const factor = 1000 + d.wallPm * d.wall;
+  return { ...d, units: Math.max(d.units, Math.ceil((floor * 1000) / factor) - d.base) };
+}
+
+/**
+ * The defense waves landing on `row` in `ahead` seconds meet: its own (`defenseOf`), at least the
+ * floor remembered for it (`dm`, `noteDefense`), plus half the units of the owner's other cities on
+ * its island, which can walk over before the waves land (as much as its own units for one without
+ * intel).
+ */
+function targetDefense(
+  p: Planner,
+  prm: ConquerorParams,
+  row: CityRow,
+  ahead: number,
+): Defense | null {
+  const { w } = p;
+  const view = w.views.get(row.id);
+  const own = view === undefined ? null : defenseOf(w, view, prm.growthPm, ahead);
+  if (own === null) return null;
+  const d = atLeast(own, floorOf(p, row.id));
+  let support = 0;
+  for (const o of w.map?.cities ?? []) {
+    if (o.id === row.id || o.owner !== row.owner || o.island !== row.island) continue;
+    const ov = w.views.get(o.id);
+    const od = ov === undefined ? null : defenseOf(w, ov, prm.growthPm, ahead);
+    support += od === null ? own.units : Math.floor(od.units / 2);
+  }
+  return { ...d, units: d.units + support };
+}
+
+/** The least defense value to assume for `city` (`dm`), while it is less than a day old. */
+function floorOf(p: Planner, city: CityId): number {
+  const at = p.flag(`dt${city}`);
+  return at !== null && p.w.t - at < DAY ? (p.flag(`dm${city}`) ?? 0) : 0;
+}
+
+/**
+ * Remembers, for a day, the most defense each victim city showed (`dm`, seen at `dt`): a spy report
+ * may catch its army away, and the army comes home before the waves land. A strike the seat lost
+ * there (its latest report) counts as having met at least the attack it sent (`dk`).
+ */
+function noteDefense(p: Planner, prm: ConquerorParams, victim: PlayerId | null): void {
+  const { w } = p;
+  if (victim === null) return;
+  for (const row of w.map?.cities ?? []) {
+    if (row.owner !== victim) continue;
+    const view = w.views.get(row.id);
+    if (view === undefined || view.access !== "public" || view.intel === null) continue;
+    const { type, data, at } = view.intel;
+    const since = p.flag(`dt${row.id}`);
+    if (since !== null && at[0] <= since) continue;
+    let seen: number | null = null;
+    if (type === "spy_report") {
+      const d = defenseOf(w, view, prm.growthPm);
+      seen = d === null ? null : defenseValue(d);
+    } else if (data["attacker"] === w.seat && data["winner"] !== "attacker") {
+      seen = p.flag(`dk${row.id}`);
+    }
+    if (seen === null || seen < floorOf(p, row.id)) continue;
+    p.setFlag(`dm${row.id}`, seen);
+    p.setFlag(`dt${row.id}`, at[0]);
+  }
 }
 
 /** `(loser / winner)²` in per mille, as a loss rate. */
@@ -592,12 +689,13 @@ function assault(
         left -= countOf(x.units, kit.roles.attacker);
       }
       const extra = Math.max(0, Math.min(left, have - least));
-      const own = allocate(p, f, island, [
-        { attackers: extra, founders: 0, defenders: 0 },
+      // The founders' wave gets the carriers first; the spare attackers leave before it.
+      const [lead, spare] = allocate(p, f, island, [
         { attackers: least, founders: n, defenders: 0 },
-      ]).filter((x): x is Wave => x !== null);
-      const lead = own.at(-1);
-      if (lead === undefined || foundersIn(kit, lead.units) < n) continue;
+        { attackers: extra, founders: 0, defenders: 0 },
+      ]);
+      if (lead === undefined || lead === null || foundersIn(kit, lead.units) < n) continue;
+      const own = spare === undefined || spare === null ? [lead] : [spare, lead];
       const waves = [...clear, ...own];
       last = waves;
       const order = [...before, ...waves.map((x) => eff(x.strength))];
@@ -611,11 +709,12 @@ function assault(
  * The garrison that follows a founders' wave from `from` and the other cities of its island, in
  * the same second: their attackers left and their defenders (the forge city keeps half of its).
  * Landing after the founders' wave, they join the siege it starts (or fight on if it lost), so
- * that the owner's army coming home meets more than the founders' escort.
+ * that the owner's army coming home meets more than the founders' escort. Returns its land attack.
  */
-function garrison(p: Planner, from: OwnCity, to: CityId, island: IslandId): void {
+function garrison(p: Planner, from: OwnCity, to: CityId, island: IslandId): number {
   const { w } = p;
   const forge = forgeCity(w)?.id;
+  let strength = 0;
   for (const c of w.cities) {
     if (c.blocked || c.island !== from.island || p.attacksLeft <= 0) continue;
     const have = countOf(p.homeOf(c.id), w.kit.roles.defender);
@@ -625,21 +724,42 @@ function garrison(p: Planner, from: OwnCity, to: CityId, island: IslandId): void
       defenders: c.id === forge ? Math.floor(have / 2) : have,
     };
     const wave = allocate(p, c, island, [part])[0];
-    if (wave !== undefined && wave !== null) p.attack(c, to, wave.units);
+    if (wave !== undefined && wave !== null && p.attack(c, to, wave.units)) {
+      strength += power(w.kit, wave.units, "attack", true);
+    }
   }
+  return strength;
 }
 
-/** Launches `waves` in order, then the garrison; true when the founders' wave left. */
-function launch(p: Planner, tg: CityId, island: IslandId, waves: readonly Wave[]): boolean {
+/**
+ * Launches `waves` in order, then the garrison; true when the founders' wave left. The attack sent
+ * (after morale `m`) is added to the strike's `dk`, which `noteDefense` reads if the strike loses.
+ */
+function launch(
+  p: Planner,
+  tg: CityId,
+  island: IslandId,
+  waves: readonly Wave[],
+  m: number,
+): boolean {
   const kit = p.w.kit;
   if (p.attacksLeft < waves.length) return false;
   let sent = false;
+  let strength = 0;
   for (const x of waves) {
-    if (p.attack(x.from, tg, x.units) && foundersIn(kit, x.units) > 0) sent = true;
+    if (!p.attack(x.from, tg, x.units)) continue;
+    strength += x.strength;
+    if (foundersIn(kit, x.units) > 0) sent = true;
   }
   const lead = waves.at(-1);
-  if (sent && lead !== undefined) garrison(p, lead.from, tg, island);
+  if (sent && lead !== undefined) strength += garrison(p, lead.from, tg, island);
+  addStrike(p, tg, Math.floor((strength * m) / 1000));
   return sent;
+}
+
+/** Adds `attack` to the attack sent at `city` by its current strike (`dk`). */
+function addStrike(p: Planner, city: CityId, attack: number): void {
+  if (attack > 0) p.setFlag(`dk${city}`, (p.flag(`dk${city}`) ?? 0) + attack);
 }
 
 /**
@@ -659,11 +779,14 @@ function strike(p: Planner, prm: ConquerorParams, tg: Target, d: Defense, foes: 
   const travel = f === null ? null : w.travel(f.id, island, false);
   if (f === null || travel === null) return false;
   if (w.t + travel < open) {
-    p.wakes.push(open - travel);
+    p.wakeAt(open - travel);
     return false;
   }
   const now = assault(p, prm, tg, d, m, [], false);
-  if (now !== null) return launch(p, tg.row.id, island, now);
+  if (now !== null) {
+    p.clearFlag(`dk${tg.row.id}`);
+    return launch(p, tg.row.id, island, now, m);
+  }
 
   // A train: helpers from other islands, slower than the founders' island by 10 min to 2 h.
   const helpers = w.cities
@@ -684,32 +807,56 @@ function strike(p: Planner, prm: ConquerorParams, tg: Target, d: Defense, foes: 
     chosen.push(h);
     const sorted = chosen.toSorted((a, b) => b.travel - a.travel);
     const earlier = sorted.map((x) => eff(x.strength));
-    if (assault(p, prm, tg, d, m, earlier, false) === null) continue;
     const landing = Math.max(...chosen.map((x) => w.t + x.travel));
-    if (landing < open || p.attacksLeft < chosen.length + 2) return false;
-    for (const x of sorted) p.attack(x.from, tg.row.id, x.units);
+    // The train lands later than a strike from the founders' island: the defense grows meanwhile.
+    const late = targetDefense(p, prm, tg.row, landing + 60 - w.t) ?? d;
+    if (assault(p, prm, tg, late, m, earlier, false) === null) continue;
     const n = cityNumber(tg.row.id);
-    if (n === null) return true;
-    p.setFlag("tc", n);
-    p.setFlag("ta", landing + 60);
-    p.wakes.push(landing + 60 - travel);
+    if (landing < open || p.attacksLeft < chosen.length + 2 || n === null) return false;
+    // The founders' island's waves leave at a self-wake: it must not find the own wakes used up.
+    if (!wakeFor(p, landing + 60 - travel)) {
+      p.summary.push(`${tg.row.id}: train waits for own wakes`);
+      return false;
+    }
+    p.clearFlag(`dk${tg.row.id}`);
+    for (const x of sorted) {
+      if (p.attack(x.from, tg.row.id, x.units)) addStrike(p, tg.row.id, eff(x.strength));
+    }
+    p.setFlag("at", n);
+    p.setFlag("aw", landing + 60);
+    p.wakeAt(landing + 60 - travel);
     p.memo(`train ${tg.row.id} ${fmtTime(landing + 60)}`);
     return true;
   }
   return false;
 }
 
+/**
+ * True when the seat can count on an own wake at `at`: on a later game day, or when today's own
+ * wakes left cover what will wake it before, the wake at `at` and `TRAIN_SPARE`.
+ */
+function wakeFor(p: Planner, at: number): boolean {
+  const { w } = p;
+  if (at >= (w.day + 1) * DAY) return true;
+  return ownWakesBefore(p, at) + 1 + TRAIN_SPARE <= w.briefing.budget.ownWakesLeft;
+}
+
+/** True while a planned train waits for its founders' island's waves to leave. */
+function trainWaits(p: Planner): boolean {
+  return (p.flag("at") ?? 0) > 0;
+}
+
 /** Launches the founders' island's waves of a planned train once their time has come. */
 function trainStep(p: Planner, prm: ConquerorParams, victim: PlayerId | null): void {
   const { w } = p;
-  const tc = p.flag("tc") ?? 0;
-  const ta = p.flag("ta") ?? 0;
+  const tc = p.flag("at") ?? 0;
+  const ta = p.flag("aw") ?? 0;
   if (tc <= 0) return;
   const id: CityId = `c${tc}`;
   const row = w.map?.cities.find((c) => c.id === id);
   const drop = (): void => {
-    p.setFlag("tc", 0);
-    p.setFlag("ta", 0);
+    p.clearFlag("at");
+    p.clearFlag("aw");
   };
   if (row === undefined || row.owner !== victim || besiegedRow(w, row) || w.t > ta + TRAIN_EXPIRY) {
     drop();
@@ -722,16 +869,18 @@ function trainStep(p: Planner, prm: ConquerorParams, victim: PlayerId | null): v
     return;
   }
   if (w.t + travel < ta) {
-    p.wakes.push(ta - travel);
+    p.wakeAt(ta - travel);
     return;
   }
   // The helpers have landed (or are about to): the founders' island sends everything it has.
-  const view = w.views.get(id);
-  const d = (view === undefined ? null : defenseOf(w, view, prm.growthPm)) ?? NO_DEFENSE;
+  const d = targetDefense(p, prm, row, travel) ?? NO_DEFENSE;
   const foes = w.map?.cities.filter((c) => c.owner === victim).length ?? 1;
   const tg: Target = { row, besieged: false, travel };
-  const waves = assault(p, prm, tg, d, moraleAgainst(w, foes), [], true);
-  if (waves !== null && launch(p, id, row.island, waves)) p.setFlag("vc", 1);
+  const m = moraleAgainst(w, foes);
+  // The helpers land first: their attack (`dk`, after morale) wears the defense down.
+  const helpers = p.flag(`dk${id}`) ?? 0;
+  const waves = assault(p, prm, tg, d, m, helpers > 0 ? [helpers] : [], true);
+  if (waves !== null && launch(p, id, row.island, waves, m)) p.setFlag("ac", 1);
   drop();
 }
 
@@ -763,7 +912,8 @@ function spyOn(p: Planner, prm: ConquerorParams, tg: Target, view: CityView): bo
   const gold = Math.min(p.stockOf(from.id).gold, base * (SPY_DOUBLING[Math.min(fails, 3)] ?? 8));
   p.spy(from, tg.row.id, gold);
   p.setFlag(`sp${key}`, w.t);
-  p.setFlag(`sf${key}`, fails);
+  if (fails > 0) p.setFlag(`sf${key}`, fails);
+  else p.clearFlag(`sf${key}`);
   return true;
 }
 
@@ -797,7 +947,9 @@ function attackFrom(w: World, from: CityId | null): number | null {
  * Holds the seat's sieges: defenders from the nearest city once per siege (the owner's army may
  * come home, perfidia-1 §9.3), and from the two nearest cities that land before each attack on a
  * besieged city. A garrison no help can reach in time, facing an attack from a city whose last
- * spy report shows twice its defense, is hopeless: it is recalled, saving its units.
+ * spy report shows twice its defense, is hopeless: it is recalled, saving its units. A siege is
+ * marked reinforced (`gr<city>`) until it is no longer held (`tidy`), so a new siege of the same
+ * city is reinforced again.
  */
 function holdSieges(p: Planner): void {
   const { w } = p;
@@ -811,7 +963,7 @@ function holdSieges(p: Planner): void {
     const threats = w.briefing.incoming.filter(
       (i) => i.to === city && i.kind === "attack" && i.arrive[0] > w.t && !p.handled(`h${i.id}`),
     );
-    const fresh = !p.handled(`g${city}`);
+    const fresh = p.flag(`gr${city}`) === null;
     if (threats.length === 0 && !fresh) continue;
     const first = Math.min(...threats.map((i) => i.arrive[0]));
     const helpers = w.cities
@@ -836,7 +988,7 @@ function holdSieges(p: Planner): void {
       sent += 1;
     }
     for (const i of threats) p.markHandled(`h${i.id}`);
-    if (fresh) p.markHandled(`g${city}`);
+    if (fresh) p.setFlag(`gr${city}`, w.t);
     if (sent > 0 || !recall || threats.length === 0) continue;
     const held = power(kit, garrisonUnits, "defense", true);
     const worst = Math.max(...threats.map((i) => attackFrom(w, i.from) ?? 0));
@@ -847,7 +999,47 @@ function holdSieges(p: Planner): void {
   }
 }
 
+/**
+ * Drops the flags that no longer matter, so that the notes stay small (§11.1): the intel and strike
+ * flags of cities that are not the victim's (a failure count back to 0 too), the floor of a
+ * defense seen more than a day ago, sieges no longer held, attackers and players out of reach
+ * remembered for more than a day.
+ */
+function tidy(p: Planner, victim: PlayerId | null): void {
+  const { w } = p;
+  const theirs = new Set<string>();
+  for (const c of w.map?.cities ?? []) if (victim !== null && c.owner === victim) theirs.add(c.id);
+  const held = holdCities(w);
+  for (const [name, value] of Object.entries(p.memory.x)) {
+    const city = /^(sp|sf|dk|dm|dt|gr)c([1-9][0-9]*)$/.exec(name);
+    if (city !== null) {
+      const kind = city[1];
+      const id: CityId = `c${Number(city[2])}`;
+      const stale =
+        kind === "gr"
+          ? !held.has(id)
+          : !theirs.has(id) ||
+            (kind === "sf" && value === 0) ||
+            ((kind === "dm" || kind === "dt") && floorOf(p, id) === 0);
+      if (stale) p.clearFlag(name);
+    } else if (/^(ha|ox)[1-9][0-9]*$/.test(name) && w.t - value >= DAY) {
+      p.clearFlag(name);
+    }
+  }
+}
+
 // Offense.
+
+/** Cargo of the seat's shipments from `city` still on the way (to their target, or back). */
+function cargoAway(w: World, city: CityId): number {
+  let n = 0;
+  for (const m of w.self?.private?.movements ?? []) {
+    if (m.owner !== w.seat || (m.home ?? m.from) !== city || m.cargo === undefined) continue;
+    if (m.kind === "shipment" || m.kind === "return")
+      n += m.cargo.wood + m.cargo.stone + m.cargo.gold;
+  }
+  return n;
+}
 
 /**
  * Ships what `to` lacks of `cost` from the other cities, nearest first (at most `POOL_CITIES`,
@@ -867,7 +1059,8 @@ function pool(p: Planner, to: OwnCity, cost: Res): void {
     .slice(0, POOL_CITIES);
   for (const { c } of from) {
     if (largest(need) <= 0) return;
-    let room = ship.base + ship.perLevel * (c.levels?.[ship.building] ?? 0);
+    // The cap counts the cargo already on its way from `c` (shipments, and those turned back).
+    let room = ship.base + ship.perLevel * (c.levels?.[ship.building] ?? 0) - cargoAway(w, c.id);
     const surplus = pmRes(p.budgetOf(c.id), 667);
     const take = (have: number, want: number): number => {
       const n = Math.max(0, Math.min(have, want, room));
@@ -915,7 +1108,7 @@ function spareFounder(p: Planner, victim: PlayerId | null): IslandId[] {
 
 /** True once a conquest wave has left, or from the day after attacks open. */
 function conquering(p: Planner): boolean {
-  return (p.flag("vc") ?? 0) > 0 || p.w.t >= p.w.kit.rules.time.attackFrom + DAY;
+  return (p.flag("ac") ?? 0) > 0 || p.w.t >= p.w.kit.rules.time.attackFrom + DAY;
 }
 
 /** A victim city as `offense` sees it this turn. */
@@ -950,6 +1143,8 @@ function offense(p: Planner, prm: ConquerorParams, victim: PlayerId | null): Isl
   const foes = targets.length;
   const holds = holdCities(w);
   const attackOpen = w.t >= kit.rules.time.attackFrom && p.attacksLeft > 0;
+  // A planned train keeps the founders for its last wave, and the seat's own wakes for its launch.
+  const train = trainWaits(p);
   let spies = 0;
   const seen: Sighting[] = [];
   for (const tg of targets.slice(0, prm.scan)) {
@@ -969,13 +1164,13 @@ function offense(p: Planner, prm: ConquerorParams, victim: PlayerId | null): Isl
     const open = opensAt(w, tg.row);
     // A capital still immune is scouted shortly before it opens, not earlier.
     if (w.t + tg.travel + 4 * 3600 < open) {
-      p.wakes.push(open - tg.travel - 4 * 3600);
+      p.wakeAt(open - tg.travel - 4 * 3600);
       seen.push({ tg, label, taken, d: null, breaks: false, ready: false });
       continue;
     }
-    const d = defenseOf(w, view, prm.growthPm);
+    const d = targetDefense(p, prm, tg.row, tg.travel);
     const fresh = d !== null && d.age <= prm.stale;
-    if (!fresh && spies < 2 && w.t + 2 * 3600 >= kit.rules.time.attackFrom) {
+    if (!fresh && !train && spies < 2 && w.t + 2 * 3600 >= kit.rules.time.attackFrom) {
       if (spyOn(p, prm, tg, view)) spies += 1;
     }
     const breaks = d !== null && armyBreaks(p, prm, tg, d, foes);
@@ -985,8 +1180,6 @@ function offense(p: Planner, prm: ConquerorParams, victim: PlayerId | null): Isl
   }
 
   const wanted: IslandId[] = [];
-  const train = (p.flag("tc") ?? 0) > 0;
-  // A planned train keeps the founders for its last wave.
   let hold = train;
   for (const x of seen) {
     if (x.d === null || x.taken) continue;
@@ -1003,8 +1196,8 @@ function offense(p: Planner, prm: ConquerorParams, victim: PlayerId | null): Isl
     hold = true;
     if (!now) continue;
     if (strike(p, prm, x.tg, x.d, foes)) {
-      p.setFlag("vc", 1);
-      hold = (p.flag("tc") ?? 0) > 0;
+      p.setFlag("ac", 1);
+      hold = trainWaits(p);
     } else {
       p.summary.push(`${x.label}: waiting`);
     }
@@ -1175,6 +1368,8 @@ export const conqueror: StrategyDef = Object.freeze<StrategyDef>({
       plan(p) {
         rememberAttackers(p);
         const victim = settleVictim(p, prm);
+        tidy(p, victim);
+        noteDefense(p, prm, victim);
         let allied = p.w.self?.alliance !== null && p.w.self?.alliance !== undefined;
         p.answer((pr) => {
           if (pr.from === victim) return false;
@@ -1187,6 +1382,8 @@ export const conqueror: StrategyDef = Object.freeze<StrategyDef>({
         p.supportThreatened();
         trainStep(p, prm, victim);
         const wanted = offense(p, prm, victim);
+        // While a train waits, nothing is queued: every queue that empties would cost an own wake.
+        if (trainWaits(p)) return;
         // Founders found cities until the conquests begin; then every one leads a conquest.
         if (wanted.length === 0 && !conquering(p)) {
           p.settle();

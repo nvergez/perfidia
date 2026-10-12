@@ -43,7 +43,7 @@ async function cli(...argv: string[]): Promise<{ code: number; out: string; err:
 }
 
 function isBatch(v: unknown): v is BatchResult {
-  return typeof v === "object" && v !== null && "format" in v && v.format === "perfidia-batch/2";
+  return typeof v === "object" && v !== null && "format" in v && v.format === "perfidia-batch/3";
 }
 
 /** Every file under `dir` with its bytes, for before/after comparisons. */
@@ -255,7 +255,7 @@ describe("sim batch", () => {
     const plan = {
       seeds: [3],
       players: 6,
-      bots: ["rusher", "turtle"] as const,
+      bots: ["rusher", "turtle", "rusher@1"] as const,
       days: 1,
       // The pacing pass replays every match at Level E.
       pacing: true,
@@ -264,7 +264,8 @@ describe("sim batch", () => {
     const ba = await runBatch({ ...plan, variants: [b, a] });
     expect(ab.variants[0]).toEqual(ba.variants[1]);
     expect(ab.variants[1]).toEqual(ba.variants[0]);
-    expect(ab.bots).toEqual(["bot:rusher@2", "bot:turtle@1"]);
+    expect(ab.bots).toEqual(["bot:rusher@2", "bot:turtle@1", "bot:rusher@1"]);
+    expect(ab.variants[0]?.controllers["p3"]).toBe("bot:rusher@1");
     expect(ab.variants.flatMap((v) => v.matches.map((m) => m.replayOk))).toEqual([true, true]);
   }, 30000);
 

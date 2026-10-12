@@ -1,6 +1,7 @@
 import {
   botFromLabel,
   botLabel,
+  isBotStrategy,
   parseBotLabel,
   withThinkTime,
   type BotStrategy,
@@ -47,6 +48,20 @@ export const DEFAULT_BOTS: readonly BotStrategy[] = Object.freeze([
   "opportunist",
   "conqueror",
 ]);
+
+/**
+ * A bot as `--bots` and `--seat` name it: a strategy, at its latest version, or `strategy@n`,
+ * exactly that registered version (e.g. `rusher@1`, to run a frozen bot beside the latest ones).
+ */
+export type BotChoice = BotStrategy | `${BotStrategy}@${number}`;
+
+/** The label of a bot choice; throws when the version it names is not registered. */
+export function choiceLabel(choice: BotChoice): string {
+  if (isBotStrategy(choice)) return botLabel(choice);
+  const label = `bot:${choice}`;
+  if (parseBotLabel(label) === null) throw new Error(`no bot named ${label} in this build`);
+  return label;
+}
 
 export interface SetupSpec {
   readonly seed: number;
@@ -96,13 +111,13 @@ export function agentFromLabel(
 
 /**
  * One bot per seat: `strategies` cycled over the seats (default `DEFAULT_BOTS`), except the seats
- * `bySeat` names (`--seat p3=rusher`).
+ * `bySeat` names (`--seat p3=rusher`); a bare strategy is its latest version.
  */
 export function botAgents(
   setup: MatchSetup,
-  strategies: readonly BotStrategy[] = DEFAULT_BOTS,
+  strategies: readonly BotChoice[] = DEFAULT_BOTS,
   think?: ThinkTime,
-  bySeat: Readonly<Record<string, BotStrategy>> = {},
+  bySeat: Readonly<Record<string, BotChoice>> = {},
 ): Map<PlayerId, SeatAgent> {
   if (strategies.length === 0) throw new Error("botAgents: no strategy");
   for (const seat of Object.keys(bySeat)) {
@@ -115,7 +130,7 @@ export function botAgents(
         (Object.hasOwn(bySeat, s.id) ? bySeat[s.id] : undefined) ??
         strategies[i % strategies.length] ??
         "expander";
-      return [s.id, agentFromLabel(botLabel(strategy), s.id, setup.seed, think)];
+      return [s.id, agentFromLabel(choiceLabel(strategy), s.id, setup.seed, think)];
     }),
   );
 }
@@ -146,9 +161,9 @@ export interface BotRunSpec extends SetupSpec {
   /** A ruleset, or a ref or id resolved through the registry. */
   readonly ruleset: AnyRuleset | string;
   /** Cycled over the seats (default `DEFAULT_BOTS`). */
-  readonly bots?: readonly BotStrategy[];
-  /** Strategies of particular seats, overriding `bots` for them. */
-  readonly seatBots?: Readonly<Record<string, BotStrategy>>;
+  readonly bots?: readonly BotChoice[];
+  /** Bots of particular seats, overriding `bots` for them. */
+  readonly seatBots?: Readonly<Record<string, BotChoice>>;
   readonly clock: ClockChoice;
   readonly handoffs?: readonly {
     readonly seat: PlayerId;

@@ -31,7 +31,6 @@ import {
   type CityId,
   type CityView,
   type PlayerId,
-  type Res,
   type ResourceId,
   type ToolCall,
   type UnitId,
@@ -40,27 +39,31 @@ import {
   addRes,
   baseDefenseAt,
   call,
-  configInt,
+  combatNumbers,
   countOf,
   covers,
+  DAY,
   etaAfford,
   landPop,
   largest,
-  meets,
+  levelsInReport,
   pmRes,
   power,
+  reactionDefense,
   res,
   scaleRes,
+  stockInReport,
   storageLevelFor,
   subRes,
   timesAffordable,
   unitsInReport,
+  type CombatNumbers,
   type Kit,
 } from "../kit.ts";
-import type { CombatHints } from "../hints.ts";
 import {
   mainCity,
   nearby,
+  ownWakesBefore,
   projectedLevels,
   unlockWishes,
   type Planner,
@@ -128,11 +131,6 @@ const OPENING_SLACK = 300;
 const OPENING_RESERVE = 8;
 /** Fewest attackers an overflow batch of the opening is worth (a smaller one only wakes the seat). */
 const OVERFLOW_MIN = 5;
-/**
- * Share (‰) of a target's stock assumed spent on defenders once it sees the attack coming: bots
- * spend most of their stock on a mix of units when they wake, about a third of it on defenders.
- */
-const REACTION_PM = 300;
 /** Intel older than this is not attacked on, whatever the margin (it is spied again first). */
 const MAX_AGE = 86400;
 /**
@@ -140,6 +138,13 @@ const MAX_AGE = 86400;
  * leave no wake for the strikes.
  */
 const SPY_PER_DAY = 6;
+/**
+ * Spies in flight at once in the first hours after protection ends (one afterwards): when both
+ * opening reports reject their targets, the next candidates are spied side by side, so that the
+ * first strike does not wait a spy's round trip per candidate.
+ */
+const EARLY_SPIES = 2;
+const EARLY_SCOUTING = 6 * 3600;
 
 /** The resources an attacker mostly costs: each one that is at least a third of its cost. */
 function attackResources(kit: Kit): ResourceId[] {
@@ -175,17 +180,6 @@ function weighable(w: World, view: CityView | undefined): view is CityView {
   return view !== undefined && (view.tag === null || !w.hints.avoidTags.includes(view.tag));
 }
 
-/** A number-valued record of a report's data (`buildings`), or empty. */
-function levelsOf(data: Readonly<Record<string, unknown>>): Record<string, number> {
-  const raw = data["buildings"];
-  const out: Record<string, number> = {};
-  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) return out;
-  for (const [k, v] of Object.entries(raw)) {
-    if (typeof v === "number" && Number.isSafeInteger(v) && v >= 0) out[k] = v;
-  }
-  return out;
-}
-
 export interface Estimate {
   /** Estimated land defense. */
   readonly d: number;
@@ -201,56 +195,9 @@ export interface Estimate {
   readonly seen: boolean;
 }
 
-/** The stock a report's data shows (`stock`), or null. */
-function stockIn(data: Readonly<Record<string, unknown>>): Res | null {
-  const raw = data["stock"];
-  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) return null;
-  const out: Record<string, number> = {};
-  for (const [k, v] of Object.entries(raw)) {
-    if (typeof v === "number" && Number.isSafeInteger(v) && v >= 0) out[k] = v;
-  }
-  if (RESOURCE_IDS.some((r) => out[r] === undefined)) return null;
-  return res(out["wood"] ?? 0, out["stone"] ?? 0, out["gold"] ?? 0);
-}
-
-/**
- * The defense a city can add once it sees an attack coming (every incoming attack wakes its owner,
- * who spends its stock on units): `REACTION_PM` of its stock in defenders, when its buildings can
- * train them.
- */
-function reaction(kit: Kit, levels: Readonly<Record<string, number>>, stock: Res | null): number {
-  const def = kit.roles.defender;
-  const row = def === null ? undefined : kit.units.get(def);
-  if (row === undefined || stock === null || !meets(row.requires, levels)) return 0;
-  const q = kit.queues.get(row.queue);
-  if (q !== undefined && (levels[q.building] ?? 0) < 1) return 0;
-  const n = Math.min(row.maxPerOrder, timesAffordable(pmRes(stock, REACTION_PM), row.cost));
-  return n * row.defense;
-}
-
-/** The combat hints' numbers, read in the effective config (so overrides count). */
-interface Combat {
-  readonly base: NonNullable<CombatHints["baseDefense"]>;
-  readonly wallPm: number;
-  readonly moralePm: number;
-  readonly moraleFloorPm: number;
-}
-
-/**
- * The combat hints resolved in the effective config: null when the base defense is unknown (then
- * neither the buildings' share, the wall nor morale is counted); a missing wall bonus or morale
- * counts as none.
- */
-function combatOf(w: World): Combat | null {
-  const h = w.hints.combat;
-  const base = h?.baseDefense;
-  if (h === undefined || base === undefined || baseDefenseAt(w.kit, base, 0) === null) return null;
-  return {
-    base,
-    wallPm: configInt(w.kit, h.wallPmPerLevel) ?? 0,
-    moralePm: configInt(w.kit, h.morale?.perCity) ?? 0,
-    moraleFloorPm: configInt(w.kit, h.morale?.floor) ?? 1000,
-  };
+/** The combat hints resolved in the effective config (`combatNumbers`): null without a base defense. */
+function combatOf(w: World): CombatNumbers | null {
+  return combatNumbers(w.kit, w.hints.combat);
 }
 
 /**
@@ -275,11 +222,11 @@ export function estimateCity(w: World, p: Planner, view: CityView | undefined): 
   const units = unitsInReport(kit, data);
   const sum = power(kit, units, "defense", true);
   const h = combatOf(w);
-  const levels = levelsOf(data);
+  const levels = levelsInReport(data);
   const own = h === null ? 0 : (baseDefenseAt(kit, h.base, levels[h.base.building] ?? 0) ?? 0);
   const wall = kit.wall === null ? 0 : (levels[kit.wall] ?? 0);
   const factor = h === null ? 1000 : 1000 + h.wallPm * wall;
-  const react = reaction(kit, levels, stockIn(data));
+  const react = reactionDefense(kit, levels, stockInReport(data));
   return {
     d: Math.floor(((sum + own + react) * factor) / 1000),
     base: Math.floor((own * factor) / 1000),
@@ -470,9 +417,11 @@ function sendSpy(p: Planner, main: OwnCity, row: SpyRow): boolean {
 
 /**
  * Spies for the next strike after protection: nothing while a target with intel still fresh then is
- * weak enough for the army; otherwise the first city of `spyOrder` whose intel would be stale and
- * that was not last seen far beyond the army, leaving now when its launch time is less than
- * `SPY_SLACK` ahead, else asking to be awake then. Asks to be awake at the strike, too.
+ * weak enough for the army; otherwise the first city of `spyOrder` whose intel would be stale, that
+ * no spy is on its way to and that was not last seen far beyond the army, leaving now when its
+ * launch time is less than `SPY_SLACK` ahead, else asking to be awake then; while one spy is in
+ * flight (`EARLY_SPIES` in the first hours after protection), no other leaves. Asks to be awake at
+ * the strike, too.
  */
 function scout(p: Planner, prm: Rusher2Params, main: OwnCity): void {
   const { w } = p;
@@ -494,13 +443,17 @@ function scout(p: Planner, prm: Rusher2Params, main: OwnCity): void {
     if (launch > w.t + SPY_SLACK) p.wakeAt(launch);
     else sendSpy(p, main, row);
   };
-  if (rows.some((r) => p.inFlight("spy", r.target.id))) return;
+  const flying = (r: SpyRow): boolean => p.inFlight("spy", r.target.id);
+  const early = w.t < w.kit.rules.time.attackFrom + EARLY_SCOUTING ? EARLY_SPIES : 1;
+  let slots = early - rows.filter(flying).length;
+  if (slots <= 0) return;
   // With a founder ready, the colonies the army may take come first (`offense` holds the army).
   if (founding) {
     const colony = rows.find(
       (r) =>
         r.target.capitalOf === null &&
         !fresh(r) &&
+        !flying(r) &&
         (r.est === null || army * 1000 >= r.est.d * prm.conquerPm),
     );
     if (colony !== undefined) {
@@ -519,9 +472,11 @@ function scout(p: Planner, prm: Rusher2Params, main: OwnCity): void {
   if (beatable) return;
   for (const row of rows) {
     // Known cities are spied again only when the army may now beat them.
-    if (fresh(row) || (row.est !== null && row.est.d * prm.raidPm > army * 1250)) continue;
+    if (fresh(row) || flying(row)) continue;
+    if (row.est !== null && row.est.d * prm.raidPm > army * 1250) continue;
     spyFor(row);
-    return;
+    slots -= 1;
+    if (slots <= 0) return;
   }
 }
 
@@ -534,12 +489,12 @@ function openingSpies(
   const { w } = p;
   const strike = w.kit.rules.time.attackFrom;
   const out: { row: SpyRow; launch: number }[] = [];
-  const hours = (o: OtherCity): number => (w.travel(main.id, o.island, false) ?? 0) / 3600;
+  const travel = (o: OtherCity): number => w.travel(main.id, o.island, false) ?? 0;
   const nearest = strangers(w, main)[0];
   for (const row of spyOrder(p, prm, main, armyAt(p, main, strike), true)) {
     if (out.length >= prm.preSpies) break;
     // Only the nearest strangers (within an hour of the nearest) are first-wave targets.
-    if (nearest !== undefined && hours(row.target) > hours(nearest) + 1) break;
+    if (nearest !== undefined && travel(row.target) > travel(nearest) + 3600) break;
     const launch = spyLaunch(w, main, row.target, strike);
     // A report that would land after protection ends is of no use to the first wave.
     if (launch !== null && launch + OPENING_SLACK >= w.t) out.push({ row, launch });
@@ -889,11 +844,13 @@ function queueEnd(w: World, c: OwnCity, queue: string): number {
 /**
  * The army between waves, city by city, from `spendPm` of what is left: in the main city the
  * carriers that lift its attackers plus one (room for a founder); then packs of the mix (attackers
- * and defenders). Every recruit queue that runs dry wakes the seat (own budget), so a batch that
- * would start an idle queue is ordered only when it keeps it busy for half a cadence, or when the
- * stock nears the storage cap; a busy queue takes any batch.
+ * and defenders; attackers only when their queue has room for one batch only). Every recruit queue
+ * that runs dry wakes the seat (own budget), so a batch that would start an idle queue is ordered
+ * only when it keeps it busy for half a cadence, or when the stock nears the storage cap, and not
+ * at all while the own wakes are kept for a time the seat must be awake at (`tight`); a busy queue
+ * takes any batch.
  */
-function recruitArmy(p: Planner, main: OwnCity): void {
+function recruitArmy(p: Planner, main: OwnCity, tight: boolean): void {
   const { w, k } = p;
   const kit = w.kit;
   const atk = kit.roles.attacker;
@@ -911,6 +868,14 @@ function recruitArmy(p: Planner, main: OwnCity): void {
     let budget = pmRes(spendable, k.spendPm);
     let free = p.popFreeOf(c.id);
     const orders: { unit: UnitId; count: number }[] = [];
+    // Batches each queue can still take this turn (each order is one batch).
+    const room = new Map<string, number>();
+    const roomOf = (row: { readonly queue: string }): number =>
+      room.get(row.queue) ?? p.batchRoomOf(c.id, row.queue);
+    const order = (unit: UnitId, row: { readonly queue: string }, count: number): void => {
+      orders.push({ unit, count });
+      room.set(row.queue, roomOf(row) - 1);
+    };
     if (c.id === main.id && car !== null && crow !== undefined && crow.capacity > 0) {
       if (kit.rules.movement.transportRule && p.canRecruit(c, car)) {
         const lift = countOf(c.units, atk) + p.queued(c, atk) + attackersAway(w);
@@ -923,14 +888,18 @@ function recruitArmy(p: Planner, main: OwnCity): void {
           crow.maxPerOrder,
         );
         if (n > 0) {
-          orders.push({ unit: car, count: n });
+          order(car, crow, n);
           budget = subRes(budget, scaleRes(crow.cost, n));
           free -= crow.pop * n;
         }
       }
     }
-    if (p.canRecruit(c, atk)) {
-      const dn = drow !== undefined && def !== null && p.canRecruit(c, def) ? k.mix.defender : 0;
+    if (p.canRecruit(c, atk) && roomOf(arow) > 0) {
+      const defRoom = drow === undefined ? 0 : roomOf(drow) - (drow.queue === arow.queue ? 1 : 0);
+      const dn =
+        drow !== undefined && def !== null && p.canRecruit(c, def) && defRoom > 0
+          ? k.mix.defender
+          : 0;
       const an = Math.max(1, k.mix.attacker);
       const packCost =
         dn > 0 && drow !== undefined
@@ -946,16 +915,33 @@ function recruitArmy(p: Planner, main: OwnCity): void {
       const long = each === null || packs * (an + dn) * each * 2 >= k.cadence;
       const stock = p.stockOf(c.id);
       const full = RESOURCE_IDS.some((r) => stock[r] * 10 >= c.cap * 8);
-      if (packs > 0 && (busy || long || full)) {
+      if (packs > 0 && (busy || ((long || full) && !tight))) {
         const qmax = kit.queues.get(arow.queue)?.maxCount ?? arow.maxPerOrder;
-        orders.push({ unit: atk, count: Math.min(packs * an, arow.maxPerOrder, qmax) });
+        order(atk, arow, Math.min(packs * an, arow.maxPerOrder, qmax));
         if (dn > 0 && def !== null && drow !== undefined) {
-          orders.push({ unit: def, count: Math.min(packs * dn, drow.maxPerOrder, qmax) });
+          order(def, drow, Math.min(packs * dn, drow.maxPerOrder, qmax));
         }
       }
     }
     if (orders.length > 0) p.recruit(c, orders);
   }
+}
+
+/** Own wakes kept in hand beyond the one a time the seat must be awake at needs. */
+const WAKE_SPARE = 1;
+
+/**
+ * True when the own wakes left today barely cover what will wake the seat before the next time it
+ * asked to be awake at (`Planner.wakeAt`, today): a queue started now would end, and wake the
+ * seat, on the wake that time needs, which would then come only with the safety wake.
+ */
+function keepWakes(p: Planner): boolean {
+  const { w } = p;
+  const dayEnd = (w.day + 1) * DAY;
+  const firm = p.wakes.filter((t) => t > w.t && t < dayEnd);
+  if (firm.length === 0) return false;
+  const at = Math.min(...firm);
+  return ownWakesBefore(p, at) + 1 + WAKE_SPARE > w.briefing.budget.ownWakesLeft;
 }
 
 /** True when a stranger's colony (no one's capital) is among the nearest targets. */
@@ -1027,8 +1013,11 @@ export const rusher2: StrategyDef = Object.freeze<StrategyDef>({
           p.settle();
           p.founder();
         }
-        p.economy();
-        recruitArmy(p, main);
+        // Own wakes kept for the next time it must be awake at: no idle queue is started.
+        const tight = keepWakes(p);
+        if (tight) p.economyWith((c) => (c.build.length === 0 ? [] : null));
+        else p.economy();
+        recruitArmy(p, main, tight);
       },
     };
   },

@@ -163,6 +163,80 @@ export function baseDefenseAt(
   return Number.isSafeInteger(v) ? v : null;
 }
 
+/** A number-valued record of a report's data (`buildings`), or empty. */
+export function levelsInReport(data: Readonly<Record<string, unknown>>): Record<string, number> {
+  const raw = data["buildings"];
+  const out: Record<string, number> = {};
+  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) return out;
+  for (const [k, v] of Object.entries(raw)) {
+    if (typeof v === "number" && Number.isSafeInteger(v) && v >= 0) out[k] = v;
+  }
+  return out;
+}
+
+/** The stock a report's data shows (`stock`), or null. */
+export function stockInReport(data: Readonly<Record<string, unknown>>): Res | null {
+  const raw = data["stock"];
+  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const out: Record<string, number> = {};
+  for (const [k, v] of Object.entries(raw)) {
+    if (typeof v === "number" && Number.isSafeInteger(v) && v >= 0) out[k] = v;
+  }
+  if (RESOURCE_IDS.some((r) => out[r] === undefined)) return null;
+  return res(out["wood"] ?? 0, out["stone"] ?? 0, out["gold"] ?? 0);
+}
+
+/**
+ * Share (‰) of a target's stock assumed spent on defenders once it sees an attack coming: bots
+ * spend most of their stock on a mix of units when they wake, about a third of it on defenders.
+ */
+export const REACTION_PM = 300;
+
+/**
+ * The defense a city can add once it sees an attack coming (every incoming attack wakes its owner,
+ * who spends its stock on units): `REACTION_PM` of its stock in defenders, when its buildings can
+ * train them.
+ */
+export function reactionDefense(
+  kit: Kit,
+  levels: Readonly<Record<string, number>>,
+  stock: Res | null,
+): number {
+  const def = kit.roles.defender;
+  const row = def === null ? undefined : kit.units.get(def);
+  if (row === undefined || stock === null || !meets(row.requires, levels)) return 0;
+  const q = kit.queues.get(row.queue);
+  if (q !== undefined && (levels[q.building] ?? 0) < 1) return 0;
+  const n = Math.min(row.maxPerOrder, timesAffordable(pmRes(stock, REACTION_PM), row.cost));
+  return n * row.defense;
+}
+
+/** The battle numbers of the combat hints, read in the effective config (so overrides count). */
+export interface CombatNumbers {
+  readonly base: NonNullable<CombatHints["baseDefense"]>;
+  /** Land defense bonus per wall level (‰); 0 when the hints name no wall bonus. */
+  readonly wallPm: number;
+  /** Morale lost per city of difference (‰); 0 (no morale) when the hints name none. */
+  readonly moralePm: number;
+  readonly moraleFloorPm: number;
+}
+
+/**
+ * What the combat hints mean, for every bot that weighs battles: null when the base defense cannot
+ * be resolved (no hints, or its numbers missing), and the bot falls back to its safety margins;
+ * otherwise a wall bonus or morale the hints do not name counts as none (sandbox-1 has neither).
+ */
+export function combatNumbers(kit: Kit, h: CombatHints | undefined): CombatNumbers | null {
+  const base = h?.baseDefense;
+  if (h === undefined || base === undefined || baseDefenseAt(kit, base, 0) === null) return null;
+  return {
+    base,
+    wallPm: configInt(kit, h.wallPmPerLevel) ?? 0,
+    moralePm: configInt(kit, h.morale?.perCity) ?? 0,
+    moraleFloorPm: configInt(kit, h.morale?.floor) ?? 1000,
+  };
+}
+
 /** A typed tool call; the args are checked against the protocol schema by the caller's tests. */
 export function call<T extends ToolName>(tool: T, args: ToolArgs<T>): ToolCall {
   return { tool, args };

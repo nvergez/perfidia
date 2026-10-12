@@ -1,9 +1,10 @@
-import type { GameTime, LogLine } from "@perfidia/protocol";
+import { PlayerIdSchema, type GameTime, type LogLine, type PlayerId } from "@perfidia/protocol";
 
 // When a match starts fighting (docs/architecture.md §12.2): the game time of its first battle,
 // first conquest and first elimination, and the domination countdowns it opened, folded from its
-// `ev` lines by event type. Ruleset-agnostic: `battle`, `city_conquered` and `player_eliminated`
-// are standard events; a ruleset without domination countdowns (sandbox-1) just never opens one.
+// `ev` lines by event type; and who eliminated whom. Ruleset-agnostic: `battle`, `city_conquered`
+// and `player_eliminated` are standard events; a ruleset without domination countdowns (sandbox-1)
+// just never opens one.
 
 /** The public start of a domination countdown (perfidia-1 §13.3). */
 export const DOMINATION_STARTED = "domination_started";
@@ -45,6 +46,44 @@ export function fightTimes(lines: Iterable<LogLine>): FightTimes {
     dominationCountdowns,
     firstDominationT,
   };
+}
+
+/** A player eliminated, and by whom. */
+export interface Elimination {
+  readonly t: GameTime;
+  readonly player: PlayerId;
+  /** The player that took its last city (a `city_conquered` from it in the same second), or null. */
+  readonly by: PlayerId | null;
+}
+
+const playerField = (data: Readonly<Record<string, unknown>>, key: string): PlayerId | null => {
+  const r = PlayerIdSchema.safeParse(data[key]);
+  return r.success ? r.data : null;
+};
+
+/** The eliminations of a log, in order, each with the player that took the last city. */
+export function eliminations(lines: Iterable<LogLine>): Elimination[] {
+  const out: Elimination[] = [];
+  // city_conquered events of the current second: from → to.
+  const takenFrom = new Map<PlayerId, PlayerId>();
+  let second = -1;
+  for (const line of lines) {
+    if (line.k !== "ev") continue;
+    if (line.t !== second) {
+      takenFrom.clear();
+      second = line.t;
+    }
+    const data = line.e.data;
+    if (line.e.type === "city_conquered") {
+      const from = playerField(data, "from");
+      const to = playerField(data, "to");
+      if (from !== null && to !== null) takenFrom.set(from, to);
+    } else if (line.e.type === "player_eliminated") {
+      const player = playerField(data, "player");
+      if (player !== null) out.push({ t: line.t, player, by: takenFrom.get(player) ?? null });
+    }
+  }
+  return out;
 }
 
 /** A first-event time over the runs of a variant. */

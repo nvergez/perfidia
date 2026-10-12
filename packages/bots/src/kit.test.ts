@@ -13,6 +13,7 @@ import { perfidiaGame, perfidiaRules, res, rulesInfo, sandboxRules } from "./fix
 import { hintsFor, NO_HINTS } from "./hints.ts";
 import {
   baseDefenseAt,
+  combatNumbers,
   configInt,
   etaAfford,
   fmtTime,
@@ -99,6 +100,35 @@ describe("the effective config through the combat hints", () => {
     expect(baseDefenseAt({ ...pKit, config: { economy: { baseDefense: 7 } } }, p, 3)).toBeNull();
     expect(baseDefenseAt(pConf, undefined, 3)).toBeNull();
     expect(baseDefenseAt({ ...sKit, config: { combat: { keepDefense: 1.5 } } }, s, 4)).toBeNull();
+  });
+
+  test("combatNumbers: one meaning for every bot, a missing wall or morale is none", () => {
+    const p = hintsFor("perfidia-1@1.0.0").combat;
+    const s = hintsFor("sandbox-1@1.0.0").combat;
+    const pConf = {
+      ...pKit,
+      config: {
+        economy: { baseDefense: { a: 0, b: 20, c: 50 } },
+        combat: { wallPmPerLevel: 50, moralePmPerCity: 100, moraleFloorPm: 700 },
+      },
+    };
+    expect(combatNumbers(pConf, p)).toMatchObject({
+      wallPm: 50,
+      moralePm: 100,
+      moraleFloorPm: 700,
+    });
+    // sandbox-1 (§3.8): a base defense per keep level, no wall bonus and no morale.
+    const sConf = { ...sKit, config: { combat: { keepDefense: 10 } } };
+    expect(combatNumbers(sConf, s)).toMatchObject({
+      base: { building: "keep" },
+      wallPm: 0,
+      moralePm: 0,
+      moraleFloorPm: 1000,
+    });
+    // No base defense: unknown, the bots fall back to their safety margins.
+    expect(combatNumbers(pKit, p)).toBeNull();
+    expect(combatNumbers(sConf, undefined)).toBeNull();
+    expect(combatNumbers(sConf, NO_HINTS.combat)).toBeNull();
   });
 
   test("configInt reads safe integers only", () => {

@@ -1,14 +1,26 @@
 import { join } from "node:path";
-import { botLabel, type BotStrategy } from "@perfidia/bots";
 import { ENGINE_VERSION } from "@perfidia/engine";
 import { MemorySink, teeSink, type LogSink } from "@perfidia/gateway";
 import type { ClockSpec, Json, LogLine, PlayerId } from "@perfidia/protocol";
 import { errorText } from "../args.ts";
-import { normalisedHash, prepareBotRun, runPrepared, setupFor } from "../harness/index.ts";
+import {
+  choiceLabel,
+  normalisedHash,
+  prepareBotRun,
+  runPrepared,
+  setupFor,
+  type BotChoice,
+} from "../harness/index.ts";
 import { RunDirSink, assertFreeRunDir, runPaths, writeFileAtomic } from "../io/index.ts";
 import { checkCreation } from "../run/index.ts";
 import { LogShapeError, summarize, type MatchSummary } from "../summary/index.ts";
-import { fightTimes, firstTimeStat, type FightTimes, type FirstTimeStat } from "./fights.ts";
+import {
+  eliminations,
+  fightTimes,
+  firstTimeStat,
+  type FightTimes,
+  type FirstTimeStat,
+} from "./fights.ts";
 import { aggregatePacing, pacingOf, type PacingDay, type PacingRow } from "./pacing.ts";
 import type { Variant } from "./variants.ts";
 
@@ -25,15 +37,15 @@ import type { Variant } from "./variants.ts";
 
 /**
  * Bumped when the JSON shape changes (§12.2): 2 added the fight times, the end reasons and the
- * pacing days' conquests and eliminations.
+ * pacing days' conquests and eliminations; 3 who eliminated whom.
  */
-export const BATCH_FORMAT = "perfidia-batch/2";
+export const BATCH_FORMAT = "perfidia-batch/3";
 
 export interface BatchPlan {
   readonly variants: readonly Variant[];
   readonly seeds: readonly number[];
   readonly players: number;
-  readonly bots: readonly BotStrategy[];
+  readonly bots: readonly BotChoice[];
   /** `--days`, already folded into each variant's overrides; recorded for provenance. */
   readonly days: number | null;
   readonly pacing: boolean;
@@ -55,6 +67,11 @@ export interface MatchRow extends FightTimes {
   readonly battles: number;
   readonly conquests: number;
   readonly eliminations: number;
+  /**
+   * Each elimination as `<who> > <whom>`, the controllers of the two seats at that time without
+   * `bot:` (e.g. `conqueror@1 > rusher@2`); `?` when no conquest in that second took the last city.
+   */
+  readonly eliminatedBy: string[];
   readonly foundings: number;
   readonly wakesPerSeatPerDay: { readonly mean: number; readonly max: number };
   readonly internal: number;
@@ -80,6 +97,8 @@ export interface VariantAggregate {
   readonly firstElimination: FirstTimeStat;
   /** Runs with at least one elimination. */
   readonly runsWithElimination: number;
+  /** Eliminations by `<who> > <whom>` (`MatchRow.eliminatedBy`), most frequent first. */
+  readonly eliminationsBy: Readonly<Record<string, number>>;
   /** Runs where at least one domination countdown opened. */
   readonly runsWithCountdown: number;
   readonly wakesPerSeatPerDay: { readonly mean: number; readonly max: number };
@@ -149,6 +168,7 @@ function aggregate(matches: readonly MatchRow[]): VariantAggregate {
     firstConquest: firstTimeStat(matches.map((m) => m.firstConquestT)),
     firstElimination: firstTimeStat(matches.map((m) => m.firstEliminationT)),
     runsWithElimination: matches.filter((m) => m.eliminations > 0).length,
+    eliminationsBy: countsByFrequency(matches.flatMap((m) => m.eliminatedBy)),
     runsWithCountdown: matches.filter((m) => m.dominationCountdowns > 0).length,
     wakesPerSeatPerDay: {
       mean: mean(matches.map((m) => m.wakesPerSeatPerDay.mean)),
@@ -241,11 +261,21 @@ function failedRow(seed: number, lines: readonly LogLine[], error: string | null
     battles: 0,
     conquests: 0,
     eliminations: 0,
+    eliminatedBy: [],
     foundings: 0,
     ...fightTimes(lines),
     wakesPerSeatPerDay: { mean: 0, max: 0 },
     internal: 0,
   };
+}
+
+/** The controller of `seat` at `t` (its label without `bot:`), or `?`. */
+function controllerAt(s: MatchSummary, seat: PlayerId | null, t: number): string {
+  let label = "?";
+  for (const c of s.seats.find((x) => x.seat === seat)?.controllers ?? []) {
+    if (c.from <= t) label = c.label;
+  }
+  return label.startsWith("bot:") ? label.slice("bot:".length) : label;
 }
 
 function rowOf(
@@ -273,6 +303,9 @@ function rowOf(
     battles: s.events.battles,
     conquests: s.events.conquests,
     eliminations: s.events.eliminations,
+    eliminatedBy: eliminations(lines).map(
+      (e) => `${controllerAt(s, e.by, e.t)} > ${controllerAt(s, e.player, e.t)}`,
+    ),
     foundings: s.events.foundings,
     ...fightTimes(lines),
     wakesPerSeatPerDay: s.wakes.perSeatPerDay,
@@ -339,7 +372,7 @@ export async function runBatch(
     players: plan.players,
     seeds: [...plan.seeds],
     days: plan.days,
-    bots: plan.bots.map((b) => botLabel(b)),
+    bots: plan.bots.map((b) => choiceLabel(b)),
     clock,
     variants: results,
   };

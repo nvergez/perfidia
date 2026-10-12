@@ -13,6 +13,7 @@ import { FIXTURES_DIR } from "../golden/index.ts";
 import { DEFAULT_BOTS, listGoldens, readLog } from "../harness/index.ts";
 import {
   dayOf,
+  eliminations,
   fightTable,
   fightTimes,
   firstTimeStat,
@@ -104,6 +105,23 @@ describe("fight times", () => {
     expect(p.days.reduce((a, d) => a + d.eliminations, 0)).toBe(1);
   });
 
+  test("who eliminated whom: the conquest of the last city in the same second", () => {
+    const lines = log([
+      ev(90000, "city_conquered", { city: "c3", from: "p2", to: "p5" }),
+      ev(120000, "city_conquered", { city: "c9", from: "p4", to: "p1" }),
+      ev(120000, "city_conquered", { city: "c7", from: "p2", to: "p5" }),
+      ev(120000, "player_eliminated", { player: "p2" }),
+      // An elimination with no conquest in its second (another cause): by nobody known.
+      ev(130000, "city_conquered", { city: "c8", from: "p3", to: "p5" }),
+      ev(130001, "player_eliminated", { player: "p3" }),
+    ]);
+    expect(eliminations(lines)).toEqual([
+      { t: 120000, player: "p2", by: "p5" },
+      { t: 130001, player: "p3", by: null },
+    ]);
+    expect(eliminations([])).toEqual([]);
+  });
+
   test("mean (rounded to the second) and earliest over the runs that had one", () => {
     expect(firstTimeStat([])).toEqual({ runs: 0, mean: null, min: null });
     expect(firstTimeStat([null, null])).toEqual({ runs: 0, mean: null, min: null });
@@ -164,6 +182,9 @@ describe("a real batch", () => {
         expect(a.firstConquest).toEqual(firstTimeStat([m.firstConquestT]));
         expect(a.firstElimination).toEqual(firstTimeStat([m.firstEliminationT]));
         expect(a.runsWithElimination).toBe(m.eliminations > 0 ? 1 : 0);
+        // Who eliminated whom, by bot version, one entry per elimination.
+        expect(m.eliminatedBy.length).toBe(m.eliminations);
+        for (const e of m.eliminatedBy) expect(e).toMatch(/^[a-z?][a-z0-9@?]* > [a-z][a-z0-9@]*$/);
       }
 
       const f: MatchRow | undefined = fv.matches[0];
@@ -190,16 +211,16 @@ describe("a real batch", () => {
       const fights = fightTable(result).split("\n");
       expect(fights[0]).toStartWith("fights · game clock to the minute");
       expect(fights[1]).toMatch(
-        /^variant +runs +ends +1st battle \(mean \/ min\) +1st conquest \(mean \/ min\) +1st elim \(mean \/ min\) +runs with elim +runs with countdown$/,
+        /^variant +runs +ends +1st battle \(mean \/ min\) +1st conquest \(mean \/ min\) +1st elim \(mean \/ min\) +runs with elim +runs with countdown +elims \(who > whom\)$/,
       );
       // Variant names longer than their column get a line of their own, the numbers the next.
       const battle = gameClockText(f.firstBattleT);
       expect(fights[2]).toBe(fv.text);
       expect(fights[3]).toMatch(/^ +1 +time 1 /);
       expect(fights[3]).toContain(` ${battle} / ${battle} `);
-      expect(fights[3]).toMatch(/ 0$/);
+      expect(fights[3]).toMatch(/ 0 +(-|[a-z0-9@?]+ > [a-z0-9@]+ \d.*)$/);
       expect(fights[4]).toBe(dv.text);
-      expect(fights[5]).toMatch(/^ +1 +domination 1 +- +- +- +0 +1$/);
+      expect(fights[5]).toMatch(/^ +1 +domination 1 +- +- +- +0 +1 +-$/);
       const perMatch = matchTable(result);
       expect(perMatch).toContain(` ${battle} `);
       expect(perMatch).toContain(

@@ -7,6 +7,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   CityIdSchema,
+  z,
   type AgentRules,
   type CityId,
   type IslandId,
@@ -357,6 +358,38 @@ describe.each(SHAPES)("$name", (shape) => {
       notes: notesWith({ sd: day, sn: 5 }),
     });
     expect(callsTo(fresh, "spy").length).toBe(1);
+  });
+
+  test("rusher@2 spies two candidates side by side in the first hours after protection", async () => {
+    const early = await playTurn(bot(), armed(shape), "p1");
+    expect(callsTo(early, "spy").length).toBe(2);
+    // Later in the day, one spy at a time.
+    const later = armed(shape, 40, shape.game().rules.time.attackFrom + 7 * 3600);
+    const log = await playTurn(bot(), later, "p1");
+    expect(callsTo(log, "spy").length).toBe(1);
+  });
+
+  test("rusher@2 orders no recruit batch a queue has no room for", async () => {
+    const game = armed(shape);
+    const c1 = game.city("c1");
+    c1.stock = res(5000, 5000, 5000);
+    const queue = game.rules.units.find((u) => u.id === shape.attacker)!.queue;
+    const room = game.rules.queues.recruit.find((q) => q.id === queue)!.maxBatches;
+    // One batch of room left in the attackers' queue (the defenders' too: the same queue).
+    c1.recruit[queue] = Array.from({ length: room - 1 }, (_, i) => ({
+      item: i + 1,
+      unit: shape.attacker,
+      count: 5,
+      start: game.t,
+      end: game.t + 3600 * (i + 1),
+    }));
+    const log = await playTurn(bot(), game, "p1");
+    expect(game.violations).toEqual([]);
+    const inQueue = callsTo(log, "recruit")
+      .filter((r) => r["city"] === "c1")
+      .flatMap((r) => z.array(z.object({ unit: z.string() })).parse(r["orders"]))
+      .filter((o) => game.rules.units.find((u) => u.id === o.unit)?.queue === queue);
+    expect(inQueue.map((o) => o.unit)).toEqual([shape.attacker]);
   });
 
   test("rusher@2 asks to be awake when its army comes home", async () => {

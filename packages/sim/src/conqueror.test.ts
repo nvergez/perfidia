@@ -1,7 +1,8 @@
 // The conqueror bot (docs/architecture.md §11.2) on real seeded perfidia-1 matches, through the
 // gateway: it eliminates its victim (§9.7 of the ruleset), its last city taken by the conqueror's
-// own siege, and the match is a pure function of its seed (the same log twice). The match is cut
-// at the end of day 5 to keep the test fast; this seed eliminates on day 4.
+// own siege, its strikes mostly win, and the match is a pure function of its seed (the same log
+// twice). The match is cut at the end of day 5 to keep the test fast; this seed eliminates on
+// day 4.
 
 import { describe, expect, test } from "bun:test";
 import type { EvLine, LogLine, NoteLine } from "@perfidia/protocol";
@@ -10,13 +11,16 @@ import { summarize } from "./summary/index.ts";
 
 const DAY = 86400;
 
-/** Six seats: the default bots with the conqueror at p5 (p6 is the second rusher). */
+/**
+ * Six seats: the default bots with the conqueror at p5 (p6 is the second rusher), every version
+ * pinned, so that a later version of any of them does not change this match.
+ */
 const SPEC: BotRunSpec = {
   ruleset: "perfidia-1@1.0.0",
   seed: 13,
   players: 6,
   days: 5,
-  bots: ["expander", "rusher", "turtle", "opportunist", "conqueror", "rusher"],
+  bots: ["expander@1", "rusher@2", "turtle@1", "opportunist@1", "conqueror@1", "rusher@2"],
   clock: { kind: "lockstep" },
   strict: true,
 };
@@ -49,7 +53,7 @@ describe("conqueror on a real match (perfidia-1, seed 13, 6 seats)", () => {
       (l): l is NoteLine => l.k === "note" && l.seat === "p5" && l.t <= first.t,
     );
     const memory: unknown = JSON.parse(notes.at(-1)?.text ?? "{}");
-    expect(memory).toMatchObject({ s: "conqueror", x: { vp: Number(victim.slice(1)), vc: 1 } });
+    expect(memory).toMatchObject({ s: "conqueror", x: { av: Number(victim.slice(1)), ac: 1 } });
 
     // Every city the conqueror took came from a siege it started and held.
     const s = summarize(a.lines);
@@ -59,6 +63,21 @@ describe("conqueror on a real match (perfidia-1, seed 13, 6 seats)", () => {
     expect(taken.length).toBeGreaterThanOrEqual(2);
     expect(started.length).toBeGreaterThanOrEqual(taken.length);
     expect(s.internal).toBe(0);
+    expect(first.t).toBeGreaterThanOrEqual(3 * DAY);
+
+    // Strike quality: the waves that carried founders (perfidia-1 battle reports list each side's
+    // stacks) won at least twice as often as they lost.
+    const strikes = events(a.lines, "battle_report").filter((l) => {
+      const d = l.e.data;
+      return (
+        d["attacker"] === "p5" &&
+        l.e.to.some((r) => r.p === "p5" && r.as === "self") &&
+        JSON.stringify(d["stacks"] ?? []).includes('"unit":"settler"')
+      );
+    });
+    const won = strikes.filter((l) => l.e.data["winner"] === "attacker").length;
+    expect(won).toBeGreaterThanOrEqual(2);
+    expect(2 * (strikes.length - won)).toBeLessThanOrEqual(won);
 
     const b = await runBots(SPEC);
     expect(normalisedHash(b.lines)).toBe(normalisedHash(a.lines));

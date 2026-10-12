@@ -154,6 +154,8 @@ describe("sim run", () => {
         [["--bots", "expander,ninja"], 'unknown bot "ninja"'],
         [["--seat", "p7=rusher"], "seats p1..p6"],
         [["--seat", "p2=ninja"], 'unknown bot "ninja"'],
+        [["--bots", "rusher@9"], 'unknown bot "rusher@9": rusher has rusher@1, rusher@2'],
+        [["--seat", "p2=turtle@0"], '--seat p2=turtle@0: unknown bot "turtle@0"'],
         [["--id-key", "ABC"], "--id-key must be 32 lowercase hex characters"],
         [["--clock", "lockstep", "--speed", "3"], "--speed applies to --clock realtime only"],
         [["--clock", "realtime", "--time", "atomic"], "--time must be virtual or system"],
@@ -348,5 +350,8 @@ describe("the plan of a run", () => {
     );
     const bots = planRun({ bots: ["turtle,rusher"], seats: ["p2=expander"] });
     expect([bots.bots, bots.seatBots]).toEqual([["turtle", "rusher"], { p2: "expander" }]);
+    // A version picks a frozen bot (the phase-1 composition can be rerun beside the latest ones).
+    const old = planRun({ bots: ["expander,rusher@1"], seats: ["p3=rusher@2"] });
+    expect([old.bots, old.seatBots]).toEqual([["expander", "rusher@1"], { p3: "rusher@2" }]);
   });
 });

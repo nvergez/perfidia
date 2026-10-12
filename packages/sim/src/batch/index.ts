@@ -24,8 +24,10 @@ export {
 } from "./batch.ts";
 export {
   DOMINATION_STARTED,
+  eliminations,
   fightTimes,
   firstTimeStat,
+  type Elimination,
   type FightTimes,
   type FirstTimeStat,
 } from "./fights.ts";

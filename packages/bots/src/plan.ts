@@ -25,6 +25,7 @@ import {
   cleanUnits,
   countOf,
   covers,
+  DAY,
   etaAfford,
   landPop,
   largest,
@@ -273,6 +274,36 @@ export function intelAge(w: World, view: CityView | undefined): number | null {
   return view.intel === null ? null : Math.max(0, w.t - view.intel.at[0]);
 }
 
+/**
+ * The own wakes the seat can expect before `until`, today (the next game day has a fresh budget):
+ * each of its queues that empties and each report of its spies and attacks that lands (the spies
+ * planned this turn included), grouped as the gateway groups them (one wake per `groupWindow`).
+ * A strategy that must be awake at `until` (`Planner.wakeAt`) checks it against the own wakes left.
+ */
+export function ownWakesBefore(p: Planner, until: number): number {
+  const { w } = p;
+  const end = Math.min(until, (w.day + 1) * DAY);
+  const times: number[] = [];
+  for (const c of w.cities) {
+    for (const q of [c.build, ...Object.values(c.recruit)]) {
+      const last = q.reduce((t, b) => Math.max(t, b.end), 0);
+      if (last > w.t && last < end) times.push(last);
+    }
+  }
+  for (const m of w.self?.private?.movements ?? []) {
+    if (m.owner !== w.seat || (m.kind !== "spy" && m.kind !== "attack")) continue;
+    if (m.arrive[0] > w.t && m.arrive[0] < end) times.push(m.arrive[0]);
+  }
+  let groups = p.calls.filter((c) => c.tool === "spy").length;
+  let open: number | null = null;
+  for (const t of times.toSorted((a, b) => a - b)) {
+    if (open !== null && t <= open + w.kit.gateway.groupWindow) continue;
+    groups += 1;
+    open = t;
+  }
+  return groups;
+}
+
 /** The own city with the most land attack at home (ties: lowest id). */
 export function mainCity(w: World): OwnCity | null {
   let best: OwnCity | null = null;
@@ -305,11 +336,8 @@ export class Planner {
   readonly summary: string[] = [];
   /** The estimated arrival of each `found_city` call planned this turn. */
   readonly foundEtas = new Map<ToolCall, number>();
-  /**
-   * Times this turn's plan must be awake at (a timed launch, an army coming home), whatever the
-   * cadence and the wake budget spread (`wakeAt`, `chooseWake`'s `firm`).
-   */
-  readonly wakes: number[] = [];
+  /** The times `wakeAt` collected this turn (read through `wakes`). */
+  private readonly firm: number[] = [];
   memory: Memory;
   /** Foundings in flight when the turn began (arrivals still ahead), before this turn's own. */
   readonly startFoundings: Readonly<Record<string, readonly number[]>>;
@@ -401,6 +429,12 @@ export class Planner {
     this.memory = { ...this.memory, x: { ...this.memory.x, [name]: value } };
     return true;
   }
+  /** Removes a flag (nothing when it is not set), so that the notes keep only what still matters. */
+  clearFlag(name: string): void {
+    if (!Object.hasOwn(this.memory.x, name)) return;
+    const x = Object.fromEntries(Object.entries(this.memory.x).filter(([k]) => k !== name));
+    this.memory = { ...this.memory, x };
+  }
   memo(line: string): void {
     const text = memoLine(line);
     if (!this.memory.m.includes(text))
@@ -411,7 +445,14 @@ export class Planner {
    * the cadence and the wake budget spread. Times not ahead of the world's time are ignored.
    */
   wakeAt(t: number): void {
-    if (Number.isSafeInteger(t) && t > this.w.t) this.wakes.push(t);
+    if (Number.isSafeInteger(t) && t > this.w.t) this.firm.push(t);
+  }
+  /**
+   * Times this turn's plan must be awake at (a timed launch, an army coming home), whatever the
+   * cadence and the wake budget spread (`chooseWake`'s `firm`); only `wakeAt` adds to them.
+   */
+  get wakes(): readonly number[] {
+    return this.firm;
   }
   private push(c: ToolCall, note: string): void {
     this.calls.push(c);
@@ -843,6 +884,11 @@ export class Planner {
       }
       if (plan.saving !== null) this.saving.set(c.id, plan.saving);
     }
+  }
+
+  /** Recruit batches the city's `queue` can still take this turn. */
+  batchRoomOf(id: CityId, queue: QueueId): number {
+    return this.batchRoom.get(id)?.get(queue) ?? 0;
   }
 
   /** Free pop of a city after this turn's orders. */

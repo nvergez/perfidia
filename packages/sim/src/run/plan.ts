@@ -1,4 +1,4 @@
-import { BOT_STRATEGIES, isBotStrategy, type BotStrategy } from "@perfidia/bots";
+import { BOT_STRATEGIES, botLabels, botVersions, isBotStrategy } from "@perfidia/bots";
 import {
   MatchConfigError,
   UnknownRuleset,
@@ -12,7 +12,7 @@ import {
 import { DAY, idKeyFromSeed } from "@perfidia/engine/core";
 import { IdKeySchema, type Json, type MatchSetup } from "@perfidia/protocol";
 import { UsageError } from "../args.ts";
-import { DEFAULT_BOTS, setupFor, type ClockChoice } from "../harness/index.ts";
+import { DEFAULT_BOTS, setupFor, type BotChoice, type ClockChoice } from "../harness/index.ts";
 
 // The plan of a `sim run` (docs/architecture.md §12.1, §3.6): the ruleset from the registry (a test
 // ruleset only with `--allow-test`), the overrides validated by the ruleset's schema and the config
@@ -53,8 +53,8 @@ export interface RunRequest {
 export interface RunPlan {
   readonly ruleset: AnyRuleset;
   readonly setup: MatchSetup;
-  readonly bots: readonly BotStrategy[];
-  readonly seatBots: Readonly<Record<string, BotStrategy>>;
+  readonly bots: readonly BotChoice[];
+  readonly seatBots: Readonly<Record<string, BotChoice>>;
   readonly clock: ClockChoice;
   readonly invariants: InvariantLevel;
   readonly snapshotEvery: number;
@@ -127,41 +127,58 @@ export function playerRange(rs: AnyRuleset, config: unknown): { min: number; max
   return rs.players(config);
 }
 
-/** `--bots`: strategies, comma-separated, each a bot of this build. */
-export function parseBots(texts: readonly string[]): BotStrategy[] {
-  const out: BotStrategy[] = [];
-  for (const name of texts.flatMap((t) => t.split(","))) {
-    const s = name.trim();
-    if (!isBotStrategy(s)) {
-      throw new UsageError(`unknown bot "${s}"; the bots are ${BOT_STRATEGIES.join(", ")}`);
-    }
-    out.push(s);
+/** What `--bots` and `--seat` accept, for error messages. */
+function botsText(): string {
+  const versions = botLabels().map((l) => l.slice("bot:".length));
+  return `the bots are ${BOT_STRATEGIES.join(", ")} (each at its latest version), or name@n for a version: ${versions.join(", ")}`;
+}
+
+/** A bot of `--bots` or `--seat`: `name` (its latest version) or `name@n` (a registered version). */
+export function parseBotChoice(text: string): BotChoice {
+  const m = /^([a-z]+)(?:@([1-9][0-9]*))?$/.exec(text);
+  const name = m?.[1] ?? "";
+  if (m === null || !isBotStrategy(name)) {
+    throw new UsageError(`unknown bot "${text}"; ${botsText()}`);
   }
-  if (out.length === 0)
-    throw new UsageError(`--bots lists no bot; the bots are ${BOT_STRATEGIES.join(", ")}`);
+  if (m[2] === undefined) return name;
+  const version = Number(m[2]);
+  const known = botVersions(name);
+  if (!known.includes(version)) {
+    throw new UsageError(
+      `unknown bot "${text}": ${name} has ${known.map((v) => `${name}@${v}`).join(", ")}`,
+    );
+  }
+  return `${name}@${version}`;
+}
+
+/** `--bots`: bots, comma-separated, each a strategy of this build or one of its versions. */
+export function parseBots(texts: readonly string[]): BotChoice[] {
+  const out = texts.flatMap((t) => t.split(",")).map((name) => parseBotChoice(name.trim()));
+  if (out.length === 0) throw new UsageError(`--bots lists no bot; ${botsText()}`);
   return out;
 }
 
-/** `--seat p3=rusher` texts, checked against the seats p1..pN. */
+/** `--seat p3=rusher` (or `p3=rusher@1`) texts, checked against the seats p1..pN. */
 export function parseSeatBots(
   texts: readonly string[],
   players: number,
-): Record<string, BotStrategy> {
-  const out: Record<string, BotStrategy> = {};
+): Record<string, BotChoice> {
+  const out: Record<string, BotChoice> = {};
   for (const text of texts) {
-    const m = /^(p[1-9][0-9]*)=([a-z]+)$/.exec(text);
+    const m = /^(p[1-9][0-9]*)=(.+)$/.exec(text);
     if (m?.[1] === undefined || m[2] === undefined) {
-      throw new UsageError(`--seat ${text}: write seat=bot, such as p3=rusher`);
+      throw new UsageError(`--seat ${text}: write seat=bot, such as p3=rusher or p3=rusher@1`);
     }
     const seat = m[1];
-    const bot = m[2];
     if (Number(seat.slice(1)) > players) {
       throw new UsageError(`--seat ${text}: the match has seats p1..p${players}`);
     }
-    if (!isBotStrategy(bot)) {
-      throw new UsageError(
-        `--seat ${text}: unknown bot "${bot}"; the bots are ${BOT_STRATEGIES.join(", ")}`,
-      );
+    let bot: BotChoice;
+    try {
+      bot = parseBotChoice(m[2]);
+    } catch (error) {
+      if (error instanceof UsageError) throw new UsageError(`--seat ${text}: ${error.message}`);
+      throw error;
     }
     if (Object.hasOwn(out, seat)) throw new UsageError(`--seat ${seat} is given twice`);
     out[seat] = bot;

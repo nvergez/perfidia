@@ -117,7 +117,8 @@ export function matchTable(result: BatchResult): string {
 
 /**
  * Per variant: the end reasons, the first battle, conquest and elimination (mean and earliest over
- * the runs that had one), and the runs with an elimination and with a domination countdown.
+ * the runs that had one), the runs with an elimination and with a domination countdown, and who
+ * eliminated whom (bot versions: an elimination count may be one predator and one prey).
  */
 export function fightTable(result: BatchResult): string {
   const head = [
@@ -129,6 +130,7 @@ export function fightTable(result: BatchResult): string {
     "1st elim (mean / min)",
     "runs with elim",
     "runs with countdown",
+    "elims (who > whom)",
   ];
   const rows = result.variants.map((v) => {
     const a = v.aggregate;
@@ -141,6 +143,7 @@ export function fightTable(result: BatchResult): string {
       firstText(a.firstElimination, a.runs),
       String(a.runsWithElimination),
       String(a.runsWithCountdown),
+      countsText(a.eliminationsBy, "-"),
     ];
   });
   const title = "fights · game clock to the minute, mean / earliest over the runs that had one";
