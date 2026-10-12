@@ -106,7 +106,7 @@ describe("sim batch", () => {
       ]);
       expect(parsed.bots).toEqual([
         "bot:expander@1",
-        "bot:rusher@1",
+        "bot:rusher@2",
         "bot:turtle@1",
         "bot:opportunist@1",
       ]);
@@ -126,7 +126,7 @@ describe("sim batch", () => {
           configHash: resolved.ok ? resolved.hash : "",
           engine: ENGINE_VERSION,
           seeds: [1, 2],
-          controllers: { p1: "bot:expander@1", p2: "bot:rusher@1", p6: "bot:rusher@1" },
+          controllers: { p1: "bot:expander@1", p2: "bot:rusher@2", p6: "bot:rusher@2" },
         });
         expect(v.rulesHash).toMatch(/^[0-9a-f]{64}$/);
         expect(v.matches.map((m) => [m.seed, m.status, m.reason])).toEqual([
@@ -258,7 +258,7 @@ describe("sim batch", () => {
     const ba = await runBatch({ ...plan, variants: [b, a] });
     expect(ab.variants[0]).toEqual(ba.variants[1]);
     expect(ab.variants[1]).toEqual(ba.variants[0]);
-    expect(ab.bots).toEqual(["bot:rusher@1", "bot:turtle@1"]);
+    expect(ab.bots).toEqual(["bot:rusher@2", "bot:turtle@1"]);
     expect(ab.variants.flatMap((v) => v.matches.map((m) => m.replayOk))).toEqual([true, true]);
   }, 30000);
 

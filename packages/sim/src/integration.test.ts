@@ -153,11 +153,11 @@ describe("1-game-day matches of the four bots", () => {
       const header = first.lines[0];
       expect(header?.k === "header" && Object.values(header.controllers)).toEqual([
         "bot:expander@1",
-        "bot:rusher@1",
+        "bot:rusher@2",
         "bot:turtle@1",
         "bot:opportunist@1",
         "bot:expander@1",
-        "bot:rusher@1",
+        "bot:rusher@2",
       ]);
       expect(first.run.stats.turns).toBe(k["wake"] ?? -1);
     }, 30000);
