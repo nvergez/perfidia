@@ -1,4 +1,4 @@
-import { BOT_STRATEGIES } from "@perfidia/bots";
+import { DEFAULT_BOTS } from "../harness/index.ts";
 import {
   EXIT,
   UsageError,
@@ -69,7 +69,7 @@ export async function batchCommand(argv: readonly string[], io: CliIo): Promise<
       );
     }
   }
-  const bots = f.has("bots") ? parseBots(f.strings("bots")) : [...BOT_STRATEGIES];
+  const bots = f.has("bots") ? parseBots(f.strings("bots")) : [...DEFAULT_BOTS];
   const total = variants.length * seeds.length;
   let done = 0;
   const result = await runBatch(

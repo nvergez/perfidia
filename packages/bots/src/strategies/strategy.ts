@@ -14,6 +14,7 @@ export const BOT_STRATEGIES = Object.freeze([
   "rusher",
   "turtle",
   "opportunist",
+  "conqueror",
 ] as const);
 export type BotStrategy = (typeof BOT_STRATEGIES)[number];
 

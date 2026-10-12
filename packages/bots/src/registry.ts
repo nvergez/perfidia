@@ -6,6 +6,7 @@
 
 import type { SeatAgent } from "@perfidia/protocol";
 import { BotAgent, type BotOptions } from "./agent.ts";
+import { conqueror } from "./strategies/conqueror.ts";
 import { expander } from "./strategies/expander.ts";
 import { opportunist } from "./strategies/opportunist.ts";
 import { rusher } from "./strategies/rusher.ts";
@@ -23,6 +24,7 @@ const PUBLISHED: readonly StrategyDef[] = Object.freeze([
   rusher2,
   turtle,
   opportunist,
+  conqueror,
 ]);
 
 /** One registered version of a strategy. */

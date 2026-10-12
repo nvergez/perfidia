@@ -66,8 +66,8 @@ interface Plan {
   /** The estimated arrival of each planned `found_city` call. */
   readonly etas: ReadonlyMap<ToolCall, number>;
   readonly cadence: number;
-  /** Times the strategy asked to be awake at (`Planner.wakeAt`). */
-  readonly firm: readonly number[];
+  /** Times the strategy asked to be awake at (`Planner.wakes`, `Planner.wakeAt`). */
+  readonly wakes: readonly number[];
   readonly summary: readonly string[];
 }
 
@@ -389,7 +389,7 @@ export class BotAgent implements SeatAgent {
         foundings: s.memory.f,
         etas: none,
         cadence,
-        firm: [],
+        wakes: [],
         summary,
       };
     }
@@ -401,7 +401,7 @@ export class BotAgent implements SeatAgent {
       foundings: p.startFoundings,
       etas: p.foundEtas,
       cadence,
-      firm: p.wakes,
+      wakes: p.wakes,
       summary: p.summary,
     };
   }
@@ -514,7 +514,7 @@ export class BotAgent implements SeatAgent {
       selfWake: s.kit?.gateway.selfWake ?? null,
       ownWakesLeft: s.briefing.budget.ownWakesLeft,
       events,
-      firm: plan.firm,
+      firm: plan.wakes,
     });
   }
 }

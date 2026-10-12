@@ -33,6 +33,21 @@ import { rusher2, rusher2Params } from "./strategies/rusher2.ts";
 
 const DAY = 86400;
 
+/** The game of `make` with the config numbers the combat hints point at (`hints.ts`). */
+function configured(game: FakeGame, config: Record<string, unknown>): FakeGame {
+  Object.assign(game.info.config, structuredClone(config));
+  return game;
+}
+
+/** perfidia-1's default battle numbers (§8.2, §8.5): base defense 20·hall + 50, wall, morale. */
+const PERFIDIA_COMBAT = {
+  economy: { baseDefense: { a: 0, b: 20, c: 50 } },
+  combat: { wallPmPerLevel: 50, moralePmPerCity: 100, moraleFloorPm: 700 },
+};
+
+/** sandbox-1's default base defense (§3.8): 10 per keep level. */
+const SANDBOX_COMBAT = { combat: { keepDefense: 10 } };
+
 interface Shape {
   readonly name: string;
   game(): FakeGame;
@@ -47,7 +62,7 @@ interface Shape {
 const SHAPES: Shape[] = [
   {
     name: "perfidia-1 shape",
-    game: () => perfidiaGame(6),
+    game: () => configured(perfidiaGame(6), PERFIDIA_COMBAT),
     defender: "guard",
     attacker: "raider",
     founder: "settler",
@@ -65,7 +80,7 @@ const SHAPES: Shape[] = [
   },
   {
     name: "sandbox-1 shape",
-    game: () => sandboxGame(6),
+    game: () => configured(sandboxGame(6), SANDBOX_COMBAT),
     defender: "spearman",
     attacker: "axeman",
     founder: "colonist",
@@ -366,7 +381,7 @@ describe.each(SHAPES)("$name", (shape) => {
 
 /** A rusher@2 campaign on the perfidia-shaped fake until a day after protection ends, as text. */
 async function campaignText(seed: number): Promise<string> {
-  const game = perfidiaGame(6);
+  const game = configured(perfidiaGame(6), PERFIDIA_COMBAT);
   game.city("c2").units = { guard: 1 };
   return JSON.stringify(await campaign(game, game.rules.time.attackFrom + DAY, seed));
 }

@@ -12,7 +12,7 @@ import {
 import { DAY, idKeyFromSeed } from "@perfidia/engine/core";
 import { IdKeySchema, type Json, type MatchSetup } from "@perfidia/protocol";
 import { UsageError } from "../args.ts";
-import { setupFor, type ClockChoice } from "../harness/index.ts";
+import { DEFAULT_BOTS, setupFor, type ClockChoice } from "../harness/index.ts";
 
 // The plan of a `sim run` (docs/architecture.md §12.1, §3.6): the ruleset from the registry (a test
 // ruleset only with `--allow-test`), the overrides validated by the ruleset's schema and the config
@@ -253,7 +253,7 @@ export function planRun(req: RunRequest, o: { readonly randomKey?: () => string 
       `--invariants must be one of ${INVARIANT_LEVELS.join(", ")}, got "${invariants}"`,
     );
   }
-  const bots = req.bots === undefined ? [...BOT_STRATEGIES] : parseBots(req.bots);
+  const bots = req.bots === undefined ? [...DEFAULT_BOTS] : parseBots(req.bots);
   const seatBots = parseSeatBots(req.seats ?? [], players);
   const clock = clockFor(req);
   const setup = setupFor(ruleset, { seed, players, overrides, idKey });

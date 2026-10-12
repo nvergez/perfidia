@@ -1,5 +1,4 @@
 import {
-  BOT_STRATEGIES,
   botFromLabel,
   botLabel,
   parseBotLabel,
@@ -36,8 +35,16 @@ import { SystemTime, createVirtualTime, systemWall } from "./time.ts";
 // header's controller labels, `controller` lines as hand-offs, the clock spec and latency model).
 // The CLI, the integration test, the hardening, golden and exit tests all run matches through here.
 
-/** The four bots, in the order `--bots` cycles them by default. */
-export const DEFAULT_BOTS: readonly BotStrategy[] = BOT_STRATEGIES;
+/**
+ * The four phase-1 bots, in the order `--bots` cycles them by default. Named here rather than taken
+ * from `BOT_STRATEGIES`, so that a new strategy does not change the default seats.
+ */
+export const DEFAULT_BOTS: readonly BotStrategy[] = Object.freeze([
+  "expander",
+  "rusher",
+  "turtle",
+  "opportunist",
+]);
 
 export interface SetupSpec {
   readonly seed: number;

@@ -38,7 +38,9 @@ import {
 } from "@perfidia/protocol";
 import {
   addRes,
+  baseDefenseAt,
   call,
+  configInt,
   countOf,
   covers,
   etaAfford,
@@ -55,6 +57,7 @@ import {
   unitsInReport,
   type Kit,
 } from "../kit.ts";
+import type { CombatHints } from "../hints.ts";
 import {
   mainCity,
   nearby,
@@ -225,6 +228,31 @@ function reaction(kit: Kit, levels: Readonly<Record<string, number>>, stock: Res
   return n * row.defense;
 }
 
+/** The combat hints' numbers, read in the effective config (so overrides count). */
+interface Combat {
+  readonly base: NonNullable<CombatHints["baseDefense"]>;
+  readonly wallPm: number;
+  readonly moralePm: number;
+  readonly moraleFloorPm: number;
+}
+
+/**
+ * The combat hints resolved in the effective config: null when the base defense is unknown (then
+ * neither the buildings' share, the wall nor morale is counted); a missing wall bonus or morale
+ * counts as none.
+ */
+function combatOf(w: World): Combat | null {
+  const h = w.hints.combat;
+  const base = h?.baseDefense;
+  if (h === undefined || base === undefined || baseDefenseAt(w.kit, base, 0) === null) return null;
+  return {
+    base,
+    wallPm: configInt(w.kit, h.wallPmPerLevel) ?? 0,
+    moralePm: configInt(w.kit, h.morale?.perCity) ?? 0,
+    moraleFloorPm: configInt(w.kit, h.morale?.floor) ?? 1000,
+  };
+}
+
 /**
  * The defense of a city from the seat's latest intel: a spy report's units, the buildings' share
  * (with the combat hints) and what its stock can still train on warning; or, after the seat's own
@@ -246,11 +274,11 @@ export function estimateCity(w: World, p: Planner, view: CityView | undefined): 
   }
   const units = unitsInReport(kit, data);
   const sum = power(kit, units, "defense", true);
-  const h = w.hints.combat;
+  const h = combatOf(w);
   const levels = levelsOf(data);
-  const own = h === undefined ? 0 : h.base + h.perLevel * (levels[h.building] ?? 0);
+  const own = h === null ? 0 : (baseDefenseAt(kit, h.base, levels[h.base.building] ?? 0) ?? 0);
   const wall = kit.wall === null ? 0 : (levels[kit.wall] ?? 0);
-  const factor = h === undefined ? 1000 : 1000 + h.wallPm * wall;
+  const factor = h === null ? 1000 : 1000 + h.wallPm * wall;
   const react = reaction(kit, levels, stockIn(data));
   return {
     d: Math.floor(((sum + own + react) * factor) / 1000),
@@ -264,8 +292,8 @@ export function estimateCity(w: World, p: Planner, view: CityView | undefined): 
 
 /** The seat's morale against `foe` (‰), from the combat hints; 1000 without them. */
 function moraleAgainst(w: World, foe: PlayerId | null): number {
-  const h = w.hints.combat;
-  if (h === undefined || h.moralePm <= 0 || foe === null) return 1000;
+  const h = combatOf(w);
+  if (h === null || h.moralePm <= 0 || foe === null) return 1000;
   const mine = w.cities.length;
   const theirs = w.others.filter((o) => o.owner === foe).length;
   const m = 1000 - h.moralePm * (mine - theirs);
@@ -713,7 +741,7 @@ function supportFor(p: Planner, target: OtherCity, own: Estimate): number {
 function candidates(p: Planner, prm: Rusher2Params, main: OwnCity): Candidate[] {
   const { w } = p;
   const out: Candidate[] = [];
-  const unhinted = w.hints.combat === undefined ? UNHINTED_PM : 0;
+  const unhinted = combatOf(w) === null ? UNHINTED_PM : 0;
   const army = power(w.kit, p.homeOf(main.id), "attack", true);
   for (const target of strangers(w, main).slice(0, prm.scan)) {
     const view = w.views.get(target.id);

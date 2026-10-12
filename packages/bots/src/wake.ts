@@ -24,9 +24,10 @@ export interface WakeInput {
   /** Times worth waking at: queue ends, `availableAt` of rejected calls and items, landings. */
   readonly events: readonly number[];
   /**
-   * Times the strategy must be awake at (a launch window opening, its army coming home): the
-   * earliest one ahead is kept even when the cadence or the wake budget spread would wake later,
-   * within `selfWake`. Omitted or empty: no such time.
+   * Times the strategy must be awake at (a timed launch, a launch window opening, its army coming
+   * home): the earliest one ahead is kept even when the cadence or the wake budget spread would
+   * wake later, clamped below by `selfWake.min` (and the real-time margin) only. Omitted or empty:
+   * no such time.
    */
   readonly firm?: readonly number[];
 }
