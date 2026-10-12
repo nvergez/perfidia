@@ -20,9 +20,9 @@ import { readFirstLine } from "../io/index.ts";
 // `sim golden` (docs/architecture.md §3.5, §12.1, §13.5, §13.6): `--check` runs the harness's
 // freeze guard over the committed fixtures; `--update` only adds: a golden for each bot spec below
 // that has none for the current bot labels (a later bot version gets a new golden, suffixed with a
-// hash of its labels, and the old one keeps its Level E check), the scripted scenario goldens that
-// do not exist yet, then fingerprint entries for every ref and golden without one. Nothing is ever
-// rewritten; naming an existing golden is refused.
+// hash of its labels, and the old one keeps its Level E and G checks, §11.1), the scripted scenario
+// goldens that do not exist yet, then fingerprint entries for every ref and golden without one.
+// Nothing is ever rewritten; naming an existing golden is refused.
 
 /** `packages/sim/fixtures`: the committed goldens and `fingerprints.json`. */
 export const FIXTURES_DIR = join(import.meta.dir, "..", "..", "fixtures");

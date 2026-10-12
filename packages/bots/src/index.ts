@@ -3,6 +3,16 @@
 
 export { BotAgent, type BotOptions } from "./agent.ts";
 export { hintsFor, NO_HINTS, RULESET_HINTS, type StrategyHints } from "./hints.ts";
-export { botFromLabel, botLabel, createBot, isBotStrategy, parseBotLabel } from "./registry.ts";
+export {
+  botFromLabel,
+  botLabel,
+  botLabels,
+  botVersions,
+  createBot,
+  createBotVersion,
+  isBotStrategy,
+  parseBotLabel,
+  type BotVersion,
+} from "./registry.ts";
 export { BOT_STRATEGIES, type BotStrategy } from "./strategies/strategy.ts";
 export { thinkLatencyMs, withThinkTime, type ThinkTimeOptions } from "./think.ts";
