@@ -66,6 +66,8 @@ interface Plan {
   /** The estimated arrival of each planned `found_city` call. */
   readonly etas: ReadonlyMap<ToolCall, number>;
   readonly cadence: number;
+  /** Times the strategy asked to be awake at (`Planner.wakeAt`). */
+  readonly firm: readonly number[];
   readonly summary: readonly string[];
 }
 
@@ -381,7 +383,15 @@ export class BotAgent implements SeatAgent {
     if (s.kit === null) {
       const none = new Map<ToolCall, number>();
       const summary = ["no rules"];
-      return { calls: [], memory: s.memory, foundings: s.memory.f, etas: none, cadence, summary };
+      return {
+        calls: [],
+        memory: s.memory,
+        foundings: s.memory.f,
+        etas: none,
+        cadence,
+        firm: [],
+        summary,
+      };
     }
     const p = new Planner(this.world(s), this.brain.knobs);
     this.brain.plan(p);
@@ -391,6 +401,7 @@ export class BotAgent implements SeatAgent {
       foundings: p.startFoundings,
       etas: p.foundEtas,
       cadence,
+      firm: p.wakes,
       summary: p.summary,
     };
   }
@@ -450,7 +461,8 @@ export class BotAgent implements SeatAgent {
   /**
    * The self-wake (`chooseWake`), from what the bot waits for: the end of each of its queues (the
    * briefing's, then this turn's accepted items), the `availableAt` of every time-gated rejection
-   * (a whole call, or one item of a `build`/`recruit` batch) and each founding's arrival.
+   * (a whole call, or one item of a `build`/`recruit` batch) and each founding's arrival; and the
+   * times the strategy asked to be awake at, which skip the cadence and the budget spread.
    */
   private wakeAt(s: TurnState, plan: Plan, memory: Memory): number {
     const events: number[] = [];
@@ -502,6 +514,7 @@ export class BotAgent implements SeatAgent {
       selfWake: s.kit?.gateway.selfWake ?? null,
       ownWakesLeft: s.briefing.budget.ownWakesLeft,
       events,
+      firm: plan.firm,
     });
   }
 }

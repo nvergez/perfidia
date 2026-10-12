@@ -2,7 +2,14 @@
 // rules shaped like perfidia-1 and like sandbox-1.
 
 import { describe, expect, test } from "bun:test";
-import type { AgentRules, CityId, IslandId, MovementId, PlayerId } from "@perfidia/protocol";
+import type {
+  AgentRules,
+  CityId,
+  IslandId,
+  MovementId,
+  PlayerId,
+  SeatAgent,
+} from "@perfidia/protocol";
 import {
   advance,
   callsTo,
@@ -22,7 +29,7 @@ import {
 import type { StrategyHints } from "./hints.ts";
 import { fmtTime } from "./kit.ts";
 import { parseMemory } from "./memory.ts";
-import { createBot } from "./registry.ts";
+import { botFromLabel, botLabels, botVersions, createBot, createBotVersion } from "./registry.ts";
 import { streamOf } from "./rng.ts";
 import { opportunistParams } from "./strategies/opportunist.ts";
 import { rusherParams } from "./strategies/rusher.ts";
@@ -126,6 +133,16 @@ function offerTwoAlliancesAndAPact(game: FakeGame): void {
 
 function bot(strategy: BotStrategy, seat: PlayerId = "p1", seed = 11) {
   return createBot(strategy, { seat, seed, strict: true });
+}
+
+/** The rusher these fixtures describe: version 1, frozen since its goldens (rusher@2: rusher2.test.ts). */
+function rusherV1(seat: PlayerId = "p1", seed = 11, hints?: StrategyHints) {
+  return createBotVersion("rusher", 1, {
+    seat,
+    seed,
+    strict: true,
+    ...(hints === undefined ? {} : { hints }),
+  });
 }
 
 function noViolations(game: FakeGame): void {
@@ -297,7 +314,7 @@ describe.each(SHAPES)("$name", (shape) => {
       at: game.t - 3600,
       data: { report: "r00001", city: "c2", units: { home: { [shape.defender]: 2 } } },
     });
-    const log = await playTurn(bot("rusher"), game, "p1");
+    const log = await playTurn(rusherV1(), game, "p1");
     noViolations(game);
     const attacks = callsTo(log, "attack");
     expect(attacks.length).toBe(1);
@@ -321,7 +338,7 @@ describe.each(SHAPES)("$name", (shape) => {
       at: game.t - 3600,
       data: { report: "r00001", city: "c2", units: { home: { [shape.defender]: 40 } } },
     });
-    const log = await playTurn(bot("rusher"), game, "p1");
+    const log = await playTurn(rusherV1(), game, "p1");
     noViolations(game);
     expect(callsTo(log, "attack").filter((a) => a["to"] === "c2")).toEqual([]);
   });
@@ -349,7 +366,7 @@ describe.each(SHAPES)("$name", (shape) => {
       at: game.t - 100,
       data: { report: "r00002", city: "c2", units: { home: { [shape.defender]: 200 } } },
     });
-    const log = await playTurn(bot("rusher"), game, "p1");
+    const log = await playTurn(rusherV1(), game, "p1");
     noViolations(game);
     const recalls = callsTo(log, "recall_troops");
     if (game.rules.movement.recall.kinds.includes("attack")) {
@@ -380,7 +397,7 @@ describe.each(SHAPES)("$name", (shape) => {
       at: game.t - 4000,
       data: { report: "r00003", city: "c2", units: { home: { [shape.defender]: 200 } } },
     });
-    const log = await playTurn(bot("rusher"), game, "p1");
+    const log = await playTurn(rusherV1(), game, "p1");
     expect(callsTo(log, "recall_troops")).toEqual([]);
   });
 
@@ -414,7 +431,7 @@ describe.each(SHAPES)("$name", (shape) => {
         },
       },
     });
-    const log = await playTurn(bot("rusher"), game, "p1");
+    const log = await playTurn(rusherV1(), game, "p1");
     noViolations(game);
     expect(callsTo(log, "recall_troops")).toEqual([]);
   });
@@ -427,7 +444,7 @@ describe.each(SHAPES)("$name", (shape) => {
     c1.stock = res(900, 900, 900);
     c1.units = { [shape.attacker]: 30, [shape.carrier]: 3, [shape.defender]: 10 };
     game.city("c2").units = { [shape.defender]: 2 };
-    const b = bot("rusher");
+    const b = rusherV1();
     const first = await playTurn(b, game, "p1");
     noViolations(game);
     const spies = callsTo(first, "spy");
@@ -464,9 +481,9 @@ describe.each(SHAPES)("$name", (shape) => {
       weakIntel(game, shape, "c2", 40, age);
       return game;
     };
-    const fresh = await playTurn(bot("rusher"), setup(prm.stale), "p1");
+    const fresh = await playTurn(rusherV1(), setup(prm.stale), "p1");
     expect(callsTo(fresh, "spy").filter((s) => s["to"] === "c2")).toEqual([]);
-    const stale = await playTurn(bot("rusher"), setup(prm.stale + 1), "p1");
+    const stale = await playTurn(rusherV1(), setup(prm.stale + 1), "p1");
     expect(callsTo(stale, "spy").map((s) => s["to"])).toContain("c2");
   });
 
@@ -492,7 +509,7 @@ describe.each(SHAPES)("$name", (shape) => {
       return game;
     };
     const founderCount = async (game: FakeGame): Promise<number | null> => {
-      const log = await playTurn(bot("rusher"), game, "p1");
+      const log = await playTurn(rusherV1(), game, "p1");
       noViolations(game);
       const attacks = callsTo(log, "attack");
       expect(attacks.length).toBe(1);
@@ -526,22 +543,22 @@ describe.each(SHAPES)("$name", (shape) => {
     crowned.tag = "crown";
     game.cities.push(crowned);
     weakIntel(game, shape, "c21", 1);
-    // Three rounds leave no room for target reads: a city it could not read is not spied blind.
-    const blind = await playTurn(
-      createBot("rusher", { seat: "p1", seed: 11, strict: true, hints }),
-      game,
-      "p1",
-      { maxRounds: 3 },
-    );
-    noViolations(game);
-    expect(callsTo(blind, "view_city").filter((c) => c["city"] === "c21")).toEqual([]);
-    expect(callsTo(blind, "spy")).toEqual([]);
+    for (const version of botVersions("rusher")) {
+      const rusher = (): SeatAgent =>
+        createBotVersion("rusher", version, { seat: "p1", seed: 11, strict: true, hints });
+      // Three rounds leave no room for target reads: a city it could not read is not spied blind.
+      // oxlint-disable-next-line no-await-in-loop -- one version at a time on one fake game
+      const blind = await playTurn(rusher(), game, "p1", { maxRounds: 3 });
+      noViolations(game);
+      expect(callsTo(blind, "view_city").filter((c) => c["city"] === "c21")).toEqual([]);
+      expect(callsTo(blind, "spy")).toEqual([]);
 
-    const rusherBot = createBot("rusher", { seat: "p1", seed: 11, strict: true, hints });
-    const log = await playTurn(rusherBot, game, "p1");
-    noViolations(game);
-    for (const tool of ["spy", "attack"] as const) {
-      expect(callsTo(log, tool).filter((c) => c["to"] === "c21")).toEqual([]);
+      // oxlint-disable-next-line no-await-in-loop -- one version at a time on one fake game
+      const log = await playTurn(rusher(), game, "p1");
+      noViolations(game);
+      for (const tool of ["spy", "attack"] as const) {
+        expect(callsTo(log, tool).filter((c) => c["to"] === "c21")).toEqual([]);
+      }
     }
 
     // The opportunist does not betray it either, even as a friend's weakest city.
@@ -557,9 +574,9 @@ describe.each(SHAPES)("$name", (shape) => {
     }
   });
 
-  test.each(["expander", "rusher", "turtle", "opportunist"] as const)(
+  test.each([...botLabels()])(
     "%s: a besieged own city builds, recruits and sends nothing",
-    async (strategy) => {
+    async (label) => {
       const hints: StrategyHints = { settleOrder: [], avoidTags: [], blockedExt: ["siege"] };
       const game = shape.game();
       game.t = 3 * DAY + 3600;
@@ -590,7 +607,8 @@ describe.each(SHAPES)("$name", (shape) => {
           arrive: pair(game.t + 9000),
         },
       ]);
-      const b = createBot(strategy, { seat: "p1", seed: 11, strict: true, hints });
+      const b = botFromLabel(label, { seat: "p1", seed: 11, strict: true, hints });
+      if (b === null) throw new Error(`${label} is not registered`);
       const log = await playTurn(b, game, "p1");
       noViolations(game);
       for (const tool of ["build", "recruit", "cancel_queue"] as const) {

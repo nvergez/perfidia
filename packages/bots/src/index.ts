@@ -2,7 +2,13 @@
 // gateway drives (docs/architecture.md §11). Bots import only `protocol` at runtime.
 
 export { BotAgent, type BotOptions } from "./agent.ts";
-export { hintsFor, NO_HINTS, RULESET_HINTS, type StrategyHints } from "./hints.ts";
+export {
+  hintsFor,
+  NO_HINTS,
+  RULESET_HINTS,
+  type CombatHints,
+  type StrategyHints,
+} from "./hints.ts";
 export {
   botFromLabel,
   botLabel,

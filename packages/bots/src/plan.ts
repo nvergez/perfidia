@@ -300,6 +300,8 @@ export class Planner {
   readonly summary: string[] = [];
   /** The estimated arrival of each `found_city` call planned this turn. */
   readonly foundEtas = new Map<ToolCall, number>();
+  /** Times this turn's plan must be awake at, whatever the cadence (`wakeAt`). */
+  readonly wakes: number[] = [];
   memory: Memory;
   /** Foundings in flight when the turn began (arrivals still ahead), before this turn's own. */
   readonly startFoundings: Readonly<Record<string, readonly number[]>>;
@@ -395,6 +397,13 @@ export class Planner {
     const text = memoLine(line);
     if (!this.memory.m.includes(text))
       this.memory = { ...this.memory, m: [...this.memory.m, text] };
+  }
+  /**
+   * Asks to be awake at `t` (a firm self-wake, `chooseWake`): the earliest such time ahead wins over
+   * the cadence and the wake budget spread. Times not ahead of the world's time are ignored.
+   */
+  wakeAt(t: number): void {
+    if (Number.isSafeInteger(t) && t > this.w.t) this.wakes.push(t);
   }
   private push(c: ToolCall, note: string): void {
     this.calls.push(c);
@@ -790,6 +799,42 @@ export class Planner {
       }
       if (plan.saving !== null) this.saving.set(c.id, plan.saving);
     }
+  }
+
+  /**
+   * `economy` with the strategy's own wishes: in a city where `own(c)` returns a list, that list
+   * (after the wishes the planner's moves added, such as a founder's unlock) replaces the generic
+   * economy wishes; where it returns null, the generic ones apply as in `economy`.
+   */
+  economyWith(own: (c: OwnCity) => readonly Wish[] | null): void {
+    const { w, k } = this;
+    for (const c of w.cities) {
+      if (c.blocked || c.levels === null) continue;
+      const extra = this.extra.get(c.id) ?? [];
+      const mine = own(c);
+      const wishes = mine === null ? economyWishes(this, c, extra) : [...extra, ...mine];
+      const plan = planBuilds(
+        w.kit,
+        c.levels,
+        c.build.map((b) => b.building),
+        wishes,
+        subRes(this.stockOf(c.id), this.reserved.get(c.id) ?? ZERO),
+        c.rate,
+        c.cap,
+        this.buildRoom.get(c.id) ?? 0,
+        k.cadence,
+      );
+      if (plan.items.length > 0) {
+        this.build(c, plan.items);
+        this.spend(c.id, plan.spent);
+      }
+      if (plan.saving !== null) this.saving.set(c.id, plan.saving);
+    }
+  }
+
+  /** Free pop of a city after this turn's orders. */
+  popFreeOf(id: CityId): number {
+    return this.popFree.get(id) ?? 0;
   }
 
   /**

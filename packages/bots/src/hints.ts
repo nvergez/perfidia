@@ -14,6 +14,25 @@ export interface StrategyHints {
   readonly avoidTags: readonly string[];
   /** Keys of a briefing city's `ext` that mean the city cannot build, recruit or send anything. */
   readonly blockedExt: readonly string[];
+  /**
+   * How a city's buildings add to its land defense, which the rules data does not carry; read by
+   * bots that weigh spy reports (absent: they count the units only, behind a wider margin).
+   */
+  readonly combat?: CombatHints;
+}
+
+/**
+ * A city's land defense from a spy report: `(Σ unit defense + base + perLevel × level(building)) ×
+ * (1000 + wallPm × level(wall)) / 1000`, the wall being `roles.wall`; and the attacker's morale,
+ * `1000 − moralePm × (its cities − the foe's)`, at least `moraleFloorPm` and at most 1000 (‰).
+ */
+export interface CombatHints {
+  readonly building: string;
+  readonly base: number;
+  readonly perLevel: number;
+  readonly wallPm: number;
+  readonly moralePm: number;
+  readonly moraleFloorPm: number;
 }
 
 /** The empty hint set: generic play. */
@@ -32,12 +51,31 @@ export const RULESET_HINTS: Readonly<Record<string, StrategyHints>> = Object.fre
     settleOrder: Object.freeze(["home", "frontier", "backyard", "inner", "frontier"]),
     avoidTags: Object.freeze(["crown"]),
     blockedExt: Object.freeze(["siege"]),
+    // §8.2 and §8.5 with the default config: base defense 20·hall + 50, +5% per wall level, and
+    // −10% attack per city above the foe, floor 70%.
+    combat: Object.freeze({
+      building: "hall",
+      base: 50,
+      perLevel: 20,
+      wallPm: 50,
+      moralePm: 100,
+      moraleFloorPm: 700,
+    }),
   }),
   // sandbox-1 §3.8: the home island's second slot, then the shared islands.
   "sandbox-1": Object.freeze({
     settleOrder: Object.freeze(["home", "shared", "shared"]),
     avoidTags: Object.freeze([]),
     blockedExt: Object.freeze([]),
+    // §3.8: 10 per keep level, no wall, no morale.
+    combat: Object.freeze({
+      building: "keep",
+      base: 0,
+      perLevel: 10,
+      wallPm: 0,
+      moralePm: 0,
+      moraleFloorPm: 1000,
+    }),
   }),
 });
 
