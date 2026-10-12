@@ -1,5 +1,5 @@
 import { join } from "node:path";
-import { ENGINE_VERSION } from "@perfidia/engine";
+import { ENGINE_VERSION, type AnyRuleset } from "@perfidia/engine";
 import { MemorySink, teeSink, type LogSink } from "@perfidia/gateway";
 import type { ClockSpec, Json, LogLine, PlayerId } from "@perfidia/protocol";
 import { errorText } from "../args.ts";
@@ -14,6 +14,8 @@ import {
 import { RunDirSink, assertFreeRunDir, runPaths, writeFileAtomic } from "../io/index.ts";
 import { checkCreation } from "../run/index.ts";
 import { LogShapeError, summarize, type MatchSummary } from "../summary/index.ts";
+import { battleRecords, battleSplit, type BattleSplit } from "./battles.ts";
+import { countdownRows, type CountdownRow } from "./countdowns.ts";
 import {
   eliminations,
   fightTimes,
@@ -22,6 +24,8 @@ import {
   type FirstTimeStat,
 } from "./fights.ts";
 import { aggregatePacing, pacingOf, type PacingDay, type PacingRow } from "./pacing.ts";
+import { botName, seatRows, strategyRows, type SeatRow, type StrategyRow } from "./seats.ts";
+import { freeSlotsOf, initialFreeSlots, type FreeSlots } from "./slots.ts";
 import type { Variant } from "./variants.ts";
 
 // `sim batch` (docs/architecture.md §12.1, §12.2): every variant over the same seeds with the same
@@ -30,16 +34,20 @@ import type { Variant } from "./variants.ts";
 // depend on the variant order. The JSON records the provenance of every row: for each variant the
 // ref, overrides, `configHash`, `rulesHash`, `ENGINE_VERSION`, bot labels and seeds, and for each
 // match its final hash and end reason (plus the normalised log hash), with its fight times (first
-// battle, conquest and elimination, domination countdowns) next to its counts. With `--out`, every
+// battle, conquest and elimination, domination countdowns) next to its counts, its battles split by
+// what they were fought over, its free city slots, its countdowns and one row per seat; each variant
+// aggregates them, with one row per bot (wins per seat and their Wilson interval). With `--out`, every
 // match keeps a full run directory (§10.1: log, snapshots, `summary.json`), and the whole batch is
 // checked before its first match, so a taken directory or a match that cannot be created writes
 // nothing.
 
 /**
  * Bumped when the JSON shape changes (§12.2): 2 added the fight times, the end reasons and the
- * pacing days' conquests and eliminations; 3 who eliminated whom.
+ * pacing days' conquests and eliminations; 3 who eliminated whom; 4 the seats, the battle split,
+ * the free slots and the countdowns of each match, and per variant the explicit end counts and the
+ * per-bot rows.
  */
-export const BATCH_FORMAT = "perfidia-batch/3";
+export const BATCH_FORMAT = "perfidia-batch/4";
 
 export interface BatchPlan {
   readonly variants: readonly Variant[];
@@ -73,11 +81,49 @@ export interface MatchRow extends FightTimes {
    */
   readonly eliminatedBy: string[];
   readonly foundings: number;
+  /** The battles by what they were fought over: defended or empty, reliefs, homecomings. */
+  readonly battleSplit: BattleSplit;
   readonly wakesPerSeatPerDay: { readonly mean: number; readonly max: number };
   readonly internal: number;
+  /** Free city slots at the start, the end of days 5 and 7 and the match end; null unless ended. */
+  readonly freeSlots: FreeSlots | null;
+  readonly countdowns: CountdownRow[];
+  /** One row per seat, in seat order (empty when the log has no header). */
+  readonly seats: SeatRow[];
   /** With `--pacing`: whether the Level E replay of the pacing pass matched, and the days. */
   readonly replayOk?: boolean;
   readonly pacing?: PacingDay[];
+}
+
+/** Ended matches by end reason, the two early ends kept apart (§12.2). */
+export interface EndCounts {
+  readonly time: number;
+  readonly domination: number;
+  readonly lastStanding: number;
+  /** Any other reason (`hill` in sandbox-1). */
+  readonly other: number;
+}
+
+/** A measure over the runs that have it. */
+export interface RunMean {
+  readonly runs: number;
+  /** 2 decimals; null when no run has it. */
+  readonly mean: number | null;
+}
+
+/** The countdowns of a variant's runs. */
+export interface CountdownStat {
+  readonly opened: number;
+  readonly won: number;
+  readonly cancelled: number;
+  readonly open: number;
+  /** Cancellations by the log's reason. */
+  readonly cancelReasons: Readonly<Record<string, number>>;
+  /** Totals over the countdowns: bloc cities at the start, and of them conquered, founded, initial. */
+  readonly cities: number;
+  readonly conquered: number;
+  readonly founded: number;
+  readonly initial: number;
 }
 
 export interface VariantAggregate {
@@ -85,6 +131,7 @@ export interface VariantAggregate {
   readonly fatal: number;
   /** Ended matches per end reason (`time`, `domination`, `last_standing`, …), most frequent first. */
   readonly reasons: Readonly<Record<string, number>>;
+  readonly ends: EndCounts;
   /** Matches won per strategy (a strategy counts once per match it is among the winners). */
   readonly winners: Readonly<Record<string, number>>;
   readonly endDay: number;
@@ -101,8 +148,14 @@ export interface VariantAggregate {
   readonly eliminationsBy: Readonly<Record<string, number>>;
   /** Runs where at least one domination countdown opened. */
   readonly runsWithCountdown: number;
+  readonly countdowns: CountdownStat;
+  /** Means per run. */
+  readonly battleSplit: BattleSplit;
+  readonly freeSlots: { readonly d5: RunMean; readonly d7: RunMean; readonly end: RunMean };
   readonly wakesPerSeatPerDay: { readonly mean: number; readonly max: number };
   readonly internal: number;
+  /** One row per bot label over the seats of the ended runs. */
+  readonly strategies: StrategyRow[];
 }
 
 export interface VariantResult {
@@ -151,14 +204,52 @@ function countsByFrequency(keys: readonly string[]): Record<string, number> {
   return ordered;
 }
 
+function runMean(xs: readonly (number | null | undefined)[]): RunMean {
+  const had = xs.filter((x): x is number => typeof x === "number");
+  return { runs: had.length, mean: had.length === 0 ? null : mean(had) };
+}
+
+function endCounts(reasons: readonly string[]): EndCounts {
+  const n = (r: string): number => reasons.filter((x) => x === r).length;
+  const time = n("time");
+  const domination = n("domination");
+  const lastStanding = n("last_standing");
+  return {
+    time,
+    domination,
+    lastStanding,
+    other: reasons.length - time - domination - lastStanding,
+  };
+}
+
+function countdownStat(rows: readonly CountdownRow[]): CountdownStat {
+  const sum = (f: (r: CountdownRow) => number): number => rows.reduce((a, r) => a + f(r), 0);
+  const cancelled = rows.filter((r) => r.outcome === "cancelled");
+  return {
+    opened: rows.length,
+    won: rows.filter((r) => r.outcome === "won").length,
+    cancelled: cancelled.length,
+    open: rows.filter((r) => r.outcome === "open").length,
+    cancelReasons: countsByFrequency(cancelled.map((r) => r.reason ?? "?")),
+    cities: sum((r) => r.cities),
+    conquered: sum((r) => r.conquered),
+    founded: sum((r) => r.founded),
+    initial: sum((r) => r.initial),
+  };
+}
+
 function aggregate(matches: readonly MatchRow[]): VariantAggregate {
   const ended = matches.filter((m) => m.endDay !== null);
+  const reasons = matches.flatMap((m) =>
+    m.status === "ended" && m.reason !== null ? [m.reason] : [],
+  );
+  const split = (f: (b: BattleSplit) => number): number =>
+    mean(matches.map((m) => f(m.battleSplit)));
   return {
     runs: matches.length,
     fatal: matches.filter((m) => m.status !== "ended").length,
-    reasons: countsByFrequency(
-      matches.flatMap((m) => (m.status === "ended" && m.reason !== null ? [m.reason] : [])),
-    ),
+    reasons: countsByFrequency(reasons),
+    ends: endCounts(reasons),
     winners: countsByFrequency(matches.flatMap((m) => m.winnerStrategies)),
     endDay: mean(ended.map((m) => m.endDay ?? 0)),
     battles: mean(matches.map((m) => m.battles)),
@@ -170,11 +261,27 @@ function aggregate(matches: readonly MatchRow[]): VariantAggregate {
     runsWithElimination: matches.filter((m) => m.eliminations > 0).length,
     eliminationsBy: countsByFrequency(matches.flatMap((m) => m.eliminatedBy)),
     runsWithCountdown: matches.filter((m) => m.dominationCountdowns > 0).length,
+    countdowns: countdownStat(matches.flatMap((m) => m.countdowns)),
+    battleSplit: {
+      defended: split((b) => b.defended),
+      empty: split((b) => b.empty),
+      unknown: split((b) => b.unknown),
+      relief: split((b) => b.relief),
+      reliefByOwner: split((b) => b.reliefByOwner),
+      reliefBroke: split((b) => b.reliefBroke),
+      homecoming: split((b) => b.homecoming),
+    },
+    freeSlots: {
+      d5: runMean(matches.map((m) => m.freeSlots?.d5)),
+      d7: runMean(matches.map((m) => m.freeSlots?.d7)),
+      end: runMean(matches.map((m) => m.freeSlots?.end)),
+    },
     wakesPerSeatPerDay: {
       mean: mean(matches.map((m) => m.wakesPerSeatPerDay.mean)),
       max: Math.max(0, ...matches.map((m) => m.wakesPerSeatPerDay.max)),
     },
     internal: matches.reduce((a, m) => a + m.internal, 0),
+    strategies: strategyRows(matches),
   };
 }
 
@@ -263,9 +370,13 @@ function failedRow(seed: number, lines: readonly LogLine[], error: string | null
     eliminations: 0,
     eliminatedBy: [],
     foundings: 0,
+    battleSplit: battleSplit(battleRecords(lines)),
     ...fightTimes(lines),
     wakesPerSeatPerDay: { mean: 0, max: 0 },
     internal: 0,
+    freeSlots: null,
+    countdowns: [],
+    seats: [],
   };
 }
 
@@ -275,7 +386,7 @@ function controllerAt(s: MatchSummary, seat: PlayerId | null, t: number): string
   for (const c of s.seats.find((x) => x.seat === seat)?.controllers ?? []) {
     if (c.from <= t) label = c.label;
   }
-  return label.startsWith("bot:") ? label.slice("bot:".length) : label;
+  return botName(label);
 }
 
 function rowOf(
@@ -284,8 +395,14 @@ function rowOf(
   s: MatchSummary | null,
   error: string | null,
   pacing: boolean,
+  ruleset: AnyRuleset,
 ): MatchRow {
   if (s === null) return failedRow(seed, lines, error);
+  const header = lines[0];
+  const battles = battleRecords(lines);
+  const bots = Object.fromEntries(
+    s.seats.map((x) => [x.seat, botName(x.controllers.at(-1)?.label ?? "?")]),
+  );
   const winnerStrategies = [
     ...new Set(s.winners.map((w) => s.seats.find((x) => x.seat === w)?.strategy ?? w)),
   ].toSorted(byCodeUnit);
@@ -307,9 +424,16 @@ function rowOf(
       (e) => `${controllerAt(s, e.by, e.t)} > ${controllerAt(s, e.player, e.t)}`,
     ),
     foundings: s.events.foundings,
+    battleSplit: battleSplit(battles),
     ...fightTimes(lines),
     wakesPerSeatPerDay: s.wakes.perSeatPerDay,
     internal: s.internal,
+    freeSlots:
+      s.status === "ended" && s.endedAt !== null && header?.k === "header"
+        ? freeSlotsOf(lines, initialFreeSlots(header.setup, ruleset), s.endedAt)
+        : null,
+    countdowns: countdownRows(lines, bots),
+    seats: seatRows(lines, s, battles),
   };
   if (!pacing || s.status !== "ended") return row;
   const p = pacingOf(lines);
@@ -347,7 +471,7 @@ export async function runBatch(
         clock = header.clock;
         controllers = { ...header.controllers };
       }
-      const row = rowOf(seed, lines, summary, error, plan.pacing);
+      const row = rowOf(seed, lines, summary, error, plan.pacing, v.ruleset);
       matches.push(row);
       o.progress?.(v, seed, row);
     }

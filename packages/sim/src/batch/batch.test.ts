@@ -43,7 +43,7 @@ async function cli(...argv: string[]): Promise<{ code: number; out: string; err:
 }
 
 function isBatch(v: unknown): v is BatchResult {
-  return typeof v === "object" && v !== null && "format" in v && v.format === "perfidia-batch/3";
+  return typeof v === "object" && v !== null && "format" in v && v.format === "perfidia-batch/4";
 }
 
 /** Every file under `dir` with its bytes, for before/after comparisons. */
@@ -94,6 +94,14 @@ describe("sim batch", () => {
       expect(rows[5]).toStartWith("fights · ");
       expect(rows[6]).toMatch(/^variant +runs +ends +1st battle \(mean \/ min\) /);
       expect(rows[7]).toMatch(/^perfidia-1@1\.0\.0 +2 +time 2 /);
+      // Then the ends and land, battles and bots tables; no countdown, no list of them.
+      const ends = rows.findIndex((l) => l.startsWith("ends and land · "));
+      expect(ends).toBe(11);
+      expect(rows[ends + 2]).toMatch(/^perfidia-1@1\.0\.0 +2 +2 +0 +0 +0 +0 +0 +0 +0 +- +- \/ /);
+      expect(rows.find((l) => l.startsWith("battles · "))).toBeDefined();
+      expect(rows.find((l) => l.startsWith("bots · "))).toBeDefined();
+      expect(r.out).not.toContain("domination countdowns · ");
+      expect(r.out).not.toContain("seats · ");
       expect(r.out).toContain(`results with provenance: ${json}`);
 
       const parsed: unknown = JSON.parse(readFileSync(json, "utf8"));
@@ -199,6 +207,8 @@ describe("sim batch", () => {
         "--per-match",
         "--out",
         dir,
+        "--json",
+        join(dir, "batch.json"),
       );
       expect(r.code).toBe(EXIT.ok);
       expect(r.err).toStartWith(
@@ -230,6 +240,22 @@ describe("sim batch", () => {
       expect(last?.scoreMean).toBe(
         Math.round((s.seats.reduce((a, x) => a + (x.score ?? 0), 0) / 3) * 100) / 100,
       );
+      // The batch row agrees: free slots without a replay, and sandbox-1's own score parts.
+      const parsed: unknown = JSON.parse(readFileSync(join(dir, "batch.json"), "utf8"));
+      if (!isBatch(parsed)) throw new Error("not a batch result");
+      const m = parsed.variants[0]?.matches[0];
+      expect(m?.freeSlots).toEqual({
+        initial: 9,
+        d5: null,
+        d7: last?.freeSlots ?? -1,
+        end: last?.freeSlots ?? -1,
+      });
+      for (const x of m?.seats ?? []) {
+        expect(x.levelPoints).toBe(x.parts["levelPoints"] ?? -1);
+        expect([x.crownPoints, x.battleScore]).toEqual([null, null]);
+      }
+      expect(rows.find((l) => l.startsWith("seats · "))).toBeDefined();
+      expect(rows.find((l) => l.startsWith("battles and land per match"))).toBeDefined();
       // --allow-test silences the note (--pacing replays the match: exit 0 means it matched).
       const quiet = await cli(
         "batch",

@@ -1,7 +1,7 @@
 import { verifyLog, type ReadCtx, type ReplayReport } from "@perfidia/engine";
 import { DAY } from "@perfidia/engine/core";
 import { sortedIds, unitsAtHome, unitsPop } from "@perfidia/engine/std";
-import type { LogLine } from "@perfidia/protocol";
+import type { DeepReadonly, GameState, LogLine } from "@perfidia/protocol";
 
 // The pacing measurement (docs/architecture.md §13.9, perfidia-1 §19.5): each run is replayed
 // through `verifyLog` with `onCheckpoint`, and at the end of every game day (the checkpoint of hour
@@ -57,20 +57,28 @@ export function dayOf(t: number): number {
   return Math.max(1, Math.ceil(t / DAY));
 }
 
+/** Free city slots left on the whole map: each island's slots less the cities on it. */
+export function freeSlotCount(s: DeepReadonly<GameState>): number {
+  const used = new Map<string, number>();
+  for (const c of Object.values(s.cities)) used.set(c.island, (used.get(c.island) ?? 0) + 1);
+  let free = 0;
+  for (const isl of Object.values(s.islands))
+    free += Math.max(0, isl.slots - (used.get(isl.id) ?? 0));
+  return free;
+}
+
 /** The state measures of the pacing table at one moment. */
 export function measureState(r: ReadCtx): StateMeasures {
   const s = r.state;
   const players = sortedIds(s.players);
   const cities = new Map<string, number>(players.map((p) => [p, 0]));
   const army = new Map<string, number>(players.map((p) => [p, 0]));
-  const used = new Map<string, number>();
   const addArmy = (p: string, pop: number): void => {
     if (army.has(p)) army.set(p, (army.get(p) ?? 0) + pop);
   };
   for (const id of sortedIds(s.cities)) {
     const c = s.cities[id];
     if (c === undefined) continue;
-    used.set(c.island, (used.get(c.island) ?? 0) + 1);
     if (c.owner !== null) {
       if (cities.has(c.owner)) cities.set(c.owner, (cities.get(c.owner) ?? 0) + 1);
       // Units at home through the std derivation (§4.3): trickled recruits not yet materialised
@@ -80,17 +88,13 @@ export function measureState(r: ReadCtx): StateMeasures {
     for (const g of c.stationed) addArmy(g.owner, unitsPop(r.rules, g.units));
   }
   for (const m of Object.values(s.movements)) addArmy(m.owner, unitsPop(r.rules, m.units));
-  let freeSlots = 0;
-  for (const isl of Object.values(s.islands)) {
-    freeSlots += Math.max(0, isl.slots - (used.get(isl.id) ?? 0));
-  }
   const counts = [...cities.values()];
   const scores = r.ruleset.hooks.standings(r).map((st) => st.score);
   return {
     citiesMean: mean(counts),
     citiesMin: Math.min(...counts),
     citiesMax: Math.max(...counts),
-    freeSlots,
+    freeSlots: freeSlotCount(s),
     armyPopMean: mean([...army.values()]),
     scoreMean: mean(scores),
   };
