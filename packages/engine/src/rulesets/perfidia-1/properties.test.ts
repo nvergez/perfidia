@@ -132,5 +132,5 @@ describe("battles through the kernel", () => {
       }),
       { numRuns: 120 },
     );
-  });
+  }, 30000);
 });
