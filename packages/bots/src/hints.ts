@@ -20,10 +20,43 @@ export interface StrategyHints {
    * back to safety margins.
    */
   readonly combat?: CombatHints;
+  /**
+   * Where a besieged city's public `ext` (map rows, city views) names its besieger and the siege's
+   * end, and where the config keeps a siege's length. Read by the relief module (`relief.ts`) only;
+   * absent, a besieger is found from the city's `hold` groups and a siege has no known end.
+   */
+  readonly siege?: SiegeHints;
+  /**
+   * Where the running domination countdowns are listed. Read by the relief module only; absent,
+   * the bot never reacts to a countdown.
+   */
+  readonly domination?: DominationHints;
 }
 
 /** A path of keys into the effective config, e.g. `["time", "attackFrom"]`. */
 export type ConfigPath = readonly string[];
+
+/** Siege fields of a city's public `ext`, and the siege length in the effective config. */
+export interface SiegeHints {
+  /** Path in the city's `ext` to the besieger's player id. */
+  readonly by: ConfigPath;
+  /** Path in the city's `ext` to the siege's end: a game time, or a `[time, text]` pair. */
+  readonly ends: ConfigPath;
+  /** Path in the effective config to a siege's length in seconds. */
+  readonly duration?: ConfigPath;
+}
+
+/** Domination countdowns: where the briefing lists them and how one reads. */
+export interface DominationHints {
+  /** Path in the briefing's `ext` to the array of running countdowns. */
+  readonly countdowns: ConfigPath;
+  /** Key of a countdown's member list (player ids). */
+  readonly members: string;
+  /** Key of a countdown's end: a game time, or a `[time, text]` pair. */
+  readonly ends: string;
+  /** Path in the leaderboard's `ext` to the bloc threshold in cities. */
+  readonly need?: ConfigPath;
+}
 
 /**
  * Battle numbers a bot cannot derive from `CompiledRules`, as paths into the effective config (so
@@ -86,6 +119,20 @@ export const RULESET_HINTS: Readonly<Record<string, StrategyHints>> = Object.fre
         floor: Object.freeze(["combat", "moraleFloorPm"]),
       }),
       lootProtectPerLevel: Object.freeze(["economy", "lootProtectPerLevel"]),
+    }),
+    // §12: a besieged city's public extras `siege {by, ends}`; §16 `time.siegeDuration`. §13.2:
+    // the briefing's `countdowns [{key, members, cities, need, ends}]`, the leaderboard's
+    // `domination.need`.
+    siege: Object.freeze({
+      by: Object.freeze(["siege", "by"]),
+      ends: Object.freeze(["siege", "ends"]),
+      duration: Object.freeze(["time", "siegeDuration"]),
+    }),
+    domination: Object.freeze({
+      countdowns: Object.freeze(["countdowns"]),
+      members: "members",
+      ends: "ends",
+      need: Object.freeze(["domination", "need"]),
     }),
   }),
   // sandbox-1 §3.8: the home island's second slot, then the shared islands; capitals fall from

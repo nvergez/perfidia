@@ -58,3 +58,19 @@ test("every combat hint path holds an integer (or a quad of them) in each rulese
   }
   expect(checked).toBeGreaterThanOrEqual(7);
 });
+
+test("the relief module's siege length path holds an integer in each ruleset's defaults", () => {
+  let checked = 0;
+  for (const rs of RULESETS) {
+    const path = RULESET_HINTS[rs.id]?.siege?.duration;
+    if (path === undefined) continue;
+    const defaults = JsonObjectSchema.parse(rs.defaults);
+    expect([rs.ref, path.join("."), isInt(at(defaults, path))]).toEqual([
+      rs.ref,
+      path.join("."),
+      true,
+    ]);
+    checked += 1;
+  }
+  expect(checked).toBeGreaterThanOrEqual(1);
+});

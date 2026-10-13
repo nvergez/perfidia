@@ -73,11 +73,11 @@ describe("setups", () => {
     );
     const agents = botAgents(setup, ["turtle", "rusher"], undefined, { p4: "opportunist" });
     expect([...agents.values()].map((a) => a.label)).toEqual([
-      "bot:turtle@1",
+      "bot:turtle@2",
       "bot:rusher@3",
-      "bot:turtle@1",
-      "bot:opportunist@1",
-      "bot:turtle@1",
+      "bot:turtle@2",
+      "bot:opportunist@2",
+      "bot:turtle@2",
       "bot:rusher@3",
     ]);
     expect(() => botAgents(setup, ["turtle"], undefined, { p9: "rusher" })).toThrow("not a seat");
@@ -150,9 +150,9 @@ describe("normalised logs and the system clock", () => {
     expect(prepared.virtual).toBeNull();
     expect(prepared.options.clock).toEqual({ kind: "lockstep", maxTurnsPerSecond: 3 });
     expect([...prepared.options.agents.values()].map((a) => a.label)).toEqual([
-      "bot:expander@1",
+      "bot:expander@2",
       "bot:rusher@3",
-      "bot:turtle@1",
+      "bot:turtle@2",
     ]);
     const renamed = { ...header, controllers: { ...header.controllers, p2: "llm:somebody" } };
     expect(resimProblem(renamed, lines)).toBe("controller llm:somebody is not a bot of this build");

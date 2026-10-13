@@ -27,8 +27,16 @@ const P1 = { seat: "p1", seed: 1 } as const;
 /** A later rusher for the tests: the same brain under version 2 (a real one would differ). */
 const rusher2: StrategyDef = Object.freeze<StrategyDef>({ ...rusher, version: 2 });
 
-/** The latest version of each strategy: rusher@3 beside rusher@1 and @2, conqueror@2 beside @1. */
-const latest = (s: string): number => (s === "rusher" ? 3 : s === "conqueror" ? 2 : 1);
+/** The registered versions of each strategy (the latest last). */
+const VERSIONS: Readonly<Record<string, readonly number[]>> = {
+  expander: [1, 2],
+  rusher: [1, 2, 3],
+  turtle: [1, 2],
+  opportunist: [1, 2],
+  conqueror: [1, 2],
+};
+const versionsOf = (s: string): readonly number[] => VERSIONS[s] ?? [];
+const latest = (s: string): number => versionsOf(s).at(-1) ?? 0;
 
 describe("the registry of this build", () => {
   test("the five strategies at their latest version, every published version kept", () => {
@@ -41,17 +49,20 @@ describe("the registry of this build", () => {
     ]);
     for (const s of BOT_STRATEGIES) {
       expect(botLabel(s)).toBe(`bot:${s}@${latest(s)}`);
-      expect(botVersions(s)).toEqual(Array.from({ length: latest(s) }, (_, i) => i + 1));
+      expect(botVersions(s)).toEqual(versionsOf(s));
       expect(createBot(s, P1).label).toBe(`bot:${s}@${latest(s)}`);
       expect(createBotVersion(s, 1, P1).label).toBe(`bot:${s}@1`);
     }
     expect(botLabels()).toEqual([
       "bot:expander@1",
+      "bot:expander@2",
       "bot:rusher@1",
       "bot:rusher@2",
       "bot:rusher@3",
       "bot:turtle@1",
+      "bot:turtle@2",
       "bot:opportunist@1",
+      "bot:opportunist@2",
       "bot:conqueror@1",
       "bot:conqueror@2",
     ]);
@@ -86,7 +97,7 @@ describe("the registry of this build", () => {
   test("an unregistered version is an error when asked for by number", () => {
     expect(() => botLabel("rusher", 9)).toThrow("no bot:rusher@9; rusher has @1, @2, @3");
     expect(() => createBotVersion("rusher", 9, P1)).toThrow("no bot:rusher@9");
-    expect(() => botLabel("turtle", 2)).toThrow("no bot:turtle@2; turtle has @1");
+    expect(() => botLabel("turtle", 3)).toThrow("no bot:turtle@3; turtle has @1, @2");
   });
 
   test("each createBot call is a new instance", () => {
