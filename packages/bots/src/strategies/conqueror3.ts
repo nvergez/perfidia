@@ -27,9 +27,10 @@
 //   a garrison a relief its origin's spy report shows stronger than every helper can make would beat
 //   is called home (the units live). Allies are asked to hold the city once it falls (`siege` call).
 // - War calls (`war.ts`): a strike on a capital or a strong city waits for the allies in reach that
-//   answered its last call: a `strike` call names a landing window before its founders, whose waves
-//   leave at a timed wake, weighed again then on the intel of then (never counting on the allies);
-//   a call-off is cancelled to them. It answers its allies' calls: a strike on a stranger's city with
+//   answered its last call: a `strike` call names a landing window before its founders, late enough
+//   for their armies (sailing from their capitals) to land in it, whose waves leave at a timed wake,
+//   weighed again then on the intel of then (never counting on the allies); a call-off is cancelled
+//   to them. It answers its allies' calls: a strike on a stranger's city with
 //   a share of its attackers landing in the window (its own victim's first), defenders for a hold or
 //   a conquest, never while its own train waits or an attack is on its way to it.
 // - Trains and joint strikes call themselves off on a spy report showing more than `abortPm` of the
@@ -1703,18 +1704,32 @@ function nextCallId(p: Planner): { id: string; n: number } {
 
 /**
  * Allies with a city that could reach `row` within `JOINT_REACH` (map distance at the seat's pace),
- * with the travel of their nearest city, by id.
+ * by id, with the travel of their nearest city and of their army: from their capital, where an
+ * army gathers (at least the nearest city's, at most `JOINT_REACH`; the nearest city's when the
+ * capital is not theirs any more).
  */
-function alliesInReach(w: World, ctx: Context, row: CityRow): { q: PlayerId; travel: number }[] {
+function alliesInReach(
+  w: World,
+  ctx: Context,
+  row: CityRow,
+): { q: PlayerId; travel: number; army: number }[] {
   const pace = seaPace(w);
   const out = new Map<PlayerId, number>();
+  const capital = new Map<PlayerId, number>();
   for (const o of w.map?.cities ?? []) {
     if (o.owner === null || !ctx.allies.includes(o.owner)) continue;
     const t = islandTravel(w, pace, o.island, row.island);
+    if (t !== null && o.capitalOf === o.owner) capital.set(o.owner, t);
     if (t === null || t > JOINT_REACH) continue;
     out.set(o.owner, Math.min(out.get(o.owner) ?? t, t));
   }
-  return [...out].map(([q, travel]) => ({ q, travel })).toSorted((a, b) => compareIds(a.q, b.q));
+  return [...out]
+    .map(([q, travel]) => ({
+      q,
+      travel,
+      army: Math.min(JOINT_REACH, Math.max(travel, capital.get(q) ?? travel)),
+    }))
+    .toSorted((a, b) => compareIds(a.q, b.q));
 }
 
 /** True when `q` left the seat's last strike call unanswered within `DEAF_FOR` (`wd<seat>`). */
@@ -1783,9 +1798,9 @@ function jointStrike(
   const n = cityNumber(row.id);
   if (allies.length === 0 || f === null || travel === null || n === null) return false;
   if (p.attacksLeft < 3 || travel > MAX_FLIGHT) return false;
-  // The allies hear the call at their next wake and leave at a wake of theirs: their farthest
-  // travel and half an hour come before the window.
-  const farthest = Math.max(...reach.map((x) => x.travel));
+  // The allies hear the call at their next wake and leave at a wake of theirs: their armies'
+  // farthest travel and half an hour come before the window.
+  const farthest = Math.max(...reach.map((x) => x.army));
   const lands = roundUp(w.t + Math.max(travel, JOINT_LEAD, farthest + 1800 + JOINT_WINDOW)) + 120;
   const launchAt = lands - travel;
   if (lands < opensAt(w, row) || !wakeFor(p, launchAt)) return false;
@@ -2388,7 +2403,6 @@ function grow(p: Planner, prm: Conqueror3Params): void {
 export const conqueror3: StrategyDef = Object.freeze<StrategyDef>({
   name: "conqueror",
   version: 3,
-  preview: true,
   brain(rng) {
     const prm = conqueror3Params(rng);
     const knobs: Knobs = {

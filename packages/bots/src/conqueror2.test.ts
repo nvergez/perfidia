@@ -251,8 +251,9 @@ function strikeGame(carriers: number): FakeGame {
 }
 
 describe("conqueror@2 (perfidia-1 shape)", () => {
-  test("it is the latest conqueror; conqueror@1 stays registered", () => {
-    expect(botLabel("conqueror")).toBe("bot:conqueror@2");
+  test("it builds by its label beside conqueror@3, the default; conqueror@1 stays registered", () => {
+    expect(botLabel("conqueror", 2)).toBe("bot:conqueror@2");
+    expect(botLabel("conqueror")).toBe("bot:conqueror@3");
     expect(bot().label).toBe("bot:conqueror@2");
     expect(createBotVersion("conqueror", 1, { seat: "p1", seed: 1 }).label).toBe("bot:conqueror@1");
   });

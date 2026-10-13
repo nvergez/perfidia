@@ -1,10 +1,11 @@
-// Fixture behaviours of conqueror@3 (docs/architecture.md §11.2) on rules shaped like perfidia-1: a
-// preview next to conqueror@2 (the default stays @2), its garrison sent as supports landing with the
+// Fixture behaviours of conqueror@3 (docs/architecture.md §11.2) on rules shaped like perfidia-1: the
+// default conqueror (@2 and @1 stay registered), its garrison sent as supports landing with the
 // founders' wave, strikes kept short and on fresh intel, no siege its owner's known army would
 // relieve, sieges held against a relief or given up when no help can match it, and the war calls
-// (`war.ts`): a strike call to an ally before a capital is struck, its waves at the timed wake, a
-// call-off cancelled to the ally, an ally's call answered and joined at its launch, calls from
-// anyone but an ally ignored. Its play on real matches is tested in `sim` (`conqueror3.test.ts`).
+// (`war.ts`): a strike call to an ally before a capital is struck, its window late enough for the
+// ally's army at its capital, its waves at the timed wake, a call-off cancelled to the ally, an
+// ally's call answered and joined at its launch, calls from anyone but an ally ignored. Its play on
+// real matches is tested in `sim` (`conqueror3.test.ts`, and with the responders `warcalls.test.ts`).
 
 import { describe, expect, test } from "bun:test";
 import type {
@@ -31,6 +32,7 @@ import {
 import { fmtTime } from "./kit.ts";
 import { encodeMemory, parseMemory, type Memory } from "./memory.ts";
 import { botLabel, botLabels, createBotVersion } from "./registry.ts";
+import { parseWar } from "./war.ts";
 
 const DAY = 86400;
 const pair = (t: number): [number, string] => [t, fmtTime(t)];
@@ -299,9 +301,11 @@ async function jointCalls(): Promise<string> {
 }
 
 describe("conqueror@3 (perfidia-1 shape)", () => {
-  test("a preview: registered next to conqueror@2 and @1, the default stays conqueror@2", () => {
-    expect(botLabel("conqueror")).toBe("bot:conqueror@2");
+  test("the latest conqueror and the default; conqueror@2 and @1 stay registered", () => {
+    expect(botLabel("conqueror")).toBe("bot:conqueror@3");
     expect(botLabels()).toContain("bot:conqueror@3");
+    expect(botLabels()).toContain("bot:conqueror@2");
+    expect(botLabels()).toContain("bot:conqueror@1");
     expect(bot().label).toBe("bot:conqueror@3");
     expect(bot(11, 2).label).toBe("bot:conqueror@2");
   });
@@ -414,6 +418,24 @@ describe("conqueror@3 (perfidia-1 shape)", () => {
       const waves = g.moves.filter((m) => m.kind === "attack");
       expect(waves.every((m) => m.arrive === lands)).toBe(true);
       expect(memoryOf(g).x["at"]).toBeUndefined();
+    });
+
+    test("the window leaves time to the ally's army at its capital, not only to its nearest city", async () => {
+      // p6's capital 3 h from the target (p3's home island), its colony c31 1 h 20 away.
+      const g = jointGame();
+      const c6 = g.city("c6");
+      c6.island = "i10";
+      c6.slot = 1;
+      noFreeSlots(g);
+      const log = await playTurn(bot(), g, "p1", { notes: victimNotes(g, 2) });
+      expect(g.violations).toEqual([]);
+      const calls = warMessages(log).flatMap((t) => parseWar(t));
+      expect(calls.length).toBe(1);
+      const call = calls[0]?.kind === "call" ? calls[0].call : null;
+      expect(call?.role).toBe("strike");
+      // The ally hears it at a wake (10 min at most) and its army sails 3 h: the window is later.
+      expect(call?.t0 ?? 0).toBeGreaterThanOrEqual(g.t + 3 * 3600 + 600);
+      expect(memoryOf(g).x["aw"]).toBe(call?.lands ?? -1);
     });
 
     test("a joint strike called off on a fresher report is cancelled to the allies", async () => {

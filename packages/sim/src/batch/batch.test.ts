@@ -127,7 +127,7 @@ describe("sim batch", () => {
         "bot:rusher@3",
         "bot:turtle@3",
         "bot:opportunist@3",
-        "bot:conqueror@2",
+        "bot:conqueror@3",
       ]);
       expect(parsed.clock).toEqual({ kind: "lockstep", maxTurnsPerSecond: 3 });
       const rs = getRuleset("perfidia-1@1.0.0");
@@ -148,7 +148,7 @@ describe("sim batch", () => {
           controllers: {
             p1: "bot:expander@2",
             p2: "bot:rusher@3",
-            p5: "bot:conqueror@2",
+            p5: "bot:conqueror@3",
             p6: "bot:expander@2",
           },
         });

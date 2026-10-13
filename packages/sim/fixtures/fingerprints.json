@@ -4,25 +4,31 @@
     "goldens": {
       "lockstep-12p-1d": "9c1f7d883ffc7f28",
       "lockstep-12p-1d-bots-24a01286": "3298b6e89a2695bb",
+      "lockstep-12p-1d-bots-52f1a52b": "ec46b0c6ba405554",
       "lockstep-12p-1d-bots-c5bd73c9": "e2845d8854c766d8",
       "lockstep-6p-4d": "96bd6f37f267c3cd",
       "lockstep-6p-4d-bots-3cd67627": "aaea08dd3f9f3f68",
       "lockstep-6p-4d-bots-9ac064bb": "0e6cb54c77974463",
+      "lockstep-6p-4d-bots-aeaf1d12": "4c03e8cc486cbf54",
       "rt-virtual-6p-1d": "251c4a2163559ea4",
       "rt-virtual-6p-1d-bots-3cd67627": "2e5c1b574e4960ca",
       "rt-virtual-6p-1d-bots-9ac064bb": "237382e97d046dbc",
+      "rt-virtual-6p-1d-bots-aeaf1d12": "2fedfe4267ca6d9e",
       "scenario-late": "add278fb5f7e1e85"
     },
     "views": {
       "lockstep-12p-1d": "62ba34350fb358d63855d99e724948c6da44a56910ff783874bc99663689b92f",
       "lockstep-12p-1d-bots-24a01286": "d5d4e6413b8999b538ea34387b3eb3e68588a6ddba3cb34e1cb6eb8c3bc1f802",
+      "lockstep-12p-1d-bots-52f1a52b": "594a8278e8c8fd8331f0aeba309ade2cbf4d700ce33c2ef19066861726f31837",
       "lockstep-12p-1d-bots-c5bd73c9": "628a8431843deff21e93044897e238369e0c6d8f25fc9e67f1dd410b28ab00fd",
       "lockstep-6p-4d": "1d0f05018bf547d65cd83e99031a192404cbe32395e7841a449d7f1c7c6b2212",
       "lockstep-6p-4d-bots-3cd67627": "73a043478392fbf4059fe45c101c8ad0c9a6e01c81ff9a95f6e6ec7f9c01cc43",
       "lockstep-6p-4d-bots-9ac064bb": "77ad0d36319c08fababf175bfe605c537eb4775a19e44c74d399ea0a8da8ff29",
+      "lockstep-6p-4d-bots-aeaf1d12": "8aad6de11e354016f31cebdbf651ea7977135c141e054777371d755a21558358",
       "rt-virtual-6p-1d": "af5ea2acae60502f1d9f21d65526290a0acf3ed5dae8de5e60ac36d70365d5c4",
       "rt-virtual-6p-1d-bots-3cd67627": "518ca8464e8ac0516f0e6c604c90dcaf1879f59f1ad191da78531c3bd581031e",
       "rt-virtual-6p-1d-bots-9ac064bb": "45eebbe46adf5dafebec2ee9d3bdd18cc837c72bad5a275f4df13a1450fae5fb",
+      "rt-virtual-6p-1d-bots-aeaf1d12": "1a8feb6692540a2e1a90e13a0b4dcc224a04f78baaf894cbf3aa3fbd6a6700c2",
       "scenario-late": "c57b02bebdd95925b4562cd7a17f3ba52da7c940cbcf35ddbb41b92aa4964fcc"
     }
   },
@@ -32,17 +38,21 @@
       "lockstep-6p-3d": "61690c75d7642a90",
       "lockstep-6p-3d-bots-3cd67627": "814f5764c0a026bc",
       "lockstep-6p-3d-bots-9ac064bb": "4182a37749ab69ca",
+      "lockstep-6p-3d-bots-aeaf1d12": "06ba18cc8c8d8b2e",
       "rt-virtual-6p-1d": "04791dbeba2d9573",
       "rt-virtual-6p-1d-bots-3cd67627": "27cce701b891ca2e",
-      "rt-virtual-6p-1d-bots-9ac064bb": "8f3c28e00a510de6"
+      "rt-virtual-6p-1d-bots-9ac064bb": "8f3c28e00a510de6",
+      "rt-virtual-6p-1d-bots-aeaf1d12": "5eecb2ca22d28dcf"
     },
     "views": {
       "lockstep-6p-3d": "ba1f557dbd0ddd2f98c79ec6712bd6c41618a20125c93da1d781aa539ae064ec",
       "lockstep-6p-3d-bots-3cd67627": "617b5e5ed7a244d1313b4898009c15e682d44afbef8ff9b9d3e7d3b3330eaabb",
       "lockstep-6p-3d-bots-9ac064bb": "e83ffd7a7304e802c47dff56d6f968c8a08e0576b4655bdbfbc29f8a26c03b7d",
+      "lockstep-6p-3d-bots-aeaf1d12": "3487c82fbf89df0467a0986af24107c53747392adf3f0145628e7436ff2a49fe",
       "rt-virtual-6p-1d": "3cca21eb214fac0e517eb32187e8a2caabe1bd1984bf7727644508d4d3491006",
       "rt-virtual-6p-1d-bots-3cd67627": "cabaf6da8d9af85cfdc6169e78c2835249ad35a17f52c2e0d7123607df2fbb79",
-      "rt-virtual-6p-1d-bots-9ac064bb": "200726096d00e240e69d21efad2a817329d1dca41f1e0d59efd772537ae894c2"
+      "rt-virtual-6p-1d-bots-9ac064bb": "200726096d00e240e69d21efad2a817329d1dca41f1e0d59efd772537ae894c2",
+      "rt-virtual-6p-1d-bots-aeaf1d12": "ab9d6223e1a650c9bc72e7847b0ed1cc9106f1d2de535615dfad9aabfa54f92e"
     }
   }
 }

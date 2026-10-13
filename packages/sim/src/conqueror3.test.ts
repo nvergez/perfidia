@@ -1,4 +1,4 @@
-// conqueror@3 (docs/architecture.md §11.2, a preview pinned by `name@3`) on a real seeded perfidia-1
+// conqueror@3 (docs/architecture.md §11.2, pinned by `name@3`) on a real seeded perfidia-1
 // match, through the gateway: its garrison leaves as supports with the founders' wave and lands in
 // the same second, the city falls to its own siege, it asks its ally to hold the city (a `siege` war
 // call, `war.ts`), and the match is a pure function of its seed (the same log twice). Four game days

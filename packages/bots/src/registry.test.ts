@@ -35,8 +35,8 @@ const VERSIONS: Readonly<Record<string, readonly number[]>> = {
   opportunist: [1, 2, 3],
   conqueror: [1, 2, 3],
 };
-/** Previews (`StrategyDef.preview`): registered, but not the default yet. */
-const PREVIEWS: Readonly<Record<string, readonly number[]>> = { conqueror: [3] };
+/** Previews (`StrategyDef.preview`): registered, but not the default yet (none in this build). */
+const PREVIEWS: Readonly<Record<string, readonly number[]>> = {};
 const versionsOf = (s: string): readonly number[] => VERSIONS[s] ?? [];
 const latest = (s: string): number =>
   versionsOf(s).findLast((v) => !(PREVIEWS[s] ?? []).includes(v)) ?? 0;
@@ -76,10 +76,11 @@ describe("the registry of this build", () => {
     expect(botFromLabel("bot:rusher@2", P1)?.label).toBe("bot:rusher@2");
     expect(botFromLabel("bot:rusher@3", P1)?.label).toBe("bot:rusher@3");
     expect(botFromLabel("bot:conqueror@2", P1)?.label).toBe("bot:conqueror@2");
-    // A preview builds by its label, never as the default.
+    // conqueror@3, a preview before its release, is the default now; conqueror@2 builds by its label.
     expect(botFromLabel("bot:conqueror@3", P1)?.label).toBe("bot:conqueror@3");
     expect(createBotVersion("conqueror", 3, P1).label).toBe("bot:conqueror@3");
-    expect(botLabel("conqueror")).toBe("bot:conqueror@2");
+    expect(botLabel("conqueror")).toBe("bot:conqueror@3");
+    expect(botLabel("conqueror", 2)).toBe("bot:conqueror@2");
   });
 
   test("labels parse back to their strategy; malformed or unregistered labels do not", () => {

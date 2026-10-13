@@ -38,19 +38,29 @@ const FIGHT_LABELS = [
   "bot:opportunist@1",
   "bot:conqueror@1",
 ];
-/** The default bots of this build, each at its latest version. */
-const DEFAULT_LABELS = [
+/** The default bots of the relief release (PR #8): each strategy at its version then, frozen. */
+const RELIEF_LABELS = [
   "bot:expander@2",
   "bot:rusher@3",
   "bot:turtle@2",
   "bot:opportunist@2",
   "bot:conqueror@2",
 ];
+/** The default bots of this build, each at its latest version (the war-call bots). */
+const DEFAULT_LABELS = [
+  "bot:expander@2",
+  "bot:rusher@3",
+  "bot:turtle@3",
+  "bot:opportunist@3",
+  "bot:conqueror@3",
+];
 /** The name suffixes of the goldens of a set of bots: a hash of the seats' labels (§13.5). */
 const FIGHT_6P = "bots-3cd67627";
 const FIGHT_12P = "bots-c5bd73c9";
-const BOTS_6P = "bots-9ac064bb";
-const BOTS_12P = "bots-24a01286";
+const RELIEF_6P = "bots-9ac064bb";
+const RELIEF_12P = "bots-24a01286";
+const BOTS_6P = "bots-aeaf1d12";
+const BOTS_12P = "bots-52f1a52b";
 
 function golden(ref: string, name: string): GoldenFile {
   const g = listGoldens(FIXTURES_DIR).find((x) => x.ref === ref && x.name === name);
@@ -78,23 +88,28 @@ describe("the freeze guard", () => {
     expect(report.ok).toBe(true);
     // The goldens of §13.5; Level G runs for the bot goldens, not for the scripted scenario. Each
     // bot golden exists for the phase-1 bots and, suffixed with a hash of its labels, for the
-    // default bots of PR #7 (rusher@2, conqueror@1) and for those of this build (every strategy at
-    // its latest version): the older ones keep their Level G check.
+    // default bots of PR #7 (rusher@2, conqueror@1), of PR #8 (the relief release) and of this
+    // build (every strategy at its latest version): the older ones keep their Level G check.
     expect(report.goldens.map((g) => `${g.ref}/${g.name} ${g.levelG}`)).toEqual([
+      `${PERFIDIA}/lockstep-12p-1d-${RELIEF_12P} pass`,
       `${PERFIDIA}/lockstep-12p-1d-${BOTS_12P} pass`,
       `${PERFIDIA}/lockstep-12p-1d-${FIGHT_12P} pass`,
       `${PERFIDIA}/lockstep-12p-1d pass`,
       `${PERFIDIA}/lockstep-6p-4d-${FIGHT_6P} pass`,
+      `${PERFIDIA}/lockstep-6p-4d-${RELIEF_6P} pass`,
       `${PERFIDIA}/lockstep-6p-4d-${BOTS_6P} pass`,
       `${PERFIDIA}/lockstep-6p-4d pass`,
       `${PERFIDIA}/rt-virtual-6p-1d-${FIGHT_6P} pass`,
+      `${PERFIDIA}/rt-virtual-6p-1d-${RELIEF_6P} pass`,
       `${PERFIDIA}/rt-virtual-6p-1d-${BOTS_6P} pass`,
       `${PERFIDIA}/rt-virtual-6p-1d pass`,
       `${PERFIDIA}/scenario-late skipped`,
       `${SANDBOX}/lockstep-6p-3d-${FIGHT_6P} pass`,
+      `${SANDBOX}/lockstep-6p-3d-${RELIEF_6P} pass`,
       `${SANDBOX}/lockstep-6p-3d-${BOTS_6P} pass`,
       `${SANDBOX}/lockstep-6p-3d pass`,
       `${SANDBOX}/rt-virtual-6p-1d-${FIGHT_6P} pass`,
+      `${SANDBOX}/rt-virtual-6p-1d-${RELIEF_6P} pass`,
       `${SANDBOX}/rt-virtual-6p-1d-${BOTS_6P} pass`,
       `${SANDBOX}/rt-virtual-6p-1d pass`,
     ]);
@@ -236,34 +251,40 @@ describe("what the goldens cover (§13.5)", () => {
     expect(evs(lines, "player_eliminated").length).toBeGreaterThan(0);
   });
 
-  test(`lockstep-6p-4d-${BOTS_6P}: the same match with the default bots, conquests, a siege relieved by bots and a domination countdown`, () => {
-    const lines = readLog(golden(PERFIDIA, `lockstep-6p-4d-${BOTS_6P}`).path);
-    const header = lines[0];
-    if (header?.k !== "header") throw new Error("no header");
-    expect(header.setup.overrides).toEqual({ "time.matchEnd": 345600 });
-    expect(header.clock).toEqual({ kind: "lockstep", maxTurnsPerSecond: 3 });
-    expect(new Set(Object.values(header.controllers))).toEqual(new Set(DEFAULT_LABELS));
-    const end = lines.at(-1);
-    if (end?.k !== "end") throw new Error("no end line");
-    expect(end.t).toBe(345600);
-    expect(evs(lines, "siege_started").length).toBeGreaterThan(0);
-    expect(evs(lines, "city_conquered").length).toBeGreaterThan(0);
-    // A siege broken by a relief battle: won by the relief, in the same second and city.
-    const won = evs(lines, "battle").filter(
-      (l) => field(l, "kind") === "relief" && field(l, "winner") === "attacker",
-    );
-    const relieved = evs(lines, "siege_broken").filter(
-      (b) =>
-        field(b, "cause") === "relief" &&
-        won.some((l) => l.t === b.t && field(l, "city") === field(b, "city")),
-    );
-    expect(relieved.length).toBeGreaterThan(0);
-    expect(evs(lines, "domination_started").length).toBeGreaterThan(0);
-  });
+  for (const [what, labels, six] of [
+    ["the PR #8 default bots", RELIEF_LABELS, RELIEF_6P],
+    ["the default bots", DEFAULT_LABELS, BOTS_6P],
+  ] as const) {
+    test(`lockstep-6p-4d-${six}: the same match with ${what}, conquests, a siege relieved by bots and a domination countdown`, () => {
+      const lines = readLog(golden(PERFIDIA, `lockstep-6p-4d-${six}`).path);
+      const header = lines[0];
+      if (header?.k !== "header") throw new Error("no header");
+      expect(header.setup.overrides).toEqual({ "time.matchEnd": 345600 });
+      expect(header.clock).toEqual({ kind: "lockstep", maxTurnsPerSecond: 3 });
+      expect(new Set(Object.values(header.controllers))).toEqual(new Set(labels));
+      const end = lines.at(-1);
+      if (end?.k !== "end") throw new Error("no end line");
+      expect(end.t).toBe(345600);
+      expect(evs(lines, "siege_started").length).toBeGreaterThan(0);
+      expect(evs(lines, "city_conquered").length).toBeGreaterThan(0);
+      // A siege broken by a relief battle: won by the relief, in the same second and city.
+      const won = evs(lines, "battle").filter(
+        (l) => field(l, "kind") === "relief" && field(l, "winner") === "attacker",
+      );
+      const relieved = evs(lines, "siege_broken").filter(
+        (b) =>
+          field(b, "cause") === "relief" &&
+          won.some((l) => l.t === b.t && field(l, "city") === field(b, "city")),
+      );
+      expect(relieved.length).toBeGreaterThan(0);
+      expect(evs(lines, "domination_started").length).toBeGreaterThan(0);
+    });
+  }
 
   test("every bot golden of a default set of bots has their labels; the 12-seat ones fight on day 1", () => {
     for (const [labels, six, twelve] of [
       [FIGHT_LABELS, FIGHT_6P, FIGHT_12P],
+      [RELIEF_LABELS, RELIEF_6P, RELIEF_12P],
       [DEFAULT_LABELS, BOTS_6P, BOTS_12P],
     ] as const) {
       for (const [ref, name] of [
@@ -286,6 +307,7 @@ describe("what the goldens cover (§13.5)", () => {
       for (const name of [
         "rt-virtual-6p-1d",
         `rt-virtual-6p-1d-${FIGHT_6P}`,
+        `rt-virtual-6p-1d-${RELIEF_6P}`,
         `rt-virtual-6p-1d-${BOTS_6P}`,
       ]) {
         const header = readLog(golden(ref, name).path)[0];
@@ -301,6 +323,7 @@ describe("what the goldens cover (§13.5)", () => {
     for (const name of [
       "lockstep-6p-3d",
       `lockstep-6p-3d-${FIGHT_6P}`,
+      `lockstep-6p-3d-${RELIEF_6P}`,
       `lockstep-6p-3d-${BOTS_6P}`,
     ]) {
       const end = readLog(golden(SANDBOX, name).path).at(-1);
