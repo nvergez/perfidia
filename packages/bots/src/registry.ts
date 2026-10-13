@@ -2,12 +2,14 @@
 // `bot:<strategy>@<n>`, and the factory that `sim` uses for live runs and Level G re-simulation.
 // Every published version of every strategy stays registered (§11.1), so the goldens of an older
 // version keep their Level G check after a newer one ships: a behaviour change is a new def with the
-// next version, added to `PUBLISHED` beside the frozen old one. Unversioned calls use the latest.
+// next version, added to `PUBLISHED` beside the frozen old one. Unversioned calls use the latest
+// version that is not a preview (`StrategyDef.preview`: registered for pinned use before release).
 
 import type { SeatAgent } from "@perfidia/protocol";
 import { BotAgent, type BotOptions } from "./agent.ts";
 import { conqueror } from "./strategies/conqueror.ts";
 import { conqueror2 } from "./strategies/conqueror2.ts";
+import { conqueror3 } from "./strategies/conqueror3.ts";
 import { expander } from "./strategies/expander.ts";
 import { expander2 } from "./strategies/expander2.ts";
 import { opportunist } from "./strategies/opportunist.ts";
@@ -35,6 +37,7 @@ const PUBLISHED: readonly StrategyDef[] = Object.freeze([
   expander2,
   turtle2,
   opportunist2,
+  conqueror3,
 ]);
 
 /** One registered version of a strategy. */
@@ -49,7 +52,7 @@ export interface BotRegistry {
   readonly strategies: readonly BotStrategy[];
   /** The registered versions of `strategy`, ascending. */
   versions(strategy: BotStrategy): readonly number[];
-  /** The highest registered version of `strategy`. */
+  /** The default version of `strategy`: its highest registered version that is not a preview. */
   latest(strategy: BotStrategy): number;
   /** Every registered label, by strategy order then version. */
   labels(): readonly string[];
@@ -108,9 +111,14 @@ export function createBotRegistry(
     if (v === undefined) throw new Error(`bots registry: unknown strategy ${strategy}`);
     return v;
   };
-  const latest = (strategy: BotStrategy): number => versionsOf(strategy).at(-1) ?? 0;
   const find = (strategy: BotStrategy, version: number): StrategyDef | undefined =>
     byName.get(strategy)?.get(version);
+  // The default version: the highest one that is not a preview (the highest when all are).
+  const latest = (strategy: BotStrategy): number => {
+    const every = versionsOf(strategy);
+    const released = every.filter((v) => find(strategy, v)?.preview !== true);
+    return released.at(-1) ?? every.at(-1) ?? 0;
+  };
   const defOf = (strategy: BotStrategy, version: number | undefined): StrategyDef => {
     const v = version ?? latest(strategy);
     const def = find(strategy, v);

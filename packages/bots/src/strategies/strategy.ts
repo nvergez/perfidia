@@ -35,5 +35,10 @@ export interface StrategyDef {
   readonly name: BotStrategy;
   /** An integer ≥ 1, unique per strategy. */
   readonly version: number;
+  /**
+   * A preview: registered (labels, `name@n`, Level G) but not the default yet, so unversioned
+   * calls keep the highest version without the flag. A release drops it.
+   */
+  readonly preview?: boolean;
   brain(rng: BotRng): Brain;
 }
