@@ -897,6 +897,23 @@ export class Planner {
   }
 
   /**
+   * Lowers the recruit batches `queue` of a city may still take this turn to at most `room`, so
+   * that the moves planned after it (`units`) leave that queue alone (a strategy pacing its own
+   * wakes, `pace.ts`). It never raises the room.
+   */
+  capBatchRoom(id: CityId, queue: QueueId, room: number): void {
+    const rooms = this.batchRoom.get(id);
+    if (rooms === undefined || !rooms.has(queue)) return;
+    rooms.set(queue, Math.max(0, Math.min(rooms.get(queue) ?? 0, room)));
+  }
+
+  /** Lowers the build items a city may still queue this turn to at most `room` (never raises it). */
+  capBuildRoom(id: CityId, room: number): void {
+    if (!this.buildRoom.has(id)) return;
+    this.buildRoom.set(id, Math.max(0, Math.min(this.buildRoom.get(id) ?? 0, room)));
+  }
+
+  /**
    * Spends `spendPm` of what is left on units, in packs of the mix (explicit counts, so the mix
    * holds); keeps carriers for the attackers when the strategy ships them across water.
    */

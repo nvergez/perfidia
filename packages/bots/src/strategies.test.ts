@@ -29,7 +29,7 @@ import {
 import type { StrategyHints } from "./hints.ts";
 import { fmtTime } from "./kit.ts";
 import { parseMemory } from "./memory.ts";
-import { botFromLabel, botLabels, botVersions, createBot, createBotVersion } from "./registry.ts";
+import { botFromLabel, botLabels, botVersions, createBotVersion } from "./registry.ts";
 import { streamOf } from "./rng.ts";
 import { opportunistParams } from "./strategies/opportunist.ts";
 import { rusherParams } from "./strategies/rusher.ts";
@@ -131,8 +131,12 @@ function offerTwoAlliancesAndAPact(game: FakeGame): void {
   }
 }
 
+/**
+ * The version these fixtures describe: version 1 of each strategy, frozen since its goldens
+ * (expander@2, turtle@2 and opportunist@2: relief.test.ts; rusher@2: rusher2.test.ts).
+ */
 function bot(strategy: BotStrategy, seat: PlayerId = "p1", seed = 11) {
-  return createBot(strategy, { seat, seed, strict: true });
+  return createBotVersion(strategy, 1, { seat, seed, strict: true });
 }
 
 /** The rusher these fixtures describe: version 1, frozen since its goldens (rusher@2: rusher2.test.ts). */
@@ -223,7 +227,7 @@ describe.each(SHAPES)("$name", (shape) => {
     c1.units = { [shape.founder]: 3, [shape.defender]: 10, [shape.carrier]: 6 };
     // The home island's second slot is taken: the 2-slot island nearby is the best for each.
     game.cities.push(colonyOf(shape, "c20", "p1", c1.island, 1, {}));
-    const b = createBot("expander", { seat: "p1", seed: 11, strict: true, hints: null });
+    const b = createBotVersion("expander", 1, { seat: "p1", seed: 11, strict: true, hints: null });
     const log = await playTurn(b, game, "p1");
     noViolations(game);
     const islands = callsTo(log, "found_city").map((f) => str(f["island"]));
@@ -566,7 +570,7 @@ describe.each(SHAPES)("$name", (shape) => {
     game.t = prm.betrayDay * DAY + 3600;
     game.relations.set("p1", [{ player: "p2", kind: "pact", until: null }]);
     game.intel.delete("p1|c2");
-    const opp = createBot("opportunist", { seat: "p1", seed: 11, strict: true, hints });
+    const opp = createBotVersion("opportunist", 1, { seat: "p1", seed: 11, strict: true, hints });
     const betrayal = await playTurn(opp, game, "p1");
     noViolations(game);
     for (const tool of ["spy", "attack"] as const) {

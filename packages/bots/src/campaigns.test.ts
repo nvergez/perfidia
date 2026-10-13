@@ -115,7 +115,7 @@ describe.each(SHAPES)("$name", (shape) => {
       game.relations.set("p1", [{ player: "p2", kind: "pact", until: null }]);
       game.relations.set("p2", [{ player: "p1", kind: "pact", until: null }]);
       // oxlint-disable-next-line no-await-in-loop -- one campaign at a time
-      const acts = await campaign(game, "opportunist", seed, 6 * DAY);
+      const acts = await campaign(game, "opportunist", seed, 6 * DAY, 1);
       const attacks = acts.filter((a) => a.tool === "attack");
       expect(attacks.map((a) => a.args["to"])).toEqual(["c2"]);
       const strike = attacks[0]!;

@@ -90,6 +90,8 @@ describe("the streaming reader", () => {
         seed: 3,
         players: 6,
         days: 1,
+        // Pinned: a log of this lineup is larger than two chunks.
+        bots: ["expander@1", "rusher@2", "turtle@1", "opportunist@1", "conqueror@1"],
         clock: { kind: "lockstep" },
       })
     ).lines;
