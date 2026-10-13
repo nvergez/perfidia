@@ -33,6 +33,7 @@ test("every combat hint path holds an integer (or a quad of them) in each rulese
       combat.baseDefense?.perLevel,
       combat.morale?.perCity,
       combat.morale?.floor,
+      combat.lootProtectPerLevel,
     ];
     for (const path of ints) {
       if (path === undefined) continue;

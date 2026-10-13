@@ -27,8 +27,8 @@ const P1 = { seat: "p1", seed: 1 } as const;
 /** A later rusher for the tests: the same brain under version 2 (a real one would differ). */
 const rusher2: StrategyDef = Object.freeze<StrategyDef>({ ...rusher, version: 2 });
 
-/** The latest version of each strategy: rusher@2 (the protection-end rush) beside rusher@1. */
-const latest = (s: string): number => (s === "rusher" ? 2 : 1);
+/** The latest version of each strategy: rusher@3 (the rush that grows) beside rusher@1 and @2. */
+const latest = (s: string): number => (s === "rusher" ? 3 : 1);
 
 describe("the registry of this build", () => {
   test("the five strategies at their latest version, every published version kept", () => {
@@ -41,7 +41,7 @@ describe("the registry of this build", () => {
     ]);
     for (const s of BOT_STRATEGIES) {
       expect(botLabel(s)).toBe(`bot:${s}@${latest(s)}`);
-      expect(botVersions(s)).toEqual(s === "rusher" ? [1, 2] : [1]);
+      expect(botVersions(s)).toEqual(s === "rusher" ? [1, 2, 3] : [1]);
       expect(createBot(s, P1).label).toBe(`bot:${s}@${latest(s)}`);
       expect(createBotVersion(s, 1, P1).label).toBe(`bot:${s}@1`);
     }
@@ -49,19 +49,21 @@ describe("the registry of this build", () => {
       "bot:expander@1",
       "bot:rusher@1",
       "bot:rusher@2",
+      "bot:rusher@3",
       "bot:turtle@1",
       "bot:opportunist@1",
       "bot:conqueror@1",
     ]);
     expect(botFromLabel("bot:rusher@1", P1)?.label).toBe("bot:rusher@1");
     expect(botFromLabel("bot:rusher@2", P1)?.label).toBe("bot:rusher@2");
+    expect(botFromLabel("bot:rusher@3", P1)?.label).toBe("bot:rusher@3");
   });
 
   test("labels parse back to their strategy; malformed or unregistered labels do not", () => {
     expect(parseBotLabel("bot:rusher@1")).toEqual({ strategy: "rusher", version: 1 });
     expect(parseBotLabel("bot:rusher@2")).toEqual({ strategy: "rusher", version: 2 });
     for (const bad of [
-      "bot:rusher@3",
+      "bot:rusher@9",
       "bot:rusher@0",
       "bot:chaos@1",
       "rusher",
@@ -80,8 +82,8 @@ describe("the registry of this build", () => {
   });
 
   test("an unregistered version is an error when asked for by number", () => {
-    expect(() => botLabel("rusher", 3)).toThrow("no bot:rusher@3; rusher has @1, @2");
-    expect(() => createBotVersion("rusher", 3, P1)).toThrow("no bot:rusher@3");
+    expect(() => botLabel("rusher", 9)).toThrow("no bot:rusher@9; rusher has @1, @2, @3");
+    expect(() => createBotVersion("rusher", 9, P1)).toThrow("no bot:rusher@9");
     expect(() => botLabel("turtle", 2)).toThrow("no bot:turtle@2; turtle has @1");
   });
 
