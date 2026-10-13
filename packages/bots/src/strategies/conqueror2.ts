@@ -22,8 +22,12 @@
 //   which the waves no longer win, or the failure of that spy, calls the founders' waves off.
 // - Scouting: one spy per turn on the best city of another player whose intel is stale, so that the
 //   next campaign starts from fresh intel.
-// - Own wakes: scouting spies and idle queues wait while the own wakes left would not see the day
-//   out; a spy whose report may lead to a strike needs only one to spare.
+// - Own wakes: paced as the relief pack's bots (`pace.ts`): an idle recruit queue gets a batch only
+//   when it lasts until the next own wake; an idle build queue and a scouting spy need own wakes in
+//   hand under an even share of the day's budget; a spy whose report may lead to a strike may use
+//   one beyond it.
+// - Defense estimates add the support the victim's cities on other islands can ship over before the
+//   waves land (`defenseAt`).
 // - Army: the attackers' unlock first, units before buildings in the capital, carriers wherever an
 //   army or founders would otherwise be stuck on their island.
 // - Diplomacy: from day 2, once a day while it has no alliance, it proposes a war alliance to the
@@ -35,8 +39,8 @@
 // Memory (notes, §11.1): conqueror@1's flags (see `conqueror.ts`), plus `ae`/`ap` (the defense a
 // train was planned on, and when), `hw` (since when founders are held for a strike), `lo<city>` (a
 // city lost, and when), `sc<city>` (a scouting spy), `dp` (the day after its last proposal), `mv`
-// (the victim told to its allies) and `jv`/`jt` (the player an ally named, and when). Handled ids
-// `a<movement>`: an attack on an ally's city answered.
+// (the victim told to its allies), `jv`/`jt` (the player an ally named, and when) and `u<unit>` (a
+// unit's training time, `pace.ts`). Handled ids `a<movement>`: an attack on an ally's city answered.
 
 import {
   compareIds,
@@ -47,20 +51,18 @@ import {
   type ToolCall,
 } from "@perfidia/protocol";
 import {
-  addRes,
   call,
   countOf,
   DAY,
   fmtTime,
   landPop,
   meets,
-  pmRes,
-  scaleRes,
   timesAffordable,
   unitsInReport,
-  ZERO,
 } from "../kit.ts";
-import { economyWishes, ownWakesBefore, unlockWishes, type Knobs, type Planner } from "../plan.ts";
+import { paceBuilds, paceRecruits, wakesInHand } from "../pace.ts";
+import { ownWakesBefore, unlockWishes, type Knobs, type Planner } from "../plan.ts";
+import { rivalCountdowns } from "../relief.ts";
 import { fnv1a32, randInt, type BotRng } from "../rng.ts";
 import type { OwnCity, World } from "../world.ts";
 import {
@@ -70,6 +72,7 @@ import {
   besiegedRow,
   citiesByOwner,
   conquestFounders,
+  defenseOf,
   defenseValue,
   forgeCity,
   founderCity,
@@ -165,13 +168,14 @@ const TRAIN_EXPIRY = 6 * 3600;
 /** Fewest defenders sent to support an ally's city. */
 const MIN_SUPPORT = 5;
 /**
- * Own wakes kept for the rest of the game day: one per this many seconds, beyond what will wake the
- * seat anyway. A spy costs one (its report wakes the seat), so spies wait when they would leave the
- * evening without wakes.
+ * Own wakes in hand (`wakesInHand`) a scouting spy needs: its report wakes the seat, and one is kept
+ * for a spy that may lead to a strike.
  */
-const WAKE_SPACING = 4 * 3600;
-/** Packs of the unit mix in a batch long enough to start an idle queue while own wakes are short. */
-const LONG_PACKS = 8;
+const SCOUT_HAND = 2;
+/** Share (‰) of the units of the owner's cities on other islands assumed to land as support. */
+const SUPPORT_PM = 500;
+/** The owner's cities on other islands whose support is counted, the nearest first. */
+const SUPPORT_CITIES = 2;
 /** A strike is worth founders once every attacker could break the city by this margin (‰). */
 const STRIKE_PM = 1800;
 /** Founders held for a strike that does not leave are released to found cities after this. */
@@ -182,7 +186,6 @@ const CONQUEST_PM = 2000;
 const SLOT_COST = 300;
 /** Nearest players (by travel to their nearest city) among which an alliance is sought. */
 const NEIGHBOURS = 3;
-const SEAT_ID = /^p[1-9][0-9]*$/;
 
 const bySeat = (n: number): PlayerId => `p${n}`;
 
@@ -206,24 +209,6 @@ interface Context {
   readonly named: PlayerId | null;
 }
 
-/** The members of every running domination countdown (the briefing's `ext.countdowns`). */
-function countdownBlocs(w: World): PlayerId[][] {
-  const raw = w.briefing.ext["countdowns"];
-  if (!Array.isArray(raw)) return [];
-  const out: PlayerId[][] = [];
-  for (const c of raw) {
-    if (c === null || typeof c !== "object" || Array.isArray(c)) continue;
-    const members = c["members"];
-    if (!Array.isArray(members)) continue;
-    const ids: PlayerId[] = [];
-    for (const m of members) {
-      if (typeof m === "string" && SEAT_ID.test(m)) ids.push(bySeat(Number(m.slice(1))));
-    }
-    if (ids.length > 0) out.push(ids);
-  }
-  return out;
-}
-
 function contextOf(p: Planner): Context {
   const { w } = p;
   const standings = new Map<PlayerId, Standing>();
@@ -238,11 +223,8 @@ function contextOf(p: Planner): Context {
     });
     if (s.rank === 1) leader = s.player;
   }
-  const rivals = new Set<PlayerId>();
-  for (const bloc of countdownBlocs(w)) {
-    if (bloc.includes(w.seat)) continue;
-    for (const m of bloc) rivals.add(m);
-  }
+  // The members of the blocs running a domination countdown the seat is not in (hints).
+  const rivals = new Set<PlayerId>(rivalCountdowns(w).flatMap((c) => c.members));
   const allies = [...w.relations.entries()]
     .filter(([, kind]) => kind === "ally")
     .map(([q]) => q)
@@ -296,6 +278,87 @@ function priorDefense(w: World, row: CityRow): number {
   return prior.base + Math.floor((prior.perDay * w.t) / DAY);
 }
 
+/** The integer square root of `n` ≥ 0. */
+function isqrt(n: number): number {
+  if (n <= 0) return 0;
+  let r = Math.floor(Math.sqrt(n));
+  while (r * r > n) r -= 1;
+  while ((r + 1) * (r + 1) <= n) r += 1;
+  return r;
+}
+
+/** Tiles between two islands of the map, or null when one is not on it. */
+function tiles(w: World, a: IslandId, b: IslandId): number | null {
+  const ia = w.map?.islands.find((x) => x.id === a);
+  const ib = w.map?.islands.find((x) => x.id === b);
+  if (ia === undefined || ib === undefined) return null;
+  const dx = ia.x - ib.x;
+  const dy = ia.y - ib.y;
+  return isqrt(dx * dx + dy * dy);
+}
+
+/**
+ * Seconds a group takes per 1000 tiles across the sea, from the seat's own travel times: the lower
+ * median of travel ÷ distance over the islands its cities reach in more than `minTravel`; null when
+ * none is known.
+ */
+function seaPace(w: World): number | null {
+  const min = w.kit.rules.time.minTravel;
+  const ratios: number[] = [];
+  for (const c of w.cities) {
+    for (const isl of w.map?.islands ?? []) {
+      if (isl.id === c.island) continue;
+      const t = w.travel(c.id, isl.id, false);
+      const d = tiles(w, c.island, isl.id);
+      if (t === null || d === null || d <= 0 || t <= min) continue;
+      ratios.push(Math.floor((t * 1000) / d));
+    }
+  }
+  if (ratios.length === 0) return null;
+  return ratios.toSorted((a, b) => a - b)[Math.floor((ratios.length - 1) / 2)] ?? null;
+}
+
+/**
+ * The defense waves landing on `row` in `ahead` seconds meet: conqueror@1's estimate
+ * (`targetDefense`: the city, at least the floor remembered for it, half the units of its owner's
+ * cities on its island) plus half the units of its owner's nearest `SUPPORT_CITIES` cities on other
+ * islands whose support, sent when the first wave leaves, lands before them (their travel timed on
+ * the map with the seat's own sea pace). A city seen without carriers when the rules need them to
+ * cross water sends none; one without intel counts as half the target's own units. conqueror@1 left
+ * them out: against bots that ship defenders over, a fifth of its strikes met them and died.
+ */
+function defenseAt(p: Planner, prm: Conqueror2Params, row: CityRow, ahead: number): Defense | null {
+  const d = targetDefense(p, prm, row, ahead);
+  const { w } = p;
+  const pace = seaPace(w);
+  if (d === null || pace === null) return d;
+  const kit = w.kit;
+  const min = kit.rules.time.minTravel;
+  const view = w.views.get(row.id);
+  const own = view === undefined ? null : defenseOf(w, view, prm.growthPm, ahead);
+  const near = (w.map?.cities ?? [])
+    .filter((o) => o.id !== row.id && o.owner === row.owner && o.island !== row.island)
+    .map((o) => {
+      const dist = tiles(w, o.island, row.island);
+      return { o, travel: dist === null ? null : Math.max(min, Math.ceil((pace * dist) / 1000)) };
+    })
+    .filter((x): x is { o: CityRow; travel: number } => x.travel !== null && x.travel < ahead)
+    .toSorted((a, b) => a.travel - b.travel || compareIds(a.o.id, b.o.id))
+    .slice(0, SUPPORT_CITIES);
+  const carrier = kit.roles.carrier;
+  let support = 0;
+  for (const { o } of near) {
+    const ov = w.views.get(o.id);
+    const seen = ov?.access === "public" && ov.intel?.type === "spy_report" ? ov.intel.data : null;
+    if (seen !== null && kit.rules.movement.transportRule && carrier !== null) {
+      if (countOf(unitsInReport(kit, seen), carrier) <= 0) continue;
+    }
+    const od = ov === undefined ? null : defenseOf(w, ov, prm.growthPm, ahead);
+    support += Math.floor(((od?.units ?? own?.units ?? 0) * SUPPORT_PM) / 1000);
+  }
+  return { ...d, units: d.units + support };
+}
+
 interface Cost {
   /** Defense points: the defense after morale, the overhead and the travel. */
   readonly cost: number;
@@ -312,7 +375,7 @@ function cityCost(
   foes: number,
 ): Cost {
   const { w } = p;
-  const d = targetDefense(p, prm, row, travel);
+  const d = defenseAt(p, prm, row, travel);
   const value = d === null ? priorDefense(w, row) : defenseValue(d);
   const m = Math.max(1, moraleAgainst(w, foes));
   const eff = Math.ceil((value * 1000) / m);
@@ -457,7 +520,7 @@ function victimTargets(p: Planner, prm: Conqueror2Params, victim: PlayerId): Tar
     const c = open ? cityCost(p, prm, row, travel, rows.length) : null;
     const raw = c?.cost ?? 0;
     const cost = lostRecently(p, row.id) ? Math.floor((raw * 1000) / RETAKE_PM) : raw;
-    const d = row.capitalOf === victim && c !== null ? targetDefense(p, prm, row, travel) : null;
+    const d = row.capitalOf === victim && c !== null ? defenseAt(p, prm, row, travel) : null;
     const head = d !== null && armyBreaks(p, { ...prm, marginPm: STRIKE_PM }, tg, d, rows.length);
     out.push({ tg, rank: head ? 0 : open ? 1 : 2, cost });
   }
@@ -521,7 +584,7 @@ function strikeChecked(
   foes: number,
 ): boolean {
   const before = p.flag("at") ?? 0;
-  const ok = strike(p, prm, tg, d, foes);
+  const ok = strike(p, prm, tg, d, foes, (row, ahead) => defenseAt(p, prm, row, ahead));
   const after = p.flag("at") ?? 0;
   if (ok && after > 0 && after !== before) {
     p.setFlag("ae", defenseValue(d));
@@ -538,7 +601,7 @@ function strikeChecked(
 function checkSpy(p: Planner, prm: Conqueror2Params, tg: Target): void {
   const { w } = p;
   const kit = w.kit;
-  if (p.inFlight("spy", tg.row.id) || !wakesSpare(p, 1)) return;
+  if (p.inFlight("spy", tg.row.id) || (wakesInHand(p) < 1 && !wakesLeft(p, 1))) return;
   const view = w.views.get(tg.row.id);
   const seen =
     view?.access === "public" && view.intel !== null
@@ -567,18 +630,6 @@ function spyTravel(w: World, island: IslandId): number | null {
     if (t !== null && (best === null || t < best)) best = t;
   }
   return best;
-}
-
-/**
- * True when the own wakes left today cover the rest of the day at one per `WAKE_SPACING`, what will
- * wake the seat anyway (its queues that empty and its reports that land, `ownWakesBefore`, spies
- * planned this turn included) and `extra` more reports.
- */
-function wakesSpare(p: Planner, extra: number): boolean {
-  const { w } = p;
-  const end = (w.day + 1) * DAY;
-  const need = Math.ceil((end - w.t) / WAKE_SPACING);
-  return ownWakesBefore(p, end) + extra + need <= w.briefing.budget.ownWakesLeft;
 }
 
 /** True when the own wakes left today cover what will wake the seat anyway and `extra` more. */
@@ -630,7 +681,7 @@ function trainStep(p: Planner, prm: Conqueror2Params, victim: PlayerId | null): 
     p.wakeAt(ta - travel);
     return;
   }
-  const d = targetDefense(p, prm, row, travel) ?? NO_DEFENSE;
+  const d = defenseAt(p, prm, row, travel) ?? NO_DEFENSE;
   const foes = w.map?.cities.filter((c) => c.owner === victim).length ?? 1;
   const tg: Target = { row, besieged: false, travel };
   const m = moraleAgainst(w, foes);
@@ -730,14 +781,15 @@ function offense(
       seen.push({ tg, label, taken, d: null, breaks: false, ready: false });
       continue;
     }
-    const d = targetDefense(p, prm, tg.row, tg.travel);
+    const d = defenseAt(p, prm, tg.row, tg.travel);
     const fresh = d !== null && d.age <= prm.stale;
     // A spy whose report may lead to a strike (the army could strike the city on its older intel)
-    // is worth one of the own wakes kept for the rest of the day; others wait for spare ones.
+    // may take an own wake beyond the seat's even share of the day (`wakesInHand`); others wait for
+    // one in hand.
     const strikable = d !== null && armyBreaks(p, { ...prm, marginPm: STRIKE_PM }, tg, d, foes);
     const spyable =
       w.t + 2 * 3600 >= kit.rules.time.attackFrom &&
-      (wakesSpare(p, 1) || (strikable && wakesLeft(p, 1)));
+      (wakesInHand(p) >= 1 || (strikable && wakesLeft(p, 1)));
     if (!fresh && !train && spies < 2 && spyable) {
       if (spyOn(p, prm, tg, view)) spies += 1;
     }
@@ -796,7 +848,8 @@ function scout(
 ): void {
   const { w } = p;
   const kit = w.kit;
-  if (w.t + 2 * 3600 < kit.rules.time.attackFrom || trainWaits(p) || !wakesSpare(p, 1)) return;
+  if (w.t + 2 * 3600 < kit.rules.time.attackFrom || trainWaits(p)) return;
+  if (wakesInHand(p) < SCOUT_HAND) return;
   for (const o of opts) {
     if (o.q === victim) continue;
     const view = w.views.get(o.row.id);
@@ -831,31 +884,6 @@ function slotEv(p: Planner): number {
     if (ev > best) best = ev;
   }
   return best;
-}
-
-/**
- * True when `c` may take a batch of the unit mix while own wakes are short: its attackers' queue is
- * busy (the batch only delays the wake its end brings), or the batch would hold `LONG_PACKS` packs
- * (long enough not to end before the next wake).
- */
-function recruitNow(p: Planner, c: OwnCity): boolean {
-  const { w, k } = p;
-  const kit = w.kit;
-  const attacker = kit.roles.attacker;
-  const arow = attacker === null ? undefined : kit.units.get(attacker);
-  if (arow === undefined) return false;
-  if ((c.recruit[arow.queue]?.length ?? 0) > 0) return true;
-  const drow = kit.roles.defender === null ? undefined : kit.units.get(kit.roles.defender);
-  const cost = addRes(
-    scaleRes(arow.cost, k.mix.attacker),
-    drow === undefined ? ZERO : scaleRes(drow.cost, k.mix.defender),
-  );
-  const pop = arow.pop * k.mix.attacker + (drow?.pop ?? 0) * k.mix.defender;
-  const packs = Math.min(
-    timesAffordable(pmRes(p.budgetOf(c.id), k.spendPm), cost),
-    Math.floor(p.popFreeOf(c.id) / Math.max(1, pop)),
-  );
-  return packs >= LONG_PACKS;
 }
 
 /**
@@ -1082,21 +1110,24 @@ function foundersFor(p: Planner, prm: Conqueror2Params, victim: PlayerId | null,
 }
 
 /**
- * The army and the buildings. Every queue that runs dry wakes the seat (own budget): while the own
- * wakes left would not see the day out (`wakesSpare`), no idle build queue is started and an idle
- * recruit queue only for a long batch. The army comes first in the forge city (the capital), after
- * the buildings elsewhere; an army that cannot cross water asks for its carriers first.
+ * The army and the buildings, paced on the seat's own wakes (`pace.ts`): every queue that runs dry
+ * wakes the seat on its own budget, so an idle recruit queue gets a batch only when it lasts until
+ * the next own wake, and an idle build queue starts only with an own wake in hand (the queues
+ * started this turn, the founders' included, count). The army comes first in the forge city (the
+ * capital), after the buildings elsewhere; an army that cannot cross water asks for its carriers
+ * first.
  */
 function grow(p: Planner, prm: Conqueror2Params): void {
-  const spare = wakesSpare(p, 0);
   const forge = forgeCity(p.w)?.id ?? null;
   harbors(p, prm);
-  const may = (c: OwnCity): boolean => spare || recruitNow(p, c);
-  p.units(undefined, (c) => c.id === forge && may(c));
-  if (spare) p.economy((c) => storeAhead(p, c));
-  else p.economyWith((c) => (c.build.length === 0 ? [] : economyWishes(p, c, storeAhead(p, c))));
-  transports(p);
-  p.units(undefined, (c) => c.id !== forge && may(c));
+  paceRecruits(p);
+  p.units(undefined, (c) => c.id === forge);
+  paceBuilds(p);
+  p.economy((c) => storeAhead(p, c));
+  transports(p, true);
+  // The other cities' batches are what the buildings left: weighed again.
+  paceRecruits(p);
+  p.units(undefined, (c) => c.id !== forge);
 }
 
 export const conqueror2: StrategyDef = Object.freeze<StrategyDef>({

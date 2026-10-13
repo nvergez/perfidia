@@ -485,6 +485,41 @@ async function campaignText(seed: number): Promise<string> {
   return JSON.stringify(await campaign(game, game.rules.time.attackFrom + DAY, seed));
 }
 
+test("rusher@3 ships a colony's surplus to its capital only as far as the capital can store it", async () => {
+  const shape = SHAPES[0]!;
+  const shipped = async (stock: number): Promise<Record<string, unknown>[]> => {
+    const game = armed(shape, 0, 2 * DAY + 3600);
+    const c1 = game.city("c1");
+    // A full build queue and no free pop: the capital spends nothing this turn.
+    c1.units = { raider: 400 };
+    c1.build = [1, 2, 3, 4, 5].map((item) => ({
+      item,
+      building: "lumber",
+      level: 4 + item,
+      start: game.t - 600,
+      end: game.t + item * 3600,
+    }));
+    c1.itemSeq = 5;
+    c1.stock = res(stock, stock, stock);
+    // A colony on the backyard island (4800 s away) with a surplus well above half its store.
+    game.cities.push(
+      colonyOf(shape, "c22", "p1", "i3", 0, { [shape.defender]: 10, [shape.carrier]: 2 }),
+    );
+    game.city("c22").stock = res(3500, 3500, 3500);
+    const log = await playTurn(bot(), game, "p1");
+    expect(game.violations).toEqual([]);
+    return callsTo(log, "send_resources");
+  };
+  // Room for about 2500 of each in the capital (3560 a resource): the surplus goes, within it.
+  const roomy = await shipped(1000);
+  expect(roomy.map((s) => [s["from"], s["to"]])).toEqual([["c22", "c1"]]);
+  for (const r of ["wood", "stone", "gold"] as const) {
+    expect(Number(roomy[0]![r] ?? 0)).toBeLessThanOrEqual(3560 - 1000);
+  }
+  // A capital whose store is nearly full would lose the cargo: none is sent.
+  expect(await shipped(3500)).toEqual([]);
+});
+
 test("rusher@3 campaigns are deterministic: the same seed plays the same calls", async () => {
   const first = await campaignText(SEED);
   expect(await campaignText(SEED)).toBe(first);

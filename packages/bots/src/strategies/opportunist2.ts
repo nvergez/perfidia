@@ -474,7 +474,7 @@ export const opportunist2: StrategyDef = Object.freeze<StrategyDef>({
       knobs,
       reads(w: World): ToolCall[] {
         const out: ToolCall[] = [call("leaderboard", {})];
-        out.push(...reliefReads(w, true), ...countdownReads(w));
+        out.push(...reliefReads(w, true), ...countdownReads(w, true));
         if (w.day >= prm.betrayDay - 1) {
           for (const o of friendCities(w).slice(0, FRIEND_SCAN)) {
             out.push(call("view_city", { city: o.id }));
@@ -505,7 +505,7 @@ export const opportunist2: StrategyDef = Object.freeze<StrategyDef>({
         holdBetrayal(p);
         relieveSieges(p, relief, true, 0);
         holdSieges(p, relief);
-        const keepFounders = stopTheLeader(p, relief, 300);
+        const keepFounders = stopTheLeader(p, relief, 300, true);
         betray(p, prm);
         scoutFriends(p, prm);
         raid(p, prm);

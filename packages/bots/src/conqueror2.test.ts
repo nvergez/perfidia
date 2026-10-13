@@ -224,6 +224,32 @@ function alliedColonies(): FakeGame {
   return g;
 }
 
+/** p3's colony on p1's frontier: 30 guards, which 200 raiders break; a free slot at home. */
+function colonyGame(): FakeGame {
+  const g = game();
+  g.t = 2 * DAY + 3600;
+  armed(g, { ...ARMY, raider: 200, transport: 30 });
+  g.cities.push(colony("c20", "p3", FRONTIER, 0, { guard: 30 }));
+  spied(g, "c20", { guard: 30 });
+  fortified(g, [2, 3, 4, 5, 6]);
+  return g;
+}
+
+/**
+ * p2's colony on its backyard (20 guards), 11818 s from p1's capital; p2's capital, 4800 s from it,
+ * is spied with 400 guards and `carriers`: half of them land before the waves when it has carriers.
+ */
+function strikeGame(carriers: number): FakeGame {
+  const g = game();
+  g.t = 2 * DAY + 3600;
+  armed(g, { ...ARMY, raider: 150, transport: 30 });
+  g.cities.push(colony("c20", "p2", FAR, 0, { guard: 20 }));
+  spied(g, "c20", { guard: 20 });
+  spied(g, "c2", carriers > 0 ? { guard: 400, transport: carriers } : { guard: 400 });
+  noFreeSlots(g);
+  return g;
+}
+
 describe("conqueror@2 (perfidia-1 shape)", () => {
   test("it is the latest conqueror; conqueror@1 stays registered", () => {
     expect(botLabel("conqueror")).toBe("bot:conqueror@2");
@@ -325,6 +351,33 @@ describe("conqueror@2 (perfidia-1 shape)", () => {
     expect(callsTo(log1, "found_city")).toEqual([]);
   });
 
+  test("its founders found a city on a free slot worth more than a conquest, and strike once none is left", async () => {
+    const g = colonyGame();
+    const log = await playTurn(bot(), g, "p1");
+    expect(g.violations).toEqual([]);
+    expect(callsTo(log, "attack")).toEqual([]);
+    expect(callsTo(log, "found_city").length).toBeGreaterThan(0);
+    // No free slot left: the same colony is worth its founders.
+    const full = colonyGame();
+    noFreeSlots(full);
+    const struck = await playTurn(bot(), full, "p1");
+    expect(full.violations).toEqual([]);
+    const sent = callsTo(struck, "attack").filter((a) => a["to"] === "c20");
+    expect(sent.some((a) => founders(a) > 0)).toBe(true);
+  });
+
+  test("it counts the support its victim's cities on other islands can ship over before the waves land", async () => {
+    const shipped = strikeGame(10);
+    const log = await playTurn(bot(), shipped, "p1");
+    expect(shipped.violations).toEqual([]);
+    expect(callsTo(log, "attack").filter((a) => a["to"] === "c20")).toEqual([]);
+    // Without carriers its capital's guards cannot cross: the colony is struck.
+    const stuck = strikeGame(0);
+    const struck = await playTurn(bot(), stuck, "p1");
+    expect(stuck.violations).toEqual([]);
+    expect(callsTo(struck, "attack").some((a) => a["to"] === "c20" && founders(a) > 0)).toBe(true);
+  });
+
   test("it strikes a weak colony before capitals can fall, founders in the leading wave", async () => {
     const g = game();
     g.t = g.rules.time.attackFrom + 2 * 3600;
@@ -355,6 +408,27 @@ describe("conqueror@2 (perfidia-1 shape)", () => {
       expect(m.x["at"]).toBeUndefined();
       expect(m.x["ae"]).toBeUndefined();
       expect(m.m.some((l) => l.startsWith("train c20 called off"))).toBe(true);
+    });
+
+    test("its founders' wave stays home past twice the defense planned on, even when the waves would still win", async () => {
+      const g = trainGame();
+      // Helpers strong enough to break even the larger garrison.
+      g.city("c30").units = { raider: 400, transport: 20 };
+      const b = bot();
+      const first = await playTurn(b, g, "p1", { notes: notesWith({ av: 2, ac: 1 }) });
+      expect(g.violations).toEqual([]);
+      expect(callsTo(first, "attack")).toEqual([
+        { from: "c30", to: "c20", units: { raider: 400, transport: 20 } },
+      ]);
+      const planned = memoryOf(g).x["ae"] ?? 0;
+      advance(g, first.wakeAt!);
+      // 240 guards: a defense above twice the one planned on, which 400 raiders still break.
+      spied(g, "c20", { guard: 240 }, { hall: 3, wall: 0 }, 600);
+      const log = await playTurn(b, g, "p1", { turn: 2 });
+      expect(g.violations).toEqual([]);
+      expect(callsTo(log, "attack")).toEqual([]);
+      const called = memoryOf(g).m.find((l) => l.startsWith("train c20 called off"));
+      expect(called).toContain(`vs D${planned}`);
     });
 
     test("it leaves as planned when the fresher report confirms the defense", async () => {

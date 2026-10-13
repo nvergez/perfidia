@@ -39,7 +39,7 @@ export const expander2: StrategyDef = Object.freeze<StrategyDef>({
     const prm = reliefParams(rng);
     return {
       knobs,
-      reads: (w) => [...reliefReads(w, false), ...countdownReads(w)],
+      reads: (w) => [...reliefReads(w, false), ...countdownReads(w, false)],
       plan(p) {
         // Every pact, and one alliance while it has none (as expander@1).
         let allied = p.w.self?.alliance !== null && p.w.self?.alliance !== undefined;
@@ -51,7 +51,7 @@ export const expander2: StrategyDef = Object.freeze<StrategyDef>({
         });
         relieveSieges(p, prm, false, 0);
         holdSieges(p, prm);
-        const keepFounders = stopTheLeader(p, prm, 300);
+        const keepFounders = stopTheLeader(p, prm, 300, false);
         p.supportThreatened();
         if (!keepFounders) p.settle();
         p.founder();

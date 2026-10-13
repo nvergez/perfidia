@@ -69,26 +69,26 @@ function expanderAttacksAreReliefs(lines: readonly LogLine[]): void {
 }
 
 describe("relief on real matches (perfidia-1, 6 seats, days 1–2)", () => {
-  test("seed 18: expander@2 breaks the siege of its own city, and the same seed gives the same log", async () => {
-    const a = await runBots(spec(18));
+  test("seed 35: expander@2 breaks the siege of its own city, and the same seed gives the same log", async () => {
+    const a = await runBots(spec(35));
     expect(a.lines.at(-1)?.k).toBe("end");
     expect(summarize(a.lines).internal).toBe(0);
     const reliefs = brokenByRelief(a.lines);
     // p1 (expander@2) relieved its own city.
     expect(reliefs.some(([by, , owner]) => by === "p1" && owner === "p1")).toBe(true);
     expanderAttacksAreReliefs(a.lines);
-    const b = await runBots(spec(18));
+    const b = await runBots(spec(35));
     expect(normalisedHash(b.lines)).toBe(normalisedHash(a.lines));
   }, 60_000);
 
-  test("seed 7: opportunist@2 breaks the siege of its ally's city", async () => {
-    const lines = (await runBots(spec(7))).lines;
+  test("seed 29: opportunist@2 breaks the siege of its ally's city", async () => {
+    const lines = (await runBots(spec(29))).lines;
     expect(lines.at(-1)?.k).toBe("end");
     const reliefs = brokenByRelief(lines);
-    // p4 (opportunist@2) relieved a city of p3 (turtle@2), its ally then.
-    expect(reliefs.some(([by, , owner]) => by === "p4" && owner === "p3")).toBe(true);
+    // p4 (opportunist@2) relieved a city of p5 (conqueror@1), its ally then.
+    expect(reliefs.some(([by, , owner]) => by === "p4" && owner === "p5")).toBe(true);
     const formed = events(lines, "alliance_formed").map((l) => l.e.data["members"]);
-    expect(formed).toContainEqual(["p3", "p4"]);
+    expect(formed).toContainEqual(["p4", "p5"]);
     expanderAttacksAreReliefs(lines);
   }, 60_000);
 });

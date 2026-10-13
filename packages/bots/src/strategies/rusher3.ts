@@ -89,6 +89,7 @@ import {
   type Planner,
   type Wish,
 } from "../plan.ts";
+import { unitTime } from "../pace.ts";
 import { randInt, type BotRng } from "../rng.ts";
 import type { OtherCity, OwnCity, World } from "../world.ts";
 import type { StrategyDef } from "./strategy.ts";
@@ -433,30 +434,6 @@ function returning(
       n: countOf(m.units ?? {}, atk),
     }))
     .toSorted((a, b) => a.at - b.at);
-}
-
-/**
- * Seconds one `unit` takes to train in a city: from its table when the rules carry it, else from a
- * batch of that unit in the city's full view (remembered as the flag `ut`), else null.
- */
-function unitTime(p: Planner, c: OwnCity, unit: UnitId): number | null {
-  const kit = p.w.kit;
-  const row = kit.units.get(unit);
-  const q = row === undefined ? undefined : kit.queues.get(row.queue);
-  if (row === undefined || q === undefined || c.levels === null) return null;
-  const table = row.time;
-  if (table !== undefined && table.length > 0) {
-    return table[Math.min(c.levels[q.building] ?? 0, table.length - 1)] ?? null;
-  }
-  const view = p.w.views.get(c.id);
-  if (view !== undefined && view.access === "full") {
-    for (const b of view.recruit[row.queue] ?? []) {
-      if (b.unit !== unit || b.count <= 0) continue;
-      const each = Math.floor((b.end[0] - b.start[0]) / b.count);
-      if (each > 0) p.setFlag("ut", each);
-    }
-  }
-  return p.flag("ut");
 }
 
 /** Attackers of `c` that may leave: those at home above the ones its garrison keeps. */
@@ -1933,25 +1910,33 @@ function recruitArmy(
 /**
  * Ships every other city's surplus to the city that trains the army: what it holds above
  * `SHIP_KEEP_PM` of its storage cap, within its shipment cap, when none of its shipments is on its
- * way and the cargo is worth `SHIP_MIN`. A shipment wakes no one; a queue it would feed instead
- * wakes the seat when it empties.
+ * way and the cargo is worth `SHIP_MIN`. Each cargo fits what the receiver can still store when it
+ * lands (its cap, less its stock after this turn's orders, its production on the way and the cargo
+ * already heading there): above that, the cargo would be lost. A shipment wakes no one; a queue it
+ * would feed instead wakes the seat when it empties. Call it after the receiver's orders.
  */
 function shipSurplus(p: Planner, to: OwnCity): void {
   const { w } = p;
   const rule = w.kit.rules.movement.shipment;
   const away = new Set<string>();
+  let room = subRes(res(to.cap, to.cap, to.cap), p.stockOf(to.id));
   for (const m of w.self?.private?.movements ?? []) {
     if (m.owner !== w.seat || m.cargo === undefined) continue;
     if (m.kind === "shipment" || m.kind === "return") away.add(m.home ?? m.from ?? "");
+    const lands = m.kind === "shipment" ? m.to : m.kind === "return" ? (m.home ?? null) : null;
+    if (lands === to.id) room = subRes(room, m.cargo);
   }
   for (const c of w.cities) {
     if (c.id === to.id || c.blocked || c.levels === null || away.has(c.id)) continue;
     const keep = Math.floor((c.cap * SHIP_KEEP_PM) / 1000);
     const stock = p.stockOf(c.id);
+    const travel = w.travel(c.id, to.island, false) ?? 0;
+    const fits = (r: ResourceId): number =>
+      Math.max(0, room[r] - Math.floor((to.rate[r] * travel) / 3600));
     const surplus = res(
-      Math.max(0, stock.wood - keep),
-      Math.max(0, stock.stone - keep),
-      Math.max(0, stock.gold - keep),
+      Math.min(fits("wood"), Math.max(0, stock.wood - keep)),
+      Math.min(fits("stone"), Math.max(0, stock.stone - keep)),
+      Math.min(fits("gold"), Math.max(0, stock.gold - keep)),
     );
     const total = surplus.wood + surplus.stone + surplus.gold;
     if (total < SHIP_MIN) continue;
@@ -1964,7 +1949,9 @@ function shipSurplus(p: Planner, to: OwnCity): void {
             Math.floor((surplus.stone * cap) / total),
             Math.floor((surplus.gold * cap) / total),
           );
-    if (cargo.wood + cargo.stone + cargo.gold >= SHIP_MIN) p.ship(c, to.id, cargo);
+    if (cargo.wood + cargo.stone + cargo.gold < SHIP_MIN) continue;
+    p.ship(c, to.id, cargo);
+    room = subRes(room, cargo);
   }
 }
 
@@ -2078,8 +2065,8 @@ export const rusher3: StrategyDef = Object.freeze<StrategyDef>({
         }
         economy(p, wishes, keepWakes(p), pace);
         const trainer = hub ?? main;
-        shipSurplus(p, trainer);
         recruitArmy(p, trainer, g, pace);
+        shipSurplus(p, trainer);
       },
     };
   },

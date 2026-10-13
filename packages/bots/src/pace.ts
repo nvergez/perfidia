@@ -4,18 +4,21 @@
 // sleeps through the evening. An empty recruit queue therefore gets a batch only when that batch
 // lasts until the seat's next own wake (its cadence, or later once the own wakes left must be
 // spread over the rest of the day): longer batches, fewer wakes. Otherwise the resources wait for
-// that wake. Queues already running are topped up as usual: that only moves their end later. While
-// the own wakes left no longer cover the cadence, an empty build queue waits for the next wake too.
+// that wake. Queues already running are topped up as usual: that only moves their end later. An
+// empty build queue (its items' lengths are unknown before they are ordered) is started only while
+// the seat's own wakes keep to an even share of the day's budget: ahead of it, it waits.
 
-import type { QueueId, UnitId } from "@perfidia/protocol";
+import { CityIdSchema, compareIds, z, type QueueId, type UnitId } from "@perfidia/protocol";
 import { addRes, countOf, DAY, pmRes, scaleRes, timesAffordable, ZERO } from "./kit.ts";
-import type { Planner } from "./plan.ts";
+import { ownWakesBefore, type Planner } from "./plan.ts";
 import type { OwnCity, World } from "./world.ts";
 
 /** Packs of the unit mix below which `units` keeps the surplus (its default `minPacks`). */
 const MIN_PACKS = 3;
 /** Carriers ordered in an empty queue at least (fewer wait for the shortfall to grow). */
 const CARRIER_BATCH = 3;
+/** Own wakes a seat may run ahead of an even share of the day's budget (`wakesInHand`). */
+const PACE_SLACK = 2;
 
 /**
  * The time each own wake left today must cover so that the budget lasts until the day ends, or
@@ -183,19 +186,97 @@ export function paceRecruits(p: Planner): void {
   }
 }
 
+const BuildArgs = z.looseObject({ city: CityIdSchema });
+const RecruitArgs = z.looseObject({
+  city: CityIdSchema,
+  orders: z.array(z.looseObject({ unit: z.string(), count: z.union([z.int(), z.literal("max")]) })),
+});
+
 /**
- * While the own wakes left today no longer cover the strategy's cadence (`ownWakeSpread`), an
- * empty build queue stays empty until the next wake: an item started now would most likely end,
- * and wake the seat, before the budget affords it. A city whose stock nears its storage cap builds
- * anyway (its production would be lost). Call it before `economy`.
+ * The own wakes this turn's calls add before `until`: one per queue they start that was idle (a
+ * city's build queue, or one of its recruit queues) unless its orders are known to last until then
+ * (build items' lengths are unknown before they are ordered; a recruit batch's comes from
+ * `unitTime`, and a `"max"` order counts as unknown).
+ */
+export function plannedWakes(p: Planner, until: number): number {
+  const { w } = p;
+  const kit = w.kit;
+  const builds = new Set<string>();
+  const lengths = new Map<string, number | null>();
+  for (const c of p.calls) {
+    if (c.tool === "build") {
+      const args = BuildArgs.safeParse(c.args);
+      const city = args.success ? p.city(args.data.city) : undefined;
+      if (city !== undefined && city.build.length === 0) builds.add(city.id);
+    } else if (c.tool === "recruit") {
+      const args = RecruitArgs.safeParse(c.args);
+      const city = args.success ? p.city(args.data.city) : undefined;
+      if (!args.success || city === undefined) continue;
+      for (const o of args.data.orders) {
+        const queue = kit.units.get(o.unit)?.queue;
+        if (queue === undefined || (city.recruit[queue]?.length ?? 0) > 0) continue;
+        const key = `${city.id}/${queue}`;
+        const each = o.count === "max" ? null : unitTime(p, city, o.unit);
+        const before = lengths.has(key) ? (lengths.get(key) ?? null) : 0;
+        lengths.set(
+          key,
+          before === null || each === null || o.count === "max" ? null : before + o.count * each,
+        );
+      }
+    }
+  }
+  let n = builds.size;
+  for (const length of lengths.values()) if (length === null || w.t + length < until) n += 1;
+  return n;
+}
+
+/**
+ * The own wakes the seat can still spend before its next own wake (`nextOwnWake`) while keeping to
+ * an even share of the day's budget, plus `PACE_SLACK` (never more than the budget): that share at
+ * its next wake, less the own wakes used today, those already due before it (its queues that empty
+ * and its reports that land, the spies planned this turn included, `ownWakesBefore`), those this
+ * turn's calls add (`plannedWakes`) and that next wake itself when it falls today. A seat that spent
+ * extra wakes in the morning gets them back as the day goes on; one that kept to its share has
+ * `PACE_SLACK` in hand.
+ */
+export function wakesInHand(p: Planner): number {
+  const { w, k } = p;
+  const g = w.kit.gateway;
+  const start = w.day * DAY;
+  const end = start + DAY;
+  const next = Math.min(nextOwnWake(w, k.cadence), end);
+  const share = Math.min(
+    g.ownWakesPerDay,
+    Math.floor((g.ownWakesPerDay * (next - start)) / DAY) + PACE_SLACK,
+  );
+  const used = g.ownWakesPerDay - w.briefing.budget.ownWakesLeft;
+  const due = ownWakesBefore(p, next) + plannedWakes(p, next - g.groupWindow);
+  return share - used - due - (next < end ? 1 : 0);
+}
+
+/**
+ * Starts an empty build queue only while the seat has a wake in hand (`wakesInHand`): an item
+ * started now may end, and wake the seat, before its next own wake. Each such queue started counts
+ * as one wake, the richest cities first (they order the most items, the longest queues); the others
+ * wait for a later wake. A city whose stock nears its storage cap builds anyway (its production
+ * would be lost). Call it before `economy`.
  */
 export function paceBuilds(p: Planner): void {
-  const { w, k } = p;
-  if (ownWakeSpread(w, k.cadence) === null) return;
+  const { w } = p;
+  const idle: { c: OwnCity; stock: number; full: boolean }[] = [];
   for (const c of w.cities) {
     if (c.blocked || c.build.length > 0) continue;
     const s = p.stockOf(c.id);
-    if (Math.max(s.wood, s.stone, s.gold) * 10 >= c.cap * 8) continue;
-    p.capBuildRoom(c.id, 0);
+    const full = Math.max(s.wood, s.stone, s.gold) * 10 >= c.cap * 8;
+    idle.push({ c, stock: s.wood + s.stone + s.gold, full });
+  }
+  if (idle.length === 0) return;
+  let hand = wakesInHand(p);
+  const order = idle.toSorted(
+    (a, b) => Number(b.full) - Number(a.full) || b.stock - a.stock || compareIds(a.c.id, b.c.id),
+  );
+  for (const { c, full } of order) {
+    hand -= 1;
+    if (!full && hand < 0) p.capBuildRoom(c.id, 0);
   }
 }

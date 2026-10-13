@@ -90,13 +90,13 @@ export const turtle2: StrategyDef = Object.freeze<StrategyDef>({
     const prm = reliefParams(rng);
     return {
       knobs,
-      reads: (w) => [...reliefReads(w, true), ...countdownReads(w)],
+      reads: (w) => [...reliefReads(w, true), ...countdownReads(w, false)],
       plan(p) {
         p.answer(() => true);
         brace(p);
         relieveSieges(p, prm, true, RELIEF_DEFENDERS_PM);
         holdSieges(p, prm);
-        const keepFounders = stopTheLeader(p, prm, RELIEF_DEFENDERS_PM);
+        const keepFounders = stopTheLeader(p, prm, RELIEF_DEFENDERS_PM, false);
         p.supportThreatened();
         supportAllies(p, prm);
         if (!keepFounders) p.settle();

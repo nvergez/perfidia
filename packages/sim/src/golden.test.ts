@@ -123,14 +123,17 @@ describe("the freeze guard", () => {
         g.path,
         jsonlText(lines.with(at, { ...act, r: { ok: false, code: "QUEUE_FULL" } })),
       );
-      const flipped = await checkGoldens(dir, RULESETS, { levelG: false });
+      // Only the golden tampered with is replayed: the first test replays them all.
+      const late = (ref: string, name: string): boolean =>
+        ref === PERFIDIA && name === "scenario-late";
+      const flipped = await checkGoldens(dir, RULESETS, { levelG: false, only: late });
       expect(flipped.ok).toBe(false);
       expect(flipped.problems).toEqual([
         `golden ${PERFIDIA}/scenario-late: Level E: result divergence at t = ${act.t} (n ${act.n}): expected {"code":"QUEUE_FULL","ok":false}, got {"ok":true}`,
       ]);
 
       rmSync(g.path);
-      const deleted = await checkGoldens(dir, RULESETS, { levelG: false });
+      const deleted = await checkGoldens(dir, RULESETS, { levelG: false, only: late });
       expect(deleted.ok).toBe(false);
       expect(deleted.problems).toEqual([
         `golden ${PERFIDIA}/scenario-late is recorded in ${FINGERPRINTS_FILE} but missing`,
@@ -147,7 +150,7 @@ describe("the freeze guard", () => {
       cheatSheet: (config, rules) => `${original.cheatSheet(config, rules)}\n`,
     };
     const rulesets = RULESETS.map((rs) => (rs.ref === PERFIDIA ? altered : rs));
-    const report = await checkGoldens(FIXTURES_DIR, rulesets, { levelG: false });
+    const report = await checkGoldens(FIXTURES_DIR, rulesets, { levelG: false, only: none });
     expect(report.ok).toBe(false);
     expect(report.problems).toHaveLength(1);
     expect(report.problems[0]).toContain(`${FINGERPRINTS_FILE}: ${PERFIDIA}'s artefacts changed`);
@@ -169,14 +172,18 @@ describe("the freeze guard", () => {
         },
       },
     };
-    const views = await checkGoldens(FIXTURES_DIR, swap(hooked), { levelG: false });
+    // One perfidia-1 golden replayed is enough to see it (the first test replays them all).
+    const views = await checkGoldens(FIXTURES_DIR, swap(hooked), {
+      levelG: false,
+      only: (ref, name) => ref === PERFIDIA && name === "rt-virtual-6p-1d",
+    });
     expect(views.ok).toBe(false);
     expect(views.problems.length).toBeGreaterThan(0);
     for (const p of views.problems) {
       expect(p).toContain("what the ruleset's hooks show at its checkpoints changed");
     }
     const titled: AnyRuleset = { ...perfidia, title: `${perfidia.title} 2` };
-    const title = await checkGoldens(FIXTURES_DIR, swap(titled), { levelG: false });
+    const title = await checkGoldens(FIXTURES_DIR, swap(titled), { levelG: false, only: none });
     expect(title.problems).toHaveLength(1);
     expect(title.problems[0]).toContain(`${FINGERPRINTS_FILE}: ${PERFIDIA}'s artefacts changed`);
     const [first, second] = sandbox.tools ?? [];
@@ -185,11 +192,14 @@ describe("the freeze guard", () => {
       ...sandbox,
       tools: [first, { ...second, description: `${second.description} ` }],
     };
-    const tool = await checkGoldens(FIXTURES_DIR, swap(described), { levelG: false });
+    const tool = await checkGoldens(FIXTURES_DIR, swap(described), { levelG: false, only: none });
     expect(tool.problems).toHaveLength(1);
     expect(tool.problems[0]).toContain(`${FINGERPRINTS_FILE}: ${SANDBOX}'s artefacts changed`);
   }, 60000);
 });
+
+/** No golden replayed: the artefact fingerprints alone. */
+const none = (): boolean => false;
 
 /** The registry with `rs` in place of the ruleset of its ref. */
 function swap(rs: AnyRuleset): AnyRuleset[] {
@@ -238,8 +248,16 @@ describe("what the goldens cover (§13.5)", () => {
     expect(end.t).toBe(345600);
     expect(evs(lines, "siege_started").length).toBeGreaterThan(0);
     expect(evs(lines, "city_conquered").length).toBeGreaterThan(0);
-    expect(evs(lines, "battle").map((l) => field(l, "kind"))).toContain("relief");
-    expect(evs(lines, "siege_broken").length).toBeGreaterThan(0);
+    // A siege broken by a relief battle: won by the relief, in the same second and city.
+    const won = evs(lines, "battle").filter(
+      (l) => field(l, "kind") === "relief" && field(l, "winner") === "attacker",
+    );
+    const relieved = evs(lines, "siege_broken").filter(
+      (b) =>
+        field(b, "cause") === "relief" &&
+        won.some((l) => l.t === b.t && field(l, "city") === field(b, "city")),
+    );
+    expect(relieved.length).toBeGreaterThan(0);
     expect(evs(lines, "domination_started").length).toBeGreaterThan(0);
   });
 

@@ -18,6 +18,7 @@ import {
   perfidiaGame,
   playTurn,
   res,
+  sandboxGame,
   str,
   type FakeGame,
   type FCity,
@@ -88,6 +89,42 @@ function withMapExtras(game: FakeGame): void {
       }
     }
     return r;
+  };
+}
+
+/** `city`'s view lists `moves` on their way to it (the fake's views list none). */
+function withIncoming(game: FakeGame, city: CityId, moves: readonly JsonObject[]): void {
+  const respond = game.respond.bind(game);
+  game.respond = (seat: PlayerId, c: ToolCall) => {
+    const r = respond(seat, c);
+    if (c.tool !== "view_city" || !r.ok || r.data["id"] !== city) return r;
+    return { ...r, data: { ...r.data, incoming: [...moves] } };
+  };
+}
+
+/** A movement of `owner` on its way to `to`, as a full city view lists it. */
+function move(
+  game: FakeGame,
+  id: string,
+  kind: "attack" | "support",
+  owner: PlayerId,
+  from: CityId,
+  to: CityId,
+  party: PlayerId | null,
+  arrive: number,
+  units: Record<string, number>,
+): JsonObject {
+  return {
+    id,
+    kind,
+    access: "full",
+    owner,
+    from,
+    to,
+    party,
+    depart: pair(game.t - 600),
+    arrive: pair(arrive),
+    units,
   };
 }
 
@@ -233,6 +270,122 @@ describe("relief of a besieged city", () => {
 });
 
 /**
+ * p1 at D3 01:00 with `raiders` (and the carriers to lift them) in its capital; its colony c20 on
+ * its backyard island (4800 s away) besieged by p2 with `garrison` for 5 more hours. In the fake,
+ * a relief's attack counts × 0.8 (morale without hints) and a garrison's defense × 1.3 + 100.
+ */
+function reliefGame(raiders: number, garrison: Record<string, number>): FakeGame {
+  const game = perfidiaGame(6);
+  game.t = 2 * DAY + 3600;
+  const c1 = game.city("c1");
+  c1.levels = { ...DEVELOPED };
+  c1.units = raiders > 0 ? { raider: raiders, transport: Math.ceil(raiders / 20) } : {};
+  const c20 = colony("c20", "p1", "i3", {});
+  besiege(c20, "p2", "c2", garrison, game.t + 5 * 3600);
+  game.cities.push(c20);
+  return game;
+}
+
+/** Whether expander@2 (seed `seed`) sends a relief to c20 in `game`. */
+async function relieves(game: FakeGame, seed = 11): Promise<boolean> {
+  const log = await playTurn(v2("expander", "p1", seed), game, "p1");
+  noViolations(game);
+  return attacks(log).some((a) => a.to === "c20");
+}
+
+describe("relief margins", () => {
+  test.each([11, 12, 13])(
+    "expander@2 (seed %i) needs its winning margin (1.15 to 1.35): not at parity, at 1.36 yes",
+    async (seed) => {
+      // 30 guards and 3 founders: D = 30 × 20 × 1.3 + 100 = 880. Three founders do not all die
+      // in a lost battle that close (the break path needs more), so only a win counts.
+      const garrison = { guard: 30, settler: 3 };
+      // 55 raiders: A = 55 × 20 × 0.8 = 880, parity.
+      expect(await relieves(reliefGame(55, garrison), seed)).toBe(false);
+      // 75 raiders: A = 1200, 1.36 × D.
+      expect(await relieves(reliefGame(75, garrison), seed)).toBe(true);
+    },
+  );
+
+  test.each([11, 12, 13])(
+    "expander@2 (seed %i) breaks a lone founder's siege from about 0.8 × D, not at 0.69",
+    async (seed) => {
+      const garrison = { guard: 30, settler: 1 };
+      // 38 raiders: A = 608 = 0.69 × 880: the founder may survive.
+      expect(await relieves(reliefGame(38, garrison), seed)).toBe(false);
+      // 53 raiders: A = 848 = 0.96 × 880: a lost battle still kills the lone founder.
+      expect(await relieves(reliefGame(53, garrison), seed)).toBe(true);
+    },
+  );
+
+  test("expander@2 sends the wave that breaks the siege, not a smaller one that would die first", async () => {
+    const game = reliefGame(10, { guard: 30, settler: 3 });
+    // A colony on its frontier (8050 s from c20) holds the army that wins alone.
+    const c21 = colony("c21", "p1", "i4", { raider: 100, transport: 5 });
+    game.cities.push(c21);
+    const log = await playTurn(v2("expander"), game, "p1");
+    noViolations(game);
+    const sent = callsTo(log, "attack").filter((a) => a["to"] === "c20");
+    expect(sent.map((a) => a["from"])).toEqual(["c21"]);
+  });
+
+  test("a relief in flight that the besieger's supports would beat is called back", async () => {
+    for (const reinforced of [false, true]) {
+      const game = reliefGame(0, { raider: 12, settler: 1 });
+      game.moves.push({
+        id: "m1rkf0",
+        kind: "attack",
+        owner: "p1",
+        from: "c1",
+        to: "c20",
+        island: "i3",
+        units: { raider: 60, transport: 3 },
+        depart: game.t - 300,
+        arrive: game.t + 4500,
+        recallableUntil: game.t + 300,
+        party: "p2",
+      });
+      if (reinforced) {
+        withIncoming(game, "c20", [
+          move(game, "m2spt0", "support", "p2", "c2", "c20", "p1", game.t + 2000, { guard: 200 }),
+        ]);
+      }
+      // oxlint-disable-next-line no-await-in-loop -- one game at a time
+      const log = await playTurn(v2("expander"), game, "p1");
+      noViolations(game);
+      const recalls = callsTo(log, "recall_troops").map((r) => r["movement"]);
+      expect(recalls).toEqual(reinforced ? ["m1rkf0"] : []);
+    }
+  });
+
+  test("turtle@2 leaves an ally's siege to the relief already on its way there", async () => {
+    for (const relieved of [false, true]) {
+      const game = perfidiaGame(6);
+      withMapExtras(game);
+      game.t = 3 * DAY + 3600;
+      const c1 = game.city("c1");
+      c1.levels = { ...DEVELOPED };
+      c1.units = { raider: 40, guard: 120, transport: 10 };
+      game.relations.set("p1", [{ player: "p2", kind: "ally", until: null }]);
+      game.relations.set("p2", [{ player: "p1", kind: "ally", until: null }]);
+      game.alliance.set("p1", "a1");
+      game.alliance.set("p2", "a1");
+      besiege(game.city("c2"), "p3", "c3", { raider: 20, settler: 1 }, game.t + 5 * 3600);
+      if (relieved) {
+        // p2's own relief from its colony, fighting the besieger.
+        withIncoming(game, "c2", [
+          move(game, "m3rkf0", "attack", "p2", "c22", "c2", "p3", game.t + 3000, { raider: 50 }),
+        ]);
+      }
+      // oxlint-disable-next-line no-await-in-loop -- one game at a time
+      const log = await playTurn(v2("turtle"), game, "p1");
+      noViolations(game);
+      expect(attacks(log).filter((a) => a.to === "c2").length).toBe(relieved ? 0 : 1);
+    }
+  });
+});
+
+/**
  * The cancels and `max` orders of one turn of `turtle@version` with two attacks on its way to a
  * city that cannot afford a defender (two build items queued).
  */
@@ -310,6 +463,57 @@ describe("opportunist@2", () => {
     noViolations(counting);
     expect(attacks(held).map((a) => a.to)).not.toContain("c2");
     expect(callsTo(held, "send_message")).toEqual([]);
+  });
+
+  test("waits for the countdown instead of betraying while its bloc is within 2 cities of the threshold", async () => {
+    const seed = 11;
+    // p1 and p2 hold 2 cities: a threshold of 4 is within reach, one of 5 is not.
+    for (const need of [4, 5]) {
+      const game = betrayalDay(seed);
+      const respond = game.respond.bind(game);
+      game.respond = (seat: PlayerId, c: ToolCall) => {
+        const r = respond(seat, c);
+        if (c.tool !== "leaderboard" || !r.ok) return r;
+        return { ...r, data: { ...r.data, ext: { domination: { need } } } };
+      };
+      // oxlint-disable-next-line no-await-in-loop -- one game at a time
+      const log = await playTurn(v2("opportunist", "p1", seed), game, "p1");
+      noViolations(game);
+      const betrays = attacks(log).some((a) => a.to === "c2");
+      expect([need, betrays]).toEqual([need, need === 5]);
+    }
+  });
+
+  test("turns back a betrayal still in its recall window once its own bloc's countdown starts", async () => {
+    const seed = 11;
+    for (const counting of [false, true]) {
+      const game = betrayalDay(seed);
+      game.moves.push({
+        id: "m4btr0",
+        kind: "attack",
+        owner: "p1",
+        from: "c1",
+        to: "c2",
+        island: "i6",
+        units: { raider: 40, transport: 2 },
+        depart: game.t - 120,
+        arrive: game.t + 9000,
+        recallableUntil: game.t + 480,
+      });
+      game.city("c1").units = { guard: 10, transport: 1 };
+      if (counting) {
+        withBriefingExt(game, {
+          countdowns: [
+            { key: "a1", members: ["p1", "p2"], cities: 12, need: 12, ends: pair(game.t + 86000) },
+          ],
+        });
+      }
+      // oxlint-disable-next-line no-await-in-loop -- one game at a time
+      const log = await playTurn(v2("opportunist", "p1", seed), game, "p1");
+      noViolations(game);
+      const recalls = callsTo(log, "recall_troops").map((r) => r["movement"]);
+      expect([counting, recalls]).toEqual([counting, counting ? ["m4btr0"] : []]);
+    }
   });
 
   test("raids a weak stranger on a fresh spy report, and spies one it knows nothing about", async () => {
@@ -405,6 +609,22 @@ describe("stop the leader", () => {
     expect(callsTo(log, "found_city")).toEqual([]);
   });
 
+  test("expander@2 and turtle@2 never strike a pact partner's city; opportunist@2 does", async () => {
+    for (const strategy of ["expander", "turtle", "opportunist"] as const) {
+      const game = leaderGame(true);
+      game.relations.set("p1", [{ player: "p2", kind: "pact", until: null }]);
+      game.relations.set("p2", [
+        { player: "p3", kind: "ally", until: null },
+        { player: "p1", kind: "pact", until: null },
+      ]);
+      // oxlint-disable-next-line no-await-in-loop -- one game at a time
+      const log = await playTurn(v2(strategy), game, "p1");
+      noViolations(game);
+      const struck = attacks(log).some((a) => a.to === "c20");
+      expect([strategy, struck]).toEqual([strategy, strategy === "opportunist"]);
+    }
+  });
+
   test("without a countdown the same expander@2 attacks nobody", async () => {
     const game = leaderGame(false);
     const log = await playTurn(v2("expander"), game, "p1");
@@ -456,6 +676,60 @@ describe("own-wake pacing", () => {
     const v1 = createBotVersion("expander", 1, { seat: "p1", seed: 11, strict: true });
     expect(recruitsIn(await playTurn(v1, old, "p1"), "guard")).toBe(1);
   });
+});
+
+/**
+ * `pacingGame` (D2 02:00, no free slot) with producers to raise, `used` own wakes spent today and
+ * `stock` of each resource.
+ */
+function idleBuilder(used: number, stock: number): FakeGame {
+  const game = pacingGame(12 - used);
+  const c1 = game.city("c1");
+  c1.levels = { ...DEVELOPED, warehouse: 10 };
+  c1.stock = res(stock, stock, stock);
+  return game;
+}
+
+describe("own-wake pacing of the build queue", () => {
+  const STRATEGIES: BotStrategy[] = ["expander", "turtle", "opportunist"];
+
+  test.each(STRATEGIES)(
+    "%s@2 builds on its first wake, on sandbox-1 (8 own wakes a day) as on perfidia-1",
+    async (strategy) => {
+      // sandbox-1: the rest of the day over 8 own wakes is 3 h a wake, more than every cadence.
+      const sandbox = sandboxGame(6);
+      sandbox.budget.ownWakesLeft = 8;
+      const s = await playTurn(v2(strategy), sandbox, "p1");
+      noViolations(sandbox);
+      expect(callsTo(s, "build").length).toBeGreaterThan(0);
+      // perfidia-1: 2 h a wake, more than opportunist@2's cadence (90 to 120 min).
+      const perfidia = perfidiaGame(6);
+      const p = await playTurn(v2(strategy), perfidia, "p1");
+      noViolations(perfidia);
+      expect(callsTo(p, "build").length).toBeGreaterThan(0);
+    },
+  );
+
+  test.each(STRATEGIES)(
+    "%s@2 waits with an idle build queue once ahead of an even share of its wakes, unless its store is nearly full",
+    async (strategy) => {
+      // One own wake by 02:00 keeps to the share (12 a day: one per 2 h).
+      const onPace = idleBuilder(1, 3000);
+      const a = await playTurn(v2(strategy), onPace, "p1");
+      noViolations(onPace);
+      expect(callsTo(a, "build").length).toBeGreaterThan(0);
+      // Five by 02:00: the item could end, and wake the seat, before its next wake; it waits.
+      const ahead = idleBuilder(5, 3000);
+      const b = await playTurn(v2(strategy), ahead, "p1");
+      noViolations(ahead);
+      expect(callsTo(b, "build")).toEqual([]);
+      // The same, with a store nearly full: its production would be lost, it builds.
+      const full = idleBuilder(5, 8000);
+      const c = await playTurn(v2(strategy), full, "p1");
+      noViolations(full);
+      expect(callsTo(c, "build").length).toBeGreaterThan(0);
+    },
+  );
 });
 
 describe("determinism", () => {

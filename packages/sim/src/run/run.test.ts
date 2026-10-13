@@ -238,15 +238,12 @@ describe("sim run", () => {
   test("the trace of a run that stopped on a fatal line covers every action before it", async () => {
     const dir = tempDir();
     try {
-      // Pinned bots (the defaults before the relief pack): pacing bots may not act within 6 h on
-      // sandbox-1, and this test needs a log with at least 10 actions, whatever the defaults are.
       const { lines } = await runBots({
         ruleset: "sandbox-1",
         seed: 5,
         players: 3,
         overrides: { "time.matchEnd": 21600 },
         clock: { kind: "lockstep" },
-        bots: ["expander@1", "rusher@2", "turtle@1"],
       });
       expect(verifyLog(lines).ok).toBe(true);
       // The log of a run that died right after its 10th action, ending with the host's fatal line.

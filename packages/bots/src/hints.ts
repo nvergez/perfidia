@@ -27,8 +27,8 @@ export interface StrategyHints {
    */
   readonly siege?: SiegeHints;
   /**
-   * Where the running domination countdowns are listed. Read by the relief module only; absent,
-   * the bot never reacts to a countdown.
+   * Where the running domination countdowns are listed. Read by the relief module (`relief.ts`,
+   * whose countdown helpers conqueror@2 uses too); absent, the bot never reacts to a countdown.
    */
   readonly domination?: DominationHints;
 }

@@ -6,13 +6,14 @@
 //   there when a battle model says its waves break the siege by a seeded margin: the last wave wins
 //   (A > D), or the waves kill every founder of the garrison, which ends the siege as well (a lost
 //   relief at A ≥ 0.71·D kills a lone founder, perfidia-1 §9.3). Waves must land before the siege
-//   ends when the hints say when it does.
+//   ends when the hints say when it does; the fewest that break it are sent, and a relief in flight
+//   that the besieger's supports would beat is called back while it can be.
 // - Support: defenders for an ally's city with an attack on its way (the supportive ally), and the
 //   seat's own sieges held with defenders from its nearest cities.
 // - Stop the leader: while a rival bloc runs a domination countdown, the seat spies that bloc's
 //   nearest cities and strikes the weakest with founders, so that a conquest takes a city away
 //   before the countdown ends (a raid does not stop a countdown; a besieged city still counts for
-//   its owner).
+//   its owner). A pact partner's city only when the strategy says so (it breaks the pact).
 //
 // Everything is read through structured data and the optional `siege` and `domination` hints
 // (`hints.ts`); battle numbers through `combatNumbers` like rusher@2 and conqueror@1. A city with
@@ -90,6 +91,8 @@ export function reliefParams(rng: BotRng): ReliefParams {
 const FALLBACK_MORALE_PM = 800;
 /** Waves of one relief at most (one per helper city). */
 const RELIEF_WAVES = 3;
+/** Nearest helper cities among which the relief's waves are chosen. */
+const RELIEF_SCAN = 6;
 /** A relief lands this long before the siege ends at the latest. */
 const RELIEF_SLACK = 120;
 /** Countdown candidates read (and weighed) per turn. */
@@ -483,7 +486,7 @@ function breakQ(founders: number): number {
  * that would lose its naval phase sinks whole, so such a plan is null.
  */
 function reliefOutcome(
-  waves: readonly Wave[],
+  waves: readonly Pick<Wave, "attack" | "naval" | "water">[],
   g: { def: number; founders: number; naval: number },
   f: Fort,
   m: number,
@@ -511,11 +514,64 @@ function reliefOutcome(
 }
 
 /**
+ * The waves of a relief: among the nearest `RELIEF_SCAN` helpers (in landing order), the fewest
+ * that break the garrison (`reliefOutcome`, against the besieger's supports landing before the
+ * last of them), then the earliest to land; a small wave that would only die first is left home.
+ */
+function reliefWaves(
+  kit: Kit,
+  helpers: readonly Wave[],
+  view: CityViewFull,
+  by: PlayerId,
+  f: Fort,
+  m: number,
+  prm: ReliefParams,
+): { waves: Wave[]; how: "win" | "break" } | null {
+  const pool = helpers.slice(0, RELIEF_SCAN);
+  for (let n = 1; n <= Math.min(RELIEF_WAVES, pool.length); n += 1) {
+    let best: { waves: Wave[]; how: "win" | "break" } | null = null;
+    const pick = (start: number, chosen: Wave[]): void => {
+      if (chosen.length === n) {
+        const last = chosen.at(-1)!.arrive;
+        if (best !== null && last >= best.waves.at(-1)!.arrive) return;
+        const how = reliefOutcome(chosen, garrisonStats(kit, view, by, last), f, m, prm);
+        if (how !== null) best = { waves: [...chosen], how };
+        return;
+      }
+      for (let i = start; i < pool.length; i += 1) pick(i + 1, [...chosen, pool[i]!]);
+    };
+    pick(0, []);
+    if (best !== null) return best;
+  }
+  return null;
+}
+
+/** A garrison as the battle model weighs it: its defense, founders and naval strength. */
+interface GarrisonStats {
+  readonly def: number;
+  readonly founders: number;
+  readonly naval: number;
+}
+
+/** The besieger's garrison in a city seen in full, its supports landing by `until` included. */
+function garrisonStats(kit: Kit, view: CityViewFull, by: PlayerId, until: number): GarrisonStats {
+  const garrison = garrisonOf(view, by, until);
+  return {
+    def: power(kit, garrison, "defense", true),
+    founders: countOf(garrison, kit.roles.founder),
+    naval: power(kit, garrison, "naval", false),
+  };
+}
+
+/**
  * Relieves the seat's besieged cities (and its allies', with `allies`): the nearest cities whose
  * attackers (and, with `defendersPm`, that share of their defenders) land before the siege ends
- * attack the besieger when the battle model breaks the siege by the seeded margins; one wave when
- * one is enough, else up to three, nearest first. A siege the seat already sent a relief to waits
- * for it to land; a besieger that is an ally (or, for an ally's city, a pact partner) is left alone.
+ * attack the besieger when the battle model breaks the siege by the seeded margins: the fewest
+ * waves that do (`reliefWaves`), three at most. A relief of the seat in flight is weighed again on
+ * every turn (the besieger's supports may have reinforced the garrison) and called back while it
+ * can be when it no longer breaks the siege; otherwise it is left to land. An ally's siege that
+ * another player already relieves is left to that relief; a besieger that is an ally (or, for an
+ * ally's city, a pact partner) is left alone.
  */
 export function relieveSieges(
   p: Planner,
@@ -532,13 +588,23 @@ export function relieveSieges(
   }
   if (w.t < kit.rules.time.attackFrom) return;
   for (const s of running) {
-    if (p.attacksLeft <= 0) return;
     const by = s.by;
     if (by === null || by === w.seat || w.relations.get(by) === "ally") continue;
     if (s.owner !== w.seat && w.relations.has(by)) continue;
-    if (p.inFlight("attack", s.city)) continue;
     const view = w.views.get(s.city);
     if (view === undefined || view.access !== "full") continue;
+    const f = fortOf(w, view.buildings);
+    const m = moraleVs(w, by);
+    if (p.inFlight("attack", s.city)) {
+      recheckRelief(p, prm, s, view, by, f, m);
+      continue;
+    }
+    if (p.attacksLeft <= 0) return;
+    // Another player's relief on its way: an ally's city is left to it.
+    const theirs = view.incoming.some(
+      (i) => i.kind === "attack" && i.party === by && i.owner !== by && i.owner !== w.seat,
+    );
+    if (theirs && s.owner !== w.seat) continue;
     const deadline = s.ends === null ? null : s.ends - RELIEF_SLACK;
     const helpers = w.cities
       .filter((c) => c.id !== s.city && !c.blocked)
@@ -548,32 +614,54 @@ export function relieveSieges(
       })
       .toSorted((a, b) => a.arrive - b.arrive || compareIds(a.from.id, b.from.id));
     if (helpers.length === 0) continue;
-    const last = helpers[Math.min(helpers.length, RELIEF_WAVES) - 1]!.arrive;
-    const garrison = garrisonOf(view, by, last);
-    const founders = countOf(garrison, kit.roles.founder);
-    if (founders <= 0) continue;
-    const g = {
-      def: power(kit, garrison, "defense", true),
-      founders,
-      naval: power(kit, garrison, "naval", false),
-    };
-    const f = fortOf(w, view.buildings);
-    const m = moraleVs(w, by);
-    let chosen: Wave[] | null = null;
-    let how: "win" | "break" | null = null;
-    for (let n = 1; n <= Math.min(RELIEF_WAVES, helpers.length) && chosen === null; n += 1) {
-      const waves = helpers.slice(0, n);
-      how = reliefOutcome(waves, g, f, m, prm);
-      if (how !== null) chosen = waves;
-    }
-    if (chosen === null || how === null) continue;
+    if (countOf(garrisonOf(view, by, helpers.at(-1)!.arrive), kit.roles.founder) <= 0) continue;
+    const plan = reliefWaves(kit, helpers, view, by, f, m, prm);
+    if (plan === null) continue;
     let sent = 0;
-    for (const wave of chosen) if (p.attack(wave.from, s.city, wave.units)) sent += 1;
+    for (const wave of plan.waves) if (p.attack(wave.from, s.city, wave.units)) sent += 1;
     if (sent === 0) continue;
     const key = citySuffix(s.city);
     if (key !== null) p.setFlag(`rs${key}`, w.t);
-    p.memo(`relief ${s.city} vs ${by} (${how}, ${sent}) ${fmtTime(w.t)}`);
+    p.memo(`relief ${s.city} vs ${by} (${plan.how}, ${sent}) ${fmtTime(w.t)}`);
   }
+}
+
+/**
+ * Weighs again the seat's relief in flight to a besieged city: when its waves (in landing order)
+ * no longer break the garrison with the besieger's supports landing before them, those still in
+ * their recall window are called back.
+ */
+function recheckRelief(
+  p: Planner,
+  prm: ReliefParams,
+  s: Siege,
+  view: CityViewFull,
+  by: PlayerId,
+  f: Fort,
+  m: number,
+): void {
+  const { w } = p;
+  const kit = w.kit;
+  const mine = (w.self?.private?.movements ?? [])
+    .filter((x) => x.owner === w.seat && x.kind === "attack" && x.to === s.city)
+    .filter((x) => x.party === by && x.units !== undefined && (x.turnedBack ?? null) === null)
+    .toSorted((a, b) => a.arrive[0] - b.arrive[0] || compareIds(a.id, b.id));
+  const recallable = mine.filter((x) => (x.recallableUntil?.[0] ?? 0) > w.t);
+  const last = mine.at(-1);
+  if (last === undefined || recallable.length === 0) return;
+  const waves = mine.map((x) => {
+    const units = x.units ?? {};
+    const from = w.cities.find((c) => c.id === x.from);
+    return {
+      attack: power(kit, units, "attack", true),
+      naval: power(kit, units, "naval", false),
+      water: from === undefined || from.island !== s.island,
+    };
+  });
+  const g = garrisonStats(kit, view, by, last.arrive[0]);
+  if (g.founders <= 0 || reliefOutcome(waves, g, f, m, prm) !== null) return;
+  for (const x of recallable) p.recall(x.id);
+  p.memo(`relief ${s.city} called back ${fmtTime(w.t)}`);
 }
 
 /**
@@ -700,14 +788,21 @@ function weighable(w: World, view: CityView | undefined): view is CityView {
   return view !== undefined && (view.tag === null || !w.hints.avoidTags.includes(view.tag));
 }
 
-/** Cities of the rival countdown blocs, not besieged, nearest to `from` first. */
-function leaderCities(w: World, from: OwnCity): { row: CityRow; travel: number }[] {
+/**
+ * Cities of the rival countdown blocs, not besieged, nearest to `from` first: never an ally's, nor,
+ * without `pacts`, a pact partner's (a battle against a pact partner ends the pact as a betrayal).
+ */
+function leaderCities(w: World, from: OwnCity, pacts: boolean): { row: CityRow; travel: number }[] {
   const members = new Set<PlayerId>(rivalCountdowns(w).flatMap((c) => c.members));
   if (members.size === 0) return [];
   const sieged = besiegedRows(w);
+  const spared = (owner: PlayerId): boolean => {
+    const kind = w.relations.get(owner);
+    return kind === "ally" || (!pacts && kind === "pact");
+  };
   return (w.map?.cities ?? [])
     .filter((r) => r.owner !== null && members.has(r.owner) && !sieged.has(r.id))
-    .filter((r) => r.owner === null || w.relations.get(r.owner) !== "ally")
+    .filter((r) => r.owner === null || !spared(r.owner))
     .map((row) => ({ row, travel: w.travel(from.id, row.island, false) }))
     .filter((x): x is { row: CityRow; travel: number } => x.travel !== null)
     .toSorted((a, b) => a.travel - b.travel || compareIds(a.row.id, b.row.id));
@@ -830,12 +925,15 @@ function planStrike(
   return null;
 }
 
-/** Reads for a countdown strike: the rival blocs' nearest cities (their latest intel). */
-export function countdownReads(w: World): ToolCall[] {
+/**
+ * Reads for a countdown strike: the rival blocs' nearest cities (their latest intel), pact
+ * partners' included with `pacts`.
+ */
+export function countdownReads(w: World, pacts: boolean): ToolCall[] {
   if (rivalCountdowns(w).length === 0) return [];
   const from = w.cities.find((c) => c.capital) ?? w.cities[0];
   if (from === undefined) return [];
-  return leaderCities(w, from)
+  return leaderCities(w, from, pacts)
     .slice(0, COUNTDOWN_SCAN)
     .map((x) => call("view_city", { city: x.row.id }));
 }
@@ -850,10 +948,16 @@ function siegeLength(kit: Kit, w: World): number {
  * spy report) with founders from the city with the most attack at home, early enough for the
  * conquest to land before the countdown ends. The attackers of the seat's other cities that land
  * no later go first, nearest first, as few as needed; then the strike city's waves (`planStrike`).
- * Without a founder there it recruits one. Returns true while the seat keeps its founders for the
+ * Without a founder there it recruits one. A pact partner's city is a target only with `pacts` (the
+ * strike breaks the pact as a betrayal). Returns true while the seat keeps its founders for the
  * strike (the strategy then founds no city this turn).
  */
-export function stopTheLeader(p: Planner, prm: ReliefParams, defendersPm: number): boolean {
+export function stopTheLeader(
+  p: Planner,
+  prm: ReliefParams,
+  defendersPm: number,
+  pacts: boolean,
+): boolean {
   const { w } = p;
   const kit = w.kit;
   const rivals = rivalCountdowns(w);
@@ -869,7 +973,7 @@ export function stopTheLeader(p: Planner, prm: ReliefParams, defendersPm: number
     .filter((e): e is number => e !== null)
     .reduce<number | null>((a, e) => (a === null || e < a ? e : a), null);
   const latest = ends === null ? null : ends - siegeLength(kit, w) - RELIEF_SLACK;
-  const cands = leaderCities(w, from)
+  const cands = leaderCities(w, from, pacts)
     .filter((x) => latest === null || w.t + x.travel <= latest)
     .slice(0, COUNTDOWN_SCAN);
   if (cands.length === 0) return false;

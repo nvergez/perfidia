@@ -766,7 +766,8 @@ function addStrike(p: Planner, city: CityId, attack: number): void {
  * A conquest of `tg`: the waves of the founders' island in one second when they suffice;
  * otherwise a train, with waves from other islands (landing up to `TRAIN_WINDOW` earlier) leaving
  * now and the founders' island's waves timed to land just after them. Returns true when the
- * founders' wave left or a train was planned.
+ * founders' wave left or a train was planned. `defenseAt` estimates the defense a later landing
+ * meets (default: `targetDefense`).
  */
 export function strike(
   p: Planner,
@@ -774,6 +775,8 @@ export function strike(
   tg: Target,
   d: Defense,
   foes: number,
+  defenseAt: (row: CityRow, ahead: number) => Defense | null = (row, ahead) =>
+    targetDefense(p, prm, row, ahead),
 ): boolean {
   const { w } = p;
   const kit = w.kit;
@@ -815,7 +818,7 @@ export function strike(
     const earlier = sorted.map((x) => eff(x.strength));
     const landing = Math.max(...chosen.map((x) => w.t + x.travel));
     // The train lands later than a strike from the founders' island: the defense grows meanwhile.
-    const late = targetDefense(p, prm, tg.row, landing + 60 - w.t) ?? d;
+    const late = defenseAt(tg.row, landing + 60 - w.t) ?? d;
     if (assault(p, prm, tg, late, m, earlier, false) === null) continue;
     const n = cityNumber(tg.row.id);
     if (landing < open || p.attacksLeft < chosen.length + 2 || n === null) return false;
@@ -1316,9 +1319,10 @@ const CARRIER_BATCH = 6;
 /**
  * Carriers for the garrison too: enough to lift every attacker, half the defenders and the
  * founders at home or queued, recruited where the carriers' queue is free (the generic unit plan
- * only counts attackers).
+ * only counts attackers). With `planned`, the order fits the pop this turn's orders leave free
+ * (`popFreeOf`) rather than the briefing's.
  */
-export function transports(p: Planner): void {
+export function transports(p: Planner, planned = false): void {
   const { w } = p;
   const kit = w.kit;
   const carrier = kit.roles.carrier;
@@ -1341,7 +1345,8 @@ export function transports(p: Planner): void {
       timesAffordable(p.budgetOf(c.id), row.cost),
       row.maxPerOrder,
     );
-    if (n > 0 && c.popCap - c.popUsed >= row.pop * n) p.recruit(c, [{ unit: carrier, count: n }]);
+    const free = planned ? p.popFreeOf(c.id) : c.popCap - c.popUsed;
+    if (n > 0 && free >= row.pop * n) p.recruit(c, [{ unit: carrier, count: n }]);
   }
 }
 
