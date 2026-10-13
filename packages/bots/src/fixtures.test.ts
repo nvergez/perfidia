@@ -531,6 +531,8 @@ export interface FMove {
   depart: number;
   arrive: number;
   recallableUntil: number | null;
+  /** The movement's recorded foe (a relief's: the besieger); null when not given. */
+  party?: PlayerId | null;
 }
 
 export interface FIntel {
@@ -885,7 +887,7 @@ export class FakeGame {
             owner: m.owner,
             from: m.from,
             to: m.to,
-            party: null,
+            party: m.party ?? null,
             depart: pair(m.depart),
             arrive: pair(m.arrive),
             units: m.units,

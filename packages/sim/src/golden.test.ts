@@ -30,17 +30,27 @@ const SANDBOX = "sandbox-1@1.0.0";
 
 /** The phase-1 bots: the controllers of the first bot goldens. */
 const PHASE1_BOTS = ["bot:expander@1", "bot:rusher@1", "bot:turtle@1", "bot:opportunist@1"];
-/** The default bots of this build, each at its latest version. */
-const DEFAULT_LABELS = [
+/** The default bots of the fighting-bots release (PR #7): rusher@2 and conqueror@1, frozen. */
+const FIGHT_LABELS = [
   "bot:expander@1",
   "bot:rusher@2",
   "bot:turtle@1",
   "bot:opportunist@1",
   "bot:conqueror@1",
 ];
-/** The name suffixes of the goldens of the default bots: a hash of the seats' labels (§13.5). */
-const BOTS_6P = "bots-3cd67627";
-const BOTS_12P = "bots-c5bd73c9";
+/** The default bots of this build, each at its latest version. */
+const DEFAULT_LABELS = [
+  "bot:expander@2",
+  "bot:rusher@3",
+  "bot:turtle@2",
+  "bot:opportunist@2",
+  "bot:conqueror@2",
+];
+/** The name suffixes of the goldens of a set of bots: a hash of the seats' labels (§13.5). */
+const FIGHT_6P = "bots-3cd67627";
+const FIGHT_12P = "bots-c5bd73c9";
+const BOTS_6P = "bots-9ac064bb";
+const BOTS_12P = "bots-24a01286";
 
 function golden(ref: string, name: string): GoldenFile {
   const g = listGoldens(FIXTURES_DIR).find((x) => x.ref === ref && x.name === name);
@@ -68,17 +78,23 @@ describe("the freeze guard", () => {
     expect(report.ok).toBe(true);
     // The goldens of §13.5; Level G runs for the bot goldens, not for the scripted scenario. Each
     // bot golden exists for the phase-1 bots and, suffixed with a hash of its labels, for the
-    // default bots of this build (rusher@2, conqueror@1): the older ones keep their Level G check.
+    // default bots of PR #7 (rusher@2, conqueror@1) and for those of this build (every strategy at
+    // its latest version): the older ones keep their Level G check.
     expect(report.goldens.map((g) => `${g.ref}/${g.name} ${g.levelG}`)).toEqual([
       `${PERFIDIA}/lockstep-12p-1d-${BOTS_12P} pass`,
+      `${PERFIDIA}/lockstep-12p-1d-${FIGHT_12P} pass`,
       `${PERFIDIA}/lockstep-12p-1d pass`,
+      `${PERFIDIA}/lockstep-6p-4d-${FIGHT_6P} pass`,
       `${PERFIDIA}/lockstep-6p-4d-${BOTS_6P} pass`,
       `${PERFIDIA}/lockstep-6p-4d pass`,
+      `${PERFIDIA}/rt-virtual-6p-1d-${FIGHT_6P} pass`,
       `${PERFIDIA}/rt-virtual-6p-1d-${BOTS_6P} pass`,
       `${PERFIDIA}/rt-virtual-6p-1d pass`,
       `${PERFIDIA}/scenario-late skipped`,
+      `${SANDBOX}/lockstep-6p-3d-${FIGHT_6P} pass`,
       `${SANDBOX}/lockstep-6p-3d-${BOTS_6P} pass`,
       `${SANDBOX}/lockstep-6p-3d pass`,
+      `${SANDBOX}/rt-virtual-6p-1d-${FIGHT_6P} pass`,
       `${SANDBOX}/rt-virtual-6p-1d-${BOTS_6P} pass`,
       `${SANDBOX}/rt-virtual-6p-1d pass`,
     ]);
@@ -107,14 +123,17 @@ describe("the freeze guard", () => {
         g.path,
         jsonlText(lines.with(at, { ...act, r: { ok: false, code: "QUEUE_FULL" } })),
       );
-      const flipped = await checkGoldens(dir, RULESETS, { levelG: false });
+      // Only the golden tampered with is replayed: the first test replays them all.
+      const late = (ref: string, name: string): boolean =>
+        ref === PERFIDIA && name === "scenario-late";
+      const flipped = await checkGoldens(dir, RULESETS, { levelG: false, only: late });
       expect(flipped.ok).toBe(false);
       expect(flipped.problems).toEqual([
         `golden ${PERFIDIA}/scenario-late: Level E: result divergence at t = ${act.t} (n ${act.n}): expected {"code":"QUEUE_FULL","ok":false}, got {"ok":true}`,
       ]);
 
       rmSync(g.path);
-      const deleted = await checkGoldens(dir, RULESETS, { levelG: false });
+      const deleted = await checkGoldens(dir, RULESETS, { levelG: false, only: late });
       expect(deleted.ok).toBe(false);
       expect(deleted.problems).toEqual([
         `golden ${PERFIDIA}/scenario-late is recorded in ${FINGERPRINTS_FILE} but missing`,
@@ -131,7 +150,7 @@ describe("the freeze guard", () => {
       cheatSheet: (config, rules) => `${original.cheatSheet(config, rules)}\n`,
     };
     const rulesets = RULESETS.map((rs) => (rs.ref === PERFIDIA ? altered : rs));
-    const report = await checkGoldens(FIXTURES_DIR, rulesets, { levelG: false });
+    const report = await checkGoldens(FIXTURES_DIR, rulesets, { levelG: false, only: none });
     expect(report.ok).toBe(false);
     expect(report.problems).toHaveLength(1);
     expect(report.problems[0]).toContain(`${FINGERPRINTS_FILE}: ${PERFIDIA}'s artefacts changed`);
@@ -153,14 +172,18 @@ describe("the freeze guard", () => {
         },
       },
     };
-    const views = await checkGoldens(FIXTURES_DIR, swap(hooked), { levelG: false });
+    // One perfidia-1 golden replayed is enough to see it (the first test replays them all).
+    const views = await checkGoldens(FIXTURES_DIR, swap(hooked), {
+      levelG: false,
+      only: (ref, name) => ref === PERFIDIA && name === "rt-virtual-6p-1d",
+    });
     expect(views.ok).toBe(false);
     expect(views.problems.length).toBeGreaterThan(0);
     for (const p of views.problems) {
       expect(p).toContain("what the ruleset's hooks show at its checkpoints changed");
     }
     const titled: AnyRuleset = { ...perfidia, title: `${perfidia.title} 2` };
-    const title = await checkGoldens(FIXTURES_DIR, swap(titled), { levelG: false });
+    const title = await checkGoldens(FIXTURES_DIR, swap(titled), { levelG: false, only: none });
     expect(title.problems).toHaveLength(1);
     expect(title.problems[0]).toContain(`${FINGERPRINTS_FILE}: ${PERFIDIA}'s artefacts changed`);
     const [first, second] = sandbox.tools ?? [];
@@ -169,11 +192,14 @@ describe("the freeze guard", () => {
       ...sandbox,
       tools: [first, { ...second, description: `${second.description} ` }],
     };
-    const tool = await checkGoldens(FIXTURES_DIR, swap(described), { levelG: false });
+    const tool = await checkGoldens(FIXTURES_DIR, swap(described), { levelG: false, only: none });
     expect(tool.problems).toHaveLength(1);
     expect(tool.problems[0]).toContain(`${FINGERPRINTS_FILE}: ${SANDBOX}'s artefacts changed`);
   }, 60000);
 });
+
+/** No golden replayed: the artefact fingerprints alone. */
+const none = (): boolean => false;
 
 /** The registry with `rs` in place of the ruleset of its ref. */
 function swap(rs: AnyRuleset): AnyRuleset[] {
@@ -194,13 +220,13 @@ describe("what the goldens cover (§13.5)", () => {
     expect(evs(lines, "battle").length).toBeGreaterThan(0);
   });
 
-  test(`lockstep-6p-4d-${BOTS_6P}: the same match with the default bots, sieges, conquests and an elimination played by bots`, () => {
-    const lines = readLog(golden(PERFIDIA, `lockstep-6p-4d-${BOTS_6P}`).path);
+  test(`lockstep-6p-4d-${FIGHT_6P}: the same match with the PR #7 default bots, sieges, conquests and an elimination played by bots`, () => {
+    const lines = readLog(golden(PERFIDIA, `lockstep-6p-4d-${FIGHT_6P}`).path);
     const header = lines[0];
     if (header?.k !== "header") throw new Error("no header");
     expect(header.setup.overrides).toEqual({ "time.matchEnd": 345600 });
     expect(header.clock).toEqual({ kind: "lockstep", maxTurnsPerSecond: 3 });
-    expect(new Set(Object.values(header.controllers))).toEqual(new Set(DEFAULT_LABELS));
+    expect(new Set(Object.values(header.controllers))).toEqual(new Set(FIGHT_LABELS));
     const end = lines.at(-1);
     if (end?.k !== "end") throw new Error("no end line");
     expect(end.t).toBe(345600);
@@ -210,24 +236,58 @@ describe("what the goldens cover (§13.5)", () => {
     expect(evs(lines, "player_eliminated").length).toBeGreaterThan(0);
   });
 
-  test("every bot golden of the default bots has their labels; the 12-seat one fights on day 1", () => {
-    for (const [ref, name] of [
-      [PERFIDIA, `lockstep-12p-1d-${BOTS_12P}`],
-      [PERFIDIA, `rt-virtual-6p-1d-${BOTS_6P}`],
-      [SANDBOX, `lockstep-6p-3d-${BOTS_6P}`],
-      [SANDBOX, `rt-virtual-6p-1d-${BOTS_6P}`],
+  test(`lockstep-6p-4d-${BOTS_6P}: the same match with the default bots, conquests, a siege relieved by bots and a domination countdown`, () => {
+    const lines = readLog(golden(PERFIDIA, `lockstep-6p-4d-${BOTS_6P}`).path);
+    const header = lines[0];
+    if (header?.k !== "header") throw new Error("no header");
+    expect(header.setup.overrides).toEqual({ "time.matchEnd": 345600 });
+    expect(header.clock).toEqual({ kind: "lockstep", maxTurnsPerSecond: 3 });
+    expect(new Set(Object.values(header.controllers))).toEqual(new Set(DEFAULT_LABELS));
+    const end = lines.at(-1);
+    if (end?.k !== "end") throw new Error("no end line");
+    expect(end.t).toBe(345600);
+    expect(evs(lines, "siege_started").length).toBeGreaterThan(0);
+    expect(evs(lines, "city_conquered").length).toBeGreaterThan(0);
+    // A siege broken by a relief battle: won by the relief, in the same second and city.
+    const won = evs(lines, "battle").filter(
+      (l) => field(l, "kind") === "relief" && field(l, "winner") === "attacker",
+    );
+    const relieved = evs(lines, "siege_broken").filter(
+      (b) =>
+        field(b, "cause") === "relief" &&
+        won.some((l) => l.t === b.t && field(l, "city") === field(b, "city")),
+    );
+    expect(relieved.length).toBeGreaterThan(0);
+    expect(evs(lines, "domination_started").length).toBeGreaterThan(0);
+  });
+
+  test("every bot golden of a default set of bots has their labels; the 12-seat ones fight on day 1", () => {
+    for (const [labels, six, twelve] of [
+      [FIGHT_LABELS, FIGHT_6P, FIGHT_12P],
+      [DEFAULT_LABELS, BOTS_6P, BOTS_12P],
     ] as const) {
-      const header = readLog(golden(ref, name).path)[0];
-      if (header?.k !== "header") throw new Error(`no header in ${name}`);
-      expect(new Set(Object.values(header.controllers))).toEqual(new Set(DEFAULT_LABELS));
+      for (const [ref, name] of [
+        [PERFIDIA, `lockstep-12p-1d-${twelve}`],
+        [PERFIDIA, `rt-virtual-6p-1d-${six}`],
+        [SANDBOX, `lockstep-6p-3d-${six}`],
+        [SANDBOX, `rt-virtual-6p-1d-${six}`],
+      ] as const) {
+        const header = readLog(golden(ref, name).path)[0];
+        if (header?.k !== "header") throw new Error(`no header in ${name}`);
+        expect(new Set(Object.values(header.controllers))).toEqual(new Set(labels));
+      }
+      const day1 = readLog(golden(PERFIDIA, `lockstep-12p-1d-${twelve}`).path);
+      expect(evs(day1, "battle").length).toBeGreaterThan(0);
     }
-    const twelve = readLog(golden(PERFIDIA, `lockstep-12p-1d-${BOTS_12P}`).path);
-    expect(evs(twelve, "battle").length).toBeGreaterThan(0);
   });
 
   test("rt-virtual-6p-1d: real time under VirtualTime, speed 3, latency 2–60 s", () => {
     for (const ref of [PERFIDIA, SANDBOX]) {
-      for (const name of ["rt-virtual-6p-1d", `rt-virtual-6p-1d-${BOTS_6P}`]) {
+      for (const name of [
+        "rt-virtual-6p-1d",
+        `rt-virtual-6p-1d-${FIGHT_6P}`,
+        `rt-virtual-6p-1d-${BOTS_6P}`,
+      ]) {
         const header = readLog(golden(ref, name).path)[0];
         expect(header).toMatchObject({
           k: "header",
@@ -238,7 +298,11 @@ describe("what the goldens cover (§13.5)", () => {
   });
 
   test("sandbox-1 lockstep-6p-3d runs past hill_open", () => {
-    for (const name of ["lockstep-6p-3d", `lockstep-6p-3d-${BOTS_6P}`]) {
+    for (const name of [
+      "lockstep-6p-3d",
+      `lockstep-6p-3d-${FIGHT_6P}`,
+      `lockstep-6p-3d-${BOTS_6P}`,
+    ]) {
       const end = readLog(golden(SANDBOX, name).path).at(-1);
       if (end?.k !== "end") throw new Error("no end line");
       expect(end.t).toBeGreaterThan(172800);

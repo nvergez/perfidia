@@ -7,12 +7,17 @@
 import type { SeatAgent } from "@perfidia/protocol";
 import { BotAgent, type BotOptions } from "./agent.ts";
 import { conqueror } from "./strategies/conqueror.ts";
+import { conqueror2 } from "./strategies/conqueror2.ts";
 import { expander } from "./strategies/expander.ts";
+import { expander2 } from "./strategies/expander2.ts";
 import { opportunist } from "./strategies/opportunist.ts";
+import { opportunist2 } from "./strategies/opportunist2.ts";
 import { rusher } from "./strategies/rusher.ts";
 import { rusher2 } from "./strategies/rusher2.ts";
+import { rusher3 } from "./strategies/rusher3.ts";
 import { BOT_STRATEGIES, type BotStrategy, type StrategyDef } from "./strategies/strategy.ts";
 import { turtle } from "./strategies/turtle.ts";
+import { turtle2 } from "./strategies/turtle2.ts";
 
 /**
  * Every published (strategy, version), in any order. A new version or a new strategy (its name in
@@ -22,9 +27,14 @@ const PUBLISHED: readonly StrategyDef[] = Object.freeze([
   expander,
   rusher,
   rusher2,
+  rusher3,
   turtle,
   opportunist,
   conqueror,
+  conqueror2,
+  expander2,
+  turtle2,
+  opportunist2,
 ]);
 
 /** One registered version of a strategy. */

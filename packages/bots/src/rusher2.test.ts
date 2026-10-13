@@ -28,7 +28,7 @@ import {
   type FCity,
 } from "./fixtures.test.ts";
 import { encodeMemory, emptyMemory } from "./memory.ts";
-import { botLabel, createBot, createBotVersion } from "./registry.ts";
+import { botLabel, createBotVersion } from "./registry.ts";
 import { streamOf } from "./rng.ts";
 import { rusher2, rusher2Params } from "./strategies/rusher2.ts";
 
@@ -189,10 +189,10 @@ async function campaign(game: FakeGame, until: number, seed = SEED): Promise<Act
   return acts;
 }
 
-test("rusher@2 is the latest rusher, registered beside the frozen rusher@1", () => {
-  expect(botLabel("rusher")).toBe("bot:rusher@2");
+test("rusher@2 stays registered, frozen, beside rusher@1 and the later rusher@3", () => {
   expect(rusher2.version).toBe(2);
-  expect(createBot("rusher", { seat: "p1", seed: 1 }).label).toBe("bot:rusher@2");
+  expect(botLabel("rusher", 2)).toBe("bot:rusher@2");
+  expect(createBotVersion("rusher", 2, { seat: "p1", seed: 1 }).label).toBe("bot:rusher@2");
   expect(createBotVersion("rusher", 1, { seat: "p1", seed: 1 }).label).toBe("bot:rusher@1");
 });
 

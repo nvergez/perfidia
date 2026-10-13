@@ -43,7 +43,7 @@ async function cli(...argv: string[]): Promise<{ code: number; out: string; err:
 }
 
 function isBatch(v: unknown): v is BatchResult {
-  return typeof v === "object" && v !== null && "format" in v && v.format === "perfidia-batch/3";
+  return typeof v === "object" && v !== null && "format" in v && v.format === "perfidia-batch/4";
 }
 
 /** Every file under `dir` with its bytes, for before/after comparisons. */
@@ -94,6 +94,14 @@ describe("sim batch", () => {
       expect(rows[5]).toStartWith("fights · ");
       expect(rows[6]).toMatch(/^variant +runs +ends +1st battle \(mean \/ min\) /);
       expect(rows[7]).toMatch(/^perfidia-1@1\.0\.0 +2 +time 2 /);
+      // Then the ends and land, battles and bots tables; no countdown, no list of them.
+      const ends = rows.findIndex((l) => l.startsWith("ends and land · "));
+      expect(ends).toBe(11);
+      expect(rows[ends + 2]).toMatch(/^perfidia-1@1\.0\.0 +2 +2 +0 +0 +0 +0 +0 +0 +0 +- +- \/ /);
+      expect(rows.find((l) => l.startsWith("battles · "))).toBeDefined();
+      expect(rows.find((l) => l.startsWith("bots · "))).toBeDefined();
+      expect(r.out).not.toContain("domination countdowns · ");
+      expect(r.out).not.toContain("seats · ");
       expect(r.out).toContain(`results with provenance: ${json}`);
 
       const parsed: unknown = JSON.parse(readFileSync(json, "utf8"));
@@ -105,11 +113,11 @@ describe("sim batch", () => {
         1,
       ]);
       expect(parsed.bots).toEqual([
-        "bot:expander@1",
-        "bot:rusher@2",
-        "bot:turtle@1",
-        "bot:opportunist@1",
-        "bot:conqueror@1",
+        "bot:expander@2",
+        "bot:rusher@3",
+        "bot:turtle@2",
+        "bot:opportunist@2",
+        "bot:conqueror@2",
       ]);
       expect(parsed.clock).toEqual({ kind: "lockstep", maxTurnsPerSecond: 3 });
       const rs = getRuleset("perfidia-1@1.0.0");
@@ -128,10 +136,10 @@ describe("sim batch", () => {
           engine: ENGINE_VERSION,
           seeds: [1, 2],
           controllers: {
-            p1: "bot:expander@1",
-            p2: "bot:rusher@2",
-            p5: "bot:conqueror@1",
-            p6: "bot:expander@1",
+            p1: "bot:expander@2",
+            p2: "bot:rusher@3",
+            p5: "bot:conqueror@2",
+            p6: "bot:expander@2",
           },
         });
         expect(v.rulesHash).toMatch(/^[0-9a-f]{64}$/);
@@ -199,6 +207,8 @@ describe("sim batch", () => {
         "--per-match",
         "--out",
         dir,
+        "--json",
+        join(dir, "batch.json"),
       );
       expect(r.code).toBe(EXIT.ok);
       expect(r.err).toStartWith(
@@ -230,6 +240,22 @@ describe("sim batch", () => {
       expect(last?.scoreMean).toBe(
         Math.round((s.seats.reduce((a, x) => a + (x.score ?? 0), 0) / 3) * 100) / 100,
       );
+      // The batch row agrees: free slots without a replay, and sandbox-1's own score parts.
+      const parsed: unknown = JSON.parse(readFileSync(join(dir, "batch.json"), "utf8"));
+      if (!isBatch(parsed)) throw new Error("not a batch result");
+      const m = parsed.variants[0]?.matches[0];
+      expect(m?.freeSlots).toEqual({
+        initial: 9,
+        d5: null,
+        d7: last?.freeSlots ?? -1,
+        end: last?.freeSlots ?? -1,
+      });
+      for (const x of m?.seats ?? []) {
+        expect(x.levelPoints).toBe(x.parts["levelPoints"] ?? -1);
+        expect([x.crownPoints, x.battleScore]).toEqual([null, null]);
+      }
+      expect(rows.find((l) => l.startsWith("seats · "))).toBeDefined();
+      expect(rows.find((l) => l.startsWith("battles and land per match"))).toBeDefined();
       // --allow-test silences the note (--pacing replays the match: exit 0 means it matched).
       const quiet = await cli(
         "batch",
@@ -264,7 +290,7 @@ describe("sim batch", () => {
     const ba = await runBatch({ ...plan, variants: [b, a] });
     expect(ab.variants[0]).toEqual(ba.variants[1]);
     expect(ab.variants[1]).toEqual(ba.variants[0]);
-    expect(ab.bots).toEqual(["bot:rusher@2", "bot:turtle@1", "bot:rusher@1"]);
+    expect(ab.bots).toEqual(["bot:rusher@3", "bot:turtle@2", "bot:rusher@1"]);
     expect(ab.variants[0]?.controllers["p3"]).toBe("bot:rusher@1");
     expect(ab.variants.flatMap((v) => v.matches.map((m) => m.replayOk))).toEqual([true, true]);
   }, 30000);

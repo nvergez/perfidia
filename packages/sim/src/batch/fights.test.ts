@@ -1,8 +1,9 @@
 // The fight metrics of `sim batch` (docs/architecture.md §12.2): first battle, conquest and
 // elimination times and domination countdowns, exact on hand-written lines and on the committed
 // `scenario-late` golden (which has all of them); their per-variant mean and earliest; the game
-// clock text; and a real batch whose rows, aggregates, per-day pacing and printed tables agree with
-// its logs, one variant fighting and one ending by domination.
+// clock text; and a real batch whose rows (fight times, seats, battle split, free slots,
+// countdowns), aggregates, per-day pacing and printed tables agree with its logs, one variant
+// fighting and one ending by domination.
 
 import { describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
@@ -11,18 +12,25 @@ import { join } from "node:path";
 import { LogLineSchema, type EvLine, type LogLine } from "@perfidia/protocol";
 import { FIXTURES_DIR } from "../golden/index.ts";
 import { DEFAULT_BOTS, listGoldens, readLog } from "../harness/index.ts";
+import { summarize } from "../summary/index.ts";
 import {
+  battlesTable,
+  countdownTable,
   dayOf,
   eliminations,
+  endsTable,
   fightTable,
   fightTimes,
   firstTimeStat,
   gameClockText,
+  matchLandTable,
   matchTable,
   pacingOf,
   pacingTable,
   parseVariant,
   runBatch,
+  seatTable,
+  strategyTable,
   type MatchRow,
 } from "./index.ts";
 
@@ -185,6 +193,38 @@ describe("a real batch", () => {
         // Who eliminated whom, by bot version, one entry per elimination.
         expect(m.eliminatedBy.length).toBe(m.eliminations);
         for (const e of m.eliminatedBy) expect(e).toMatch(/^[a-z?][a-z0-9@?]* > [a-z][a-z0-9@]*$/);
+
+        // One row per seat, its standing the summary's; its cities add up to the match's events.
+        const s = summarize(lines);
+        expect(m.seats.map((x) => [x.seat, x.rank, x.score, x.cities, x.eliminatedAt])).toEqual(
+          s.seats.map((x) => [x.seat, x.rank, x.score, x.cities, x.eliminatedAt]),
+        );
+        const total = (f: (x: MatchRow["seats"][number]) => number): number =>
+          m.seats.reduce((acc, x) => acc + f(x), 0);
+        expect(total((x) => x.founded)).toBe(m.foundings);
+        expect(total((x) => x.conquered)).toBe(m.conquests);
+        expect(total((x) => x.lost + x.crowns)).toBe(m.conquests);
+        expect(total((x) => x.eliminations)).toBe(m.eliminations);
+        expect(total((x) => (x.winner ? 1 : 0))).toBe(m.winners.length);
+        for (const x of m.seats.filter((y) => y.eliminatedAt === null)) {
+          expect(x.levelPoints).toBe((x.cityPoints ?? 0) - 100 * (x.cities ?? 0));
+          expect(x.battleScore).toBe(
+            Math.min(Math.floor((x.battlePoints ?? 0) / 10), Math.floor((x.cityPoints ?? 0) / 4)),
+          );
+        }
+        // Every battle defended or not (perfidia-1 reports always show the defenders here).
+        const b = m.battleSplit;
+        expect([b.defended + b.empty, b.unknown]).toEqual([m.battles, 0]);
+        // Free slots: no D5 in these short runs; the match end is the pacing replay's last day.
+        expect(m.freeSlots).toMatchObject({ d5: null, d7: m.freeSlots?.end });
+        expect(m.freeSlots?.end).toBe(days.at(-1)?.freeSlots ?? -1);
+        expect(m.freeSlots?.initial).toBe((m.freeSlots?.end ?? 0) + m.foundings);
+        // One bot row per bot label of the seats: here one run, so the seats themselves.
+        expect(a.strategies.reduce((acc, x) => acc + x.seats, 0)).toBe(6);
+        expect(a.strategies.reduce((acc, x) => acc + x.wins, 0)).toBe(m.winners.length);
+        expect(a.strategies.map((x) => x.bot)).toEqual(
+          [...new Set(m.seats.map((x) => x.bot))].toSorted((x, y) => (x < y ? -1 : 1)),
+        );
       }
 
       const f: MatchRow | undefined = fv.matches[0];
@@ -206,6 +246,20 @@ describe("a real batch", () => {
       expect(d.firstDominationT).toBeGreaterThanOrEqual(21600);
       expect(d.firstDominationT).toBeLessThanOrEqual(d.endedAt - 3600);
       expect(dv.aggregate).toMatchObject({ reasons: { domination: 1 }, runsWithCountdown: 1 });
+      expect([fv.aggregate.ends, dv.aggregate.ends]).toEqual([
+        { time: 1, domination: 0, lastStanding: 0, other: 0 },
+        { time: 0, domination: 1, lastStanding: 0, other: 0 },
+      ]);
+      // The countdown that won: its members are the winners, due when the match ended.
+      expect(f.countdowns).toEqual([]);
+      expect(d.countdowns.length).toBe(d.dominationCountdowns);
+      const won = d.countdowns.filter((c) => c.outcome === "won");
+      expect(won.length).toBe(1);
+      expect(won[0]).toMatchObject({ members: d.winners, endedAt: d.endedAt, endsAt: d.endedAt });
+      expect(won[0]?.bots).toEqual(
+        d.winners.map((w) => d.seats.find((x) => x.seat === w)?.bot ?? ""),
+      );
+      expect(dv.aggregate.countdowns).toMatchObject({ opened: d.dominationCountdowns, won: 1 });
 
       // The tables print the same numbers on the game clock.
       const fights = fightTable(result).split("\n");
@@ -229,6 +283,31 @@ describe("a real batch", () => {
       expect(pacingTable(result).split("\n")[1]).toMatch(
         / +battles +conquests +elims +sieges started +held +broken$/,
       );
+      // The tables of §12.2: ends and land, battles, bots, countdowns, and per match and per seat.
+      const ends = endsTable(result).split("\n");
+      expect(ends[0]).toStartWith("ends and land · ");
+      expect(ends[1]).toMatch(
+        /^variant +runs +time +domination +last standing +other +countdowns +won +cancelled +open +bloc cities: conquered \/ founded \/ initial +free slots D5 \/ D7 \/ end$/,
+      );
+      expect(ends[3]).toMatch(/^ +1 +1 +0 +0 +0 +0 +0 +0 +0 +- +- \/ \d+\.\d \/ \d+\.\d$/);
+      expect(ends[5]).toMatch(
+        new RegExp(`^ +1 +0 +1 +0 +0 +${d.dominationCountdowns} +1 +\\d+ +\\d+ +\\d+: `),
+      );
+      expect(battlesTable(result).split("\n")[1]).toMatch(
+        /^variant +runs +battles +defended +empty +unknown +relief +by owner +broke siege +homecoming$/,
+      );
+      const bots = strategyTable(result).split("\n");
+      expect(bots[1]).toMatch(/^variant +bot +seats +wins +wins\/seat \[95% CI\] +score /);
+      expect(bots.filter((l) => /^ .* [a-z]+@\d +1 +[01] +[01]\.00 \[/.test(l)).length).toBe(
+        fv.aggregate.strategies.length + dv.aggregate.strategies.length - 2,
+      );
+      const countdowns = countdownTable(result);
+      expect(countdowns.split("\n")[1]).toMatch(/^variant +seed +start +end +bloc +cities/);
+      expect(countdowns).toContain(` ${gameClockText(d.endedAt)} `);
+      expect(countdowns).toMatch(/ won\n/);
+      // Title, head, then each long variant name on a line of its own; a final newline.
+      expect(matchLandTable(result).split("\n")).toHaveLength(2 + 2 + 2 + 1);
+      expect(seatTable(result).split("\n")).toHaveLength(2 + 2 + 12 + 1);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

@@ -1,16 +1,25 @@
 import { fmtTime } from "@perfidia/engine/core";
 import { table } from "../summary/index.ts";
-import type { BatchResult, MatchRow, VariantResult } from "./batch.ts";
+import type { BatchResult, MatchRow, RunMean, VariantResult } from "./batch.ts";
+import type { CountdownRow } from "./countdowns.ts";
 import type { FirstTimeStat } from "./fights.ts";
 
 // The batch tables (docs/architecture.md §12.2): one row per variant (or per match with
 // `--per-match`), the fights table (end reasons, first battle, conquest and elimination, domination
-// countdowns) per variant, and with `--pacing` the per-day pacing table of §13.9. A variant name
-// longer than its column is printed on a line of its own, its numbers on the next. Game times are
-// printed on the game clock to the minute, `D1 13:12` (day 1, 13:12 after the match start).
+// countdowns) per variant, the ends and land table (end counts, countdowns, free slots), the
+// battles table (defended, empty, reliefs), the bots table (per bot label: wins per seat with
+// their Wilson interval, score, cities, conquests, eliminations), every domination countdown, with
+// `--per-match` one row per match for the battles and land and one per seat, and with `--pacing`
+// the per-day pacing table of §13.9. A variant name longer than its column is printed on a line of
+// its own, its numbers on the next. Game times are printed on the game clock to the minute,
+// `D1 13:12` (day 1, 13:12 after the match start).
 
 const VARIANT_WIDTH = 30;
 const f1 = (x: number): string => x.toFixed(1);
+const f2 = (x: number): string => x.toFixed(2);
+/** A nullable number to one decimal, `-` for null. */
+const n1 = (x: number | null): string => (x === null ? "-" : f1(x));
+const int = (x: number | null): string => (x === null ? "-" : String(x));
 
 /** A game time on the game clock, to the minute (`D1 13:12`); `-` for none. */
 export function gameClockText(t: number | null): string {
@@ -190,4 +199,276 @@ export function pacingTable(result: BatchResult): string {
   );
   const title = `pacing · N = ${result.players} · ${result.seeds.length} seed(s) per variant · measured at the end of each game day`;
   return `${title}\n${withLongNames([head, ...rows], new Set([2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14])).join("\n")}\n`;
+}
+
+/** A run mean, with the number of runs when not every run had it. */
+function runMeanText(m: RunMean, runs: number): string {
+  if (m.mean === null) return "-";
+  return m.runs === runs ? f1(m.mean) : `${f1(m.mean)} (${m.runs})`;
+}
+
+/**
+ * Per variant: ended runs by end reason (domination and last standing apart), the domination
+ * countdowns (opened, won, cancelled, open; bloc cities at their start split into conquered,
+ * founded and starting cities, totals) and the free city slots (mean at the end of D5, of D7 or at
+ * an earlier match end, and at the match end).
+ */
+export function endsTable(result: BatchResult): string {
+  const head = [
+    "variant",
+    "runs",
+    "time",
+    "domination",
+    "last standing",
+    "other",
+    "countdowns",
+    "won",
+    "cancelled",
+    "open",
+    "bloc cities: conquered / founded / initial",
+    "free slots D5 / D7 / end",
+  ];
+  const rows = result.variants.map((v) => {
+    const a = v.aggregate;
+    const c = a.countdowns;
+    const runs = a.runs - a.fatal;
+    return [
+      v.text,
+      String(a.runs),
+      String(a.ends.time),
+      String(a.ends.domination),
+      String(a.ends.lastStanding),
+      String(a.ends.other),
+      String(c.opened),
+      String(c.won),
+      String(c.cancelled),
+      String(c.open),
+      c.opened === 0 ? "-" : `${c.cities}: ${c.conquered} / ${c.founded} / ${c.initial}`,
+      `${runMeanText(a.freeSlots.d5, runs)} / ${runMeanText(a.freeSlots.d7, runs)} / ${runMeanText(a.freeSlots.end, runs)}`,
+    ];
+  });
+  const title =
+    "ends and land · countdown bloc cities at their start (totals) · free slots: mean at the end of D5, of D7 (or the earlier match end) and at the match end, (n) runs when not all";
+  return `${title}\n${withLongNames([head, ...rows], new Set([1, 2, 3, 4, 5, 6, 7, 8, 9])).join("\n")}\n`;
+}
+
+/** Per variant, means per run: battles defended or empty, reliefs and homecomings. */
+export function battlesTable(result: BatchResult): string {
+  const head = [
+    "variant",
+    "runs",
+    "battles",
+    "defended",
+    "empty",
+    "unknown",
+    "relief",
+    "by owner",
+    "broke siege",
+    "homecoming",
+  ];
+  const rows = result.variants.map((v) => {
+    const a = v.aggregate;
+    const b = a.battleSplit;
+    return [
+      v.text,
+      String(a.runs),
+      f1(a.battles),
+      f1(b.defended),
+      f1(b.empty),
+      f1(b.unknown),
+      f2(b.relief),
+      f2(b.reliefByOwner),
+      f2(b.reliefBroke),
+      f2(b.homecoming),
+    ];
+  });
+  const title =
+    "battles · mean per run · defended: a defending unit present, empty: none · relief: fought against the besieger of a held siege (by the city's owner, or breaking the siege)";
+  return `${title}\n${withLongNames([head, ...rows], new Set([1, 2, 3, 4, 5, 6, 7, 8, 9])).join("\n")}\n`;
+}
+
+/**
+ * Per variant and bot label, over the seats of the ended runs: wins per seat with its 95% Wilson
+ * interval, then means per seat (score and its parts, cities at the end, founded, conquered, lost)
+ * and totals (eliminations suffered and inflicted).
+ */
+export function strategyTable(result: BatchResult): string {
+  const head = [
+    "variant",
+    "bot",
+    "seats",
+    "wins",
+    "wins/seat [95% CI]",
+    "score",
+    "city pts",
+    "levels",
+    "crown",
+    "battle",
+    "cities",
+    "founded",
+    "conquered",
+    "lost",
+    "elims suffered",
+    "inflicted",
+  ];
+  const rows = result.variants.flatMap((v) =>
+    v.aggregate.strategies.map((b, i) => [
+      i === 0 ? v.text : "",
+      b.bot,
+      String(b.seats),
+      String(b.wins),
+      `${f2(b.winsPerSeat)} [${f2(b.winsPerSeatCi[0])}, ${f2(b.winsPerSeatCi[1])}]`,
+      n1(b.score),
+      n1(b.cityPoints),
+      n1(b.levelPoints),
+      n1(b.crownPoints),
+      n1(b.battleScore),
+      n1(b.cities),
+      f1(b.founded),
+      f1(b.conquered),
+      f1(b.lost),
+      String(b.eliminated),
+      String(b.inflicted),
+    ]),
+  );
+  const title =
+    "bots · per seat over the ended runs · wins/seat with its 95% Wilson interval · means per seat, eliminations in total";
+  return `${title}\n${withLongNames([head, ...rows], new Set([2, 3, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15])).join("\n")}\n`;
+}
+
+/** `p2 expander@1 + p4 opportunist@1`, with the alliance key first when the bloc is one. */
+function blocText(c: CountdownRow): string {
+  const members = c.members.map((m, i) => `${m} ${c.bots[i] ?? "?"}`).join(" + ");
+  return c.members.some((m) => m === c.key) ? members : `${c.key}: ${members}`;
+}
+
+function outcomeText(c: CountdownRow): string {
+  if (c.outcome !== "cancelled") return c.outcome;
+  const why = c.detail.length === 0 ? "" : ` (${c.detail.join(", ")})`;
+  return `cancelled: ${c.reason ?? "?"}${why}`;
+}
+
+/** Every domination countdown: bloc, cities at the start and their origin, how it ended. Empty when none. */
+export function countdownTable(result: BatchResult): string {
+  const head = [
+    "variant",
+    "seed",
+    "start",
+    "end",
+    "bloc",
+    "cities (threshold)",
+    "conquered / founded / initial",
+    "outcome",
+  ];
+  const rows = result.variants.flatMap((v) => {
+    const list = v.matches.flatMap((m) => m.countdowns.map((c) => ({ seed: m.seed, c })));
+    return list.map(({ seed, c }, i) => [
+      i === 0 ? v.text : "",
+      String(seed),
+      gameClockText(c.t),
+      gameClockText(c.endedAt ?? c.endsAt),
+      blocText(c),
+      `${c.cities}${c.threshold === null ? "" : ` (${c.threshold})`}`,
+      `${c.conquered} / ${c.founded} / ${c.initial}`,
+      outcomeText(c),
+    ]);
+  });
+  if (rows.length === 0) return "";
+  const title =
+    "domination countdowns · bloc cities at the start: conquered / founded / initial · end: when won or cancelled, else when due";
+  return `${title}\n${withLongNames([head, ...rows], new Set([1])).join("\n")}\n`;
+}
+
+/** `--per-match`: battles, reliefs, free slots and countdowns of each match. */
+export function matchLandTable(result: BatchResult): string {
+  const head = [
+    "variant",
+    "seed",
+    "battles",
+    "defended",
+    "empty",
+    "relief",
+    "broke siege",
+    "homecoming",
+    "free slots D5",
+    "D7",
+    "end",
+    "countdowns (won / cancelled / open)",
+  ];
+  const rows = result.variants.flatMap((v) =>
+    v.matches.map((m, i) => {
+      const b = m.battleSplit;
+      const c = m.countdowns;
+      const count = (o: CountdownRow["outcome"]): number => c.filter((x) => x.outcome === o).length;
+      return [
+        i === 0 ? v.text : "",
+        String(m.seed),
+        String(m.battles),
+        String(b.defended),
+        String(b.empty),
+        String(b.relief),
+        String(b.reliefBroke),
+        String(b.homecoming),
+        int(m.freeSlots?.d5 ?? null),
+        int(m.freeSlots?.d7 ?? null),
+        int(m.freeSlots?.end ?? null),
+        c.length === 0
+          ? "-"
+          : `${c.length} (${count("won")} / ${count("cancelled")} / ${count("open")})`,
+      ];
+    }),
+  );
+  const title = "battles and land per match";
+  return `${title}\n${withLongNames([head, ...rows], new Set([1, 2, 3, 4, 5, 6, 7, 8, 9, 10])).join("\n")}\n`;
+}
+
+/** `--per-match`: one row per seat of each match. */
+export function seatTable(result: BatchResult): string {
+  const head = [
+    "variant",
+    "seed",
+    "seat",
+    "bot",
+    "rank",
+    "score",
+    "city pts",
+    "levels",
+    "crown",
+    "battle",
+    "battle pts",
+    "cities",
+    "founded",
+    "conquered",
+    "lost",
+    "eliminated",
+    "by",
+    "elims",
+  ];
+  const rows = result.variants.flatMap((v) =>
+    v.matches.flatMap((m, mi) =>
+      m.seats.map((x, i) => [
+        mi === 0 && i === 0 ? v.text : "",
+        i === 0 ? String(m.seed) : "",
+        x.seat,
+        `${x.bot}${x.winner ? " *" : ""}`,
+        int(x.rank),
+        int(x.score),
+        int(x.cityPoints),
+        int(x.levelPoints),
+        int(x.crownPoints),
+        int(x.battleScore),
+        int(x.battlePoints),
+        int(x.cities),
+        String(x.founded),
+        String(x.conquered),
+        String(x.lost),
+        gameClockText(x.eliminatedAt),
+        x.eliminatedBy ?? "-",
+        String(x.eliminations),
+      ]),
+    ),
+  );
+  const title =
+    "seats · * winner · score parts from the final standings (levels and crown derived when not exposed) · battle pts: credited before the cap";
+  return `${title}\n${withLongNames([head, ...rows], new Set([1, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 17])).join("\n")}\n`;
 }

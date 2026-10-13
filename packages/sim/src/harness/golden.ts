@@ -213,11 +213,14 @@ function firstDifference(a: string, b: string): number | null {
  * golden); every fingerprint entry of a ref of `rulesets` matches the recomputed artefacts, and
  * every golden it records is still on disk; every published ref of `rulesets` has at least one
  * golden and an entry. `ok` when there is no problem; the check itself never throws on a golden.
+ * `only` restricts the goldens replayed, and those whose presence is checked, to the ones it
+ * accepts (a test that tampers with one golden need not replay them all); the artefact
+ * fingerprints are always checked.
  */
 export async function checkGoldens(
   fixturesDir: string,
   rulesets: readonly AnyRuleset[],
-  o: { readonly levelG?: boolean } = {},
+  o: { readonly levelG?: boolean; readonly only?: (ref: string, name: string) => boolean } = {},
 ): Promise<GoldenReport> {
   const problems: string[] = [];
   const checks: GoldenCheck[] = [];
@@ -225,8 +228,9 @@ export async function checkGoldens(
   const fingerprints: Record<string, Sha256> = {};
   for (const rs of rulesets) fingerprints[rs.ref] = rulesetFingerprint(rs);
 
+  const only = o.only ?? ((): boolean => true);
   const files = listGoldens(fixturesDir);
-  for (const g of files) {
+  for (const g of files.filter((x) => only(x.ref, x.name))) {
     const where = `golden ${g.ref}/${g.name}`;
     let lines: LogLine[];
     try {
@@ -292,13 +296,14 @@ export async function checkGoldens(
     }
     // Goldens are append-only (§13.5): a recorded golden must still be on disk.
     for (const name of Object.keys(entry.goldens).toSorted(byCodeUnit)) {
+      if (!only(ref, name)) continue;
       if (!files.some((g) => g.ref === ref && g.name === name)) {
         problems.push(`golden ${ref}/${name} is recorded in ${FINGERPRINTS_FILE} but missing`);
       }
     }
   }
   for (const rs of rulesets.filter((x) => x.status === "published")) {
-    if (!checks.some((c) => c.ref === rs.ref)) problems.push(`${rs.ref} has no golden`);
+    if (!files.some((g) => g.ref === rs.ref)) problems.push(`${rs.ref} has no golden`);
     if (fp[rs.ref] === undefined) problems.push(`${rs.ref} has no entry in ${FINGERPRINTS_FILE}`);
   }
   return { ok: problems.length === 0, problems, goldens: checks, fingerprints };

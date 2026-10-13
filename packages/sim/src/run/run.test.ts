@@ -154,7 +154,7 @@ describe("sim run", () => {
         [["--bots", "expander,ninja"], 'unknown bot "ninja"'],
         [["--seat", "p7=rusher"], "seats p1..p6"],
         [["--seat", "p2=ninja"], 'unknown bot "ninja"'],
-        [["--bots", "rusher@9"], 'unknown bot "rusher@9": rusher has rusher@1, rusher@2'],
+        [["--bots", "rusher@9"], 'unknown bot "rusher@9": rusher has rusher@1, rusher@2, rusher@3'],
         [["--seat", "p2=turtle@0"], '--seat p2=turtle@0: unknown bot "turtle@0"'],
         [["--id-key", "ABC"], "--id-key must be 32 lowercase hex characters"],
         [["--clock", "lockstep", "--speed", "3"], "--speed applies to --clock realtime only"],

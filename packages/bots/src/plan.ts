@@ -719,8 +719,11 @@ export class Planner {
     return best === null ? null : { island: best.island, slot: best.slot, travel: best.travel };
   }
 
-  /** Founds cities with the founders at home: one per founder, each with an escort and its carriers. */
-  settle(): void {
+  /**
+   * Founds cities with the founders at home: one per founder, each with an escort and its carriers.
+   * With `keep`, that many founders stay home in each city it names (e.g. for a strike).
+   */
+  settle(keep: ReadonlyMap<CityId, number> | null = null): void {
     const { w, k } = this;
     const kit = w.kit;
     const founder = kit.roles.founder;
@@ -728,7 +731,7 @@ export class Planner {
     if (!k.settle || w.map === null) return;
     for (const c of w.cities) {
       if (c.blocked) continue;
-      while ((this.homeOf(c.id)[founder] ?? 0) > 0) {
+      while ((this.homeOf(c.id)[founder] ?? 0) > (keep?.get(c.id) ?? 0)) {
         if (w.cities.length + this.pendingFoundings() >= k.maxCities) return;
         const fpop = kit.units.get(founder)?.pop ?? 0;
         const slot = this.pickSlot(c, fpop);
@@ -897,14 +900,33 @@ export class Planner {
   }
 
   /**
-   * Spends `spendPm` of what is left on units, in packs of the mix (explicit counts, so the mix
-   * holds); keeps carriers for the attackers when the strategy ships them across water.
+   * Lowers the recruit batches `queue` of a city may still take this turn to at most `room`, so
+   * that the moves planned after it (`units`) leave that queue alone (a strategy pacing its own
+   * wakes, `pace.ts`). It never raises the room.
    */
-  units(mix: Mix = this.k.mix): void {
+  capBatchRoom(id: CityId, queue: QueueId, room: number): void {
+    const rooms = this.batchRoom.get(id);
+    if (rooms === undefined || !rooms.has(queue)) return;
+    rooms.set(queue, Math.max(0, Math.min(rooms.get(queue) ?? 0, room)));
+  }
+
+  /** Lowers the build items a city may still queue this turn to at most `room` (never raises it). */
+  capBuildRoom(id: CityId, room: number): void {
+    if (!this.buildRoom.has(id)) return;
+    this.buildRoom.set(id, Math.max(0, Math.min(this.buildRoom.get(id) ?? 0, room)));
+  }
+
+  /**
+   * Spends `spendPm` of what is left on units, in packs of the mix (explicit counts, so the mix
+   * holds); keeps carriers for the attackers when the strategy ships them across water. With
+   * `only`, the cities it rejects are skipped (e.g. those whose recruit queue is idle).
+   */
+  units(mix: Mix = this.k.mix, only: ((c: OwnCity) => boolean) | null = null): void {
     const { w, k } = this;
     const kit = w.kit;
     for (const c of w.cities) {
       if (c.blocked || c.levels === null) continue;
+      if (only !== null && !only(c)) continue;
       let budget = pmRes(this.budgetOf(c.id), k.spendPm);
       let free = this.popFree.get(c.id) ?? 0;
       const rooms = new Map(this.batchRoom.get(c.id) ?? []);

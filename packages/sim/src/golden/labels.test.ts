@@ -42,10 +42,17 @@ test("every bot label of every committed golden is a bot of this build", () => {
     }
   }
   expect(problems).toEqual([]);
-  // Not vacuous: the bot goldens of §13.5 are there, with the phase-1 labels and with the latest
-  // version of every default bot.
-  expect(botGoldens).toBeGreaterThanOrEqual(10);
-  for (const label of ["bot:expander@1", "bot:rusher@1", "bot:turtle@1", "bot:opportunist@1"]) {
+  // Not vacuous: the bot goldens of §13.5 are there, with the phase-1 labels, the PR #7 ones
+  // (rusher@2, conqueror@1) and the latest version of every default bot.
+  expect(botGoldens).toBeGreaterThanOrEqual(15);
+  for (const label of [
+    "bot:expander@1",
+    "bot:rusher@1",
+    "bot:rusher@2",
+    "bot:turtle@1",
+    "bot:opportunist@1",
+    "bot:conqueror@1",
+  ]) {
     expect(seen.has(label)).toBe(true);
   }
   for (const s of DEFAULT_BOTS) expect(seen.has(botLabel(s))).toBe(true);

@@ -1,4 +1,4 @@
-// Fixture behaviours of the conqueror (docs/architecture.md §11.2) on rules shaped like perfidia-1
+// Fixture behaviours of conqueror@1 (docs/architecture.md §11.2) on rules shaped like perfidia-1
 // and like sandbox-1: its victim and the notes that keep it, its strikes (founders in the wave that
 // takes the city, the garrison after it, capitals left alone while immune, the train whose last
 // waves are timed from the travel times), founders recruited just in time, its sieges held or given
@@ -20,7 +20,7 @@ import {
 } from "./fixtures.test.ts";
 import { fmtTime } from "./kit.ts";
 import { encodeMemory, parseMemory, type Memory } from "./memory.ts";
-import { createBot } from "./registry.ts";
+import { createBotVersion } from "./registry.ts";
 
 const DAY = 86400;
 const pair = (t: number): [number, string] => [t, fmtTime(t)];
@@ -81,8 +81,9 @@ const SHAPES: Shape[] = [
   },
 ];
 
+/** conqueror@1, frozen since its goldens (conqueror@2's fixtures are in `conqueror2.test.ts`). */
 function bot(seed = 11) {
-  return createBot("conqueror", { seat: "p1", seed, strict: true });
+  return createBotVersion("conqueror", 1, { seat: "p1", seed, strict: true });
 }
 
 /** The game of `shape` with the config numbers its hints point at. */
