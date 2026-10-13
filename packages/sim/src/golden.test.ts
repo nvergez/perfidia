@@ -312,7 +312,18 @@ describe("what the goldens cover (§13.5)", () => {
     );
     expect(yes).toEqual(new Set(["p1", "p3"]));
     expect(teamRecords(lines, null).joint.some((j) => j.caller !== null)).toBe(true);
-    expect(evs(lines, "city_conquered").length).toBeGreaterThan(0);
+    const conquests = evs(lines, "city_conquered");
+    expect(conquests.length).toBeGreaterThan(0);
+    // An ally of the conqueror holds its conquest: a support of another seat lands in the city.
+    const supports = lines.flatMap((l) =>
+      l.k === "act" && l.r.ok && l.a.type === "support"
+        ? [{ seat: l.seat, t: l.t, to: l.a.to }]
+        : [],
+    );
+    const held = supports.some((x) =>
+      conquests.some((c) => field(c, "city") === x.to && field(c, "to") !== x.seat && c.t <= x.t),
+    );
+    expect(held).toBe(true);
   });
 
   test("every bot golden of a default set of bots has their labels; the 12-seat ones fight on day 1", () => {

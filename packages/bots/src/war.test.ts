@@ -9,17 +9,13 @@ import {
   compareIds,
   type ArchiveEntry,
   type ArchiveHit,
-  MapViewSchema,
-  PlayerViewSchema,
   type Briefing,
   type CityId,
-  type JsonObject,
+  type GatewayRules,
   type PlayerId,
-  type ToolResult,
 } from "@perfidia/protocol";
-import { perfidiaGame, type FakeGame } from "./fixtures.test.ts";
-import { hintsFor } from "./hints.ts";
-import { call, DAY, fmtTime, groupTravel, makeKit } from "./kit.ts";
+import { perfidiaGame, worldOf, type FakeGame } from "./fixtures.test.ts";
+import { call, DAY, fmtTime, groupTravel, makeKit, type Kit } from "./kit.ts";
 import { emptyMemory, encodeMemory, parseMemory, type Memory } from "./memory.ts";
 import {
   absorbWar,
@@ -29,6 +25,7 @@ import {
   composeCancel,
   decodeEntry,
   distrustOf,
+  droppedEventSearch,
   droppedWarOpens,
   droppedWarSearch,
   encodeEntry,
@@ -43,6 +40,8 @@ import {
   pickCall,
   readBook,
   resolveTod,
+  seenEvents,
+  TRUST_EVENTS,
   WAR_LIMITS,
   WAR_RESERVE,
   warId,
@@ -50,6 +49,7 @@ import {
   warMessages,
   warTarget,
   warWhy,
+  WATCH_EVENTS,
   writeBook,
   type WarCall,
   type WarCandidate,
@@ -57,7 +57,6 @@ import {
   type WarJudgeInput,
   type WarTarget,
 } from "./war.ts";
-import { buildWorld, type World } from "./world.ts";
 
 const D3_1400 = 2 * DAY + 14 * 3600;
 
@@ -693,44 +692,6 @@ describe("deciding", () => {
   });
 });
 
-/** The data of a successful tool result; throws on a failed one. */
-function dataOf(r: ToolResult): JsonObject {
-  if (!r.ok) throw new Error(`${r.code}: ${r.message}`);
-  return r.data;
-}
-
-/** The world of `seat` in a fake game: the map (with public extras), its relations and travel rows. */
-function worldOf(game: FakeGame, seat: PlayerId, briefing?: Briefing): World {
-  const kit = makeKit(game.info);
-  const self = PlayerViewSchema.parse(
-    dataOf(game.respond(seat, call("view_player", { player: seat }))),
-  );
-  const map = MapViewSchema.parse(dataOf(game.respond(seat, call("view_map", {}))));
-  for (const row of map.cities) {
-    const ext = game.city(row.id).ext;
-    if (Object.keys(ext).length > 0) row.ext = ext;
-  }
-  const travel = new Map<CityId, Record<string, readonly number[]>>();
-  for (const c of game.cities.filter((x) => x.owner === seat)) {
-    const r = MapViewSchema.parse(dataOf(game.respond(seat, call("view_map", { fromCity: c.id }))));
-    const row: Record<string, readonly number[]> = {};
-    for (const [island, pairs] of Object.entries(r.travel ?? {}))
-      row[island] = pairs.map((p) => p[0]);
-    travel.set(c.id, row);
-  }
-  return buildWorld({
-    seat,
-    turn: 1,
-    t: game.t,
-    briefing: briefing ?? game.briefing(seat),
-    kit,
-    hints: hintsFor(game.rules.ruleset),
-    memory: emptyMemory("x"),
-    reads: { self, map, views: new Map(), board: null, hits: [], entries: new Map() },
-    travel,
-  });
-}
-
 function allyGame(): FakeGame {
   const g = perfidiaGame(6);
   g.t = 2 * DAY + 6 * 3600;
@@ -975,5 +936,127 @@ describe("messages a full briefing left out", () => {
       ["p2", "cancel"],
     ]);
     expect(heard.ignored).toBe(1);
+  });
+});
+
+/** A briefing of p1's whose `events` (`kinds` left out) and `news` were cut, as `more` lists them. */
+function cut(game: FakeGame, kinds: readonly string[] | null, news: boolean): Briefing {
+  const more: NonNullable<Briefing["more"]> = {};
+  if (kinds !== null) {
+    more["events"] = {
+      count: kinds.length,
+      call: {
+        tool: "read_notes",
+        args: { search: { scope: "mine", kinds: [...kinds], since: 7200, before: 30 } },
+      },
+    };
+  }
+  if (news) {
+    more["news"] = {
+      count: 3,
+      call: { tool: "read_notes", args: { search: { scope: "public", since: 7200, before: 41 } } },
+    };
+  }
+  return { ...game.briefing("p1"), more };
+}
+
+/** A public search hit of `type` at 9000 s, with no id. */
+function eventHit(e: number, type: string, summary: string): ArchiveHit {
+  return { e, t: [9000, fmtTime(9000)], type, public: true, id: null, summary };
+}
+
+describe("events a full briefing left out", () => {
+  test("the search: the kinds asked for that the cut lists may hold; none when they hold none", () => {
+    const g = allyGame();
+    expect(droppedEventSearch(worldOf(g, "p1"), TRUST_EVENTS)).toEqual([]);
+    // Events cut without a betrayal or a conquest among them, news kept: nothing to search.
+    const quiet = worldOf(g, "p1", cut(g, ["build_done", "recruit_done"], false));
+    expect(droppedEventSearch(quiet, TRUST_EVENTS)).toEqual([]);
+    const events = worldOf(g, "p1", cut(g, ["betrayal", "build_done"], false));
+    expect(droppedEventSearch(events, TRUST_EVENTS)).toEqual([
+      call("read_notes", {
+        search: { scope: "all", kinds: ["betrayal"], since: 7200, before: 30 },
+      }),
+    ]);
+    // The news cut: any kind may be there, up to the newest entry either list left out.
+    const both = worldOf(g, "p1", cut(g, ["build_done"], true));
+    expect(droppedEventSearch(both, TRUST_EVENTS)).toEqual([
+      call("read_notes", {
+        search: { scope: "all", kinds: ["betrayal", "city_conquered"], since: 7200, before: 41 },
+      }),
+    ]);
+    expect(droppedEventSearch(both, WATCH_EVENTS)).toEqual([
+      call("read_notes", {
+        search: { scope: "all", kinds: ["battle", "city_founded"], since: 7200, before: 41 },
+      }),
+    ]);
+  });
+
+  test("a betrayal of the seat is seen from its wake reason alone, and from a search hit", () => {
+    const g = allyGame();
+    const b = g.briefing("p1");
+    // The briefing of the betrayal turn: the event left out, the urgent wake's reason kept.
+    const reason = worldOf(g, "p1", { ...b, wake: { urgent: true, reasons: ["betrayal p2"] } });
+    expect(seenEvents(reason)).toEqual([{ type: "betrayal", by: "p2", against: "p1" }]);
+    expect([...distrustOf(reason)]).toEqual(["p2"]);
+    const w = worldOf(g, "p1", cut(g, ["betrayal"], true));
+    const hits = [
+      eventHit(29, "betrayal", "betrayal (public) against=p1 by=p2 city=c1 relation=ally"),
+      eventHit(28, "city_conquered", "city_conquered (public) city=c5 from=null to=p6"),
+      eventHit(
+        27,
+        "battle",
+        "battle (public) attacker=p4 city=c3 defender=p3 kind=city winner=attacker",
+      ),
+      eventHit(26, "city_founded", "city_founded (public) city=c40 island=i9 owner=p5 slot=2"),
+    ];
+    const read = seenEvents({ ...w, archive: { hits, entries: new Map() } });
+    const at = [9000, fmtTime(9000)];
+    expect(read).toEqual([
+      { type: "betrayal", at, against: "p1", by: "p2", city: "c1", relation: "ally" },
+      { type: "city_conquered", at, city: "c5", from: null, to: "p6" },
+      {
+        type: "battle",
+        at,
+        attacker: "p4",
+        city: "c3",
+        defender: "p3",
+        kind: "city",
+        winner: "attacker",
+      },
+      { type: "city_founded", at, city: "c40", island: "i9", owner: "p5", slot: 2 },
+    ]);
+    expect([...distrustOf({ ...w, archive: { hits, entries: new Map() } })]).toEqual(["p2"]);
+  });
+
+  test("only what a reason or a summary says for sure: other kinds, odd words and shared wakes are skipped", () => {
+    const g = allyGame();
+    const b = g.briefing("p1");
+    const reasons = ["betrayal", "betrayal p2 p3", "betrayal c4", "betrayal p1", "message g0000a"];
+    const odd = worldOf(g, "p1", { ...b, wake: { urgent: true, reasons } });
+    expect(seenEvents(odd)).toEqual([]);
+    // A conquest reason names the seat's own city it lost.
+    const lost = worldOf(g, "p1", { ...b, wake: { urgent: true, reasons: ["city_conquered c7"] } });
+    expect(seenEvents(lost)).toEqual([{ type: "city_conquered", city: "c7", from: "p1" }]);
+    // Rules that wake others for a betrayal too: the reason no longer says who was betrayed.
+    const shared = worldOf(g, "p1", { ...b, wake: { urgent: true, reasons: ["betrayal p2"] } });
+    const wake: GatewayRules["wake"] = { betrayal: { target: "urgent", ally: "social" } };
+    const kit: Kit = { ...shared.kit, gateway: { ...shared.kit.gateway, wake } };
+    expect(seenEvents({ ...shared, kit })).toEqual([]);
+    const hits = [
+      eventHit(
+        29,
+        "alliance_formed",
+        "alliance_formed (public) alliance=a1 members=[p2,p3] name=Our betrayal by=p9",
+      ),
+      eventHit(
+        28,
+        "betrayal",
+        "betrayal (public) against=p1 by=p2 city=c1 relation=ally extra=[x,y]",
+      ),
+      eventHit(27, "betrayal", "battle (public) attacker=p2"),
+      eventHit(26, "message", 'message from=p2 message=g0000a to=[p1] text="betrayal by=p3"'),
+    ];
+    expect(seenEvents({ ...odd, archive: { hits, entries: new Map() } })).toEqual([]);
   });
 });

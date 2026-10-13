@@ -18,7 +18,13 @@
 // last seen attacking), `pf` (its last alliance proposal), `l<city>` (a raid lost there), `rv<city>`
 // (a spy for a raid) and the relief module's.
 
-import { compareIds, type CityView, type PlayerId, type ToolCall } from "@perfidia/protocol";
+import {
+  compareIds,
+  type Briefing,
+  type CityView,
+  type PlayerId,
+  type ToolCall,
+} from "@perfidia/protocol";
 import { call, countOf, landPop, res, unitsInReport } from "../kit.ts";
 import { paceBuilds, paceRecruits } from "../pace.ts";
 import { mainCity, nearby, type Planner } from "../plan.ts";
@@ -178,10 +184,16 @@ export function remember(p: Planner): void {
   }
 }
 
-/** Remembers who attacked whom in the public battle headlines (`f<seat>`: last seen attacking). */
-export function watchFighters(p: Planner): void {
+/**
+ * Remembers who attacked whom in the public battle headlines (`f<seat>`: last seen attacking), from
+ * `events` (by default the briefing's news and events).
+ */
+export function watchFighters(
+  p: Planner,
+  events: readonly Briefing["events"][number][] = [...p.w.briefing.news, ...p.w.briefing.events],
+): void {
   const { w } = p;
-  for (const e of [...w.briefing.news, ...w.briefing.events]) {
+  for (const e of events) {
     if (e.type !== "battle") continue;
     const attacker = e["attacker"];
     if (!isPlayerId(attacker) || attacker === w.seat) continue;

@@ -10,7 +10,9 @@ import {
   BriefingSchema,
   compareIds,
   JsonObjectSchema,
+  MapViewSchema,
   MovementIdSchema,
+  PlayerViewSchema,
   TOOL_ARGS,
   ToolNameSchema,
   TOOL_RESULT_DATA,
@@ -35,7 +37,10 @@ import {
   type UnitCounts,
   z,
 } from "@perfidia/protocol";
-import { fmtTime } from "./kit.ts";
+import { hintsFor } from "./hints.ts";
+import { call, fmtTime, makeKit } from "./kit.ts";
+import { emptyMemory, type Memory } from "./memory.ts";
+import { buildWorld, type World } from "./world.ts";
 
 export const res = (wood: number, stone: number, gold: number): Res => ({ wood, stone, gold });
 export const clone = <T>(v: T): T => structuredClone(v);
@@ -90,6 +95,8 @@ export const P_GATEWAY: GatewayRules = {
   notesMaxChars: 4000,
   wake: {
     incoming_attack: { party: "urgent", target: "social", ally: "social", stationed: "social" },
+    city_conquered: { target: "urgent" },
+    betrayal: { target: "urgent" },
     queue_empty: { self: "own" },
     message: { target: "social" },
   },
@@ -1523,4 +1530,50 @@ export async function inSequence<T>(
 /** `1..n`. */
 export function upTo(n: number): number[] {
   return Array.from({ length: n }, (_, i) => i + 1);
+}
+
+/** The data of a successful tool result; throws on a failed one. */
+function dataOf(r: ToolResult): JsonObject {
+  if (!r.ok) throw new Error(`${r.code}: ${r.message}`);
+  return r.data;
+}
+
+/**
+ * The world of `seat` in a fake game, as a turn's base reads build it: the map (with public
+ * extras), its relations and travel rows, the briefing (by default the fake's) and `memory`.
+ */
+export function worldOf(
+  game: FakeGame,
+  seat: PlayerId,
+  briefing?: Briefing,
+  memory: Memory = emptyMemory("x"),
+): World {
+  const kit = makeKit(game.info);
+  const self = PlayerViewSchema.parse(
+    dataOf(game.respond(seat, call("view_player", { player: seat }))),
+  );
+  const map = MapViewSchema.parse(dataOf(game.respond(seat, call("view_map", {}))));
+  for (const row of map.cities) {
+    const ext = game.city(row.id).ext;
+    if (Object.keys(ext).length > 0) row.ext = ext;
+  }
+  const travel = new Map<CityId, Record<string, readonly number[]>>();
+  for (const c of game.cities.filter((x) => x.owner === seat)) {
+    const r = MapViewSchema.parse(dataOf(game.respond(seat, call("view_map", { fromCity: c.id }))));
+    const row: Record<string, readonly number[]> = {};
+    for (const [island, pairs] of Object.entries(r.travel ?? {}))
+      row[island] = pairs.map((p) => p[0]);
+    travel.set(c.id, row);
+  }
+  return buildWorld({
+    seat,
+    turn: 1,
+    t: game.t,
+    briefing: briefing ?? game.briefing(seat),
+    kit,
+    hints: hintsFor(game.rules.ruleset),
+    memory,
+    reads: { self, map, views: new Map(), board: null, hits: [], entries: new Map() },
+    travel,
+  });
 }

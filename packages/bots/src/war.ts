@@ -428,6 +428,119 @@ export function warMessages(w: World): BriefingMessage[] {
   return [...opened.toSorted((a, b) => a.e - b.e).map((x) => x.m), ...w.briefing.msgs];
 }
 
+// Events a full briefing left out. `events` and `news` give way before `msgs` (§8.2), so on a busy
+// turn a betrayal or a conquest may be missing from both. Three other sources hold them: the wake
+// reasons, which a briefing never cuts (`betrayal p3` wakes only its victim, `city_conquered c12`
+// only the city's former owner, perfidia-1 §14.2), and an archive search of the kinds the cut
+// lists may hold, whose hits `seenEvents` reads back from their one-line summaries.
+
+/** The kinds the war-call strategies read for trust and teamwork: betrayals and conquests. */
+export const TRUST_EVENTS: readonly string[] = Object.freeze(["betrayal", "city_conquered"]);
+
+/** Public headlines a strategy may watch: battles (who fights), foundings (fresh colonies). */
+export const WATCH_EVENTS: readonly string[] = Object.freeze(["battle", "city_founded"]);
+
+/** Event kinds whose hit summaries `seenEvents` reads back: data fields that are ids or labels. */
+const HIT_KINDS: readonly string[] = Object.freeze([
+  "betrayal",
+  "city_conquered",
+  "battle",
+  "city_founded",
+]);
+
+const isEventKind = (v: Json): v is string => typeof v === "string" && HIT_KINDS.includes(v);
+
+/**
+ * The read that lists the events of `kinds` a full briefing left out: the cut `events` name the
+ * kinds they left out (their `more` search), the cut `news` (the public feed) may hold any kind.
+ * One search of the seat's archive and the public feed, from the briefing's bound; none when
+ * neither list was cut, or when the cut events hold none of `kinds` and the news were kept.
+ */
+export function droppedEventSearch(w: World, kinds: readonly string[]): ToolCall[] {
+  const want = new Set<string>();
+  let since: number | null = null;
+  let before: number | null = null;
+  for (const name of ["events", "news"] as const) {
+    const more = w.briefing.more?.[name];
+    if (more === undefined || more.call.tool !== "read_notes") continue;
+    const given = more.call.args["search"];
+    if (!isObject(given)) continue;
+    const left = given["kinds"];
+    const named = name === "events" && Array.isArray(left) ? left.filter(isEventKind) : null;
+    const hit = kinds.filter((k) => HIT_KINDS.includes(k) && (named === null || named.includes(k)));
+    if (hit.length === 0) continue;
+    for (const k of hit) want.add(k);
+    const from = given["since"];
+    const bound = given["before"];
+    if (isTime(from)) since = since === null ? from : Math.min(since, from);
+    if (isTime(bound) && bound > 0) before = before === null ? bound : Math.max(before, bound);
+  }
+  if (want.size === 0) return [];
+  const search: NonNullable<ToolArgs<"read_notes">["search"]> = {
+    scope: "all",
+    kinds: [...want].toSorted(byCodeUnit),
+  };
+  if (since !== null) search.since = since;
+  if (before !== null) search.before = before;
+  return [toolCall("read_notes", { search })];
+}
+
+type SeenEvent = Briefing["events"][number];
+
+/** A hit's summary (`betrayal (public) against=p4 by=p2 …`) read back as an event, or null. */
+function eventOfHit(type: string, summary: string, at: Json): SeenEvent | null {
+  if (!HIT_KINDS.includes(type)) return null;
+  const words = summary.split(" ");
+  if (words[0] !== type) return null;
+  const e: SeenEvent = { type, at };
+  for (const word of words.slice(words[1] === "(public)" ? 2 : 1)) {
+    const m = /^([a-z][A-Za-z0-9]*)=([A-Za-z0-9_.:@-]+)$/.exec(word);
+    if (m?.[1] === undefined || m[2] === undefined) return null;
+    const v = m[2];
+    if (m[1] === "type" || m[1] === "at") continue;
+    e[m[1]] = v === "null" ? null : /^-?[0-9]{1,15}$/.test(v) ? Number(v) : v;
+  }
+  return e;
+}
+
+/**
+ * The ids of the briefing's wake reasons of `type` (`betrayal p3` → `p3`) when the rules wake only
+ * the event's target for that type, so the seat is that target; none otherwise.
+ */
+function targetReasons(w: World, type: string): string[] {
+  const roles = w.kit.gateway.wake[type];
+  if (roles === undefined) return [];
+  const woken = Object.keys(roles);
+  if (woken.length !== 1 || woken[0] !== "target") return [];
+  const out: string[] = [];
+  for (const reason of w.briefing.wake.reasons) {
+    const [kind, id, extra] = reason.split(" ");
+    if (kind === type && id !== undefined && extra === undefined) out.push(id);
+  }
+  return out;
+}
+
+/**
+ * The events the seat can know of this turn: the briefing's `events` and `news`, the hits of this
+ * turn's `droppedEventSearch` (read back from their summaries, `at` their time), and a betrayal
+ * of the seat or a conquest of its city from each wake reason that names one. An event may appear
+ * more than once.
+ */
+export function seenEvents(w: World): SeenEvent[] {
+  const out: SeenEvent[] = [...w.briefing.events, ...w.briefing.news];
+  for (const h of w.archive.hits) {
+    const e = eventOfHit(h.type, h.summary, h.t);
+    if (e !== null) out.push(e);
+  }
+  for (const by of targetReasons(w, "betrayal")) {
+    if (isPlayer(by) && by !== w.seat) out.push({ type: "betrayal", by, against: w.seat });
+  }
+  for (const city of targetReasons(w, "city_conquered")) {
+    if (isCity(city)) out.push({ type: "city_conquered", city, from: w.seat });
+  }
+  return out;
+}
+
 // The notes: one memo line per call, `wc <caller> <id> <role> <target> <t0> <t1> <state> <at|->`
 // followed, for the seat's own calls, by each ally's answer `<player>=<landing|n>`.
 
@@ -818,8 +931,9 @@ export function warTarget(w: World, city: CityId): WarTarget | null {
 
 /**
  * Players the seat does not trust this turn: the owner of an attack on its way to one of its cities
- * (an ally's included: "it's only a fake" is how a betrayal starts) and every betrayer the briefing
- * reports.
+ * (an ally's included: "it's only a fake" is how a betrayal starts) and every betrayer the seat
+ * learns of this turn (`seenEvents`: a briefing that left the event out still has the wake reason
+ * or the search hit).
  */
 export function distrustOf(w: World): Set<PlayerId> {
   const out = new Set<PlayerId>();
@@ -829,7 +943,7 @@ export function distrustOf(w: World): Set<PlayerId> {
     if (inc.foe !== undefined && inc.foe !== null && inc.foe !== w.seat) continue;
     out.add(inc.by);
   }
-  for (const e of [...w.briefing.events, ...w.briefing.news]) {
+  for (const e of seenEvents(w)) {
     const by = e["by"];
     if (e.type === "betrayal" && isPlayerId(by) && by !== w.seat) out.add(by);
   }

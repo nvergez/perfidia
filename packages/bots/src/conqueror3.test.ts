@@ -474,9 +474,8 @@ describe("conqueror@3 (perfidia-1 shape)", () => {
       const log = await playTurn(b, g, "p1", { turn: 2 });
       expect(g.violations).toEqual([]);
       expect(callsTo(log, "attack")).toEqual([]);
-      const cancel = warMessages(log);
-      expect(cancel.length).toBe(1);
-      expect(cancel[0]).toMatch(/^WAR#k1 cancel: /);
+      // In plain words, not the memo's numbers.
+      expect(warMessages(log)).toEqual(["WAR#k1 cancel: defense grew"]);
       const m = memoryOf(g);
       expect(m.x["at"]).toBeUndefined();
       expect(m.x["jx"]).toBe(g.t);
@@ -700,6 +699,51 @@ describe("conqueror@3 (perfidia-1 shape)", () => {
         }
       });
     });
+  });
+
+  test("a betrayal or a lost city its briefing left out is read from the wake reasons: no alliance, no pact with the betrayer", async () => {
+    const g = game();
+    g.t = 2 * DAY + 3600;
+    armed(g, ARMY);
+    g.cities.push(colony("c20", "p1", FRONTIER, 0, { guard: 5 }));
+    g.city("c20").owner = "p3";
+    const proposal = (
+      id: Briefing["proposals"][number]["id"],
+      from: PlayerId,
+      kind: "alliance" | "pact",
+    ): Briefing["proposals"][number] => ({
+      id,
+      from,
+      to: "p1",
+      kind,
+      name: kind === "alliance" ? `League ${from}` : null,
+      text: "together?",
+      expires: pair(g.t + DAY),
+    });
+    g.proposals.push(proposal("q0000a", "p6", "alliance"), proposal("q0000b", "p5", "pact"));
+    // A full briefing: the betrayal and the conquest were left out, the urgent wake's reasons not.
+    const b = briefed(bot(), (br) => ({
+      ...br,
+      wake: { urgent: true, reasons: ["betrayal p6", "city_conquered c20"] },
+      events: [],
+    }));
+    const log = await playTurn(b, g, "p1", { notes: victimNotes(g, 3) });
+    expect(g.violations).toEqual([]);
+    expect(callsTo(log, "answer_proposal")).toEqual([
+      { id: "q0000a", accept: false },
+      { id: "q0000b", accept: true },
+    ]);
+    const m = memoryOf(g);
+    expect(m.x["tb6"]).toBe(g.t);
+    expect(m.x["loc20"]).toBe(g.t);
+    // A day later, nothing in the briefing: still no pact with p6, and it is never asked.
+    g.proposals.length = 0;
+    g.proposals.push(proposal("q0000c", "p6", "pact"));
+    advance(g, g.t + DAY);
+    const later = await playTurn(bot(), g, "p1", { turn: 2 });
+    expect(g.violations).toEqual([]);
+    expect(callsTo(later, "answer_proposal")).toEqual([{ id: "q0000c", accept: false }]);
+    expect(callsTo(later, "propose_alliance").filter((x) => x["to"] === "p6")).toEqual([]);
   });
 
   test("notes it cannot parse are read as empty memory and rewritten", async () => {

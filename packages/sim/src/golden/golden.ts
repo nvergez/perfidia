@@ -81,7 +81,7 @@ export const GOLDEN_SPECS: readonly GoldenSpec[] = Object.freeze([
     ref: "perfidia-1@1.0.0",
     name: "lockstep-6p-6d-war",
     run: {
-      seed: 34,
+      seed: 33,
       players: 6,
       days: 6,
       bots: ["conqueror@3", "opportunist@3", "turtle@3", "conqueror@3", "expander@2", "rusher@3"],

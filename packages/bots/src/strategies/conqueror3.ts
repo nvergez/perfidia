@@ -94,9 +94,13 @@ import {
 import {
   composeCall,
   composeCancel,
+  droppedEventSearch,
   droppedWarOpens,
   droppedWarSearch,
   mayMessage,
+  seenEvents,
+  TRUST_EVENTS,
+  WATCH_EVENTS,
   warId,
   warMessages,
   type WarEntry,
@@ -371,10 +375,13 @@ function hearAllies(p: Planner): void {
   }
 }
 
-/** Remembers the cities the seat lost to a conquest (`lo<city>`: when), from the briefing's events. */
+/**
+ * Remembers the cities the seat lost to a conquest (`lo<city>`: when), from the conquests it learns
+ * of this turn (`seenEvents`).
+ */
 function rememberLosses(p: Planner): void {
   const { w } = p;
-  for (const e of [...w.briefing.events, ...w.briefing.news]) {
+  for (const e of seenEvents(w)) {
     if (e.type !== "city_conquered" || e["from"] !== w.seat) continue;
     const city = e["city"];
     if (typeof city !== "string" || !/^c[1-9][0-9]*$/.test(city)) continue;
@@ -604,12 +611,13 @@ function priorDefense(
 }
 
 /**
- * Remembers who was seen attacking in the public battle headlines (`f<seat>`: when), the seat's own
- * attackers aside (a war alliance goes to a fighter, never to the player that fights the seat).
+ * Remembers who was seen attacking in the public battle headlines (`f<seat>`: when; `seenEvents`),
+ * the seat's own attackers aside (a war alliance goes to a fighter, never to the player that fights
+ * the seat).
  */
 function watchFighters(p: Planner): void {
   const { w } = p;
-  for (const e of [...w.briefing.news, ...w.briefing.events]) {
+  for (const e of seenEvents(w)) {
     if (e.type !== "battle" || e["defender"] === w.seat) continue;
     const attacker = e["attacker"];
     const m = typeof attacker === "string" ? /^p([1-9][0-9]*)$/.exec(attacker) : null;
@@ -618,10 +626,13 @@ function watchFighters(p: Planner): void {
   }
 }
 
-/** Remembers for a day when strangers founded their cities (`fc<city>`), from the public feed. */
+/**
+ * Remembers for a day when strangers founded their cities (`fc<city>`), from the public feed
+ * (`seenEvents`).
+ */
 function rememberFoundings(p: Planner): void {
   const { w } = p;
-  for (const e of [...w.briefing.events, ...w.briefing.news]) {
+  for (const e of seenEvents(w)) {
     if (e.type !== "city_founded" || e["owner"] === w.seat) continue;
     const city = e["city"];
     const at: unknown = e["at"];
@@ -1368,20 +1379,22 @@ function trainStep(
   // helpers already left goes on, its waves being on their way anyway.
   const relief = reliefOf(p, prm, row);
   const hold = garrisonPotential(p, prm, f, tg, w.t + travel);
+  // Why it is called off: the memo's detail, and the plain words its allies read in the cancel.
   let why: string | null = null;
-  if (failed) why = "spy failed";
-  else if (helpers === 0 && travel > MAX_FLIGHT) why = "founders too far";
+  let say = "";
+  if (failed) [why, say] = ["spy failed", "spy failed"];
+  else if (helpers === 0 && travel > MAX_FLIGHT) [why, say] = ["founders too far", "too far"];
   else if (helpers === 0 && relief.known && !deters(hold, relief.attack)) {
-    why = `would not hold (D${hold})`;
+    [why, say] = [`would not hold (D${hold})`, "would not hold it"];
   } else if (newer && estimate > 0 && defenseValue(d) * 1000 > estimate * prm.abortPm) {
-    why = `D${defenseValue(d)} vs D${estimate}`;
-  } else if (waves === null) why = `D${defenseValue(d)}: short`;
+    [why, say] = [`D${defenseValue(d)} vs D${estimate}`, "defense grew"];
+  } else if (waves === null) [why, say] = [`D${defenseValue(d)}: short`, "too strong for us"];
   if (why !== null) {
     recallTrain(p, id);
     if (joint > 0) why = `${why} (${yes.size} yes)`;
     p.memo(`${joint > 0 ? "joint" : "train"} ${id} called off ${fmtTime(w.t)}: ${why}`);
     p.clearFlag(`dk${id}`);
-    cancel(why);
+    cancel(say);
     return;
   }
   if (waves !== null && launch(p, prm, tg, waves, m)) p.setFlag("ac", 1);
@@ -2579,6 +2592,8 @@ export const conqueror3: StrategyDef = Object.freeze<StrategyDef>({
           ...cities.map((city) => call("view_city", { city })),
           ...allyReads(w, victim).map((city) => call("view_city", { city })),
           ...droppedWarSearch(w),
+          ...droppedEventSearch(w, TRUST_EVENTS),
+          ...droppedEventSearch(w, WATCH_EVENTS),
         ];
       },
       moreReads: droppedWarOpens,

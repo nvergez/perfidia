@@ -44,6 +44,7 @@ import {
   mayMessage,
   pickCall,
   readBook,
+  seenEvents,
   threatened,
   warTarget,
   writeBook,
@@ -294,12 +295,14 @@ function attackSeen(w: World, target: WarTarget): boolean {
 const BETRAYED_BY = /^tb([1-9][0-9]*)$/;
 
 /**
- * Remembers who betrayed the seat (`tb<n>`), from the briefing's `betrayal` events: a betrayal
- * counts in `distrustOf` only on the turn it is reported, a betrayer must not be trusted later.
+ * Remembers who betrayed the seat (`tb<n>`), from every `betrayal` of the seat it learns of this
+ * turn (`seenEvents`: the briefing's events, the wake reason a cut briefing still carries, the
+ * search of the events it left out): a betrayal counts in `distrustOf` only on the turn it is
+ * reported, a betrayer must not be trusted later.
  */
 export function rememberBetrayers(p: Planner): void {
   const { w } = p;
-  for (const e of [...w.briefing.events, ...w.briefing.news]) {
+  for (const e of seenEvents(w)) {
     const by = e["by"];
     if (e.type !== "betrayal" || e["against"] !== w.seat || !isPlayerId(by) || by === w.seat) {
       continue;
@@ -581,10 +584,10 @@ export function closeDesk(p: Planner, desk: WarDesk): void {
 
 /**
  * Holds an ally's conquests: its sieges on the map are remembered with their end (`gw<city>`), a
- * conquest of its in the news from now; once the ally owns the city, not besieged, within
- * `HOLD_WITHIN` of that end, the nearest own city with defenders sends `sharePm` of them (lifted
- * by its carriers), unless the seat already answered a call for that city. A firm self-wake waits
- * for each remembered end.
+ * conquest of its in the news (`seenEvents`) from now; once the ally owns the city, not besieged,
+ * within `HOLD_WITHIN` of that end, the nearest own city with defenders sends `sharePm` of them
+ * (lifted by its carriers), unless the seat already answered a call for that city. A firm
+ * self-wake waits for each remembered end.
  */
 export function holdConquests(p: Planner, desk: WarDesk, sharePm: number): void {
   const { w } = p;
@@ -601,7 +604,7 @@ export function holdConquests(p: Planner, desk: WarDesk, sharePm: number): void 
     if (!w.cities.some((c) => w.travel(c.id, row.island, false) !== null)) continue;
     p.setFlag(`gw${row.id}`, ends);
   }
-  for (const e of [...w.briefing.news, ...w.briefing.events]) {
+  for (const e of seenEvents(w)) {
     if (e.type !== "city_conquered") continue;
     const city = e["city"];
     const to = e["to"];

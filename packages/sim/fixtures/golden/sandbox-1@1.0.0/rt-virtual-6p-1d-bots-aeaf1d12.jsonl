@@ -853,60 +853,62 @@
 {"args":{"city":"c12"},"bytes":170,"k":"obs","n":519,"rt":1,"seat":"p5","t":77984,"tool":"view_city","turn":12}
 {"args":{"city":"c8"},"bytes":496,"k":"obs","n":520,"rt":1,"seat":"p5","t":77984,"tool":"view_city","turn":12}
 {"args":{"city":"c3"},"bytes":167,"k":"obs","n":521,"rt":1,"seat":"p5","t":77984,"tool":"view_city","turn":12}
-{"a":{"from":"c5","island":"i2","slot":0,"type":"found_city","units":{"boat":1,"colonist":1,"spearman":1}},"i":0,"k":"act","n":522,"r":{"ok":true},"rt":2,"seat":"p5","t":78039,"tool":"found_city","turn":12}
-{"a":{"city":"c5","count":8,"type":"recruit","unit":"spearman"},"i":0,"k":"act","n":523,"r":{"ok":true},"rt":2,"seat":"p5","t":78039,"tool":"recruit","turn":12}
-{"a":{"city":"c5","count":4,"type":"recruit","unit":"axeman"},"i":1,"k":"act","n":524,"r":{"ok":true},"rt":2,"seat":"p5","t":78039,"tool":"recruit","turn":12}
-{"k":"note","mode":"replace","n":525,"seat":"p5","t":78080,"text":"{\"v\":2,\"s\":\"conqueror\",\"h\":\"c7740dd1ea0a2efb:6\",\"f\":{\"i2\":[84939]},\"m\":[\"victim p3 D1 11:01:15 (cheapest, c8)\"],\"x\":{\"ac\":0,\"av\":3,\"dmc8\":270,\"dtc8\":46945,\"fcc10\":20274,\"fcc11\":36757,\"fcc12\":65872,\"fcc13\":67419,\"fcc14\":68166,\"fcc8\":20074,\"fcc9\":20157,\"ha2\":70166,\"spc8\":39675,\"vt\":39675},\"k\":[\"sm0htrm\"]}","turn":12}
-{"calls":12,"k":"turn","next":{"at":86400,"kind":"self"},"rounds":4,"seat":"p5","selfAt":86400,"t":78080,"thought":"conqueror D1 21:40:39: c12: no intel; c8 D723: too strong; c3: no intel; found i2 from c5; recruit c5 8 spearman,4 axeman","turn":12,"why":"end_turn"}
+{"args":{"search":{"before":47,"kinds":["betrayal","city_conquered"],"scope":"all","since":70166}},"bytes":406,"k":"obs","n":522,"rt":1,"seat":"p5","t":77984,"tool":"read_notes","turn":12}
+{"args":{"search":{"before":47,"kinds":["battle","city_founded"],"scope":"all","since":70166}},"bytes":566,"k":"obs","n":523,"rt":1,"seat":"p5","t":77984,"tool":"read_notes","turn":12}
+{"a":{"from":"c5","island":"i2","slot":0,"type":"found_city","units":{"boat":1,"colonist":1,"spearman":1}},"i":0,"k":"act","n":524,"r":{"ok":true},"rt":2,"seat":"p5","t":78039,"tool":"found_city","turn":12}
+{"a":{"city":"c5","count":8,"type":"recruit","unit":"spearman"},"i":0,"k":"act","n":525,"r":{"ok":true},"rt":2,"seat":"p5","t":78039,"tool":"recruit","turn":12}
+{"a":{"city":"c5","count":4,"type":"recruit","unit":"axeman"},"i":1,"k":"act","n":526,"r":{"ok":true},"rt":2,"seat":"p5","t":78039,"tool":"recruit","turn":12}
+{"k":"note","mode":"replace","n":527,"seat":"p5","t":78080,"text":"{\"v\":2,\"s\":\"conqueror\",\"h\":\"c7740dd1ea0a2efb:6\",\"f\":{\"i2\":[84939]},\"m\":[\"victim p3 D1 11:01:15 (cheapest, c8)\"],\"x\":{\"ac\":0,\"av\":3,\"dmc8\":270,\"dtc8\":46945,\"fcc10\":20274,\"fcc11\":36757,\"fcc12\":65872,\"fcc13\":67419,\"fcc14\":68166,\"fcc8\":20074,\"fcc9\":20157,\"ha2\":70166,\"spc8\":39675,\"vt\":39675},\"k\":[\"sm0htrm\"]}","turn":12}
+{"calls":14,"k":"turn","next":{"at":86400,"kind":"self"},"rounds":4,"seat":"p5","selfAt":86400,"t":78080,"thought":"conqueror D1 21:40:39: c12: no intel; c8 D723: too strong; c3: no intel; found i2 from c5; recruit c5 8 spearman,4 axeman","turn":12,"why":"end_turn"}
 {"h":"c107232288d13214","hour":22,"k":"ckpt","t":79200}
 {"e":{"data":{"city":"c5","count":8,"item":18,"queue":"camp","unit":"spearman"},"public":false,"t":79959,"to":[{"as":"self","p":"p5"}],"type":"recruit_done"},"k":"ev","t":79959}
 {"charge":null,"day":0,"k":"wake","reasons":["queue_empty c3","self","safety"],"seat":"p3","t":80581,"turn":11,"urgent":false,"used":{"own":8,"social":1}}
-{"args":{"player":"p3"},"bytes":482,"k":"obs","n":526,"rt":0,"seat":"p3","t":80598,"tool":"view_player","turn":11}
-{"args":{"fromCity":"c12"},"bytes":2500,"k":"obs","n":527,"rt":0,"seat":"p3","t":80598,"tool":"view_map","turn":11}
-{"args":{"city":"c3"},"bytes":495,"k":"obs","n":528,"rt":0,"seat":"p3","t":80598,"tool":"view_city","turn":11}
-{"args":{"city":"c8"},"bytes":469,"k":"obs","n":529,"rt":0,"seat":"p3","t":80598,"tool":"view_city","turn":11}
-{"args":{"city":"c12"},"bytes":481,"k":"obs","n":530,"rt":0,"seat":"p3","t":80598,"tool":"view_city","turn":11}
-{"a":{"city":"c3","count":1,"type":"recruit","unit":"colonist"},"i":0,"k":"act","n":531,"r":{"ok":true},"rt":1,"seat":"p3","t":80751,"tool":"recruit","turn":11}
-{"a":{"building":"depot","city":"c8","type":"build"},"i":0,"k":"act","n":532,"r":{"ok":true},"rt":1,"seat":"p3","t":80751,"tool":"build","turn":11}
-{"a":{"building":"sawmill","city":"c8","type":"build"},"i":1,"k":"act","n":533,"r":{"ok":true},"rt":1,"seat":"p3","t":80751,"tool":"build","turn":11}
-{"a":{"building":"pit","city":"c8","type":"build"},"i":2,"k":"act","n":534,"r":{"ok":true},"rt":1,"seat":"p3","t":80751,"tool":"build","turn":11}
-{"a":{"building":"forge","city":"c8","type":"build"},"i":3,"k":"act","n":535,"r":{"ok":true},"rt":1,"seat":"p3","t":80751,"tool":"build","turn":11}
-{"a":{"city":"c3","count":9,"type":"recruit","unit":"spearman"},"i":0,"k":"act","n":536,"r":{"ok":true},"rt":1,"seat":"p3","t":80751,"tool":"recruit","turn":11}
-{"a":{"city":"c3","count":3,"type":"recruit","unit":"axeman"},"i":1,"k":"act","n":537,"r":{"ok":true},"rt":1,"seat":"p3","t":80751,"tool":"recruit","turn":11}
-{"k":"note","mode":"replace","n":538,"seat":"p3","t":80823,"text":"{\"v\":2,\"s\":\"turtle\",\"h\":\"c7740dd1ea0a2efb:6\",\"f\":{},\"m\":[],\"x\":{},\"k\":[\"q19qa5\"]}","turn":11}
+{"args":{"player":"p3"},"bytes":482,"k":"obs","n":528,"rt":0,"seat":"p3","t":80598,"tool":"view_player","turn":11}
+{"args":{"fromCity":"c12"},"bytes":2500,"k":"obs","n":529,"rt":0,"seat":"p3","t":80598,"tool":"view_map","turn":11}
+{"args":{"city":"c3"},"bytes":495,"k":"obs","n":530,"rt":0,"seat":"p3","t":80598,"tool":"view_city","turn":11}
+{"args":{"city":"c8"},"bytes":469,"k":"obs","n":531,"rt":0,"seat":"p3","t":80598,"tool":"view_city","turn":11}
+{"args":{"city":"c12"},"bytes":481,"k":"obs","n":532,"rt":0,"seat":"p3","t":80598,"tool":"view_city","turn":11}
+{"a":{"city":"c3","count":1,"type":"recruit","unit":"colonist"},"i":0,"k":"act","n":533,"r":{"ok":true},"rt":1,"seat":"p3","t":80751,"tool":"recruit","turn":11}
+{"a":{"building":"depot","city":"c8","type":"build"},"i":0,"k":"act","n":534,"r":{"ok":true},"rt":1,"seat":"p3","t":80751,"tool":"build","turn":11}
+{"a":{"building":"sawmill","city":"c8","type":"build"},"i":1,"k":"act","n":535,"r":{"ok":true},"rt":1,"seat":"p3","t":80751,"tool":"build","turn":11}
+{"a":{"building":"pit","city":"c8","type":"build"},"i":2,"k":"act","n":536,"r":{"ok":true},"rt":1,"seat":"p3","t":80751,"tool":"build","turn":11}
+{"a":{"building":"forge","city":"c8","type":"build"},"i":3,"k":"act","n":537,"r":{"ok":true},"rt":1,"seat":"p3","t":80751,"tool":"build","turn":11}
+{"a":{"city":"c3","count":9,"type":"recruit","unit":"spearman"},"i":0,"k":"act","n":538,"r":{"ok":true},"rt":1,"seat":"p3","t":80751,"tool":"recruit","turn":11}
+{"a":{"city":"c3","count":3,"type":"recruit","unit":"axeman"},"i":1,"k":"act","n":539,"r":{"ok":true},"rt":1,"seat":"p3","t":80751,"tool":"recruit","turn":11}
+{"k":"note","mode":"replace","n":540,"seat":"p3","t":80823,"text":"{\"v\":2,\"s\":\"turtle\",\"h\":\"c7740dd1ea0a2efb:6\",\"f\":{},\"m\":[],\"x\":{},\"k\":[\"q19qa5\"]}","turn":11}
 {"calls":10,"k":"turn","next":{"at":86400,"kind":"self"},"rounds":3,"seat":"p3","selfAt":86400,"t":80823,"thought":"turtle D1 22:25:51: recruit c3 1 colonist; build c8 depot,sawmill,pit,forge; recruit c3 9 spearman,3 axeman","turn":11,"why":"end_turn"}
 {"e":{"data":{"city":"c5","count":4,"item":19,"queue":"camp","unit":"axeman"},"public":false,"t":80919,"to":[{"as":"self","p":"p5"}],"type":"recruit_done"},"k":"ev","t":80919}
 {"e":{"data":{"city":"c5","queue":"camp"},"public":false,"t":80919,"to":[{"as":"self","p":"p5"}],"type":"queue_empty"},"k":"ev","t":80919}
 {"e":{"data":{"building":"depot","city":"c8","item":1,"level":2},"public":false,"t":81951,"to":[{"as":"self","p":"p3"}],"type":"build_done"},"k":"ev","t":81951}
 {"charge":null,"day":0,"k":"wake","reasons":["queue_empty c6","self","safety"],"seat":"p6","t":82204,"turn":10,"urgent":false,"used":{"own":8,"social":0}}
-{"args":{"player":"p6"},"bytes":443,"k":"obs","n":539,"rt":0,"seat":"p6","t":82306,"tool":"view_player","turn":10}
-{"args":{"fromCity":"c13"},"bytes":2500,"k":"obs","n":540,"rt":0,"seat":"p6","t":82306,"tool":"view_map","turn":10}
-{"args":{"city":"c6"},"bytes":508,"k":"obs","n":541,"rt":0,"seat":"p6","t":82306,"tool":"view_city","turn":10}
-{"args":{"city":"c9"},"bytes":470,"k":"obs","n":542,"rt":0,"seat":"p6","t":82306,"tool":"view_city","turn":10}
-{"args":{"city":"c13"},"bytes":482,"k":"obs","n":543,"rt":0,"seat":"p6","t":82306,"tool":"view_city","turn":10}
-{"a":{"from":"c6","island":"i10","slot":1,"type":"found_city","units":{"boat":1,"colonist":1,"spearman":2}},"i":0,"k":"act","n":544,"r":{"ok":true},"rt":1,"seat":"p6","t":82382,"tool":"found_city","turn":10}
-{"a":{"city":"c6","count":1,"type":"recruit","unit":"boat"},"i":0,"k":"act","n":545,"r":{"ok":true},"rt":1,"seat":"p6","t":82382,"tool":"recruit","turn":10}
-{"a":{"building":"depot","city":"c9","type":"build"},"i":0,"k":"act","n":546,"r":{"ok":true},"rt":1,"seat":"p6","t":82382,"tool":"build","turn":10}
-{"a":{"building":"sawmill","city":"c9","type":"build"},"i":1,"k":"act","n":547,"r":{"ok":true},"rt":1,"seat":"p6","t":82382,"tool":"build","turn":10}
-{"a":{"building":"pit","city":"c9","type":"build"},"i":2,"k":"act","n":548,"r":{"ok":true},"rt":1,"seat":"p6","t":82382,"tool":"build","turn":10}
-{"a":{"building":"forge","city":"c9","type":"build"},"i":3,"k":"act","n":549,"r":{"ok":true},"rt":1,"seat":"p6","t":82382,"tool":"build","turn":10}
-{"k":"note","mode":"replace","n":550,"seat":"p6","t":82497,"text":"{\"v\":2,\"s\":\"expander\",\"h\":\"c7740dd1ea0a2efb:6\",\"f\":{\"i10\":[89282]},\"m\":[],\"x\":{\"uaxeman\":240,\"uspearman\":240},\"k\":[]}","turn":10}
+{"args":{"player":"p6"},"bytes":443,"k":"obs","n":541,"rt":0,"seat":"p6","t":82306,"tool":"view_player","turn":10}
+{"args":{"fromCity":"c13"},"bytes":2500,"k":"obs","n":542,"rt":0,"seat":"p6","t":82306,"tool":"view_map","turn":10}
+{"args":{"city":"c6"},"bytes":508,"k":"obs","n":543,"rt":0,"seat":"p6","t":82306,"tool":"view_city","turn":10}
+{"args":{"city":"c9"},"bytes":470,"k":"obs","n":544,"rt":0,"seat":"p6","t":82306,"tool":"view_city","turn":10}
+{"args":{"city":"c13"},"bytes":482,"k":"obs","n":545,"rt":0,"seat":"p6","t":82306,"tool":"view_city","turn":10}
+{"a":{"from":"c6","island":"i10","slot":1,"type":"found_city","units":{"boat":1,"colonist":1,"spearman":2}},"i":0,"k":"act","n":546,"r":{"ok":true},"rt":1,"seat":"p6","t":82382,"tool":"found_city","turn":10}
+{"a":{"city":"c6","count":1,"type":"recruit","unit":"boat"},"i":0,"k":"act","n":547,"r":{"ok":true},"rt":1,"seat":"p6","t":82382,"tool":"recruit","turn":10}
+{"a":{"building":"depot","city":"c9","type":"build"},"i":0,"k":"act","n":548,"r":{"ok":true},"rt":1,"seat":"p6","t":82382,"tool":"build","turn":10}
+{"a":{"building":"sawmill","city":"c9","type":"build"},"i":1,"k":"act","n":549,"r":{"ok":true},"rt":1,"seat":"p6","t":82382,"tool":"build","turn":10}
+{"a":{"building":"pit","city":"c9","type":"build"},"i":2,"k":"act","n":550,"r":{"ok":true},"rt":1,"seat":"p6","t":82382,"tool":"build","turn":10}
+{"a":{"building":"forge","city":"c9","type":"build"},"i":3,"k":"act","n":551,"r":{"ok":true},"rt":1,"seat":"p6","t":82382,"tool":"build","turn":10}
+{"k":"note","mode":"replace","n":552,"seat":"p6","t":82497,"text":"{\"v\":2,\"s\":\"expander\",\"h\":\"c7740dd1ea0a2efb:6\",\"f\":{\"i10\":[89282]},\"m\":[],\"x\":{\"uaxeman\":240,\"uspearman\":240},\"k\":[]}","turn":10}
 {"calls":10,"k":"turn","next":{"at":86400,"kind":"self"},"rounds":3,"seat":"p6","selfAt":86400,"t":82497,"thought":"expander D1 22:53:02: found i10 from c6; recruit c6 1 boat; build c9 depot,sawmill,pit,forge","turn":10,"why":"end_turn"}
 {"h":"e9fc7f9ec45e7216","hour":23,"k":"ckpt","t":82800}
 {"charge":null,"day":0,"k":"wake","reasons":["queue_empty c1","self","safety"],"seat":"p1","t":82922,"turn":11,"urgent":false,"used":{"own":8,"social":1}}
-{"args":{"player":"p1"},"bytes":486,"k":"obs","n":551,"rt":0,"seat":"p1","t":83044,"tool":"view_player","turn":11}
-{"args":{"fromCity":"c14"},"bytes":2500,"k":"obs","n":552,"rt":0,"seat":"p1","t":83044,"tool":"view_map","turn":11}
-{"args":{"city":"c1"},"bytes":507,"k":"obs","n":553,"rt":0,"seat":"p1","t":83044,"tool":"view_city","turn":11}
-{"args":{"city":"c10"},"bytes":472,"k":"obs","n":554,"rt":0,"seat":"p1","t":83044,"tool":"view_city","turn":11}
-{"args":{"city":"c14"},"bytes":481,"k":"obs","n":555,"rt":0,"seat":"p1","t":83044,"tool":"view_city","turn":11}
-{"a":{"from":"c1","island":"i8","slot":1,"type":"found_city","units":{"boat":1,"colonist":1,"spearman":2}},"i":0,"k":"act","n":556,"r":{"ok":true},"rt":1,"seat":"p1","t":83066,"tool":"found_city","turn":11}
-{"a":{"city":"c1","count":1,"type":"recruit","unit":"boat"},"i":0,"k":"act","n":557,"r":{"ok":true},"rt":1,"seat":"p1","t":83066,"tool":"recruit","turn":11}
-{"a":{"city":"c1","count":1,"type":"recruit","unit":"colonist"},"i":0,"k":"act","n":558,"r":{"ok":true},"rt":1,"seat":"p1","t":83066,"tool":"recruit","turn":11}
-{"a":{"building":"depot","city":"c10","type":"build"},"i":0,"k":"act","n":559,"r":{"ok":true},"rt":1,"seat":"p1","t":83066,"tool":"build","turn":11}
-{"a":{"building":"sawmill","city":"c10","type":"build"},"i":1,"k":"act","n":560,"r":{"ok":true},"rt":1,"seat":"p1","t":83066,"tool":"build","turn":11}
-{"a":{"building":"pit","city":"c10","type":"build"},"i":2,"k":"act","n":561,"r":{"ok":true},"rt":1,"seat":"p1","t":83066,"tool":"build","turn":11}
-{"a":{"building":"forge","city":"c10","type":"build"},"i":3,"k":"act","n":562,"r":{"ok":true},"rt":1,"seat":"p1","t":83066,"tool":"build","turn":11}
-{"k":"note","mode":"replace","n":563,"seat":"p1","t":83139,"text":"{\"v\":2,\"s\":\"expander\",\"h\":\"c7740dd1ea0a2efb:6\",\"f\":{\"i8\":[89966]},\"m\":[],\"x\":{\"uaxeman\":240,\"uspearman\":240},\"k\":[\"q9syyk\"]}","turn":11}
+{"args":{"player":"p1"},"bytes":486,"k":"obs","n":553,"rt":0,"seat":"p1","t":83044,"tool":"view_player","turn":11}
+{"args":{"fromCity":"c14"},"bytes":2500,"k":"obs","n":554,"rt":0,"seat":"p1","t":83044,"tool":"view_map","turn":11}
+{"args":{"city":"c1"},"bytes":507,"k":"obs","n":555,"rt":0,"seat":"p1","t":83044,"tool":"view_city","turn":11}
+{"args":{"city":"c10"},"bytes":472,"k":"obs","n":556,"rt":0,"seat":"p1","t":83044,"tool":"view_city","turn":11}
+{"args":{"city":"c14"},"bytes":481,"k":"obs","n":557,"rt":0,"seat":"p1","t":83044,"tool":"view_city","turn":11}
+{"a":{"from":"c1","island":"i8","slot":1,"type":"found_city","units":{"boat":1,"colonist":1,"spearman":2}},"i":0,"k":"act","n":558,"r":{"ok":true},"rt":1,"seat":"p1","t":83066,"tool":"found_city","turn":11}
+{"a":{"city":"c1","count":1,"type":"recruit","unit":"boat"},"i":0,"k":"act","n":559,"r":{"ok":true},"rt":1,"seat":"p1","t":83066,"tool":"recruit","turn":11}
+{"a":{"city":"c1","count":1,"type":"recruit","unit":"colonist"},"i":0,"k":"act","n":560,"r":{"ok":true},"rt":1,"seat":"p1","t":83066,"tool":"recruit","turn":11}
+{"a":{"building":"depot","city":"c10","type":"build"},"i":0,"k":"act","n":561,"r":{"ok":true},"rt":1,"seat":"p1","t":83066,"tool":"build","turn":11}
+{"a":{"building":"sawmill","city":"c10","type":"build"},"i":1,"k":"act","n":562,"r":{"ok":true},"rt":1,"seat":"p1","t":83066,"tool":"build","turn":11}
+{"a":{"building":"pit","city":"c10","type":"build"},"i":2,"k":"act","n":563,"r":{"ok":true},"rt":1,"seat":"p1","t":83066,"tool":"build","turn":11}
+{"a":{"building":"forge","city":"c10","type":"build"},"i":3,"k":"act","n":564,"r":{"ok":true},"rt":1,"seat":"p1","t":83066,"tool":"build","turn":11}
+{"k":"note","mode":"replace","n":565,"seat":"p1","t":83139,"text":"{\"v\":2,\"s\":\"expander\",\"h\":\"c7740dd1ea0a2efb:6\",\"f\":{\"i8\":[89966]},\"m\":[],\"x\":{\"uaxeman\":240,\"uspearman\":240},\"k\":[\"q9syyk\"]}","turn":11}
 {"calls":11,"k":"turn","next":{"at":86400,"kind":"self"},"rounds":3,"seat":"p1","selfAt":86400,"t":83139,"thought":"expander D1 23:04:26: found i8 from c1; recruit c1 1 boat; recruit c1 1 colonist; build c10 depot,sawmill,pit,forge","turn":11,"why":"end_turn"}
 {"e":{"data":{"building":"sawmill","city":"c8","item":2,"level":2},"public":false,"t":83151,"to":[{"as":"self","p":"p3"}],"type":"build_done"},"k":"ev","t":83151}
 {"e":{"data":{"city":"c6","count":1,"item":20,"queue":"docks","unit":"boat"},"public":false,"t":83282,"to":[{"as":"self","p":"p6"}],"type":"recruit_done"},"k":"ev","t":83282}

@@ -36,7 +36,7 @@ import {
   type ResponderParams,
 } from "../respond.ts";
 import { randInt } from "../rng.ts";
-import { droppedWarOpens, droppedWarSearch } from "../war.ts";
+import { droppedEventSearch, droppedWarOpens, droppedWarSearch, TRUST_EVENTS } from "../war.ts";
 import type { StrategyDef } from "./strategy.ts";
 import { brace, RELIEF_DEFENDERS_PM } from "./turtle2.ts";
 
@@ -73,7 +73,12 @@ export const turtle3: StrategyDef = Object.freeze<StrategyDef>({
     };
     return {
       knobs,
-      reads: (w) => [...reliefReads(w, true), ...countdownReads(w, false), ...droppedWarSearch(w)],
+      reads: (w) => [
+        ...reliefReads(w, true),
+        ...countdownReads(w, false),
+        ...droppedWarSearch(w),
+        ...droppedEventSearch(w, TRUST_EVENTS),
+      ],
       moreReads: droppedWarOpens,
       plan(p) {
         // Every proposal, except a betrayer's.

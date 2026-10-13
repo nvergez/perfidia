@@ -65,10 +65,13 @@ import { randInt } from "../rng.ts";
 import {
   composeCall,
   composeCancel,
+  droppedEventSearch,
   droppedWarOpens,
   droppedWarSearch,
   mayMessage,
   overlaps,
+  seenEvents,
+  TRUST_EVENTS,
   warId,
   warMessages,
   warTarget,
@@ -116,6 +119,8 @@ const NAMED_FOR = DAY;
 const REFUSED_FOR = DAY;
 /** Half the window of its own calls, around its landing. */
 const CALL_HALF = 1800;
+/** The public headlines it watches (`watchFighters`) when a full briefing left them out. */
+const FIGHTS: readonly string[] = Object.freeze(["battle"]);
 /** An ally needs this long at least to hear a call (a social wake) and land (the shortest trip). */
 const CALL_REACH = 4200;
 
@@ -360,7 +365,8 @@ function noteRefusals(p: Planner, desk: WarDesk): void {
  * attackers kept home while a strike it promised (or a joint raid of its own) has not left, and
  * its allies called when it raids a common enemy: a target nearer than `ahead` becomes a joint
  * raid (the call now, its own launch timed to land `ahead` from now, in the call's window); a
- * farther one is raided now with a call around its landing.
+ * farther one is raided now with a call around its landing. A target one of its calls under way
+ * already names in an overlapping window (`calledAlready`) is raided now, with no second call.
  */
 function raid(
   p: Planner,
@@ -412,6 +418,7 @@ function raid(
         travel !== null &&
         to.length > 0 &&
         travel < calls.ahead &&
+        !calledAlready(desk, w.seat, target, w.t + calls.ahead) &&
         canWakeAt(p, w.t + calls.ahead - travel)
       ) {
         const lands = w.t + calls.ahead;
@@ -547,7 +554,8 @@ export const opportunist3: StrategyDef = Object.freeze<StrategyDef>({
             out.push(call("view_city", { city: o.id }));
           }
         }
-        out.push(...droppedWarSearch(w));
+        out.push(...droppedWarSearch(w), ...droppedEventSearch(w, TRUST_EVENTS));
+        out.push(...droppedEventSearch(w, FIGHTS));
         return out;
       },
       moreReads: droppedWarOpens,
@@ -573,7 +581,7 @@ export const opportunist3: StrategyDef = Object.freeze<StrategyDef>({
           return true;
         });
         remember(p);
-        watchFighters(p);
+        watchFighters(p, seenEvents(w));
         noteLosses(p);
         hearNamed(p);
         const desk = openDesk(p);
