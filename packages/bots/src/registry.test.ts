@@ -27,8 +27,8 @@ const P1 = { seat: "p1", seed: 1 } as const;
 /** A later rusher for the tests: the same brain under version 2 (a real one would differ). */
 const rusher2: StrategyDef = Object.freeze<StrategyDef>({ ...rusher, version: 2 });
 
-/** The latest version of each strategy: rusher@3 (the rush that grows) beside rusher@1 and @2. */
-const latest = (s: string): number => (s === "rusher" ? 3 : 1);
+/** The latest version of each strategy: rusher@3 beside rusher@1 and @2, conqueror@2 beside @1. */
+const latest = (s: string): number => (s === "rusher" ? 3 : s === "conqueror" ? 2 : 1);
 
 describe("the registry of this build", () => {
   test("the five strategies at their latest version, every published version kept", () => {
@@ -41,7 +41,7 @@ describe("the registry of this build", () => {
     ]);
     for (const s of BOT_STRATEGIES) {
       expect(botLabel(s)).toBe(`bot:${s}@${latest(s)}`);
-      expect(botVersions(s)).toEqual(s === "rusher" ? [1, 2, 3] : [1]);
+      expect(botVersions(s)).toEqual(Array.from({ length: latest(s) }, (_, i) => i + 1));
       expect(createBot(s, P1).label).toBe(`bot:${s}@${latest(s)}`);
       expect(createBotVersion(s, 1, P1).label).toBe(`bot:${s}@1`);
     }
@@ -53,10 +53,12 @@ describe("the registry of this build", () => {
       "bot:turtle@1",
       "bot:opportunist@1",
       "bot:conqueror@1",
+      "bot:conqueror@2",
     ]);
     expect(botFromLabel("bot:rusher@1", P1)?.label).toBe("bot:rusher@1");
     expect(botFromLabel("bot:rusher@2", P1)?.label).toBe("bot:rusher@2");
     expect(botFromLabel("bot:rusher@3", P1)?.label).toBe("bot:rusher@3");
+    expect(botFromLabel("bot:conqueror@2", P1)?.label).toBe("bot:conqueror@2");
   });
 
   test("labels parse back to their strategy; malformed or unregistered labels do not", () => {

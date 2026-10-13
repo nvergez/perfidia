@@ -156,7 +156,7 @@ describe("1-game-day matches of the default bots", () => {
         "bot:rusher@3",
         "bot:turtle@1",
         "bot:opportunist@1",
-        "bot:conqueror@1",
+        "bot:conqueror@2",
         "bot:expander@1",
       ]);
       expect(first.run.stats.turns).toBe(k["wake"] ?? -1);
