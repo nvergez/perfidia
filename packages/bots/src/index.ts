@@ -22,3 +22,16 @@ export {
 } from "./registry.ts";
 export { BOT_STRATEGIES, type BotStrategy } from "./strategies/strategy.ts";
 export { thinkLatencyMs, withThinkTime, type ThinkTimeOptions } from "./think.ts";
+export {
+  composeAck,
+  composeCall,
+  composeCancel,
+  parseWar,
+  WAR_LIMITS,
+  WAR_ROLES,
+  type WarAck,
+  type WarCall,
+  type WarCancel,
+  type WarItem,
+  type WarRole,
+} from "./war.ts";

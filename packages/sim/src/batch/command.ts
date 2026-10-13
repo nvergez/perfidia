@@ -19,9 +19,12 @@ import {
   fightTable,
   matchLandTable,
   matchTable,
+  matchTeamTable,
   pacingTable,
   seatTable,
+  siegeTable,
   strategyTable,
+  teamTable,
   variantTable,
 } from "./table.ts";
 import { parseVariants } from "./variants.ts";
@@ -106,9 +109,12 @@ export async function batchCommand(argv: readonly string[], io: CliIo): Promise<
   io.out(`\n${strategyTable(result)}`);
   const countdowns = countdownTable(result);
   if (countdowns !== "") io.out(`\n${countdowns}`);
+  io.out(`\n${teamTable(result)}`);
+  io.out(`\n${siegeTable(result)}`);
   if (perMatch) {
     io.out(`\n${matchLandTable(result)}`);
     io.out(`\n${seatTable(result)}`);
+    io.out(`\n${matchTeamTable(result)}`);
   }
   if (result.variants.some((v) => v.pacing !== undefined)) io.out(`\n${pacingTable(result)}`);
   const json = f.string("json");

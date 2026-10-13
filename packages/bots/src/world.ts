@@ -92,6 +92,8 @@ export interface World {
   readonly relations: ReadonlyMap<PlayerId, "ally" | "pact">;
   /** Travel time from an own city to an island (`spy`: the spy probe), or null when unknown. */
   travel(from: CityId, island: IslandId, spy: boolean): number | null;
+  /** The travel times from an own city to an island, one per probe (`view_map`), or null when unknown. */
+  travelRow(from: CityId, island: IslandId): readonly number[] | null;
 }
 
 export interface Reads {
@@ -204,6 +206,9 @@ export function buildWorld(i: WorldInput): World {
     travel(from: CityId, island: IslandId, spy: boolean): number | null {
       const row = i.travel.get(from)?.[island];
       return row === undefined ? null : pickTravel(kit, row, spy);
+    },
+    travelRow(from: CityId, island: IslandId): readonly number[] | null {
+      return i.travel.get(from)?.[island] ?? null;
     },
   };
 }

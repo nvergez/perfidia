@@ -430,6 +430,27 @@ export function pickTravel(kit: Kit, row: readonly number[], spy: boolean): numb
   return best;
 }
 
+/**
+ * A group's travel time from a per-probe row: the slowest of the probes whose ships the group
+ * carries (a group moves at its slowest ship's pace), or `pickTravel`'s slowest group probe when it
+ * carries none of them (a group without ships, or rules whose probes name none).
+ */
+export function groupTravel(
+  kit: Kit,
+  row: readonly number[],
+  units: Readonly<Record<string, number>>,
+): number | null {
+  let best: number | null = null;
+  for (const [i, probe] of kit.rules.travelProbes.entries()) {
+    if (probe.group.kind === "spy") continue;
+    const ships = Object.keys(probe.group.units);
+    if (ships.length === 0 || !ships.every((u) => (units[u] ?? 0) > 0)) continue;
+    const s = row[i];
+    if (s !== undefined && (best === null || s > best)) best = s;
+  }
+  return best ?? pickTravel(kit, row, false);
+}
+
 // Time.
 
 export const DAY = 86400;

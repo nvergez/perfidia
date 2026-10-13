@@ -1,6 +1,6 @@
 import { createMatch, type AnyRuleset } from "@perfidia/engine";
 import { DAY } from "@perfidia/engine/core";
-import type { GameTime, LogLine, MatchSetup } from "@perfidia/protocol";
+import type { GameTime, LogLine, MatchSetup, PlayerId } from "@perfidia/protocol";
 import { freeSlotCount } from "./pacing.ts";
 
 // Free city slots over a match (docs/architecture.md §12.2), without a replay: a city is only ever
@@ -21,6 +21,23 @@ export interface FreeSlots {
 /** The free city slots of the initial world of `setup`. */
 export function initialFreeSlots(setup: MatchSetup, ruleset: AnyRuleset): number {
   return freeSlotCount(createMatch(setup, ruleset).read().state);
+}
+
+/** The initial world of `setup`: its free city slots, all its slots and each city's owner. */
+export interface InitialWorld {
+  readonly free: number;
+  readonly slots: number;
+  readonly owners: ReadonlyMap<string, PlayerId | null>;
+}
+
+/** The initial world of `setup` (created once, as `initialFreeSlots` does). */
+export function initialWorld(setup: MatchSetup, ruleset: AnyRuleset): InitialWorld {
+  const state = createMatch(setup, ruleset).read().state;
+  let slots = 0;
+  for (const isl of Object.values(state.islands)) slots += isl.slots;
+  const owners = new Map<string, PlayerId | null>();
+  for (const c of Object.values(state.cities)) owners.set(c.id, c.owner);
+  return { free: freeSlotCount(state), slots, owners };
 }
 
 /** The game times of the `city_founded` events. */

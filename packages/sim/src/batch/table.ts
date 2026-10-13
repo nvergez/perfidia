@@ -8,11 +8,12 @@ import type { FirstTimeStat } from "./fights.ts";
 // `--per-match`), the fights table (end reasons, first battle, conquest and elimination, domination
 // countdowns) per variant, the ends and land table (end counts, countdowns, free slots), the
 // battles table (defended, empty, reliefs), the bots table (per bot label: wins per seat with
-// their Wilson interval, score, cities, conquests, eliminations), every domination countdown, with
-// `--per-match` one row per match for the battles and land and one per seat, and with `--pacing`
-// the per-day pacing table of §13.9. A variant name longer than its column is printed on a line of
-// its own, its numbers on the next. Game times are printed on the game clock to the minute,
-// `D1 13:12` (day 1, 13:12 after the match start).
+// their Wilson interval, score, cities, conquests, eliminations), every domination countdown, the
+// teamwork table (joint attacks, war calls, R1 reach) and the sieges and teamwork by bot, with
+// `--per-match` one row per match for the battles and land, one per seat and one per match for the
+// teamwork, and with `--pacing` the per-day pacing table of §13.9. A variant name longer than its
+// column is printed on a line of its own, its numbers on the next. Game times are printed on the
+// game clock to the minute, `D1 13:12` (day 1, 13:12 after the match start).
 
 const VARIANT_WIDTH = 30;
 const f1 = (x: number): string => x.toFixed(1);
@@ -471,4 +472,166 @@ export function seatTable(result: BatchResult): string {
   const title =
     "seats · * winner · score parts from the final standings (levels and crown derived when not exposed) · battle pts: credited before the cap";
   return `${title}\n${withLongNames([head, ...rows], new Set([1, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 17])).join("\n")}\n`;
+}
+
+/** A mean to 2 decimals, `-` for null. */
+const n2 = (x: number | null): string => (x === null ? "-" : f2(x));
+
+/**
+ * Per variant, teamwork: joint attacks (mean per run, runs with one, those a war call preceded),
+ * the war-call messages (calls, calls answered, answers yes and no, cancels) and how near a bloc came
+ * to R1 (its threshold, runs that met it, the largest bloc's cities and conquered cities, and the
+ * most cities a bloc held with ≥ 2 conquered: means over the runs).
+ */
+export function teamTable(result: BatchResult): string {
+  const head = [
+    "variant",
+    "runs",
+    "joint attacks/run",
+    "runs with one",
+    "after a call",
+    "war calls",
+    "answered",
+    "yes",
+    "no",
+    "cancels",
+    "R1 need",
+    "R1 met",
+    "largest bloc: cities / conquered",
+    "bloc with ≥ 2 conquered: cities (runs)",
+  ];
+  const rows = result.variants.map((v) => {
+    const t = v.aggregate.team;
+    return [
+      v.text,
+      String(t.runs),
+      f2(t.joint.mean),
+      String(t.joint.runs),
+      String(t.joint.called),
+      String(t.calls.calls),
+      String(t.calls.answered),
+      String(t.calls.yes),
+      String(t.calls.no),
+      String(t.calls.cancels),
+      int(t.r1.need),
+      `${t.r1.reached} of ${t.r1.runs}`,
+      `${n1(t.r1.maxCities)} / ${n2(t.r1.maxConquered)}`,
+      t.r1.fightingRuns === 0 ? "-" : `${n1(t.r1.fightingMax)} (${t.r1.fightingRuns})`,
+    ];
+  });
+  const title =
+    "teamwork · joint attack: battles at one city by ≥ 2 players allied at the time, landing within 60 min · war calls: private WAR# messages · R1: a bloc with ≥ 40% of the map's city slots, ≥ 2 of them conquered";
+  return `${title}\n${withLongNames([head, ...rows], new Set([1, 2, 3, 4, 5, 6, 7, 8, 9, 10])).join("\n")}\n`;
+}
+
+/** `n (p%)` of a part of `total`, `0` when there is none. */
+function partText(n: number, total: number): string {
+  return n === 0 || total === 0 ? String(n) : `${n} (${Math.round((100 * n) / total)}%)`;
+}
+
+/**
+ * Per variant, sieges (all, then per bot label as the besieger) by how they were held and ended,
+ * and per bot label its joint attacks (called, joined) and war messages (calls, answers yes / no).
+ */
+export function siegeTable(result: BatchResult): string {
+  const head = [
+    "variant",
+    "besieger",
+    "sieges",
+    "reinforced",
+    "relief came",
+    "conquered",
+    "broken by relief",
+    "abandoned",
+    "other",
+    "joint: called",
+    "joined",
+    "war calls",
+    "yes / no",
+  ];
+  const rows = result.variants.flatMap((v) => {
+    const all = v.aggregate.team.sieges;
+    const total = [
+      v.text,
+      "all",
+      String(all.sieges),
+      partText(all.reinforced, all.sieges),
+      partText(all.relieved, all.sieges),
+      partText(all.conquered, all.sieges),
+      partText(all.broken, all.sieges),
+      partText(all.abandoned, all.sieges),
+      partText(all.other, all.sieges),
+      String(v.aggregate.team.joint.called),
+      String(v.aggregate.team.joint.total),
+      String(v.aggregate.team.calls.calls),
+      `${v.aggregate.team.calls.yes} / ${v.aggregate.team.calls.no}`,
+    ];
+    const bots = v.aggregate.teamBots.map((b) => {
+      const g = b.sieges;
+      return [
+        "",
+        b.bot,
+        String(g.sieges),
+        partText(g.reinforced, g.sieges),
+        partText(g.relieved, g.sieges),
+        partText(g.conquered, g.sieges),
+        partText(g.broken, g.sieges),
+        partText(g.abandoned, g.sieges),
+        partText(g.other, g.sieges),
+        String(b.jointCalled),
+        String(b.jointJoined),
+        String(b.calls),
+        `${b.yes} / ${b.no}`,
+      ];
+    });
+    return [total, ...bots];
+  });
+  const title =
+    "sieges and teamwork by bot · totals over the runs · reinforced: the besieger sent a support or a later wave joined its garrison · other: a homecoming, the besieger eliminated, or still open at the end · joint: attacks called (by a war call) and joined (all: joint attacks in total)";
+  return `${title}\n${withLongNames([head, ...rows], new Set([2, 9, 10, 11])).join("\n")}\n`;
+}
+
+/** `--per-match`: the joint attacks, sieges, war calls and R1 reach of each match. */
+export function matchTeamTable(result: BatchResult): string {
+  const head = [
+    "variant",
+    "seed",
+    "joint attacks",
+    "sieges: conquered / relief / abandoned / other (reinforced)",
+    "war calls (answered)",
+    "largest bloc",
+    "R1 met",
+  ];
+  const rows = result.variants.flatMap((v) =>
+    v.matches.map((m, i) => {
+      const s = m.sieges;
+      const n = (o: string): number => s.filter((x) => x.outcome === o).length;
+      const conquered = n("conquered");
+      const relief = n("relief");
+      const abandoned = n("abandoned");
+      const reinforced = s.filter((x) => x.joined > 0 || x.sent > 0).length;
+      const joint =
+        m.joint.length === 0
+          ? "-"
+          : m.joint
+              .slice(0, 3)
+              .map((j) => `${j.city} ${j.players.join("+")} ${gameClockText(j.t)}`)
+              .join(", ") + (m.joint.length > 3 ? ` +${m.joint.length - 3}` : "");
+      const r1 = m.r1;
+      return [
+        i === 0 ? v.text : "",
+        String(m.seed),
+        joint,
+        s.length === 0
+          ? "-"
+          : `${conquered} / ${relief} / ${abandoned} / ${s.length - conquered - relief - abandoned} (${reinforced})`,
+        `${m.warCalls.calls} (${m.warCalls.answered})`,
+        r1 === null ? "-" : `${r1.maxCities} / ${r1.maxConquered} (${r1.maxBloc.join(" + ")})`,
+        r1 === null || r1.reachedAt === null ? "-" : gameClockText(r1.reachedAt),
+      ];
+    }),
+  );
+  const title =
+    "teamwork per match · joint attacks: city, attackers, first landing · largest bloc: cities / conquered (members)";
+  return `${title}\n${withLongNames([head, ...rows], new Set([1])).join("\n")}\n`;
 }
