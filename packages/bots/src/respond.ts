@@ -55,6 +55,7 @@ import {
   type WarTarget,
   type WarVerdict,
   type WarWhy,
+  warMessages,
 } from "./war.ts";
 import type { OwnCity, World } from "./world.ts";
 
@@ -270,8 +271,52 @@ export function judgeOwn(
     minForce: strike ? prm.minStrike : prm.minHold,
     attacksLeft: p.attacksLeft,
     threatened: threatened(w),
+    attackSeen: target === null ? false : attackSeen(w, target),
   });
   return { verdict, target, groups };
+}
+
+/** True when an attack on its way to `target` is in the briefing (not the seat's, not a homecoming). */
+function attackSeen(w: World, target: WarTarget): boolean {
+  return w.briefing.incoming.some(
+    (i) =>
+      i.kind === "attack" &&
+      i.to === target.id &&
+      i.by !== w.seat &&
+      i.homecoming !== true &&
+      i.arrive[0] > w.t,
+  );
+}
+
+// Betrayers.
+
+/** A player that betrayed the seat (`tb<n>`: when) is never trusted again in the match. */
+const BETRAYED_BY = /^tb([1-9][0-9]*)$/;
+
+/**
+ * Remembers who betrayed the seat (`tb<n>`), from the briefing's `betrayal` events: a betrayal
+ * counts in `distrustOf` only on the turn it is reported, a betrayer must not be trusted later.
+ */
+export function rememberBetrayers(p: Planner): void {
+  const { w } = p;
+  for (const e of [...w.briefing.events, ...w.briefing.news]) {
+    const by = e["by"];
+    if (e.type !== "betrayal" || e["against"] !== w.seat || !isPlayerId(by) || by === w.seat) {
+      continue;
+    }
+    const n = Number(by.slice(1));
+    if (p.flag(`tb${n}`) === null) p.setFlag(`tb${n}`, w.t);
+  }
+}
+
+/** The players that betrayed the seat (`rememberBetrayers`). */
+export function betrayers(p: Planner): Set<PlayerId> {
+  const out = new Set<PlayerId>();
+  for (const name of Object.keys(p.memory.x)) {
+    const m = BETRAYED_BY.exec(name);
+    if (m?.[1] !== undefined) out.add(`p${Number(m[1])}`);
+  }
+  return out;
 }
 
 // The desk: the book of calls for one turn, and the answers to send.
@@ -299,6 +344,17 @@ function say(desk: WarDesk, to: PlayerId, text: string, yes: boolean): void {
 }
 
 /**
+ * A late no for `e`: the yes this turn queued for it, if any, is taken back (the caller never hears
+ * both), and the no is queued in its place.
+ */
+function sayNo(desk: WarDesk, e: WarEntry, why: string): void {
+  const box = desk.out.get(e.from);
+  const tag = `WAR#${e.call.id} `;
+  if (box !== undefined) box.yes = box.yes.filter((t) => !t.startsWith(tag));
+  say(desk, e.from, composeAck(e.call.id, false, null, why), false);
+}
+
+/**
  * The turn's book: the notes' entries with the briefing's war messages taken in (`hearWar`,
  * `absorbWar`). A strike of the seat still in its recall window whose call was just cancelled is
  * called back.
@@ -306,10 +362,11 @@ function say(desk: WarDesk, to: PlayerId, text: string, yes: boolean): void {
 export function openDesk(p: Planner, distrust: ReadonlySet<PlayerId> = new Set()): WarDesk {
   const { w } = p;
   const before = readBook(p.memory);
-  const { heard } = hearWar(w.briefing.msgs, w.seat, w.relations);
+  const { heard } = hearWar(warMessages(w), w.seat, w.relations);
   const book = absorbWar(before, heard, w.seat);
   const all = distrustOf(w);
   for (const q of distrust) all.add(q);
+  for (const q of betrayers(p)) all.add(q);
   const desk: WarDesk = { book, out: new Map(), distrust: all };
   for (const e of book) {
     if (e.from === w.seat || e.state !== "cancelled" || !isStrike(e.call.role)) continue;
@@ -346,6 +403,7 @@ const WHY_TEXT: Readonly<Record<WarWhy, string>> = Object.freeze({
   "under attack": "under attack",
   "too weak": "too weak",
   "no launches": "no attacks left",
+  "no threat": "no attack seen there",
 });
 
 export interface AnswerOptions {
@@ -353,6 +411,8 @@ export interface AnswerOptions {
   readonly silent?: ReadonlySet<PlayerId>;
   /** The seat's own enemies: a call against one of them comes first (`pickCall`). */
   readonly prefer?: ReadonlySet<PlayerId>;
+  /** The army is held for the seat's own plan this turn: every call it could serve gets `no: busy`. */
+  readonly busy?: boolean;
 }
 
 /**
@@ -401,7 +461,7 @@ export function answerCalls(
   // A strike promised earlier holds the attackers: a new one is busy until it has left.
   const holding = strikePending(desk, w.seat);
   for (const strike of [true, false]) {
-    if (strike && holding) continue;
+    if (o.busy === true || (strike && holding)) continue;
     const cands = accepted.filter((a) => isStrike(a.e.call.role) === strike).map((a) => a.c);
     const best = pickCall(cands, o.prefer ?? new Set(), ownerOf);
     if (best !== null) chosen.add(`${best.from}/${best.call.id}`);
@@ -438,10 +498,16 @@ export function strikePending(desk: WarDesk, seat: PlayerId): boolean {
 /**
  * Keeps the seat's word: each call it said yes to is judged again; when its strongest group's best
  * launch is now, every group that lands inside the window leaving now goes (`waves` at most);
- * otherwise the launch waits for its firm self-wake. A call it can no longer serve gets a late no
- * (when messages are plentiful) and nothing leaves.
+ * otherwise the launch waits for its firm self-wake. A call it can no longer serve (or a strike
+ * while the army is `busy` with the seat's own plan) gets a late no, while its window is open and
+ * messages are plentiful, and nothing leaves.
  */
-export function keepWord(p: Planner, desk: WarDesk, prm: ResponderParams): void {
+export function keepWord(
+  p: Planner,
+  desk: WarDesk,
+  prm: ResponderParams,
+  o: { readonly busy?: boolean } = {},
+): void {
   const { w } = p;
   for (const e of desk.book) {
     if (e.from === w.seat || e.state !== "yes") continue;
@@ -449,12 +515,15 @@ export function keepWord(p: Planner, desk: WarDesk, prm: ResponderParams): void 
       replace(desk, e, { state: "no" });
       continue;
     }
+    if (o.busy === true) {
+      replace(desk, e, { state: "no" });
+      sayNo(desk, e, "busy");
+      continue;
+    }
     const j = judgeOwn(p, e.from, e.call, prm, desk.distrust);
     if (!j.verdict.accept) {
       replace(desk, e, { state: "no" });
-      if (j.verdict.why !== "not allied") {
-        say(desk, e.from, composeAck(e.call.id, false, null, WHY_TEXT[j.verdict.why]), false);
-      }
+      if (j.verdict.why !== "not allied") sayNo(desk, e, WHY_TEXT[j.verdict.why]);
       continue;
     }
     const best = j.groups[0];
@@ -480,6 +549,7 @@ export function keepWord(p: Planner, desk: WarDesk, prm: ResponderParams): void 
     }
     if (lands === null) {
       replace(desk, e, { state: "no" });
+      sayNo(desk, e, "cannot go");
       continue;
     }
     replace(desk, e, { state: "sent", at: lands });
@@ -525,6 +595,8 @@ export function holdConquests(p: Planner, desk: WarDesk, sharePm: number): void 
     const by = besiegerOf(w, row);
     const ends = siegeEndOf(w, row);
     if (by === null || w.relations.get(by) !== "ally" || ends === null || ends <= w.t) continue;
+    // Never a siege of the seat's, an ally's or a pact partner's city.
+    if (row.owner === w.seat || (row.owner !== null && w.relations.has(row.owner))) continue;
     if (!/^c[1-9][0-9]*$/.test(row.id) || p.flag(`gw${row.id}`) === ends) continue;
     if (!w.cities.some((c) => w.travel(c.id, row.island, false) !== null)) continue;
     p.setFlag(`gw${row.id}`, ends);
@@ -533,8 +605,11 @@ export function holdConquests(p: Planner, desk: WarDesk, sharePm: number): void 
     if (e.type !== "city_conquered") continue;
     const city = e["city"];
     const to = e["to"];
+    const from = e["from"];
     if (!isCityId(city) || !isPlayerId(to)) continue;
     if (w.relations.get(to) !== "ally" || p.flag(`gw${city}`) !== null) continue;
+    // Never a conquest taken from the seat, an ally or a pact partner.
+    if (isPlayerId(from) && (from === w.seat || w.relations.has(from))) continue;
     p.setFlag(`gw${city}`, w.t);
   }
   for (const [name, ends] of Object.entries(p.memory.x).toSorted((a, b) =>

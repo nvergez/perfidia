@@ -152,6 +152,24 @@ function allied(g: FakeGame, q: PlayerId): void {
   g.alliance.set(q, "a1");
 }
 
+/** The map rows carry each city's public extras, as `view_map` does (the fake leaves them out). */
+function mapExtras(g: FakeGame): void {
+  const respond = g.respond.bind(g);
+  g.respond = (seat, c) => {
+    const r = respond(seat, c);
+    if (c.tool !== "view_map" || !r.ok) return r;
+    const rows = r.data["cities"];
+    if (!Array.isArray(rows)) return r;
+    for (const row of rows) {
+      if (row === null || typeof row !== "object" || Array.isArray(row)) continue;
+      const id = row["id"];
+      const city = typeof id === "string" ? g.cities.find((x) => x.id === id) : undefined;
+      if (city !== undefined && Object.keys(city.ext).length > 0) row["ext"] = city.ext;
+    }
+    return r;
+  };
+}
+
 const founders = (a: Record<string, unknown>): number => counts(a["units"])["settler"] ?? 0;
 
 const warMessages = (log: TurnLog): string[] =>
@@ -272,6 +290,14 @@ function jointGame(): FakeGame {
   fortified(g, [3, 4, 5]);
   allied(g, "p6");
   noFreeSlots(g);
+  return g;
+}
+
+/** jointGame with c2 holding 140 guards (too strong for p1 alone) and p6's colony 300 raiders. */
+function strongCapital(): FakeGame {
+  const g = jointGame();
+  g.city("c31").units = { raider: 300 };
+  spied(g, "c2", { guard: 140 }, { hall: 3, wall: 1 });
   return g;
 }
 
@@ -524,6 +550,155 @@ describe("conqueror@3 (perfidia-1 shape)", () => {
       );
       expect(g.violations).toEqual([]);
       expect(warMessages(log)).toEqual(["WAR#k1 no: unknown city"]);
+    });
+
+    test("while its own train waits, an ally's strike call gets `no: busy`", async () => {
+      const g = callGame();
+      g.city("c1").units["settler"] = 1;
+      const { text } = strikeCall(g.t);
+      const notes = notesWith({ av: 3, ac: 1, vt: g.t - 600, at: 20, aw: g.t + 5 * 3600 });
+      const log = await playTurn(
+        briefed(bot(), (br) => ({ ...br, msgs: [message("p6", ["p1"], text)] })),
+        g,
+        "p1",
+        { notes },
+      );
+      expect(g.violations).toEqual([]);
+      expect(warMessages(log)).toEqual(["WAR#k1 no: busy"]);
+      expect(memoryOf(g).x["at"]).toBe(20);
+    });
+
+    test("a yes needs an own wake left for its launch, and a message in hand to be said", async () => {
+      const g = callGame();
+      g.budget.ownWakesLeft = 1;
+      const { text } = strikeCall(g.t);
+      const log = await playTurn(
+        briefed(bot(), (br) => ({ ...br, msgs: [message("p6", ["p1"], text)] })),
+        g,
+        "p1",
+      );
+      expect(warMessages(log)).toEqual(["WAR#k1 no: no wake left today"]);
+      // One message left: the yes is not said (more than one is kept in hand), but kept.
+      const h = callGame();
+      h.budget.messagesLeft = 1;
+      const quiet = await playTurn(
+        briefed(bot(), (br) => ({ ...br, msgs: [message("p6", ["p1"], text)] })),
+        h,
+        "p1",
+      );
+      expect(warMessages(quiet)).toEqual([]);
+      expect(memoryOf(h).m.some((l) => /^wc p6 k1 s c20 \d+ \d+ y \d+$/.test(l))).toBe(true);
+    });
+
+    test("a siege call is served once the ally's siege has ended, never into the siege", async () => {
+      const g = callGame();
+      const c20 = g.city("c20");
+      const ends = g.t + 2 * 3600;
+      c20.ext = { siege: { by: "p6", ends: pair(ends) } };
+      mapExtras(g);
+      const t0 = Math.ceil((ends + 3600) / 300) * 300;
+      const text = `WAR#k1 siege c20 vs p3 land ${fmtTime(t0)}-${fmtTime(t0 + 4 * 3600)}`;
+      const log = await playTurn(
+        briefed(bot(), (br) => ({ ...br, msgs: [message("p6", ["p1"], text)] })),
+        g,
+        "p1",
+      );
+      expect(g.violations).toEqual([]);
+      expect(callsTo(log, "support").filter((s) => s["to"] === "c20")).toEqual([]);
+      const acks = warMessages(log).flatMap((t) => parseWar(t));
+      expect(acks.length).toBe(1);
+      const ack = acks[0]?.kind === "ack" ? acks[0].ack : null;
+      expect(ack?.yes).toBe(true);
+      const line = memoryOf(g).m.find((l) => l.startsWith("wc p6 k1 g c20"));
+      expect(Number(line?.split(" ").at(-1))).toBeGreaterThan(ends);
+    });
+
+    test("an ally that said no to its strike call is not waited for again within a day", async () => {
+      const g = jointGame();
+      const b = bot();
+      await playTurn(b, g, "p1", { notes: victimNotes(g, 2) });
+      const lands = memoryOf(g).x["aw"] ?? 0;
+      expect(memoryOf(g).x["wmk1"]).toBe(2 ** 5);
+      advance(g, lands);
+      const log = await playTurn(
+        briefed(b, (br) => ({ ...br, msgs: [message("p6", ["p1"], "WAR#k1 no: too far")] })),
+        g,
+        "p1",
+        { turn: 2 },
+      );
+      expect(g.violations).toEqual([]);
+      expect(log.endedBy).toBe("end_turn");
+      expect(memoryOf(g).x["wd6"]).toBe(g.t);
+      expect(memoryOf(g).x["wmk1"]).toBeUndefined();
+      // An ally that said yes is waited for again.
+      const h = jointGame();
+      const c = bot();
+      await playTurn(c, h, "p1", { notes: notesWith({ av: 2, ac: 1, vt: h.t - 600, wd6: 1 }) });
+      const at = memoryOf(h).x["aw"] ?? 0;
+      advance(h, at);
+      const yes = `WAR#k1 yes, landing ${fmtTime(at - 600)}`;
+      await playTurn(
+        briefed(c, (br) => ({ ...br, msgs: [message("p6", ["p1"], yes)] })),
+        h,
+        "p1",
+        { turn: 2 },
+      );
+      expect(memoryOf(h).x["wd6"]).toBeUndefined();
+    });
+
+    describe("a capital stronger than its army, with an ally's attackers in reach", () => {
+      test("alone it is too strong; with the ally's attackers it reads (in full) it calls a joint strike", async () => {
+        const g = strongCapital();
+        g.city("c31").units = { guard: 1 };
+        const alone = await playTurn(bot(), g, "p1", { notes: victimNotes(g, 2) });
+        expect(warMessages(alone)).toEqual([]);
+        expect(alone.thoughts.join(" ")).toContain("c2 D3429: too strong");
+        const h = strongCapital();
+        const log = await playTurn(bot(), h, "p1", { notes: victimNotes(h, 2) });
+        expect(h.violations).toEqual([]);
+        expect(callsTo(log, "view_city").some((v) => v["city"] === "c31")).toBe(true);
+        expect(warMessages(log).length).toBe(1);
+        expect(log.thoughts.join(" ")).toMatch(
+          /c2: joint strike called \(k1, 1 cities, allies A\d+\)/,
+        );
+      });
+
+      test("its waves leave at the timed wake when the ally said yes in the window; without a yes the strike is called off", async () => {
+        for (const yes of [true, false]) {
+          // 160 guards when called; 230 by the timed wake: more than its own waves break alone.
+          const g = strongCapital();
+          spied(g, "c2", { guard: 160 }, { hall: 3, wall: 1 });
+          const b = bot();
+          // oxlint-disable-next-line no-await-in-loop -- one game at a time
+          const call = await playTurn(b, g, "p1", { notes: victimNotes(g, 2) });
+          expect(warMessages(call).length).toBe(1);
+          const lands = memoryOf(g).x["aw"] ?? 0;
+          advance(g, lands - 3600);
+          spied(g, "c2", { guard: 230 }, { hall: 3, wall: 1 }, 600);
+          const answer = `WAR#k1 yes, landing ${fmtTime(lands - 1200)}`;
+          // oxlint-disable-next-line no-await-in-loop -- one game at a time
+          const go = await playTurn(
+            briefed(b, (br) => ({ ...br, msgs: yes ? [message("p6", ["p1"], answer)] : [] })),
+            g,
+            "p1",
+            { turn: 2 },
+          );
+          expect(g.violations).toEqual([]);
+          const attacks = callsTo(go, "attack").filter((a) => a["to"] === "c2");
+          if (yes) {
+            expect(attacks.some((a) => founders(a) > 0)).toBe(true);
+            expect(warMessages(go)).toEqual([]);
+          } else {
+            expect(attacks).toEqual([]);
+            const cancels = warMessages(go);
+            expect(cancels.length).toBe(1);
+            expect(cancels[0]).toMatch(/^WAR#k1 cancel: /);
+            const off = memoryOf(g).m.filter((l) => l.startsWith("joint c2 called off"));
+            expect(off.length).toBe(1);
+            expect(off[0]).toMatch(/: D\d+: short \(0 yes\)$/);
+          }
+        }
+      });
     });
   });
 

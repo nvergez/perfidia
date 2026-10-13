@@ -50,7 +50,8 @@ const isScenario = (s: GoldenSpec): s is ScenarioGoldenSpec => !("run" in s);
 
 /**
  * The goldens of §13.5: five bot goldens (one at the largest N, 12, so that the seat-count
- * dependent parts of a ruleset are replayed too) and the scripted `scenario-late`.
+ * dependent parts of a ruleset are replayed too), one of the war-call bots allied (`-war`, its
+ * lineup pinned) and the scripted `scenario-late`.
  */
 export const GOLDEN_SPECS: readonly GoldenSpec[] = Object.freeze([
   {
@@ -73,6 +74,20 @@ export const GOLDEN_SPECS: readonly GoldenSpec[] = Object.freeze([
     ref: "perfidia-1@1.0.0",
     name: "lockstep-12p-1d",
     run: { seed: 1, players: 12, days: 1, clock: { kind: "lockstep" }, strict: true },
+  },
+  {
+    // The war-call bots allied as in the decision batches (`conqueror@3` beside `opportunist@3` and
+    // `turtle@3`): their calls, answers, joint attacks and held conquests are under Level G.
+    ref: "perfidia-1@1.0.0",
+    name: "lockstep-6p-6d-war",
+    run: {
+      seed: 34,
+      players: 6,
+      days: 6,
+      bots: ["conqueror@3", "opportunist@3", "turtle@3", "conqueror@3", "expander@2", "rusher@3"],
+      clock: { kind: "lockstep" },
+      strict: true,
+    },
   },
   {
     ref: SCENARIO_LATE_REF,

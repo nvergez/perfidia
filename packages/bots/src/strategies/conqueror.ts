@@ -594,7 +594,7 @@ export function allAttackers(p: Planner, c: OwnCity, island: IslandId): Wave | n
  * The cities whose waves land in the same second as `f`'s (the same travel time to `island`, in
  * practice its own island), `f` excluded, strongest first.
  */
-function sameSecond(p: Planner, f: OwnCity, island: IslandId): OwnCity[] {
+export function sameSecond(p: Planner, f: OwnCity, island: IslandId): OwnCity[] {
   const { w } = p;
   const travel = w.travel(f.id, island, false);
   return w.cities

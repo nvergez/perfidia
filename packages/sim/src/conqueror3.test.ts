@@ -1,8 +1,8 @@
 // conqueror@3 (docs/architecture.md §11.2, pinned by `name@3`) on a real seeded perfidia-1
 // match, through the gateway: its garrison leaves as supports with the founders' wave and lands in
-// the same second, the city falls to its own siege, it asks its ally to hold the city (a `siege` war
-// call, `war.ts`), and the match is a pure function of its seed (the same log twice). Four game days
-// keep the test fast.
+// the same second, the city falls to its own siege, and the match is a pure function of its seed
+// (the same log twice). Four game days keep the test fast. Its war calls on real matches (a joint
+// strike, a `siege` call to hold its conquest) are tested in `warcalls.test.ts`.
 
 import { describe, expect, test } from "bun:test";
 import type { ActLine, EvLine, LogLine } from "@perfidia/protocol";
@@ -31,7 +31,7 @@ const acts = (lines: readonly LogLine[], seat: string, type: string): ActLine[] 
 const str = (v: unknown): string => (typeof v === "string" ? v : "");
 
 describe("conqueror@3 on a real match (perfidia-1, seed 8, 6 seats, 4 days)", () => {
-  test("its garrison lands with its founders, the city falls to its siege, its ally is asked to hold it; the same seed gives the same log", async () => {
+  test("its garrison lands with its founders, the city falls to its siege; the same seed gives the same log", async () => {
     const a = await runBots(SPEC);
     expect(a.lines.at(-1)?.k).toBe("end");
     const header = a.lines.find((l) => l.k === "header");
@@ -64,12 +64,6 @@ describe("conqueror@3 on a real match (perfidia-1, seed 8, 6 seats, 4 days)", ()
     expect(supports.some((s) => founders.some((f) => f.t === s.t))).toBe(true);
     const supported = new Set(arrivals("incoming_support"));
     expect(arrivals("incoming_attack").some((t) => supported.has(t))).toBe(true);
-
-    // A `siege` call to its allies, in the tagged format any bot or model can read.
-    const calls = acts(a.lines, "p5", "send_message")
-      .map((l) => (l.a.type === "send_message" ? l.a.text : ""))
-      .filter((t) => /^WAR#k[0-9a-z]+ siege c[0-9]+ /.test(t));
-    expect(calls.length).toBeGreaterThan(0);
 
     const b = await runBots(SPEC);
     expect(normalisedHash(b.lines)).toBe(normalisedHash(a.lines));

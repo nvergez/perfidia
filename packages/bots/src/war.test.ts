@@ -7,6 +7,8 @@ import { describe, expect, test } from "bun:test";
 import fc from "fast-check";
 import {
   compareIds,
+  type ArchiveEntry,
+  type ArchiveHit,
   MapViewSchema,
   PlayerViewSchema,
   type Briefing,
@@ -27,6 +29,8 @@ import {
   composeCancel,
   decodeEntry,
   distrustOf,
+  droppedWarOpens,
+  droppedWarSearch,
   encodeEntry,
   hearWar,
   joinWar,
@@ -43,6 +47,7 @@ import {
   WAR_RESERVE,
   warId,
   warOptions,
+  warMessages,
   warTarget,
   warWhy,
   writeBook,
@@ -163,7 +168,7 @@ describe("war messages", () => {
     );
   });
 
-  test("every composed message stays within the length a briefing never cuts", () => {
+  test("every composed message stays within the length a briefing never truncates", () => {
     const longest: WarCall = {
       id: "zzzzzzzz",
       role: "strike",
@@ -333,6 +338,8 @@ describe("adversarial parsing", () => {
   });
 });
 
+const restate = (e: WarEntry, state: WarEntry["state"]): WarEntry => ({ ...e, state });
+
 const entry = (over: Partial<WarEntry> = {}): WarEntry => ({
   from: "p2",
   call: { ...k3, vs: null, lands: null },
@@ -388,6 +395,35 @@ describe("the notes book", () => {
     expect(readBook(parseMemory("free text an LLM wrote", "x"))).toEqual([]);
   });
 
+  test("a full book keeps the seat's promises and own calls under way ahead of an ally's open calls", () => {
+    const now = D3_1400;
+    const promised = entry({ from: "p2", call: { ...k3, id: "kp", t0: now, t1: now + 600 } });
+    const own = entry({
+      from: "p1",
+      state: "sent",
+      call: { ...k3, id: "ko", t0: now + 60, t1: now + 660 },
+    });
+    // Six later open calls of another ally: they would push both out by their windows alone.
+    const flood = Array.from({ length: 6 }, (_, i) =>
+      entry({
+        from: "p4",
+        state: "open",
+        at: null,
+        call: { ...k3, id: `k${i + 1}`, t0: now + 3600 * (i + 1), t1: now + 3600 * (i + 1) + 600 },
+      }),
+    );
+    const back = readBook(writeBook(emptyMemory("x"), [promised, own, ...flood], now));
+    expect(back).toHaveLength(WAR_LIMITS.book);
+    expect(back.map((e) => `${e.from}/${e.call.id}`)).toEqual([
+      "p2/kp",
+      "p1/ko",
+      "p4/k3",
+      "p4/k4",
+      "p4/k5",
+      "p4/k6",
+    ]);
+  });
+
   test("hearing: calls added open, a changed call replaces, cancels close, answers recorded", () => {
     const own = entry({ from: "p1", state: "open", at: null });
     const theirs = entry({ from: "p2", state: "yes" });
@@ -421,13 +457,26 @@ describe("the notes book", () => {
     expect(byKey["p1/k3"]?.answers).toEqual({ p2: D3_1400 + 720, p4: "no" });
     expect(byKey["p2/k3"]?.state).toBe("yes");
     expect(byKey["p4/k9"]?.state).toBe("cancelled");
-    // The same id asking for something else is a new call.
-    const moved = absorbWar(
-      book,
-      [{ from: "p2", item: { kind: "call", call: { ...k3, target: "c13" } } }],
+    // The same id asking for something else is a new call while the seat promised nothing on it;
+    // one it said yes to (or acted on) stays as it was until the caller cancels it.
+    const moved = { kind: "call", call: { ...k3, target: "c13" } } as const;
+    const kept = absorbWar(book, [{ from: "p2", item: moved }], "p1");
+    expect(kept.find((e) => e.from === "p2")).toEqual(byKey["p2/k3"]);
+    const sent = absorbWar(
+      book.map((e) => (e.from === "p2" ? { ...e, state: "sent" as const } : e)),
+      [{ from: "p2", item: moved }],
       "p1",
     );
-    expect(moved.find((e) => e.from === "p2")?.state).toBe("open");
+    expect(sent.find((e) => e.from === "p2")?.call.target).toBe("c12");
+    for (const state of ["open", "no", "cancelled"] as const) {
+      const again = absorbWar(
+        book.map((e) => (e.from === "p2" ? restate(e, state) : e)),
+        [{ from: "p2", item: moved }],
+        "p1",
+      );
+      const e = again.find((x) => x.from === "p2");
+      expect([e?.state, e?.call.target]).toEqual(["open", "c13"]);
+    }
   });
 });
 
@@ -570,6 +619,30 @@ describe("deciding", () => {
     );
   });
 
+  test("a siege is never held against the seat, an ally or a pact partner; a hold needs an attack seen", () => {
+    const siege = { ...base, call: { ...k3, role: "siege" as const } };
+    const held = (owner: PlayerId | null) =>
+      judgeCall({ ...siege, target: targetWith({ owner, besieged: true, by: "p2" }) });
+    expect(held("p1")).toEqual({ accept: false, why: "own city" });
+    expect(held("p4")).toEqual({ accept: true });
+    expect(held("p3")).toEqual({ accept: false, why: "pact city" });
+    const ally = { ...siege, relations: new Map([...base.relations, ["p4", "ally"] as const]) };
+    expect(
+      judgeCall({ ...ally, target: targetWith({ owner: "p4", besieged: true, by: "p2" }) }),
+    ).toEqual({ accept: false, why: "ally city" });
+    // Taken already (the caller's city now): held whoever it was taken from.
+    expect(judgeCall({ ...siege, target: targetWith({ owner: "p2" }) })).toEqual({ accept: true });
+    const hold = {
+      ...base,
+      call: { ...k3, role: "hold" as const },
+      target: targetWith({ owner: "p2" }),
+    };
+    expect(judgeCall({ ...hold, attackSeen: false })).toEqual({ accept: false, why: "no threat" });
+    expect(judgeCall({ ...hold, attackSeen: true })).toEqual({ accept: true });
+    // A strike is not concerned.
+    expect(judgeCall({ ...base, attackSeen: false })).toEqual({ accept: true });
+  });
+
   test("the window, threats, launches and force decide the rest", () => {
     expect(judgeCall({ ...base, now: k3.t0 - 2 * DAY })).toEqual({
       accept: false,
@@ -653,7 +726,7 @@ function worldOf(game: FakeGame, seat: PlayerId, briefing?: Briefing): World {
     kit,
     hints: hintsFor(game.rules.ruleset),
     memory: emptyMemory("x"),
-    reads: { self, map, views: new Map(), board: null },
+    reads: { self, map, views: new Map(), board: null, hits: [], entries: new Map() },
     travel,
   });
 }
@@ -784,5 +857,123 @@ describe("on a fake perfidia-1 game", () => {
 
   test("deterministic: the same world gives the same verdict, options and book", () => {
     expect(judgedOnce()).toEqual(judgedOnce());
+  });
+});
+
+/** A briefing of p1's that left two messages out (`more.msgs`), with `msgs` shown. */
+function full(game: FakeGame, msgs: Briefing["msgs"]): Briefing {
+  return {
+    ...game.briefing("p1"),
+    msgs,
+    more: {
+      msgs: {
+        count: 2,
+        call: {
+          tool: "read_notes",
+          args: { search: { scope: "mine", kinds: ["message"], since: 7200, before: 41 } },
+        },
+      },
+    },
+  };
+}
+
+describe("messages a full briefing left out", () => {
+  const hit = (e: number, id: string | null, summary: string): ArchiveHit => ({
+    e,
+    t: [game0.t, fmtTime(game0.t)],
+    type: "message",
+    public: false,
+    id,
+    summary,
+  });
+  const game0 = allyGame();
+
+  test("the search: the briefing's own, narrowed to war messages; none when nothing was left out", () => {
+    const g = allyGame();
+    expect(droppedWarSearch(worldOf(g, "p1"))).toEqual([]);
+    expect(droppedWarSearch(worldOf(g, "p1", full(g, [])))).toEqual([
+      call("read_notes", {
+        search: {
+          kinds: ["message"],
+          text: "war",
+          limit: 8,
+          scope: "mine",
+          since: 7200,
+          before: 41,
+        },
+      }),
+    ]);
+  });
+
+  test("the hits opened: messages the briefing did not show, not the seat's own, four at most", () => {
+    const g = allyGame();
+    const w = worldOf(g, "p1", full(g, [{ ...msg("p2", ["p1"], "hello"), id: "g0000b" }]));
+    const hits = [
+      hit(40, "g0000a", 'message from=p2 message=g0000a to=[p1] text="WAR#k1 strike c4"'),
+      hit(39, "g0000b", 'message from=p2 message=g0000b to=[p1] text="war on p4"'),
+      hit(38, "g0000c", 'message from=p1 message=g0000c to=[p2] text="WAR#k1 yes"'),
+      hit(37, null, "battle (public) attacker=p4 war"),
+      hit(36, "g0000d", 'message from=p5 message=g0000d to=[p1] text="war"'),
+      hit(35, "g0000e", 'message from=p2 message=g0000e to=[p1] text="war"'),
+      hit(34, "g0000f", 'message from=p2 message=g0000f to=[p1] text="war"'),
+      hit(33, "g0000g", 'message from=p2 message=g0000g to=[p1] text="war"'),
+    ];
+    const opens = droppedWarOpens({ ...w, archive: { hits, entries: new Map() } });
+    expect(opens).toEqual(
+      (["g0000a", "g0000d", "g0000e", "g0000f"] as const).map((id) =>
+        call("read_notes", { open: id }),
+      ),
+    );
+  });
+
+  test("opened messages are read before the briefing's, and only an ally's private ones are heard", () => {
+    const g = allyGame();
+    const call0: WarCall = { ...strike, t0: g.t + 10 * 3600, t1: g.t + 11 * 3600 };
+    const shown = { ...msg("p2", ["p1"], "WAR#k2 cancel"), id: "g0000c" as const };
+    const w = worldOf(g, "p1", full(g, [shown]));
+    const opened = (
+      e: number,
+      id: string,
+      from: PlayerId,
+      to: PlayerId[] | "all",
+      text: string,
+    ): [string, ArchiveEntry] => {
+      const opened1: ArchiveEntry = {
+        e,
+        t: [g.t, fmtTime(g.t)],
+        type: "message",
+        public: to === "all",
+        id,
+        data: { message: id, from, to, text },
+        to: [],
+      };
+      return [id, opened1];
+    };
+    const entries = new Map<string, ArchiveEntry>([
+      opened(31, "g0000b", "p5", ["p1"], composeCall({ ...call0, id: "k9" })),
+      opened(30, "g0000a", "p2", ["p1"], composeCall(call0)),
+      opened(32, "g0000c", "p2", ["p1"], "a duplicate of a shown one"),
+      opened(33, "g0000d", "p2", ["p1"], ""),
+      [
+        "g0000x",
+        {
+          e: 34,
+          t: [g.t, fmtTime(g.t)],
+          type: "report",
+          public: false,
+          id: "g0000x",
+          data: {},
+          to: [],
+        },
+      ],
+    ]);
+    const all = warMessages({ ...w, archive: { hits: [], entries } });
+    expect(all.map((m) => m.id)).toEqual(["g0000a", "g0000b", "g0000d", "g0000c"]);
+    const heard = hearWar(all, "p1", w.relations);
+    expect(heard.heard.map((h) => [h.from, h.item.kind])).toEqual([
+      ["p2", "call"],
+      ["p2", "cancel"],
+    ]);
+    expect(heard.ignored).toBe(1);
   });
 });

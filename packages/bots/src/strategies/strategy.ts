@@ -23,6 +23,11 @@ export interface Brain {
   readonly knobs: Knobs;
   /** Reads wanted after the base views (targets, the leaderboard); duplicates are dropped. */
   reads(w: World): readonly ToolCall[];
+  /**
+   * Reads that depend on the results of `reads` (e.g. `read_notes {open}` of a search hit), asked
+   * once after them when the turn has rounds to spare; optional (none when absent).
+   */
+  moreReads?(w: World): readonly ToolCall[];
   /** Plans this turn's calls on the planner, highest priority first. */
   plan(p: Planner): void;
 }

@@ -1,16 +1,18 @@
 // The war-call protocol end to end (docs/architecture.md §11.2, `bots/src/war.ts`): the caller
 // (conqueror@3) and the responders (opportunist@3, turtle@3), each written on its own side, on real
 // seeded perfidia-1 matches through the gateway, every seat a registered bot. The matches are cut
-// on day 5, once the calls below have been served, to keep the test fast.
+// once the calls below have been served, to keep the test fast.
 //
-// - Seed 6: p4 (conqueror@3) calls its ally p2 (opportunist@3) to strike a capital-or-strong city
-//   before its own founders land; p2 answers yes with a landing inside the window, its attack leaves
-//   after the answer and lands inside the window, and the battles of both make a joint attack with
-//   p4 as its caller (`teamRecords`). p1 (conqueror@3) asks p3 (turtle@3) to hold a siege, and p3
-//   answers in the same tagged form.
-// - Seed 14: p4 (conqueror@3) asks p3 (turtle@3) to hold the city its siege is taking (`siege`);
-//   p3 answers yes, and once the city is p4's its defenders land there inside the window. The same
-//   seed gives the same log.
+// - Seed 26 (cut at D5 15:00): p2 (opportunist@3) calls its ally p4 (conqueror@3) to strike the
+//   city it raids; p4 answers yes with a landing inside the window, its attack leaves after the
+//   answer and lands inside the window, and the battles of both make a joint attack with p2 as its
+//   caller (`teamRecords`). p4 takes a city by siege: it asks p2 to hold it (`siege`), p2 answers
+//   yes and its defenders land there inside the window, once the city is p4's. (conqueror@3's own
+//   strike calls answered yes are tested on fixtures, `bots/src/conqueror3.test.ts`: none of seeds
+//   1–40 has one by D6 at these seats.)
+// - Seed 28 (cut at D5 16:00): p1 (conqueror@3) asks p3 (turtle@3) to hold the city its siege is
+//   taking (`siege`); p3 answers yes, and once the city is p1's its defenders land there inside the
+//   window. The same seed gives the same log.
 
 import { describe, expect, test } from "bun:test";
 import { parseWar, WAR_LIMITS, type WarAck, type WarCall } from "@perfidia/bots";
@@ -108,8 +110,8 @@ function controllers(lines: readonly LogLine[]): Readonly<Record<string, string>
 }
 
 describe("war calls between conqueror@3 and the responders (perfidia-1, 6 seats, real matches)", () => {
-  test("seed 6: conqueror@3 calls a strike, opportunist@3 answers yes, launches and lands in the window: a joint attack", async () => {
-    const { lines } = await runBots(spec(6, 4 * DAY + 12 * 3600));
+  test("seed 26: opportunist@3 calls a strike, conqueror@3 answers yes and both land in the window; conqueror@3's ally holds the city it takes", async () => {
+    const { lines } = await runBots(spec(26, 4 * DAY + 15 * 3600));
     expect(lines.at(-1)?.k).toBe("end");
     expect(controllers(lines)).toMatchObject({
       p1: "bot:conqueror@3",
@@ -117,81 +119,92 @@ describe("war calls between conqueror@3 and the responders (perfidia-1, 6 seats,
       p3: "bot:turtle@3",
       p4: "bot:conqueror@3",
     });
-    // Every war message is short plain text that parses (a briefing never cuts it).
+    // Every war message is short plain text that parses (a briefing never truncates it).
     for (const l of warMessages(lines)) {
       expect(textOf(l).length).toBeLessThanOrEqual(WAR_LIMITS.text);
       expect(parseWar(textOf(l)).length).toBeGreaterThan(0);
     }
 
-    const strikes = callsOf(lines, "p4").filter(
-      (c) => c.call.role === "strike" && c.to.includes("p2"),
+    const strikes = callsOf(lines, "p2").filter(
+      (c) => c.call.role === "strike" && c.to.includes("p4"),
     );
     expect(strikes.length).toBeGreaterThan(0);
     const { t: calledAt, call } = strikes[0]!;
     expect(call.vs).not.toBeNull();
     expect(call.lands).not.toBeNull();
-    // The caller leaves its allies time to hear the call and to land before its own founders.
-    expect(call.t1).toBeLessThanOrEqual(call.lands!);
 
-    const answers = answersTo(lines, "p2", "p4", call.id);
+    // p4's answer: a yes with a landing inside the window, given in one message.
+    const answers = answersTo(lines, "p4", "p2", call.id);
     expect(answers.map((a) => a.ack.yes)).toEqual([true]);
     const promised = answers[0]!.ack.lands;
     expect(promised).not.toBeNull();
     expect(promised!).toBeGreaterThanOrEqual(call.t0);
     expect(promised!).toBeLessThanOrEqual(call.t1);
 
-    // p2's strike leaves after its answer and lands inside the window.
-    const sent = launches(lines, "incoming_attack", "p2", call.target).filter(
-      (m) => m.departAt >= answers[0]!.t,
-    );
+    // p4's strike leaves after its answer and lands inside the window (its first attack there
+    // after the answer); p2's own raid left after its call.
+    const sent = launches(lines, "incoming_attack", "p4", call.target)
+      .filter((m) => m.departAt >= answers[0]!.t)
+      .toSorted((a, b) => a.departAt - b.departAt);
     expect(sent.length).toBeGreaterThan(0);
-    for (const m of sent) {
-      expect(m.arriveAt).toBeGreaterThanOrEqual(call.t0);
-      expect(m.arriveAt).toBeLessThanOrEqual(call.t1);
-    }
-    // p4's own waves left after its call.
+    expect(sent[0]!.arriveAt).toBeGreaterThanOrEqual(call.t0);
+    expect(sent[0]!.arriveAt).toBeLessThanOrEqual(call.t1);
     expect(
-      launches(lines, "incoming_attack", "p4", call.target).some((m) => m.departAt > calledAt),
+      launches(lines, "incoming_attack", "p2", call.target).some((m) => m.departAt >= calledAt),
     ).toBe(true);
 
-    // The battles of both at the target: a joint attack after p4's call.
+    // The battles of both at the target: a joint attack after p2's call.
     const joint = teamRecords(lines, null).joint.filter((j) => j.city === call.target);
-    expect(joint.map((j) => [j.players, j.caller])).toContainEqual([["p2", "p4"], "p4"]);
+    expect(joint.map((j) => [j.players, j.caller])).toContainEqual([["p2", "p4"], "p2"]);
 
-    // turtle@3 answers its ally's siege call in the same tagged form.
-    const siege = callsOf(lines, "p1").filter(
-      (c) => c.call.role === "siege" && c.to.includes("p3"),
+    // p4 takes a city by siege and asks p2 to hold it; p2 answers yes and its defenders land
+    // there inside the window, once the city is p4's.
+    const hold = callsOf(lines, "p4").filter((c) => c.call.role === "siege" && c.to.includes("p2"));
+    expect(hold.length).toBeGreaterThan(0);
+    const held = hold[0]!.call;
+    const taken = events(lines, "city_conquered").filter(
+      (l) => l.e.data["to"] === "p4" && str(l.e.data["city"]) === held.target,
     );
-    expect(siege.length).toBeGreaterThan(0);
-    expect(answersTo(lines, "p3", "p1", siege[0]!.call.id).length).toBe(1);
+    expect(taken.length).toBe(1);
+    const yes = answersTo(lines, "p2", "p4", held.id);
+    expect(yes.map((a) => a.ack.yes)).toEqual([true]);
+    const supports = launches(lines, "incoming_support", "p2", held.target).filter(
+      (m) => m.departAt >= yes[0]!.t,
+    );
+    expect(supports.length).toBeGreaterThan(0);
+    for (const m of supports) {
+      expect(m.departAt).toBeGreaterThanOrEqual(taken[0]!.t);
+      expect(m.arriveAt).toBeGreaterThanOrEqual(held.t0);
+      expect(m.arriveAt).toBeLessThanOrEqual(held.t1);
+    }
   }, 60_000);
 
-  test("seed 14: conqueror@3 asks turtle@3 to hold its siege's city; turtle@3 answers yes and its defenders land there in the window; the same seed gives the same log", async () => {
-    const run = spec(14, 4 * DAY + 16 * 3600);
+  test("seed 28: conqueror@3 asks turtle@3 to hold its siege's city; turtle@3 answers yes and its defenders land there in the window; the same seed gives the same log", async () => {
+    const run = spec(28, 4 * DAY + 16 * 3600);
     const { lines } = await runBots(run);
     expect(lines.at(-1)?.k).toBe("end");
 
-    const sieges = callsOf(lines, "p4").filter(
+    const sieges = callsOf(lines, "p1").filter(
       (c) => c.call.role === "siege" && c.to.includes("p3"),
     );
     const served = sieges.filter((c) =>
-      answersTo(lines, "p3", "p4", c.call.id).some((a) => a.ack.yes),
+      answersTo(lines, "p3", "p1", c.call.id).some((a) => a.ack.yes),
     );
     expect(served.length).toBeGreaterThan(0);
     const { call } = served[0]!;
-    // The call names a city p4 besieges, and p4 takes it before the window.
+    // The call names a city p1 besieges, and p1 takes it before the window.
     const started = events(lines, "siege_started").filter(
-      (l) => l.e.data["by"] === "p4" && l.e.data["city"] === call.target,
+      (l) => l.e.data["by"] === "p1" && l.e.data["city"] === call.target,
     );
     expect(started.length).toBeGreaterThan(0);
     const taken = events(lines, "city_conquered").filter(
-      (l) => l.e.data["to"] === "p4" && str(l.e.data["city"]) === call.target,
+      (l) => l.e.data["to"] === "p1" && str(l.e.data["city"]) === call.target,
     );
     expect(taken.length).toBe(1);
     expect(taken[0]!.t).toBeLessThan(call.t0);
 
-    // turtle@3's supports leave once the city is p4's and land inside the window.
-    const yes = answersTo(lines, "p3", "p4", call.id).find((a) => a.ack.yes)!;
+    // turtle@3's supports leave once the city is p1's and land inside the window.
+    const yes = answersTo(lines, "p3", "p1", call.id).find((a) => a.ack.yes)!;
     const sent = launches(lines, "incoming_support", "p3", call.target).filter(
       (m) => m.departAt >= yes.t,
     );

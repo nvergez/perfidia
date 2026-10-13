@@ -49,6 +49,7 @@ describe("sim golden", () => {
       ["perfidia-1@1.0.0/lockstep-6p-4d", 4, "lockstep"],
       ["perfidia-1@1.0.0/rt-virtual-6p-1d", 1, "virtual"],
       ["perfidia-1@1.0.0/lockstep-12p-1d", 1, "lockstep"],
+      ["perfidia-1@1.0.0/lockstep-6p-6d-war", 6, "lockstep"],
       ["perfidia-1@1.0.0/scenario-late", "scenario", "lockstep"],
       ["sandbox-1@1.0.0/lockstep-6p-3d", 3, "lockstep"],
       ["sandbox-1@1.0.0/rt-virtual-6p-1d", 1, "virtual"],

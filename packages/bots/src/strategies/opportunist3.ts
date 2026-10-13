@@ -13,6 +13,8 @@
 //   hour; called off with a cancel when the target is besieged or changed hands by then); a
 //   farther one is raided at once with a call around its landing. 1–3 calls a day, never to an
 //   ally that refused or ignored one of its calls within a day.
+// - A player that betrayed it is never allied again, nor are its calls answered; one raid on a
+//   target gets one call (a raid whose target an own call under way already names gets none).
 // - Ally first, betray later, as opportunist@2: the same seeded betrayal (D3–D5, top 2), never
 //   during or near its own bloc's countdown. Its betrayal may start in silence: while a betrayal
 //   is in reach (an ally's city its army beats by its margin), that ally's calls get no answer,
@@ -47,10 +49,12 @@ import {
 } from "../relief.ts";
 import {
   answerCalls,
+  betrayers,
   closeDesk,
   holdConquests,
   keepWord,
   openDesk,
+  rememberBetrayers,
   sendAnswers,
   canWakeAt,
   strikePending,
@@ -61,8 +65,12 @@ import { randInt } from "../rng.ts";
 import {
   composeCall,
   composeCancel,
+  droppedWarOpens,
+  droppedWarSearch,
   mayMessage,
+  overlaps,
   warId,
+  warMessages,
   warTarget,
   type WarCall,
   type WarEntry,
@@ -126,7 +134,7 @@ function allies(w: World): PlayerId[] {
  */
 function hearNamed(p: Planner): void {
   const { w } = p;
-  for (const m of w.briefing.msgs) {
+  for (const m of warMessages(w)) {
     if (m.to === "all" || !m.to.includes(w.seat) || w.relations.get(m.from) !== "ally") continue;
     const who = /\bwar on (p[1-9][0-9]{0,3})\b/i.exec(m.text.slice(0, 300))?.[1]?.toLowerCase();
     if (!isPlayerId(who) || who === w.seat || w.relations.has(who)) continue;
@@ -237,6 +245,30 @@ function sendCall(
   p.setFlag("wn", today + 1);
   desk.book = [...desk.book, { from: w.seat, call: c, state, at, answers: {} }];
   return true;
+}
+
+/**
+ * True when one of the seat's own calls under way (`yes`, `sent`) already names `target` with a
+ * window that overlaps the one a call landing at `lands` would ask for: a second call would cost a
+ * message and invite a double promise.
+ */
+function calledAlready(desk: WarDesk, seat: PlayerId, target: OtherCity, lands: number): boolean {
+  const ask: WarCall = {
+    id: "k1",
+    role: "strike",
+    target: target.id,
+    t0: lands - CALL_HALF,
+    t1: lands + CALL_HALF,
+    vs: null,
+    lands: null,
+  };
+  return desk.book.some(
+    (e) =>
+      e.from === seat &&
+      (e.state === "yes" || e.state === "sent") &&
+      e.call.target === target.id &&
+      overlaps(e.call, ask),
+  );
 }
 
 /** `desk`'s entry of the seat's own call `id`, patched. */
@@ -391,7 +423,11 @@ function raid(
       }
       if (p.attack(main, target.id, best.units)) {
         p.memo(`raid ${target.id} (${target.owner ?? "?"}) D${w.day + 1}`);
-        if (travel !== null && to.length > 0) {
+        if (
+          travel !== null &&
+          to.length > 0 &&
+          !calledAlready(desk, w.seat, target, w.t + travel)
+        ) {
           sendCall(p, desk, to, target, w.t + travel, "sent", w.t + travel);
         }
       }
@@ -511,8 +547,10 @@ export const opportunist3: StrategyDef = Object.freeze<StrategyDef>({
             out.push(call("view_city", { city: o.id }));
           }
         }
+        out.push(...droppedWarSearch(w));
         return out;
       },
+      moreReads: droppedWarOpens,
       plan(p) {
         const { w } = p;
         const betrayed = p.flag("bt") !== null;
@@ -521,7 +559,10 @@ export const opportunist3: StrategyDef = Object.freeze<StrategyDef>({
         // to the proposer would land as a betrayal (and end the countdown the alliance may start):
         // it is called back when it still can be, otherwise the proposal waits for it to land.
         const raids = raidsOnTheWay(w);
+        rememberBetrayers(p);
+        const traitors = betrayers(p);
         p.answer((pr) => {
+          if (traitors.has(pr.from)) return false;
           if (pr.kind === "pact" && betrayed) return false;
           if (pr.kind === "alliance" && allied) return false;
           const mine = raids.get(pr.from);

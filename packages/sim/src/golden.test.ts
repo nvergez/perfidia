@@ -12,6 +12,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { RULESETS, getRuleset, verifyLog, type AnyRuleset } from "@perfidia/engine";
 import type { EvLine, LogLine } from "@perfidia/protocol";
+import { parseWar } from "@perfidia/bots";
+import { teamRecords } from "./batch/index.ts";
 import { SCENARIO_LATE_LABEL, runScenarioLate } from "./exit/scenario.ts";
 import { FIXTURES_DIR } from "./golden/index.ts";
 import {
@@ -99,6 +101,7 @@ describe("the freeze guard", () => {
       `${PERFIDIA}/lockstep-6p-4d-${RELIEF_6P} pass`,
       `${PERFIDIA}/lockstep-6p-4d-${BOTS_6P} pass`,
       `${PERFIDIA}/lockstep-6p-4d pass`,
+      `${PERFIDIA}/lockstep-6p-6d-war pass`,
       `${PERFIDIA}/rt-virtual-6p-1d-${FIGHT_6P} pass`,
       `${PERFIDIA}/rt-virtual-6p-1d-${RELIEF_6P} pass`,
       `${PERFIDIA}/rt-virtual-6p-1d-${BOTS_6P} pass`,
@@ -251,11 +254,13 @@ describe("what the goldens cover (§13.5)", () => {
     expect(evs(lines, "player_eliminated").length).toBeGreaterThan(0);
   });
 
-  for (const [what, labels, six] of [
-    ["the PR #8 default bots", RELIEF_LABELS, RELIEF_6P],
-    ["the default bots", DEFAULT_LABELS, BOTS_6P],
+  // The default bots of this build take no city in these four days (their sieges are all relieved):
+  // `lockstep-6p-6d-war` records conquests by them.
+  for (const [what, labels, six, conquest] of [
+    ["the PR #8 default bots", RELIEF_LABELS, RELIEF_6P, true],
+    ["the default bots", DEFAULT_LABELS, BOTS_6P, false],
   ] as const) {
-    test(`lockstep-6p-4d-${six}: the same match with ${what}, conquests, a siege relieved by bots and a domination countdown`, () => {
+    test(`lockstep-6p-4d-${six}: the same match with ${what}, sieges${conquest ? ", conquests" : ""}, a siege relieved by bots and a domination countdown`, () => {
       const lines = readLog(golden(PERFIDIA, `lockstep-6p-4d-${six}`).path);
       const header = lines[0];
       if (header?.k !== "header") throw new Error("no header");
@@ -266,7 +271,7 @@ describe("what the goldens cover (§13.5)", () => {
       if (end?.k !== "end") throw new Error("no end line");
       expect(end.t).toBe(345600);
       expect(evs(lines, "siege_started").length).toBeGreaterThan(0);
-      expect(evs(lines, "city_conquered").length).toBeGreaterThan(0);
+      expect(evs(lines, "city_conquered").length > 0).toBe(conquest);
       // A siege broken by a relief battle: won by the relief, in the same second and city.
       const won = evs(lines, "battle").filter(
         (l) => field(l, "kind") === "relief" && field(l, "winner") === "attacker",
@@ -280,6 +285,35 @@ describe("what the goldens cover (§13.5)", () => {
       expect(evs(lines, "domination_started").length).toBeGreaterThan(0);
     });
   }
+
+  test("lockstep-6p-6d-war: the war-call bots allied: calls, yes answers kept, a joint attack after a call, a held conquest", () => {
+    const lines = readLog(golden(PERFIDIA, "lockstep-6p-6d-war").path);
+    const header = lines[0];
+    if (header?.k !== "header") throw new Error("no header");
+    expect(header.setup.overrides).toEqual({ "time.matchEnd": 518400 });
+    expect(header.controllers).toEqual({
+      p1: "bot:conqueror@3",
+      p2: "bot:opportunist@3",
+      p3: "bot:turtle@3",
+      p4: "bot:conqueror@3",
+      p5: "bot:expander@2",
+      p6: "bot:rusher@3",
+    });
+    const war = lines.flatMap((l) =>
+      l.k === "act" && l.r.ok && l.a.type === "send_message" && l.a.text.includes("WAR#")
+        ? parseWar(l.a.text).map((item) => ({ seat: l.seat, item }))
+        : [],
+    );
+    const roles = new Set(war.flatMap((w) => (w.item.kind === "call" ? [w.item.call.role] : [])));
+    expect(roles).toEqual(new Set(["strike", "siege"]));
+    // conqueror@3 answers yes to an opportunist@3's strike, turtle@3 to a conqueror@3's siege.
+    const yes = new Set(
+      war.flatMap((w) => (w.item.kind === "ack" && w.item.ack.yes ? [w.seat] : [])),
+    );
+    expect(yes).toEqual(new Set(["p1", "p3"]));
+    expect(teamRecords(lines, null).joint.some((j) => j.caller !== null)).toBe(true);
+    expect(evs(lines, "city_conquered").length).toBeGreaterThan(0);
+  });
 
   test("every bot golden of a default set of bots has their labels; the 12-seat ones fight on day 1", () => {
     for (const [labels, six, twelve] of [

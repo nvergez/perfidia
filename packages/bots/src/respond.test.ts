@@ -72,6 +72,29 @@ function withInbox(game: FakeGame, inbox: Map<PlayerId, Msg[]>, ext: JsonObject 
   });
 }
 
+/**
+ * An attack of p5's on its way to `city`, landing a day from now, in the briefings (a `hold` is
+ * answered only for a city with an attack seen on its way). Its foe is left out, so that the relief
+ * pack's support of a threatened ally does not answer it on its own.
+ */
+function withThreat(game: FakeGame, city: CityId): void {
+  const briefing = game.briefing.bind(game);
+  const arrive = game.t + DAY;
+  game.briefing = (seat: PlayerId, notes?: string, perWake?: number | null): Briefing => {
+    const b = briefing(seat, notes, perWake);
+    const attack = {
+      id: "m00001",
+      kind: "attack",
+      from: "c5",
+      by: "p5",
+      to: city,
+      depart: pair(game.t - 600),
+      arrive: pair(arrive),
+    } as const;
+    return { ...b, incoming: [...b.incoming, attack] };
+  };
+}
+
 /** The map rows carry each city's public extras, as `view_map` does (the fake leaves them out). */
 function withMapExtras(game: FakeGame): void {
   const respond = game.respond.bind(game);
@@ -117,6 +140,23 @@ function allied(): FakeGame {
   game.alliance.set("p1", "a1");
   game.alliance.set("p2", "a1");
   withMapExtras(game);
+  return game;
+}
+
+/** p1 allied to p2, p4's weak colony c20 on p1's frontier, freshly spied; no own wake left. */
+function nearColony(): FakeGame {
+  const game = allied();
+  game.t = 2 * DAY + 14 * 3600;
+  game.budget.ownWakesLeft = 1;
+  game.cities.push(colonyOf("c20", "p4", "i4"));
+  game.city("c20").units = { guard: 1 };
+  for (const id of ["c20", "c2", "c3", "c4", "c5", "c6"]) {
+    game.intel.set(`p1|${id}`, {
+      type: "spy_report",
+      at: game.t - 600,
+      data: { report: "r00001", city: id, units: { home: { guard: id === "c20" ? 1 : 400 } } },
+    });
+  }
   return game;
 }
 
@@ -220,6 +260,7 @@ describe("answering an ally's call", () => {
       ["p1" as PlayerId, [msg("p2", ["p1"], `${composeCall(hold)}; ${composeCall(strike)}`)]],
     ]);
     withInbox(game, inbox);
+    withThreat(game, "c2");
     const first = await playTurn(v3("turtle"), game, "p1");
     noViolations(game);
     // One message to the caller: the yes first, then the no with its reason.
@@ -285,6 +326,7 @@ describe("answering an ally's call", () => {
     const second = { ...callOf(game, "strike", "c3", 9 * 3600), id: "k2" };
     const hold = { ...callOf(game, "hold", "c2", 5 * 3600), id: "k3" };
     inbox.set("p1", [msg("p2", ["p1"], `${composeCall(second)}; ${composeCall(hold)}`)]);
+    withThreat(game, "c2");
     // Enough defenders that a share of them is worth sending.
     game.city("c1").units["guard"] = 120;
     const two = await turnAt(game, "opportunist", game.t + 600, 2);
@@ -309,6 +351,19 @@ describe("answering an ally's call", () => {
       const answer = acks(log).map((a) => [a.yes, a.why]);
       expect(answer).toEqual([yes ? [true, null] : [false, "no wake left today"]]);
     }
+  });
+
+  test("a strike never leaves before attacks open, whatever its window", async () => {
+    const game = allied();
+    game.t = game.rules.time.attackFrom - 2 * 3600;
+    // c3 is two sectors away (6 h with transports): leaving now would land inside the window, but
+    // attacks open in 2 h.
+    const call = callOf(game, "strike", "c3", 6 * 3600 - 1800);
+    withInbox(game, new Map([["p1", [msg("p2", ["p1"], composeCall(call))]]]));
+    const log = await playTurn(v3("opportunist"), game, "p1");
+    noViolations(game);
+    expect(acks(log).map((a) => [a.id, a.yes, a.why])).toEqual([["k1", false, "too far"]]);
+    expect(callsTo(log, "attack")).toEqual([]);
   });
 
   test("a call past its window is declined; one more than a day ahead waits, unanswered", async () => {
@@ -350,6 +405,7 @@ describe("answering an ally's call", () => {
       game.budget.messagesLeft = left;
       const hold = callOf(game, "hold", "c2", 5 * 3600);
       withInbox(game, new Map([["p1", [msg("p2", ["p1"], composeCall(hold))]]]));
+      withThreat(game, "c2");
       // oxlint-disable-next-line no-await-in-loop -- one game at a time
       const log = await playTurn(v3("turtle"), game, "p1");
       expect([left, warSent(log).length]).toEqual([left, expected]);
@@ -357,6 +413,125 @@ describe("answering an ally's call", () => {
       const book = readBook(parseMemory(game.notes.get("p1") ?? "", "turtle"));
       expect(book.map((e) => e.state)).toEqual(["yes"]);
     }
+  });
+});
+
+describe("trust and the inbox", () => {
+  test("a call a full briefing left out is searched for, opened and answered", async () => {
+    const game = allied();
+    withThreat(game, "c2");
+    const hold = callOf(game, "hold", "c2", 5 * 3600);
+    const text = composeCall(hold);
+    const briefing = game.briefing.bind(game);
+    game.briefing = (seat: PlayerId, notes?: string, perWake?: number | null): Briefing => ({
+      ...briefing(seat, notes, perWake),
+      msgs: [],
+      more: {
+        msgs: {
+          count: 1,
+          call: {
+            tool: "read_notes",
+            args: { search: { scope: "mine", kinds: ["message"], since: 0, before: 9 } },
+          },
+        },
+      },
+    });
+    const asked: ToolCall[] = [];
+    const respond = game.respond.bind(game);
+    game.respond = (seat: PlayerId, c: ToolCall) => {
+      if (c.tool !== "read_notes") return respond(seat, c);
+      asked.push(c);
+      const at = pair(game.t - 60);
+      const search = JSON.stringify(c.args).includes('"search"');
+      const data: JsonObject = search
+        ? {
+            notes: "",
+            hits: [
+              {
+                e: 8,
+                t: at,
+                type: "message",
+                public: false,
+                id: "g0000a",
+                summary: `message from=p2 message=g0000a to=[p1] text="${text}"`,
+              },
+            ],
+            more: false,
+          }
+        : {
+            notes: "",
+            entry: {
+              e: 8,
+              t: at,
+              type: "message",
+              public: false,
+              id: "g0000a",
+              data: { message: "g0000a", from: "p2", to: ["p1"], text },
+              to: [{ p: "p1", as: "target" }],
+            },
+          };
+      return { ok: true, t: game.t, data };
+    };
+    const log = await playTurn(v3("turtle"), game, "p1");
+    noViolations(game);
+    expect(asked.map((c) => JSON.stringify(c.args).slice(0, 9))).toEqual([
+      '{"search"',
+      '{"open":"',
+    ]);
+    expect(acks(log).map((a) => [a.id, a.yes])).toEqual([["k1", true]]);
+  });
+
+  test("a player that betrayed the seat is distrusted for good: no alliance, no answer", async () => {
+    const game = allied();
+    withThreat(game, "c2");
+    const hold = callOf(game, "hold", "c2", 5 * 3600);
+    const inbox = new Map([["p1" as PlayerId, [msg("p2", ["p1"], composeCall(hold))]]]);
+    withInbox(game, inbox);
+    const briefing = game.briefing.bind(game);
+    let betrayal = true;
+    game.briefing = (seat: PlayerId, notes?: string, perWake?: number | null): Briefing => {
+      const b = briefing(seat, notes, perWake);
+      const events = betrayal
+        ? [{ type: "betrayal", by: "p2", against: "p1", relation: "ally", city: "c1" }]
+        : [];
+      return { ...b, events: [...b.events, ...events] };
+    };
+    const first = await playTurn(v3("turtle"), game, "p1");
+    noViolations(game);
+    expect(acks(first).map((a) => [a.id, a.yes, a.why])).toEqual([["k1", false, "no trust"]]);
+    // A day later, the betrayal no longer in the briefing: still no trust, and no alliance.
+    betrayal = false;
+    const again = { ...hold, id: "k2", t0: hold.t0 + DAY, t1: hold.t1 + DAY };
+    inbox.set("p1", [msg("p2", ["p1"], composeCall(again))]);
+    game.proposals.push({
+      id: "q0000a",
+      from: "p2",
+      to: "p1",
+      kind: "alliance",
+      name: "League p2",
+      text: "sorry, together again?",
+      expires: pair(game.t + DAY + 40_000),
+    });
+    const later = await turnAt(game, "turtle", game.t + DAY, 2);
+    expect(acks(later).map((a) => [a.id, a.yes, a.why])).toEqual([["k2", false, "no trust"]]);
+    expect(callsTo(later, "answer_proposal")).toEqual([{ id: "q0000a", accept: false }]);
+  });
+
+  test("an ally's siege of a pact partner's city is not held", async () => {
+    const game = allied();
+    game.relations.set("p1", [
+      { player: "p2", kind: "ally", until: null },
+      { player: "p3", kind: "pact", until: null },
+    ]);
+    const c3 = game.city("c3");
+    const ends = game.t + 2 * 3600;
+    c3.ext = { siege: { by: "p2", ends: pair(ends) } };
+    const siege: WarCall = { ...callOf(game, "siege", "c3", 2 * 3600 + 6 * 3600 + 1800) };
+    withInbox(game, new Map([["p1", [msg("p2", ["p1"], composeCall(siege))]]]));
+    const first = await playTurn(v3("turtle"), game, "p1");
+    noViolations(game);
+    expect(acks(first).map((a) => [a.id, a.yes, a.why])).toEqual([["k1", false, "we have a pact"]]);
+    expect(parseMemory(game.notes.get("p1") ?? "", "turtle").x["gwc3"]).toBeUndefined();
   });
 });
 
@@ -605,6 +780,28 @@ describe("opportunist@3 between loyalty and betrayal", () => {
     }
   });
 
+  test("its call never opens before its allies can hear it; a raid it already called is not called again", async () => {
+    const game = nearColony();
+    const log = await playTurn(v3("opportunist"), game, "p1");
+    noViolations(game);
+    expect(callsTo(log, "attack").map((a) => a["to"])).toEqual(["c20"]);
+    const calls = warSent(log).flatMap((m) =>
+      parseWar(m.text).flatMap((i) => (i.kind === "call" ? [i.call] : [])),
+    );
+    expect(calls.length).toBe(1);
+    // The raid lands in 1 h 32: half an hour before it is too soon for an ally to hear the call and
+    // land, so the window opens 70 min from now.
+    expect(calls[0]!.lands! - 1800).toBeLessThan(game.t + 4200);
+    expect(calls[0]!.t0).toBe(game.t + 4200);
+    // The same raid again, its own call still under way: no second call.
+    const again = nearColony();
+    const notes = game.notes.get("p1") ?? "";
+    const second = await playTurn(v3("opportunist"), again, "p1", { notes });
+    noViolations(again);
+    expect(callsTo(second, "attack").map((a) => a["to"])).toEqual(["c20"]);
+    expect(warSent(second)).toEqual([]);
+  });
+
   test("a near common enemy becomes a joint raid: called now, launched to land in the window, or called off", async () => {
     for (const besieged of [false, true]) {
       const game = allied();
@@ -790,6 +987,7 @@ describe("robustness", () => {
     game.notes.set("p1", encodeMemory(memory, 4000));
     const hold = callOf(game, "hold", "c2", 5 * 3600);
     withInbox(game, new Map([["p1", [msg("p2", ["p1"], composeCall(hold))]]]));
+    withThreat(game, "c2");
     await playTurn(v3("turtle"), game, "p1");
     const book = readBook(parseMemory(game.notes.get("p1") ?? "", "turtle"));
     expect(book.map((e) => [e.call.id, e.state])).toEqual([["k1", "yes"]]);

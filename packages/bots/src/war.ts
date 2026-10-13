@@ -10,7 +10,10 @@
 //
 // The window is on the game clock (`fmtTime`), its end and the caller's own landing without their
 // day when on the window's first day; several answers to one caller ride in one message ("; ").
-// Every war message stays within `WAR_LIMITS.text` characters, which a briefing never cuts.
+// Every war message stays within `WAR_LIMITS.text` characters, which a briefing never truncates;
+// a briefing over its size target may still leave whole messages out (listed under `more.msgs`):
+// the war-call strategies then search their archive for them and open them (`droppedWarSearch`,
+// `droppedWarOpens`), and read them with the briefing's (`warMessages`).
 //
 // Roles (what a support or an attack does to a besieged city, perfidia-1 §7.3, §7.5, §9.2):
 // - `strike`: attack the target so as to land inside the window, before the caller's founders, to
@@ -31,16 +34,20 @@
 // after the other memo lines (the notes keep the newest), which expire an hour after their window.
 
 import {
+  BriefingMessageSchema,
   compareIds,
+  ReadNotesArgsSchema,
   type Briefing,
   type CityId,
   type IslandId,
   type Json,
   type JsonObject,
   type PlayerId,
+  type ToolArgs,
+  type ToolCall,
   type UnitCounts,
 } from "@perfidia/protocol";
-import { dayOf, DAY, fmtTime, groupTravel, power } from "./kit.ts";
+import { call as toolCall, dayOf, DAY, fmtTime, groupTravel, power } from "./kit.ts";
 import { MEMO_MAX_CHARS, memoLine, type Memory } from "./memory.ts";
 import { besiegedExt } from "./relief.ts";
 import type { OwnCity, World } from "./world.ts";
@@ -49,7 +56,7 @@ export const WAR_ROLES = Object.freeze(["strike", "siege", "hold"] as const);
 export type WarRole = (typeof WAR_ROLES)[number];
 
 export const WAR_LIMITS = Object.freeze({
-  /** Longest war message: a briefing shows at least this much of any message body. */
+  /** Longest war message: a briefing never truncates a message body this short (it may leave it out). */
   text: 100,
   /** Longest window a call may ask for, in seconds. */
   window: 6 * 3600,
@@ -341,6 +348,86 @@ export function hearWar(
   return { heard, ignored };
 }
 
+// Messages a full briefing left out.
+
+/** Search hits read, and messages opened, per turn at most when a briefing left messages out. */
+const DROPPED = Object.freeze({ hits: 8, open: 4 });
+
+const isObject = (v: Json | undefined): v is JsonObject =>
+  v !== undefined && v !== null && typeof v === "object" && !Array.isArray(v);
+const SCOPES = ReadNotesArgsSchema.shape.search.unwrap().shape.scope.unwrap().options;
+const isMessageId = (s: string): s is `g${string}` => /^g[0-9a-z]+$/.test(s);
+const isTime = (v: Json | undefined): v is number =>
+  typeof v === "number" && Number.isSafeInteger(v) && v >= 0;
+
+/**
+ * The read that lists the messages a full briefing left out (its `more.msgs`, §8.2: a briefing
+ * drops whole messages, the oldest first, when it is over its size target), narrowed to those that
+ * mention a war (war tags, "war on pX"); none when the briefing kept every message. Its hits are
+ * opened by `droppedWarOpens`, and `warMessages` reads them with the briefing's.
+ */
+export function droppedWarSearch(w: World): ToolCall[] {
+  const more = w.briefing.more?.["msgs"];
+  if (more === undefined || more.call.tool !== "read_notes") return [];
+  const given = more.call.args["search"];
+  const search: NonNullable<ToolArgs<"read_notes">["search"]> = {
+    kinds: ["message"],
+    text: "war",
+    limit: DROPPED.hits,
+  };
+  if (isObject(given)) {
+    // The briefing's own scope (the seat's archive), since and bound.
+    const scope = SCOPES.find((x) => x === given["scope"]);
+    const since = given["since"];
+    const before = given["before"];
+    if (scope !== undefined) search.scope = scope;
+    if (isTime(since)) search.since = since;
+    if (isTime(before) && before > 0) search.before = before;
+  }
+  return [toolCall("read_notes", { search })];
+}
+
+/**
+ * `read_notes {open}` for the newest hits of `droppedWarSearch` that are messages the briefing did
+ * not show (the seat's own left aside when the hit's summary names it as the sender),
+ * `DROPPED.open` at most.
+ */
+export function droppedWarOpens(w: World): ToolCall[] {
+  const shown = new Set<string>(w.briefing.msgs.map((m) => m.id));
+  const own = ` from=${w.seat} `;
+  return w.archive.hits
+    .filter((h) => h.type === "message" && h.id !== null && !shown.has(h.id))
+    .filter((h) => !h.summary.includes(own))
+    .slice(0, DROPPED.open)
+    .flatMap((h) =>
+      h.id !== null && isMessageId(h.id) ? [toolCall("read_notes", { open: h.id })] : [],
+    );
+}
+
+/**
+ * The messages of the turn, oldest first: those a full briefing left out and the seat opened
+ * (`droppedWarOpens`), in delivery order, then the briefing's own. Anything that does not read as
+ * a message is dropped; the trust rules are `hearWar`'s.
+ */
+export function warMessages(w: World): BriefingMessage[] {
+  const shown = new Set<string>(w.briefing.msgs.map((m) => m.id));
+  const opened: { e: number; m: BriefingMessage }[] = [];
+  for (const entry of w.archive.entries.values()) {
+    if (entry.type !== "message") continue;
+    const d = entry.data;
+    const parsed = BriefingMessageSchema.safeParse({
+      id: d["message"] ?? entry.id,
+      from: d["from"],
+      to: d["to"],
+      text: d["text"],
+    });
+    if (!parsed.success || shown.has(parsed.data.id)) continue;
+    shown.add(parsed.data.id);
+    opened.push({ e: entry.e, m: parsed.data });
+  }
+  return [...opened.toSorted((a, b) => a.e - b.e).map((x) => x.m), ...w.briefing.msgs];
+}
+
 // The notes: one memo line per call, `wc <caller> <id> <role> <target> <t0> <t1> <state> <at|->`
 // followed, for the seat's own calls, by each ally's answer `<player>=<landing|n>`.
 
@@ -436,15 +523,20 @@ export function readBook(memory: Memory): WarEntry[] {
   return [...byKey.values()].toSorted(entryOrder);
 }
 
+/** Entries kept first when the book is full: a promise or a call of the seat's still under way. */
+const pending = (e: WarEntry): number => (e.state === "yes" || e.state === "sent" ? 0 : 1);
+
 /**
  * `memory` with its war lines replaced by `book`: entries whose window ended more than
- * `WAR_LIMITS.keep` before `now` are dropped, then the `WAR_LIMITS.book` with the latest windows
- * are kept. Memo lines that are not war lines are kept as they are, before the war lines.
+ * `WAR_LIMITS.keep` before `now` are dropped, then `WAR_LIMITS.book` are kept: the seat's
+ * promises and own calls under way (`yes`, `sent`) first, so that an ally's calls never push them
+ * out, then the latest windows. Memo lines that are not war lines are kept as they are, before the
+ * war lines.
  */
 export function writeBook(memory: Memory, book: readonly WarEntry[], now: number): Memory {
   const live = book
     .filter((e) => e.call.t1 + WAR_LIMITS.keep >= now)
-    .toSorted((a, b) => b.call.t1 - a.call.t1 || entryOrder(a, b))
+    .toSorted((a, b) => pending(a) - pending(b) || b.call.t1 - a.call.t1 || entryOrder(a, b))
     .slice(0, WAR_LIMITS.book)
     .toSorted(entryOrder);
   const others = memory.m.filter((line) => !line.startsWith(PREFIX));
@@ -453,9 +545,11 @@ export function writeBook(memory: Memory, book: readonly WarEntry[], now: number
 
 /**
  * The book once `heard` is taken in (`hearWar`, oldest first): a call from an ally is added open,
- * or replaces an earlier one of the same id that asked something else (an unchanged call keeps its
- * state); a cancel closes the caller's own call of that id; an answer to one of the seat's own calls
- * records that ally's landing or its no. Items about calls the book does not hold are dropped.
+ * or replaces an earlier one of the same id that asked something else while that one is open, no
+ * or cancelled (an unchanged call keeps its state, and one the seat said yes to or acted on stays
+ * as it was: a changed call under a used id is not a new one until it is cancelled); a cancel
+ * closes the caller's own call of that id; an answer to one of the seat's own calls records that
+ * ally's landing or its no. Items about calls the book does not hold are dropped.
  */
 export function absorbWar(
   book: readonly WarEntry[],
@@ -469,6 +563,7 @@ export function absorbWar(
       const key = `${from}/${item.call.id}`;
       const old = byKey.get(key);
       if (old !== undefined && sameCall(old.call, item.call)) continue;
+      if (old !== undefined && (old.state === "yes" || old.state === "sent")) continue;
       byKey.set(key, { from, call: item.call, state: "open", at: null, answers: {} });
     } else if (item.kind === "cancel") {
       const key = `${from}/${item.cancel.id}`;
@@ -568,7 +663,8 @@ export type WarWhy =
   | "too late"
   | "under attack"
   | "too weak"
-  | "no launches";
+  | "no launches"
+  | "no threat";
 
 export type WarVerdict =
   | { readonly accept: true }
@@ -595,6 +691,11 @@ export interface WarJudgeInput {
   readonly threatened: boolean;
   /** Calls whose window starts more than this far ahead are declined (default 1 day). */
   readonly maxAhead?: number;
+  /**
+   * An attack is on its way to the target (the briefing): a `hold` is declined without one, so that
+   * a call cannot strip the seat for nothing. Not given: not checked.
+   */
+  readonly attackSeen?: boolean;
 }
 
 const no = (why: WarWhy): WarVerdict => ({ accept: false, why });
@@ -602,8 +703,10 @@ const no = (why: WarWhy): WarVerdict => ({ accept: false, why });
 /**
  * Whether to answer a call yes. Never against the seat, an ally or a pact partner, never for a
  * non-ally or a distrusted caller; a strike only at a city owned by another player and not
- * besieged; a `hold` only of the caller's own city not besieged, a `siege` only of a city the caller
- * besieges or already took; then the window must be in reach and the seat's force worth sending.
+ * besieged; a `hold` only of the caller's own city not besieged, with an attack seen on its way
+ * there (when `attackSeen` is given); a `siege` only of a city the caller besieges (never one of
+ * the seat, an ally or a pact partner) or already took; then the window must be in reach and the
+ * seat's force worth sending.
  */
 export function judgeCall(i: WarJudgeInput): WarVerdict {
   const { call, target, seat, from } = i;
@@ -620,10 +723,15 @@ export function judgeCall(i: WarJudgeInput): WarVerdict {
     if (target.besieged) return no("besieged");
   } else if (call.role === "hold") {
     if (owner !== from || target.besieged) return no("not theirs");
+    if (i.attackSeen === false) return no("no threat");
   } else {
     const taken = owner === from && !target.besieged;
     const held = target.besieged && target.by === from;
     if (!taken && !held) return no("not theirs");
+    if (held && owner === seat) return no("own city");
+    const rel = held && owner !== null ? i.relations.get(owner) : undefined;
+    if (rel === "ally") return no("ally city");
+    if (rel === "pact") return no("pact city");
   }
   if (call.t0 > i.now + (i.maxAhead ?? DAY)) return no("too early");
   if (i.launch === null) return no("too late");

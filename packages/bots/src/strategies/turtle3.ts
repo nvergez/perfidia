@@ -5,6 +5,7 @@
 //   ally's: only the besieger may support a besieged city), answered yes with the landing, or no
 //   with the reason; a strike is declined ("no: i defend, no strikes"). It starts no war and never
 //   sends a call;
+// - a player that betrayed it is never allied again, nor are its calls answered;
 // - an ally's conquest is held: the nearest own city with defenders sends a share of them once the
 //   ally owns the city (`holdConquests`), called home 8 h later by `supportAllies`;
 // - everything turtle@2 does: braced cities, relief of its own and its allies' besieged cities,
@@ -25,14 +26,17 @@ import {
 } from "../relief.ts";
 import {
   answerCalls,
+  betrayers,
   closeDesk,
   holdConquests,
   keepWord,
   openDesk,
+  rememberBetrayers,
   sendAnswers,
   type ResponderParams,
 } from "../respond.ts";
 import { randInt } from "../rng.ts";
+import { droppedWarOpens, droppedWarSearch } from "../war.ts";
 import type { StrategyDef } from "./strategy.ts";
 import { brace, RELIEF_DEFENDERS_PM } from "./turtle2.ts";
 
@@ -69,9 +73,13 @@ export const turtle3: StrategyDef = Object.freeze<StrategyDef>({
     };
     return {
       knobs,
-      reads: (w) => [...reliefReads(w, true), ...countdownReads(w, false)],
+      reads: (w) => [...reliefReads(w, true), ...countdownReads(w, false), ...droppedWarSearch(w)],
+      moreReads: droppedWarOpens,
       plan(p) {
-        p.answer(() => true);
+        // Every proposal, except a betrayer's.
+        rememberBetrayers(p);
+        const traitors = betrayers(p);
+        p.answer((pr) => !traitors.has(pr.from));
         const desk = openDesk(p);
         brace(p);
         relieveSieges(p, prm, true, RELIEF_DEFENDERS_PM);

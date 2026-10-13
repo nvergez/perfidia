@@ -21,18 +21,23 @@
 //   against the relief its owner can send (`reliefOf`): the garrison stands, and shows, when the owner
 //   wakes to the siege and weighs a relief. One attack instead of two or three is seen, so less
 //   support comes. A support stranded in a stranger's city (a strike that failed) is called home.
-// - Sieges held: a strike whose garrison could not hold against the owner's known army is not made
+// - Sieges held: a strike whose garrison could not deter the owner's known army (1.15× its relief
+//   estimate, weighed from the founders' city or the city that would lead the strike) is not made
 //   (nor are founders recruited for it); each attack on a siege (a relief) is met with defenders from
 //   the cities whose support lands first, enough for the founders to survive what it likely brings;
 //   a garrison a relief its origin's spy report shows stronger than every helper can make would beat
-//   is called home (the units live). Allies are asked to hold the city once it falls (`siege` call).
+//   is called home before more is sent (the units live). Allies are asked to hold the city once it
+//   falls (`siege` call).
 // - War calls (`war.ts`): a strike on a capital or a strong city waits for the allies in reach that
-//   answered its last call: a `strike` call names a landing window before its founders, late enough
-//   for their armies (sailing from their capitals) to land in it, whose waves leave at a timed wake,
-//   weighed again then on the intel of then (never counting on the allies); a call-off is cancelled
-//   to them. It answers its allies' calls: a strike on a stranger's city with
-//   a share of its attackers landing in the window (its own victim's first), defenders for a hold or
-//   a conquest, never while its own train waits or an attack is on its way to it.
+//   answered its last call yes: a `strike` call names a landing window before its founders, late
+//   enough for their armies (sailing from their capitals) to land in it, whose waves leave at a timed
+//   wake, weighed again then on the intel of then with what it counts on from the allies that
+//   answered yes (a share of the attackers it sees in their cities: a city too strong for it alone
+//   is a joint target when they make up the difference); a call-off is cancelled to them. It answers
+//   its allies' calls as the responders do (`respond.ts`: its own victim's first), never while its
+//   own train waits (`busy`), an attack is on its way to it, or for a betrayer or a player that
+//   attacked it within a day. A betrayer is never allied again; its supports in an ally's city come
+//   home after 8 h.
 // - Trains and joint strikes call themselves off on a spy report showing more than `abortPm` of the
 //   defense planned on (1.4–1.6×, conqueror@2: 2×), a failed check spy, or a garrison that would not
 //   hold.
@@ -40,11 +45,13 @@
 //   neighbour seen attacking first, and a player asked is not asked again for 2 days.
 //
 // Memory (notes, §11.1): conqueror@2's flags, plus `aj` (a planned joint strike: its call number),
-// `wq` (the last call number), `jx` (a joint strike called off), `wd<seat>` (an ally that left a
-// strike call unanswered), `gw<city>` (a siege's `siege` call sent), `vt` (when the victim was chosen),
-// `fc<city>` (a stranger's city founded), `f<seat>` (a player seen attacking), `pd<seat>` (an alliance
-// asked); handled ids `w<movement>` (a relief answered), `wk<call>` (a call's answers weighed). War
-// calls and answers are memo lines `wc …` (`war.ts`), written last.
+// `wq` (the last call number), `jx` (a joint strike called off), `wm<call>` (the allies a strike call
+// went to), `wd<seat>` (an ally that left a strike call unanswered or said no), `tb<seat>` (a
+// betrayer), `sa<city>` (a support in an ally's city), `gw<city>` (a siege's `siege` call sent),
+// `vt` (when the victim was chosen), `fc<city>` (a stranger's city founded), `f<seat>` (a player
+// seen attacking), `pd<seat>` (an alliance asked); handled ids `w<movement>` (a relief answered),
+// `wk<call>` (a call's answers weighed). War calls and answers are memo lines `wc …` (`war.ts`),
+// written last.
 
 import {
   compareIds,
@@ -74,23 +81,25 @@ import { ownWakesBefore, unlockWishes, type Knobs, type Planner } from "../plan.
 import { rivalCountdowns } from "../relief.ts";
 import { fnv1a32, randInt, type BotRng } from "../rng.ts";
 import {
-  absorbWar,
-  composeAck,
+  answerCalls,
+  closeDesk,
+  keepWord,
+  openDesk,
+  rememberBetrayers,
+  betrayers,
+  sendAnswers,
+  type ResponderParams,
+  type WarDesk,
+} from "../respond.ts";
+import {
   composeCall,
   composeCancel,
-  hearWar,
-  joinWar,
-  judgeWar,
-  launchTime,
+  droppedWarOpens,
+  droppedWarSearch,
   mayMessage,
-  pickCall,
-  readBook,
   warId,
-  warTarget,
-  writeBook,
-  type WarCandidate,
+  warMessages,
   type WarEntry,
-  type WarOption,
 } from "../war.ts";
 import type { OwnCity, World } from "../world.ts";
 import {
@@ -111,6 +120,7 @@ import {
   opensAt,
   reachOf,
   rememberAttackers,
+  sameSecond,
   seatNumber,
   spyOn,
   storeAhead,
@@ -264,6 +274,14 @@ const JOINT_WINDOW = 1800;
 const JOINT_REACH = 5 * 3600;
 /** A responder's strike carries at least this many attackers. */
 const WAR_MIN_ATTACKERS = 15;
+/**
+ * Share (‰) of an ally's attackers at home (its two strongest cities in reach, seen in full) that a
+ * joint strike counts on: what an ally that answered yes may bring (the responders send 50–90 % of
+ * a city's attackers, two cities at most), discounted for what it keeps home or loses on the way.
+ */
+const ALLY_COUNT_PM = 450;
+/** Allied cities read per turn at most (their units at home: what a joint strike may count on). */
+const ALLY_READS = 4;
 /** A `siege` call asks allies to land this long after the siege ends, for this long. */
 const SIEGE_CALL_AFTER = 3600;
 const SIEGE_CALL_SPAN = 4 * 3600;
@@ -341,7 +359,7 @@ function blocOf(w: World, q: PlayerId): Set<PlayerId> {
  */
 function hearAllies(p: Planner): void {
   const { w } = p;
-  for (const m of w.briefing.msgs) {
+  for (const m of warMessages(w)) {
     if (w.relations.get(m.from) !== "ally" || /war#/i.test(m.text)) continue;
     const hit = /\bwar on (p[1-9][0-9]*)\b/i.exec(m.text) ?? /\bby (p[1-9][0-9]*)\b/i.exec(m.text);
     const who = hit?.[1];
@@ -585,11 +603,14 @@ function priorDefense(
   return prior.base + Math.floor((prior.perDay * Math.max(0, w.t - founded)) / DAY);
 }
 
-/** Remembers who was seen attacking in the public battle headlines (`f<seat>`: when). */
+/**
+ * Remembers who was seen attacking in the public battle headlines (`f<seat>`: when), the seat's own
+ * attackers aside (a war alliance goes to a fighter, never to the player that fights the seat).
+ */
 function watchFighters(p: Planner): void {
   const { w } = p;
   for (const e of [...w.briefing.news, ...w.briefing.events]) {
-    if (e.type !== "battle") continue;
+    if (e.type !== "battle" || e["defender"] === w.seat) continue;
     const attacker = e["attacker"];
     const m = typeof attacker === "string" ? /^p([1-9][0-9]*)$/.exec(attacker) : null;
     if (m?.[1] === undefined || attacker === w.seat) continue;
@@ -869,15 +890,21 @@ function early(w: World): boolean {
   return w.t < (configInt(w.kit, w.hints.combat?.capitalImmunityEnd) ?? 2 * DAY);
 }
 
-/** The own city (not blocked) nearest to `island`, or null. */
-function nearestCity(w: World, island: IslandId): OwnCity | null {
-  let best: { c: OwnCity; t: number } | null = null;
+/**
+ * The city that would lead a strike on `island` before a founder is home: the one whose island
+ * group hits it hardest (where `conquestFounders` recruits the founders when it can), else the
+ * forge city.
+ */
+function leadCity(p: Planner, island: IslandId): OwnCity | null {
+  const { w } = p;
+  let best: { c: OwnCity; s: number } | null = null;
   for (const c of w.cities) {
-    if (c.blocked) continue;
-    const t = w.travel(c.id, island, false);
-    if (t !== null && (best === null || t < best.t)) best = { c, t };
+    if (c.blocked || w.travel(c.id, island, false) === null) continue;
+    let s = allAttackers(p, c, island)?.strength ?? 0;
+    for (const o of sameSecond(p, c, island)) s += allAttackers(p, o, island)?.strength ?? 0;
+    if (best === null || s > best.s) best = { c, s };
   }
-  return best?.c ?? null;
+  return best?.c ?? forgeCity(w);
 }
 
 /** True when an attack whose foe is the seat is on its way to `c`. */
@@ -998,6 +1025,18 @@ function reliefOf(p: Planner, prm: Conqueror3Params, row: CityRow): Relief {
     .slice(0, RELIEF_CITIES)
     .reduce((a, x) => a + x, 0);
   return { attack: Math.floor((top * moraleOf(w, owner)) / 1000), known };
+}
+
+/**
+ * A siege is started only when the garrison it can station deters the relief its owner can send:
+ * at least `GATE_PM` of its attack (the relief pack launches only reliefs that beat a garrison by
+ * 1.15× at least; the estimate is about 1.1× short of the relief that comes, at the median). The
+ * garrison is then sized to `holdPm` of it when the seat can (`garrisonAndCover`, `holdSieges`).
+ */
+const GATE_PM = 1150;
+
+function deters(garrison: number, relief: number): boolean {
+  return garrison * 1000 >= relief * GATE_PM;
 }
 
 /** The garrison defense a siege of `row` needs against `relief` (two founders survive a narrower loss). */
@@ -1222,6 +1261,21 @@ function wakesLeft(p: Planner, extra: number): boolean {
   return ownWakesBefore(p, (w.day + 1) * DAY) + extra < w.briefing.budget.ownWakesLeft;
 }
 
+/**
+ * The allies that answered the seat's call `id` yes with a landing inside its window (or with no
+ * landing given).
+ */
+function answeredYes(desk: WarDesk, seat: PlayerId, id: string): Set<PlayerId> {
+  const e = desk.book.find((x) => x.from === seat && x.call.id === id);
+  const out = new Set<PlayerId>();
+  if (e === undefined) return out;
+  for (const [q, a] of Object.entries(e.answers)) {
+    if (!/^p[1-9][0-9]*$/.test(q) || typeof a !== "number") continue;
+    if (a === 0 || (a >= e.call.t0 && a <= e.call.t1)) out.add(bySeat(Number(q.slice(1))));
+  }
+  return out;
+}
+
 /** Drops a planned train's flags. */
 function dropTrain(p: Planner): void {
   for (const f of ["at", "aw", "ae", "ap", "aj"]) p.clearFlag(f);
@@ -1241,15 +1295,18 @@ function recallTrain(p: Planner, city: CityId): void {
  * Launches the founders' island's waves of a planned train (or joint strike) once their time has
  * come, unless fresher intel says it fails: a spy report newer than the plan that shows more than
  * `abortPm` of the defense planned on, or with which the waves no longer win, or the failure of the
- * check spy. A joint strike (`aj`) launches only when its own waves win on the latest estimate (the
- * allies' strikes are a bonus, never counted on); a train whose helpers left commits on older intel.
- * A strike called off recalls the helpers still in their recall window and cancels its war call.
+ * check spy. A joint strike (`aj`) launches only when its own waves win on the latest estimate with
+ * what it counts on from the allies that answered yes with a landing in the window (`ALLY_COUNT_PM`
+ * of the attackers it sees in their cities in reach; each of their attacks provokes support too);
+ * a train whose helpers left commits on older intel. A strike called off recalls the helpers still
+ * in their recall window and cancels its war call.
  */
 function trainStep(
   p: Planner,
   prm: Conqueror3Params,
+  ctx: Context,
   victim: PlayerId | null,
-  book: WarEntry[],
+  desk: WarDesk,
 ): void {
   const { w } = p;
   const tc = p.flag("at") ?? 0;
@@ -1260,7 +1317,7 @@ function trainStep(
   const row = w.map?.cities.find((c) => c.id === id);
   const cancel = (why: string): void => {
     if (joint > 0) {
-      cancelCall(p, book, warId(joint), why);
+      cancelCall(p, desk, warId(joint), why);
       p.setFlag("jx", w.t);
     }
     dropTrain(p);
@@ -1281,9 +1338,11 @@ function trainStep(
   }
   const foes = w.map?.cities.filter((c) => c.owner === victim).length ?? 1;
   const helpers = p.flag(`dk${id}`) ?? 0;
-  const d = defenseAt(p, prm, row, travel, joint > 0 ? 1 : 2) ?? NO_DEFENSE;
+  const yes = joint > 0 ? answeredYes(desk, w.seat, warId(joint)) : new Set<PlayerId>();
+  const d = defenseAt(p, prm, row, travel, joint > 0 ? 1 + yes.size : 2) ?? NO_DEFENSE;
   const tg: Target = { row, besieged: false, travel };
   const m = moraleAgainst(w, foes);
+  const allied = yes.size > 0 ? Math.floor((alliedAttack(p, ctx, row, yes) * m) / 1000) : 0;
   const planned = p.flag("ap") ?? 0;
   const estimate = p.flag("ae") ?? 0;
   const view = w.views.get(id);
@@ -1303,25 +1362,23 @@ function trainStep(
     w.t > sent + fly + 60 &&
     (intelAt === null || intelAt < sent);
   const commit = joint === 0 && helpers > 0 && !newer;
-  const waves = assault(p, prm, tg, d, m, helpers > 0 ? [helpers] : [], commit);
+  const before = [...(helpers > 0 ? [helpers] : []), ...(allied > 0 ? [allied] : [])];
+  const waves = assault(p, prm, tg, d, m, before, commit);
   // A siege its owner's known army would relieve is not started (as in `offense`); a train whose
   // helpers already left goes on, its waves being on their way anyway.
   const relief = reliefOf(p, prm, row);
-  const need = holdNeed(
-    prm,
-    relief.attack,
-    Math.min(prm.founders, countOf(p.homeOf(f.id), w.kit.roles.founder)),
-  );
   const hold = garrisonPotential(p, prm, f, tg, w.t + travel);
   let why: string | null = null;
   if (failed) why = "spy failed";
   else if (helpers === 0 && travel > MAX_FLIGHT) why = "founders too far";
-  else if (helpers === 0 && relief.known && hold < need) why = `would not hold (D${hold})`;
-  else if (newer && estimate > 0 && defenseValue(d) * 1000 > estimate * prm.abortPm) {
+  else if (helpers === 0 && relief.known && !deters(hold, relief.attack)) {
+    why = `would not hold (D${hold})`;
+  } else if (newer && estimate > 0 && defenseValue(d) * 1000 > estimate * prm.abortPm) {
     why = `D${defenseValue(d)} vs D${estimate}`;
   } else if (waves === null) why = `D${defenseValue(d)}: short`;
   if (why !== null) {
     recallTrain(p, id);
+    if (joint > 0) why = `${why} (${yes.size} yes)`;
     p.memo(`${joint > 0 ? "joint" : "train"} ${id} called off ${fmtTime(w.t)}: ${why}`);
     p.clearFlag(`dk${id}`);
     cancel(why);
@@ -1348,6 +1405,103 @@ interface Sighting {
   readonly d: Defense | null;
   readonly breaks: boolean;
   readonly ready: boolean;
+  /** A strong city the army breaks only with its allies: the attack it counts on them for (else 0). */
+  readonly allied: number;
+}
+
+/** A capital, or a city of `JOINT_DEFENSE` or more: a strike on it waits for the allies in reach. */
+function strongCity(row: CityRow, d: Defense): boolean {
+  return row.capitalOf !== null || defenseValue(d) >= JOINT_DEFENSE;
+}
+
+/** `armyBreaks` by `marginPm` with `extra` attack (before morale) landing with the army's. */
+function breaksWith(
+  p: Planner,
+  marginPm: number,
+  tg: Target,
+  d: Defense,
+  foes: number,
+  extra: number,
+): boolean {
+  const m = moraleAgainst(p.w, foes);
+  let total = extra;
+  for (const c of p.w.cities) total += allAttackers(p, c, tg.row.island)?.strength ?? 0;
+  return Math.floor((total * m) / 1000) * 1000 >= defenseValue(d) * marginPm;
+}
+
+/**
+ * The attack the seat counts on from its allies for a strike on `row`: of each ally in reach
+ * (`alliesInReach`, not deaf; or each of `only`), its two strongest cities within `JOINT_REACH`
+ * whose units the seat sees in full (an ally's city, read this turn), `ALLY_COUNT_PM` of the land
+ * attack of their units with more attack than defense (founders aside), before morale.
+ */
+function alliedAttack(
+  p: Planner,
+  ctx: Context,
+  row: CityRow,
+  only?: ReadonlySet<PlayerId>,
+): number {
+  const { w } = p;
+  const kit = w.kit;
+  const pace = seaPace(w);
+  const who =
+    only ?? new Set(alliesInReach(w, ctx, row).flatMap((x) => (deaf(p, x.q) ? [] : [x.q])));
+  const per = new Map<PlayerId, number[]>();
+  for (const o of w.map?.cities ?? []) {
+    if (o.owner === null || !who.has(o.owner) || w.relations.get(o.owner) !== "ally") continue;
+    const t = islandTravel(w, pace, o.island, row.island);
+    const view = w.views.get(o.id);
+    if (t === null || t > JOINT_REACH || view?.access !== "full") continue;
+    const units: Record<string, number> = {};
+    for (const u of kit.rules.units) {
+      if (u.domain !== "land" || u.id === kit.roles.founder || u.attack <= u.defense) continue;
+      const n = countOf(view.units, u.id);
+      if (n > 0) units[u.id] = n;
+    }
+    per.set(o.owner, [...(per.get(o.owner) ?? []), power(kit, units, "attack", true)]);
+  }
+  let sum = 0;
+  for (const list of per.values()) {
+    for (const a of list.toSorted((x, y) => y - x).slice(0, 2)) sum += a;
+  }
+  return Math.floor((sum * ALLY_COUNT_PM) / 1000);
+}
+
+/**
+ * Allied cities to read (`ALLY_READS` at most): each ally's two nearest the strike's target (the
+ * planned strike's, else the victim's nearest city), within `JOINT_REACH`: their units at home are
+ * what a joint strike may count on.
+ */
+function allyReads(w: World, victim: PlayerId | null): CityId[] {
+  const allies = [...w.relations.entries()]
+    .filter(([, k]) => k === "ally")
+    .map(([q]) => q)
+    .toSorted(compareIds);
+  if (allies.length === 0) return [];
+  const at = w.memory.x["at"] ?? 0;
+  let target = at > 0 ? w.map?.cities.find((c) => c.id === `c${at}`) : undefined;
+  if (target === undefined && victim !== null) {
+    let best: { row: CityRow; t: number } | null = null;
+    for (const row of w.map?.cities ?? []) {
+      if (row.owner !== victim) continue;
+      const t = reachOf(w, [row]);
+      if (t !== null && (best === null || t < best.t)) best = { row, t };
+    }
+    target = best?.row;
+  }
+  if (target === undefined) return [];
+  const pace = seaPace(w);
+  const out: CityId[] = [];
+  for (const q of allies) {
+    const near = (w.map?.cities ?? [])
+      .filter((o) => o.owner === q)
+      .map((o) => ({ o, t: islandTravel(w, pace, o.island, target.island) }))
+      .filter((x): x is { o: CityRow; t: number } => x.t !== null && x.t <= JOINT_REACH)
+      .toSorted((a, b) => a.t - b.t || compareIds(a.o.id, b.o.id))
+      .slice(0, 2);
+    for (const { o } of near) out.push(o.id);
+  }
+  return out.slice(0, ALLY_READS);
 }
 
 /** Age (s) of the latest spy report on `city`, or null without one. */
@@ -1369,7 +1523,7 @@ function offense(
   ctx: Context,
   victim: PlayerId | null,
   strikes: boolean,
-  book: WarEntry[],
+  desk: WarDesk,
 ): Offense {
   const { w } = p;
   const kit = w.kit;
@@ -1385,20 +1539,20 @@ function offense(
     const label = tg.row.id;
     const taken = holds.has(tg.row.id) || p.inFlight("attack", tg.row.id);
     if (taken || tg.besieged) {
-      seen.push({ tg, label, taken, d: null, breaks: false, ready: false });
+      seen.push({ tg, label, taken, d: null, breaks: false, ready: false, allied: 0 });
       continue;
     }
     const view = w.views.get(tg.row.id);
     const avoided =
       view?.tag !== null && view?.tag !== undefined && w.hints.avoidTags.includes(view.tag);
     if (view === undefined || avoided) {
-      seen.push({ tg, label, taken, d: null, breaks: false, ready: false });
+      seen.push({ tg, label, taken, d: null, breaks: false, ready: false, allied: 0 });
       continue;
     }
     const open = opensAt(w, tg.row);
     if (w.t + tg.travel + 4 * 3600 < open) {
       p.wakeAt(open - tg.travel - 4 * 3600);
-      seen.push({ tg, label, taken, d: null, breaks: false, ready: false });
+      seen.push({ tg, label, taken, d: null, breaks: false, ready: false, allied: 0 });
       continue;
     }
     // The waves fly from the founders' city (the nearest city may be another): the defense is weighed
@@ -1439,13 +1593,19 @@ function offense(
         }
       }
     }
-    const breaks = d !== null && armyBreaks(p, prm, tg, d, foes);
+    const solo = d !== null && armyBreaks(p, prm, tg, d, foes);
+    // A strong city the army cannot break alone is a joint target when its allies in reach (what it
+    // sees of their attackers, discounted) make up the difference.
+    const boost = !solo && d !== null && strongCity(tg.row, d) ? alliedAttack(p, ctx, tg.row) : 0;
+    const allied =
+      boost > 0 && d !== null && breaksWith(p, prm.marginPm, tg, d, foes, boost) ? boost : 0;
+    const breaks = solo || allied > 0;
     // On intel older than `fresh`, the strike waits for the spy on its way; without one (no own wake
     // to spare for its report), it leaves on intel within `stale`, as conqueror@2's did.
     const intel = young || (!checking && !stale);
     const ready = breaks && intel && attackOpen && w.t + tg.travel >= open;
     const text = d === null ? label : `${label} D${defenseValue(d)}`;
-    seen.push({ tg, label: text, taken, d, breaks, ready });
+    seen.push({ tg, label: text, taken, d, breaks, ready, allied });
   }
 
   const wanted: IslandId[] = [];
@@ -1462,25 +1622,21 @@ function offense(
       p.summary.push(`${x.label}: too strong`);
       continue;
     }
-    if (!armyBreaks(p, { ...prm, marginPm: STRIKE_PM }, x.tg, x.d, foes)) {
-      p.summary.push(`${x.label}: army gathering`);
+    if (!breaksWith(p, STRIKE_PM, x.tg, x.d, foes, x.allied)) {
+      p.summary.push(`${x.label}: army gathering${x.allied > 0 ? " (with allies)" : ""}`);
       hold = true;
       continue;
     }
     // A siege the owner would relieve is not started: its founders and garrison would be lost. The
-    // garrison is weighed from the founders' city, or the nearest city before a founder is there.
+    // garrison is weighed from the founders' city, or before a founder is there from the city that
+    // would lead the strike (where its founders are recruited, `leadCity`).
     const f = founderCity(p, x.tg.row.island);
-    const lead = f ?? nearestCity(w, x.tg.row.island);
+    const lead = f ?? leadCity(p, x.tg.row.island);
     const flight = lead === null ? null : w.travel(lead.id, x.tg.row.island, false);
     if (lead !== null && flight !== null) {
       const relief = reliefOf(p, prm, x.tg.row);
-      const founders = Math.max(
-        1,
-        Math.min(prm.founders, countOf(p.homeOf(lead.id), kit.roles.founder)),
-      );
-      const need = holdNeed(prm, relief.attack, founders);
       const can = garrisonPotential(p, prm, lead, x.tg, w.t + flight);
-      if (relief.known && can < need) {
+      if (relief.known && !deters(can, relief.attack)) {
         p.summary.push(`${x.label}: would not hold (D${can} vs relief A${relief.attack})`);
         continue;
       }
@@ -1497,7 +1653,8 @@ function offense(
       if (strikes && free && !x.ready) p.summary.push(`${x.label}: waiting for intel`);
       continue;
     }
-    if (jointStrike(p, prm, ctx, x.tg, x.d, foes, book) || strikeChecked(p, prm, x.tg, x.d, foes)) {
+    const joint = jointStrike(p, prm, ctx, x.tg, x.d, foes, desk, x.allied);
+    if (joint || (x.allied === 0 && strikeChecked(p, prm, x.tg, x.d, foes))) {
       p.setFlag("ac", 1);
       hold = trainWaits(p);
       holding = hold ? x.tg.row.island : null;
@@ -1569,8 +1726,9 @@ function attackFromIntel(w: World, from: CityId | null): number | null {
  * spy report shows and at least `RELIEF_PM` of the garrison's defense then (a relief is launched to
  * win), and the garrison is raised to `holdPm` of it (5/6 of that with two founders, which survive a
  * narrower loss), with up to `HOLD_SHARE_PM` of the defenders of the cities whose support lands
- * first, nearest first. When even every one of them leaves the garrison short of the attack itself,
- * the garrison is called home: the siege is lost, its units are not.
+ * first, nearest first. When even every one of them would leave the garrison short of the relief
+ * its origin's spy report shows, nothing is sent and the garrison is called home: the siege is
+ * lost, its units are not.
  */
 function holdSieges(p: Planner, prm: Conqueror3Params): void {
   const { w } = p;
@@ -1613,26 +1771,63 @@ function holdSieges(p: Planner, prm: Conqueror3Params): void {
       .reduce((a, x) => a + x.defense, 0);
     const now = heldDefense(p, prm, row, units + coming);
     let worst = Math.floor((now * RELIEF_PM) / 1000);
-    let known = 0;
+    // What the relief brings, by its origin's spy report. Without one the garrison is raised and
+    // stays: in the batches, giving up on an estimate (a relief beating the garrison its owner saw
+    // by 1.15×) lost more conquests than the units it saved.
+    let expected = 0;
     for (const i of threats) {
       const intel = attackFromIntel(w, i.from);
-      if (intel === null) continue;
-      const a = Math.floor((intel * moraleOf(w, i.by)) / 1000);
-      known = Math.max(known, a);
-      worst = Math.max(worst, a);
+      if (intel !== null) {
+        const a = Math.floor((intel * moraleOf(w, i.by)) / 1000);
+        worst = Math.max(worst, a);
+        expected = Math.max(expected, a);
+      }
     }
     const need = holdNeed(prm, worst, countOf(garrison, founder));
     for (const i of threats) p.markHandled(`w${i.id}`);
     if (now >= need) continue;
+    // A relief stronger than every helper can make the garrison wins outright: the siege is lost,
+    // its units need not be (nothing more is sent, the garrison comes home).
+    const most = heldDefense(
+      p,
+      prm,
+      row,
+      units + coming + reinforcePotential(p, row, first, HOLD_SHARE_PM, HOLD_CITIES),
+    );
+    if (recall && expected > 0 && most < expected) {
+      p.recallStationed(city);
+      p.memo(`gave up ${city} ${fmtTime(w.t)}: D${most} vs A${expected}`);
+      continue;
+    }
     const added = reinforce(p, row, first, HOLD_SHARE_PM, HOLD_CITIES, need - now);
     const after = heldDefense(p, prm, row, units + coming + added);
     p.summary.push(`${city}: relief due ${fmtTime(first)}, held D${after} vs A≥${worst}`);
-    if (known === 0 || after * 1000 >= known * 1000 || !recall) continue;
-    // A relief its origin's spy report shows stronger than every helper can make the garrison wins
-    // outright: the siege is lost, its units need not be.
-    p.recallStationed(city);
-    p.memo(`gave up ${city} ${fmtTime(w.t)}: D${after} vs A${known}`);
   }
+}
+
+/** The defense `reinforce` could send at most (its helpers' share of their defenders, before lift). */
+function reinforcePotential(
+  p: Planner,
+  row: CityRow,
+  before: number,
+  sharePm: number,
+  cities: number,
+): number {
+  const { w } = p;
+  const defender = w.kit.roles.defender;
+  if (defender === null) return 0;
+  const per = Math.max(1, w.kit.units.get(defender)?.defense ?? 1);
+  return w.cities
+    .filter((c) => !c.blocked && !underAttack(w, c.id))
+    .map((c) => ({ c, travel: w.travel(c.id, row.island, false) }))
+    .filter((x): x is { c: OwnCity; travel: number } => x.travel !== null)
+    .filter((x) => w.t + x.travel < before)
+    .toSorted((a, b) => a.travel - b.travel || compareIds(a.c.id, b.c.id))
+    .slice(0, cities)
+    .reduce(
+      (a, { c }) => a + Math.floor((countOf(p.homeOf(c.id), defender) * sharePm) / 1000) * per,
+      0,
+    );
 }
 
 /**
@@ -1739,25 +1934,55 @@ function deaf(p: Planner, q: PlayerId): boolean {
   return at !== null && p.w.t - at < DEAF_FOR;
 }
 
+/** The seats a call went to, as a bit mask of their numbers (`wm<call>`); seats past 52 are left out. */
+function seatMask(qs: readonly PlayerId[]): number {
+  let mask = 0;
+  for (const q of qs) {
+    const n = seatNumber(q);
+    if (n === null || n < 1 || n > 52) continue;
+    let bit = 1;
+    for (let i = 1; i < n; i += 1) bit *= 2;
+    mask += bit;
+  }
+  return mask;
+}
+
+function maskSeats(mask: number): PlayerId[] {
+  const out: PlayerId[] = [];
+  let rest = mask;
+  for (let n = 1; n <= 52 && rest > 0; n += 1) {
+    if (rest % 2 === 1) out.push(bySeat(n));
+    rest = Math.floor(rest / 2);
+  }
+  return out;
+}
+
 /**
- * Once the window of one of the seat's own strike calls has passed: each ally that gave no answer is
- * not waited for again within `DEAF_FOR` (`wd<seat>`); one that answered is waited for again.
+ * Once the window of one of the seat's own strike calls has passed (not a call it cancelled): each
+ * ally it called (`wm<call>`) that did not answer yes (a no, or no answer) is not waited for again
+ * within `DEAF_FOR` (`wd<seat>`); one that answered yes is waited for again. Allies it did not call
+ * are not judged.
  */
-function markDeaf(p: Planner, ctx: Context, book: readonly WarEntry[]): void {
+function markDeaf(p: Planner, book: readonly WarEntry[]): void {
   const { w } = p;
   for (const e of book) {
     if (e.from !== w.seat || e.call.role !== "strike" || e.call.t1 > w.t) continue;
     if (p.handled(`wk${e.call.id}`)) continue;
     p.markHandled(`wk${e.call.id}`);
-    for (const q of ctx.allies) {
+    const asked = p.flag(`wm${e.call.id}`) ?? 0;
+    p.clearFlag(`wm${e.call.id}`);
+    if (e.state === "cancelled") continue;
+    for (const q of maskSeats(asked)) {
       const n = seatNumber(q);
       if (n === null) continue;
-      if (Object.hasOwn(e.answers, q)) p.clearFlag(`wd${n}`);
+      if (typeof e.answers[q] === "number") p.clearFlag(`wd${n}`);
       else p.setFlag(`wd${n}`, w.t);
     }
   }
+  const live = new Set(book.filter((e) => e.from === w.seat).map((e) => `wm${e.call.id}`));
   for (const [name, at] of Object.entries(p.memory.x)) {
     if (/^wd[1-9][0-9]*$/.test(name) && w.t - at >= DEAF_FOR) p.clearFlag(name);
+    if (/^wmk[0-9a-z]+$/.test(name) && !live.has(name)) p.clearFlag(name);
   }
 }
 
@@ -1779,13 +2004,15 @@ function jointStrike(
   tg: Target,
   d: Defense,
   foes: number,
-  book: WarEntry[],
+  desk: WarDesk,
+  allied: number,
 ): boolean {
   const { w } = p;
   const row = tg.row;
-  const strong = row.capitalOf !== null || defenseValue(d) >= JOINT_DEFENSE;
-  if (!strong || ctx.allies.length === 0 || !mayMessage("call", p.messagesLeft)) return false;
-  if (book.some((e) => e.from === w.seat && e.state === "sent" && e.call.t1 + 3600 > w.t)) {
+  if (!strongCity(row, d) || ctx.allies.length === 0 || !mayMessage("call", p.messagesLeft)) {
+    return false;
+  }
+  if (desk.book.some((e) => e.from === w.seat && e.state === "sent" && e.call.t1 + 3600 > w.t)) {
     return false;
   }
   const off = p.flag("jx");
@@ -1804,9 +2031,12 @@ function jointStrike(
   const lands = roundUp(w.t + Math.max(travel, JOINT_LEAD, farthest + 1800 + JOINT_WINDOW)) + 120;
   const launchAt = lands - travel;
   if (lands < opensAt(w, row) || !wakeFor(p, launchAt)) return false;
-  // The seat's own waves must still win then, without counting on the allies.
-  const late = defenseAt(p, prm, row, lands - w.t) ?? d;
-  if (assault(p, prm, tg, late, moraleAgainst(w, foes), [], false) === null) return false;
+  // The seat's own waves must still win then, or with what it counts on from its allies (a joint
+  // target: the strike leaves only if enough of them answer yes, `trainStep`).
+  const m = moraleAgainst(w, foes);
+  const late = defenseAt(p, prm, row, lands - w.t, allied > 0 ? 1 + allies.length : 2) ?? d;
+  const before = allied > 0 ? [Math.floor((allied * m) / 1000)] : [];
+  if (assault(p, prm, tg, late, m, before, false) === null) return false;
   const { id, n: seq } = nextCallId(p);
   const t1 = lands - 120;
   const t0 = t1 - JOINT_WINDOW;
@@ -1820,13 +2050,17 @@ function jointStrike(
     lands,
   });
   if (!p.message(allies, callText)) return false;
-  book.push({
-    from: w.seat,
-    call: { id, role: "strike", target: row.id, t0, t1, vs: null, lands: null },
-    state: "sent",
-    at: lands,
-    answers: {},
-  });
+  desk.book = [
+    ...desk.book,
+    {
+      from: w.seat,
+      call: { id, role: "strike", target: row.id, t0, t1, vs: null, lands: null },
+      state: "sent",
+      at: lands,
+      answers: {},
+    },
+  ];
+  p.setFlag(`wm${id}`, seatMask(allies));
   p.setFlag("at", n);
   p.setFlag("aw", lands);
   p.setFlag("aj", seq);
@@ -1836,17 +2070,18 @@ function jointStrike(
   const fly = spyTravel(w, row.island);
   if (fly !== null && w.t + fly + 600 < launchAt) checkSpy(p, prm, tg);
   p.memo(`joint ${row.id} ${fmtTime(lands)} with ${allies.join(",")}`);
-  p.summary.push(`${row.id}: joint strike called (${id}, ${foes} cities)`);
+  p.summary.push(
+    `${row.id}: joint strike called (${id}, ${foes} cities${allied > 0 ? `, allies A${allied}` : ""})`,
+  );
   return true;
 }
 
 /** Cancels the seat's own call `id` to its allies, when it is still open and a message can go. */
-function cancelCall(p: Planner, book: WarEntry[], id: string, why: string): void {
+function cancelCall(p: Planner, desk: WarDesk, id: string, why: string): void {
   const { w } = p;
-  const i = book.findIndex((e) => e.from === w.seat && e.call.id === id && e.state === "sent");
-  if (i < 0) return;
-  const e = book[i]!;
-  book[i] = { ...e, state: "cancelled" };
+  const e = desk.book.find((x) => x.from === w.seat && x.call.id === id && x.state === "sent");
+  if (e === undefined) return;
+  desk.book = desk.book.map((x) => (x === e ? { ...e, state: "cancelled" } : x));
   const allies = [...w.relations.entries()]
     .filter(([, k]) => k === "ally")
     .map(([q]) => q)
@@ -1860,7 +2095,7 @@ function cancelCall(p: Planner, book: WarEntry[], id: string, why: string): void
  * Once per siege, when the seat has allies: a `siege` call asking them to hold the city once it
  * falls, landing from `SIEGE_CALL_AFTER` after the siege's end (`gw<city>`).
  */
-function callSiegeHelp(p: Planner, ctx: Context, book: WarEntry[]): void {
+function callSiegeHelp(p: Planner, ctx: Context, desk: WarDesk): void {
   const { w } = p;
   if (ctx.allies.length === 0) return;
   for (const city of holdCities(w).keys()) {
@@ -1884,13 +2119,16 @@ function callSiegeHelp(p: Planner, ctx: Context, book: WarEntry[]): void {
       lands: null,
     });
     if (!p.message(allies, text)) continue;
-    book.push({
-      from: w.seat,
-      call: { id, role: "siege", target: city, t0, t1, vs: null, lands: null },
-      state: "sent",
-      at: null,
-      answers: {},
-    });
+    desk.book = [
+      ...desk.book,
+      {
+        from: w.seat,
+        call: { id, role: "siege", target: city, t0, t1, vs: null, lands: null },
+        state: "sent",
+        at: null,
+        answers: {},
+      },
+    ];
   }
 }
 
@@ -1918,168 +2156,38 @@ function siegeEnds(w: World, city: CityId): number | null {
 }
 
 /**
- * Answers its allies' calls (`war.ts`): every open call is judged (`judgeWar`: never against itself,
- * an ally or a pact partner, never for a distrusted caller, in reach and with force enough), and the
- * best (`pickCall`: its own victim's cities first) is answered yes: a strike sends `warSharePm` of
- * the attackers of the cities that land in the window (at least `WAR_MIN_ATTACKERS`), a hold or a
- * siege that share of their defenders, now or at a timed wake (`yes` in the book). The others are
- * answered no while messages are plentiful, or left silent. Nothing while its own train waits.
+ * How it answers its allies' calls (`respond.ts`, as the responders): a strike gets `warSharePm` of
+ * the attackers at home (with their carriers, and its share of warships across water) of the cities
+ * that land in the window, at least `WAR_MIN_ATTACKERS` of them, whatever their flight (unlike its
+ * own strikes, kept within `MAX_FLIGHT`: its allies' calls name cities farther away than it would
+ * pick, and capping their flights at 4 h cut its yes to strike calls from 15 to 6 in 30 matches
+ * of the war lineup, and the joint attacks with them); a hold or a siege that share of their
+ * defenders, `MIN_SUPPORT` at least; two cities at most, landing at the window's middle.
  */
-function respond(
-  p: Planner,
-  prm: Conqueror3Params,
-  victim: PlayerId | null,
-  book: WarEntry[],
-): void {
-  const { w } = p;
+function warParams(w: World, prm: Conqueror3Params): ResponderParams {
   const kit = w.kit;
   const attack = kit.roles.attacker === null ? 0 : (kit.units.get(kit.roles.attacker)?.attack ?? 0);
   const guard = kit.roles.defender === null ? 0 : (kit.units.get(kit.roles.defender)?.defense ?? 0);
-  const answers = new Map<PlayerId, string[]>();
-  const say = (to: PlayerId, text: string): void => {
-    answers.set(to, [...(answers.get(to) ?? []), text]);
+  return {
+    roles: ["strike", "siege", "hold"],
+    decline: "",
+    strikePm: prm.warSharePm,
+    holdPm: prm.warSharePm,
+    minStrike: WAR_MIN_ATTACKERS * attack,
+    minHold: MIN_SUPPORT * guard,
+    aimPm: 500,
+    waves: 2,
   };
-  const busy = trainWaits(p);
-  const distrust = new Set<PlayerId>();
+}
+
+/** The players that attacked the seat within a day (`ha<seat>`): their calls are not followed. */
+function recentAttackers(p: Planner): Set<PlayerId> {
+  const out = new Set<PlayerId>();
   for (const [name, at] of Object.entries(p.memory.x)) {
     const m = /^ha([1-9][0-9]*)$/.exec(name);
-    if (m !== null && w.t - at < DAY) distrust.add(bySeat(Number(m[1])));
+    if (m !== null && p.w.t - at < DAY) out.add(bySeat(Number(m[1])));
   }
-  const judged = new Map<string, { j: ReturnType<typeof judgeWar>; e: WarEntry }>();
-  const cands: WarCandidate[] = [];
-  for (const e of book) {
-    if (e.from === w.seat || e.state !== "open") continue;
-    const hits = e.call.role === "strike";
-    const j = judgeWar(w, e.from, e.call, {
-      sharePm: prm.warSharePm,
-      minForce: hits ? WAR_MIN_ATTACKERS * attack : MIN_SUPPORT * guard,
-      attacksLeft: p.attacksLeft,
-      distrust,
-    });
-    judged.set(`${e.from}/${e.call.id}`, { j, e });
-    const when = siegeLaunch(w, e, j.options[0]?.launch ?? null);
-    if (j.verdict.accept && !busy && when !== null) {
-      cands.push({ from: e.from, call: e.call, launch: when });
-    }
-  }
-  const prefer = new Set<PlayerId>(victim === null ? [] : [victim]);
-  const ownerOf = (c: CityId): PlayerId | null =>
-    w.map?.cities.find((x) => x.id === c)?.owner ?? null;
-  const pick = pickCall(cands, prefer, ownerOf);
-  for (const [key, { j, e }] of judged) {
-    const i = book.findIndex((x) => `${x.from}/${x.call.id}` === key);
-    if (i < 0) continue;
-    if (pick !== null && pick.from === e.from && pick.call.id === e.call.id) {
-      if (!mayMessage("yes", p.messagesLeft)) continue;
-      const opts = j.options;
-      const lands = pick.launch.lands;
-      book[i] = { ...e, state: "yes", at: pick.launch.at };
-      say(e.from, composeAck(e.call.id, true, lands));
-      if (pick.launch.at <= w.t) {
-        const yes = book[i];
-        if (yes !== undefined && answerCall(p, prm, yes, opts)) {
-          book[i] = { ...yes, state: "sent", at: lands };
-        }
-      } else {
-        p.wakeAt(pick.launch.at);
-      }
-      continue;
-    }
-    book[i] = { ...e, state: "no" };
-    const unreachable =
-      j.verdict.accept && siegeLaunch(w, e, j.options[0]?.launch ?? null) === null;
-    const why = busy
-      ? "busy"
-      : unreachable
-        ? "too far"
-        : j.verdict.accept
-          ? "other call"
-          : j.verdict.why;
-    if (mayMessage("no", p.messagesLeft)) say(e.from, composeAck(e.call.id, false, null, why));
-  }
-  // Calls answered yes whose launch has come; the others keep their launch's wake.
-  for (const [i, e] of book.entries()) {
-    if (e.from === w.seat || e.state !== "yes" || e.at === null) continue;
-    if (e.at > w.t) {
-      p.wakeAt(e.at);
-      continue;
-    }
-    if (busy) {
-      book[i] = { ...e, state: "no" };
-      continue;
-    }
-    const j = judgeWar(w, e.from, e.call, {
-      sharePm: prm.warSharePm,
-      minForce: 1,
-      attacksLeft: p.attacksLeft,
-      distrust,
-    });
-    const ok = j.verdict.accept && answerCall(p, prm, e, j.options);
-    book[i] = { ...e, state: ok ? "sent" : "no" };
-    if (!ok && mayMessage("no", p.messagesLeft))
-      say(e.from, composeAck(e.call.id, false, null, "cannot go"));
-  }
-  for (const [to, texts] of [...answers].toSorted((a, b) => compareIds(a[0], b[0]))) {
-    p.message([to], joinWar(texts));
-  }
-}
-
-/** A siege call's launch, never before the siege ends (a support to a besieged city is refused). */
-function siegeLaunch(
-  w: World,
-  e: WarEntry,
-  best: { at: number; lands: number } | null,
-): { at: number; lands: number } | null {
-  if (best === null || e.call.role !== "siege") return best;
-  const ends = siegeEnds(w, e.call.target);
-  if (ends === null || best.at >= ends) return best;
-  const travel = best.lands - best.at;
-  return launchTime(e.call, travel, w.t, {
-    minDelay: w.kit.gateway.selfWake.min,
-    earliest: ends + 60,
-  });
-}
-
-/**
- * Sends what an accepted call asks from the cities whose launch is now: attackers for a strike (at
- * least `WAR_MIN_ATTACKERS` in all), defenders for a hold or a siege, each with its carriers. True
- * when something left.
- */
-function answerCall(
-  p: Planner,
-  prm: Conqueror3Params,
-  e: WarEntry,
-  opts: readonly WarOption[],
-): boolean {
-  const { w } = p;
-  const kit = w.kit;
-  const target = warTarget(w, e.call.target);
-  if (target === null) return false;
-  const hits = e.call.role === "strike";
-  const unit = hits ? kit.roles.attacker : kit.roles.defender;
-  if (unit === null) return false;
-  let left = 0;
-  for (const o of opts) {
-    if (o.launch.at > w.t) continue;
-    const c = p.city(o.city);
-    if (c === undefined || c.blocked) continue;
-    const pop = Math.max(1, kit.units.get(unit)?.pop ?? 1);
-    const want = Math.min(
-      Math.floor((countOf(p.homeOf(c.id), unit) * prm.warSharePm) / 1000),
-      Math.floor(p.liftCapacity(c, target.island) / pop),
-    );
-    if (want < (hits ? WAR_MIN_ATTACKERS : MIN_SUPPORT)) continue;
-    const group = p.withCarriers(c, target.island, { [unit]: want });
-    if (group === null) continue;
-    if (hits) {
-      if (!p.attack(c, target.id, group)) continue;
-    } else {
-      p.support(c, target.id, group);
-    }
-    left += 1;
-  }
-  if (left > 0) p.memo(`${e.call.role} ${e.call.target} for ${e.from} ${fmtTime(w.t)}`);
-  return left > 0;
+  return out;
 }
 
 // Founders and army (as conqueror@2).
@@ -2156,17 +2264,20 @@ function spareFounder(p: Planner, prm: Conqueror3Params, victim: PlayerId | null
 // Diplomacy (as conqueror@2).
 
 /**
- * Answers proposals (pacts from anyone but its victim and a rival bloc, one alliance); from day 2,
- * once a day while it has no alliance, proposes a war alliance to the strongest of its nearest
- * neighbours that is neither its victim nor in a rival bloc (a pact when that neighbour has an
+ * Answers proposals (pacts from anyone but its victim, a rival bloc or a player that betrayed it;
+ * one alliance); from day 2, once a day while it has no alliance, proposes a war alliance to the
+ * strongest of its nearest neighbours that is none of those (a pact when that neighbour has an
  * alliance already); tells its allies its victim.
  */
 function diplomacy(p: Planner, ctx: Context, victim: PlayerId | null): void {
   const { w } = p;
   const d = w.kit.rules.diplomacy;
   let allied = w.self?.alliance !== null && w.self?.alliance !== undefined;
+  // Never a player that betrayed the seat (one that attacked it within a day may be allied: its
+  // calls are not followed for that day).
+  const foes = new Set<PlayerId>(betrayers(p));
   p.answer((pr) => {
-    if (pr.from === victim || ctx.rivals.has(pr.from)) return false;
+    if (pr.from === victim || ctx.rivals.has(pr.from) || foes.has(pr.from)) return false;
     if (pr.kind === "pact") return true;
     if (allied || d.allianceMax < 2) return false;
     allied = true;
@@ -2187,7 +2298,10 @@ function diplomacy(p: Planner, ctx: Context, victim: PlayerId | null): void {
     return at !== null && w.t - at < ASKED_FOR;
   };
   const near = [...citiesByOwner(w)]
-    .filter(([q]) => q !== victim && !ctx.rivals.has(q) && !w.relations.has(q) && !asked(q))
+    .filter(
+      ([q]) =>
+        q !== victim && !ctx.rivals.has(q) && !w.relations.has(q) && !asked(q) && !foes.has(q),
+    )
     .map(([q, rows]) => ({ q, reach: reachOf(w, rows) }))
     .filter((x): x is { q: PlayerId; reach: number } => x.reach !== null)
     .toSorted((a, b) => a.reach - b.reach || compareIds(a.q, b.q))
@@ -2232,10 +2346,15 @@ function coordinate(p: Planner, ctx: Context, victim: PlayerId | null): void {
   }
 }
 
+/** Supports stay in an ally's city this long after the seat first saw them there (relief pack: 8 h). */
+const SUPPORT_STAY = 8 * 3600;
+
 /**
  * Sends defenders to an ally's city under attack by someone outside the alliance, once per attack
  * (`a<movement>`): a third of those at home in the nearest own city whose support lands first, at
- * least `MIN_SUPPORT`, unless the seat already has a group stationed there.
+ * least `MIN_SUPPORT`, unless the seat already has a group stationed there. Its supports in an
+ * ally's city (not besieged) are called home `SUPPORT_STAY` after it first saw them there
+ * (`sa<city>`), unless an attack is on its way to that city.
  */
 function supportAllies(p: Planner): void {
   const { w } = p;
@@ -2273,6 +2392,36 @@ function supportAllies(p: Planner): void {
       stationed.add(row.id);
       break;
     }
+  }
+  recallFromAllies(p);
+}
+
+function recallFromAllies(p: Planner): void {
+  const { w } = p;
+  if (w.kit.rules.movement.recall.stationed === "none") return;
+  const threatened = new Set<CityId>(
+    w.briefing.incoming
+      .filter((i) => i.kind === "attack" && i.homecoming !== true && i.arrive[0] > w.t)
+      .map((i) => i.to),
+  );
+  const away = new Set<string>();
+  for (const s of w.self?.private?.stationed ?? []) {
+    if (s.role !== "support") continue;
+    const row = w.map?.cities.find((c) => c.id === s.city);
+    if (row === undefined || row.owner === null || w.relations.get(row.owner) !== "ally") continue;
+    if (besiegedRow(w, row) || away.has(`sa${s.city}`)) continue;
+    away.add(`sa${s.city}`);
+    const since = p.flag(`sa${s.city}`);
+    if (since === null) {
+      p.setFlag(`sa${s.city}`, w.t);
+      continue;
+    }
+    if (w.t - since < SUPPORT_STAY || threatened.has(s.city)) continue;
+    p.recallStationed(s.city);
+    p.clearFlag(`sa${s.city}`);
+  }
+  for (const name of Object.keys(p.memory.x)) {
+    if (/^sac[1-9][0-9]*$/.test(name) && !away.has(name)) p.clearFlag(name);
   }
 }
 
@@ -2425,17 +2574,24 @@ export const conqueror3: StrategyDef = Object.freeze<StrategyDef>({
       reads(w: World): ToolCall[] {
         const victim = remembered(w);
         const cities = [...victimReads(w, prm, victim), ...scoutReads(w, prm, victim)];
-        return [call("leaderboard", {}), ...cities.map((city) => call("view_city", { city }))];
+        return [
+          call("leaderboard", {}),
+          ...cities.map((city) => call("view_city", { city })),
+          ...allyReads(w, victim).map((city) => call("view_city", { city })),
+          ...droppedWarSearch(w),
+        ];
       },
+      moreReads: droppedWarOpens,
       plan(p) {
         const { w } = p;
         rememberAttackers(p);
         rememberLosses(p);
         rememberFoundings(p);
+        rememberBetrayers(p);
         watchFighters(p);
         hearAllies(p);
-        const inbox = hearWar(w.briefing.msgs, w.seat, w.relations);
-        const book = absorbWar(readBook(p.memory), inbox.heard, w.seat);
+        // Calls are not followed for a player that attacked the seat within a day, or betrayed it.
+        const desk = openDesk(p, recentAttackers(p));
         const ctx = contextOf(p);
         const opts = options(p, prm, ctx);
         const victim = settleVictim(p, opts);
@@ -2445,13 +2601,17 @@ export const conqueror3: StrategyDef = Object.freeze<StrategyDef>({
         diplomacy(p, ctx, victim);
         recallStrays(p);
         holdSieges(p, prm);
-        callSiegeHelp(p, ctx, book);
+        callSiegeHelp(p, ctx, desk);
         p.supportThreatened();
         supportAllies(p);
-        markDeaf(p, ctx, book);
-        trainStep(p, prm, victim, book);
-        respond(p, prm, victim, book);
-        const o = offense(p, prm, ctx, victim, conquestPays(p, opts, victim), book);
+        markDeaf(p, desk.book);
+        trainStep(p, prm, ctx, victim, desk);
+        // Its allies' calls: never while its own train waits (`busy`), its victim's cities first.
+        const war = warParams(w, prm);
+        const busy = trainWaits(p);
+        answerCalls(p, desk, war, { prefer: new Set(victim === null ? [] : [victim]), busy });
+        keepWord(p, desk, war, { busy });
+        const o = offense(p, prm, ctx, victim, conquestPays(p, opts, victim), desk);
         scout(p, prm, opts, victim);
         if (!trainWaits(p)) {
           // Before capitals can fall, the strike force is paid before the founders.
@@ -2459,7 +2619,8 @@ export const conqueror3: StrategyDef = Object.freeze<StrategyDef>({
           foundersFor(p, prm, victim, o);
           grow(p, prm);
         }
-        p.memory = writeBook(p.memory, book, w.t);
+        sendAnswers(p, desk);
+        closeDesk(p, desk);
       },
     };
   },
