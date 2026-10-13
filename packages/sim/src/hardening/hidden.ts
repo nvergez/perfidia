@@ -456,10 +456,10 @@ export function perturb(
           );
           if (from === undefined || to === undefined) break;
           const kind = p.pick % 2 === 0 ? "pact" : "alliance";
-          const same = Object.values(state.proposals).some(
-            (q) => q.from === from && q.to === to && q.kind === kind,
-          );
-          if (same) break;
+          const open = Object.values(state.proposals).filter((q) => q.from === from);
+          const same = open.some((q) => q.to === to && q.kind === kind);
+          // A valid hidden state: within the open-proposal limit (bots may already be at it).
+          if (same || open.length >= rules.diplomacy.maxOpenProposals) break;
           addProposal(state, rules, { from, to, kind, idKey });
           applied += 1;
           break;
