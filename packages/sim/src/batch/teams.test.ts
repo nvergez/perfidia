@@ -7,7 +7,7 @@ import { describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { composeAck, composeCall, composeCancel } from "@perfidia/bots";
+import { composeAck, composeCall, composeCancel, parseWar } from "@perfidia/bots";
 import { LogLineSchema, type LogLine, type PlayerId } from "@perfidia/protocol";
 import { DEFAULT_BOTS } from "../harness/index.ts";
 import { readLog } from "../io/index.ts";
@@ -392,8 +392,15 @@ describe("a real batch", () => {
       expect(m.r1).toMatchObject({ slots: 43, need: 18 });
       const most = Math.max(...m.seats.map((x) => x.cities ?? 0));
       expect(m.r1?.maxCities).toBeGreaterThanOrEqual(most);
-      // No published bot sends war calls.
-      expect(m.warCalls.calls).toBe(0);
+      // The war calls (opportunist@3 sends some): each private message's calls, as the log has them.
+      const calls = lines.flatMap((l) =>
+        l.k === "ev" && l.e.type === "message" && l.e.data["to"] !== "all"
+          ? parseWar(typeof l.e.data["text"] === "string" ? l.e.data["text"] : "").filter(
+              (i) => i.kind === "call",
+            )
+          : [],
+      );
+      expect(m.warCalls.calls).toBe(calls.length);
       for (const j of m.joint) expect(j.players.length).toBeGreaterThanOrEqual(2);
       const agg = result.variants[0]!.aggregate;
       expect(agg.team.sieges.sieges).toBe(m.sieges.length);

@@ -125,8 +125,8 @@ describe("sim batch", () => {
       expect(parsed.bots).toEqual([
         "bot:expander@2",
         "bot:rusher@3",
-        "bot:turtle@2",
-        "bot:opportunist@2",
+        "bot:turtle@3",
+        "bot:opportunist@3",
         "bot:conqueror@2",
       ]);
       expect(parsed.clock).toEqual({ kind: "lockstep", maxTurnsPerSecond: 3 });
@@ -303,7 +303,7 @@ describe("sim batch", () => {
     const ba = await runBatch({ ...plan, variants: [b, a] });
     expect(ab.variants[0]).toEqual(ba.variants[1]);
     expect(ab.variants[1]).toEqual(ba.variants[0]);
-    expect(ab.bots).toEqual(["bot:rusher@3", "bot:turtle@2", "bot:rusher@1"]);
+    expect(ab.bots).toEqual(["bot:rusher@3", "bot:turtle@3", "bot:rusher@1"]);
     expect(ab.variants[0]?.controllers["p3"]).toBe("bot:rusher@1");
     expect(ab.variants.flatMap((v) => v.matches.map((m) => m.replayOk))).toEqual([true, true]);
   }, 30000);

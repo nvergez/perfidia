@@ -31,8 +31,8 @@ const rusher2: StrategyDef = Object.freeze<StrategyDef>({ ...rusher, version: 2 
 const VERSIONS: Readonly<Record<string, readonly number[]>> = {
   expander: [1, 2],
   rusher: [1, 2, 3],
-  turtle: [1, 2],
-  opportunist: [1, 2],
+  turtle: [1, 2, 3],
+  opportunist: [1, 2, 3],
   conqueror: [1, 2],
 };
 const versionsOf = (s: string): readonly number[] => VERSIONS[s] ?? [];
@@ -61,8 +61,10 @@ describe("the registry of this build", () => {
       "bot:rusher@3",
       "bot:turtle@1",
       "bot:turtle@2",
+      "bot:turtle@3",
       "bot:opportunist@1",
       "bot:opportunist@2",
+      "bot:opportunist@3",
       "bot:conqueror@1",
       "bot:conqueror@2",
     ]);
@@ -97,7 +99,7 @@ describe("the registry of this build", () => {
   test("an unregistered version is an error when asked for by number", () => {
     expect(() => botLabel("rusher", 9)).toThrow("no bot:rusher@9; rusher has @1, @2, @3");
     expect(() => createBotVersion("rusher", 9, P1)).toThrow("no bot:rusher@9");
-    expect(() => botLabel("turtle", 3)).toThrow("no bot:turtle@3; turtle has @1, @2");
+    expect(() => botLabel("turtle", 4)).toThrow("no bot:turtle@4; turtle has @1, @2, @3");
   });
 
   test("each createBot call is a new instance", () => {

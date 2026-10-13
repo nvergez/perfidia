@@ -27,9 +27,9 @@ import { randInt } from "../rng.ts";
 import type { StrategyDef } from "./strategy.ts";
 
 /** Share (‰) of its defenders at home a city sends on a relief. */
-const RELIEF_DEFENDERS_PM = 500;
+export const RELIEF_DEFENDERS_PM = 500;
 
-function brace(p: Planner): void {
+export function brace(p: Planner): void {
   const { w } = p;
   const defender = w.kit.roles.defender;
   const allies = [...w.relations.entries()]
