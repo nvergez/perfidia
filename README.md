@@ -34,17 +34,18 @@ TypeScript is `typescript@7.0.2`, the Go-native compiler. The npm package is a t
 
 ## Packages
 
-Dependency direction: `protocol` ← `engine` ← `gateway` ← `bots` ← `sim`. Each package only
+Dependency direction: `protocol` ← `engine` ← `gateway` ← `bots` ← `sim` ← `orchestrator`. Each package only
 declares its allowed upstream packages, and the isolated linker makes any other `@perfidia/*`
 import fail to resolve.
 
-| Package              | Role                                                          | Environment |
-| -------------------- | ------------------------------------------------------------- | ----------- |
-| `@perfidia/protocol` | Zod schemas and inferred types shared by everything           | pure        |
-| `@perfidia/engine`   | Deterministic, event-driven game simulation                   | pure        |
-| `@perfidia/gateway`  | Fog of war, briefings, action validation, caps, wake-ups      | pure        |
-| `@perfidia/bots`     | Scripted players that act only through the gateway            | Bun         |
-| `@perfidia/sim`      | Headless match runner (both clocks), logs and replay verifier | Bun         |
+| Package                  | Role                                                          | Environment |
+| ------------------------ | ------------------------------------------------------------- | ----------- |
+| `@perfidia/protocol`     | Zod schemas and inferred types shared by everything           | pure        |
+| `@perfidia/engine`       | Deterministic, event-driven game simulation                   | pure        |
+| `@perfidia/gateway`      | Fog of war, briefings, action validation, caps, wake-ups      | pure        |
+| `@perfidia/bots`         | Scripted players that act only through the gateway            | Bun         |
+| `@perfidia/sim`          | Headless match runner (both clocks), logs and replay verifier | Bun         |
+| `@perfidia/orchestrator` | LLM harness: model adapters, LLM seats, budget, LLM logs      | Bun         |
 
 Each package exports `./src/index.ts` directly: Bun runs TypeScript without a build step.
 Relative imports may use the `.ts` extension (`allowImportingTsExtensions`).

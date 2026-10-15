@@ -18,12 +18,13 @@ Root scripts (run from the repo root): `bun run typecheck`, `bun run lint`, `bun
 
 - `protocol` — Zod schemas and inferred types shared by everything: ids, actions, events, player views, rules config shape. No runtime logic beyond validation.
 - `engine` — the deterministic game simulation. **Pure TypeScript:** no `bun:*`, no `node:*`, no Elysia, no I/O, no `Date`, no `Math.random`, no floating-point game maths (integers only; fixed-point where fractions are needed), seeded PRNG only. Must run unchanged in a browser.
-- `gateway` — the only way into the engine for players: fog-of-war projection, briefings, action validation with explanatory errors, per-seat caps. LLM-agnostic. (MCP exposure comes in phase 2.)
+- `gateway` — the only way into the engine for players: fog-of-war projection, briefings, action validation with explanatory errors, per-seat caps. LLM-agnostic. (MCP exposure is deferred to the server phase; phase-2 LLM seats call the tools through function calling in `orchestrator`.)
 - `bots` — scripted players that play exclusively through the gateway (never the engine directly).
 - `sim` — headless match runner (CLI): builds a world, runs a match with bots under the lockstep or real-time clock, writes logs, verifies replays.
-- Later phases: `orchestrator` (LLM harness), `server` (Elysia HTTP/WS/MCP), `web` (spectator SPA).
+- `orchestrator` — the LLM harness (phase 2): `ModelAdapter` and the Anthropic adapter (the only module that imports `@anthropic-ai/sdk`, in `src/model/anthropic.ts`), `LlmSeatAgent`, prompts and profiles, the budget ledger, `llm_calls.jsonl` logs. Reads only `PERFIDIA_ANTHROPIC_*` from the environment, never `ANTHROPIC_*`; tests never touch the network.
+- Later phases: `server` (Elysia HTTP/WS/MCP), `web` (spectator SPA).
 
-Dependency direction: `protocol` ← `engine` ← `gateway` ← `bots` ← `sim`. Never import "upwards".
+Dependency direction: `protocol` ← `engine` ← `gateway` ← `bots` ← `sim` ← `orchestrator`. Never import "upwards".
 
 ## Code conventions
 

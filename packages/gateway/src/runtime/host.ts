@@ -83,6 +83,22 @@ export interface Handoff {
   readonly agent: SeatAgent;
 }
 
+/** A hand-off a `HandoffQueue` decided while the match runs: the new controller of the seat. */
+export interface QueuedHandoff {
+  readonly label: string;
+  readonly agent: SeatAgent;
+}
+
+/**
+ * Hand-offs decided while the match runs (§8.7), e.g. an LLM seat over its budget handed to a bot.
+ * The host polls it when a seat's turn opens, after the static hand-offs, and applies a result like
+ * a static hand-off: the agent replaces the seat's, and a `controller` line precedes the `wake` line.
+ */
+export interface HandoffQueue {
+  /** Polled synchronously when `seat`'s turn opens at `t`, after the static hand-offs. Must not throw. */
+  take(seat: PlayerId, t: GameTime): QueuedHandoff | null;
+}
+
 /** Wall time for the informational `wall*` keys (injected by `sim`; absent in tests). */
 export interface WallSource {
   nowMs(): number;
@@ -129,6 +145,8 @@ export interface MatchHostOptions {
   /** The clock spec recorded in the header. */
   readonly clock: ClockSpec;
   readonly handoffs?: readonly Handoff[];
+  /** Hand-offs decided while the match runs; polled after the static ones. */
+  readonly handoffQueue?: HandoffQueue;
   readonly wall?: WallSource;
   /** Snapshot every this many game hours, at checkpoints; 0 = the final one only. Default 24. */
   readonly snapshotEvery?: number;
@@ -136,6 +154,24 @@ export interface MatchHostOptions {
   readonly strict?: boolean;
   /** The tool registry (default `createToolRegistry(match.ruleset)`); tests pass doubles. */
   readonly tools?: ToolRegistry;
+}
+
+/** An agent with a non-empty label and a `round` method, as the host requires of every seat. */
+function isSeatAgent(value: unknown): value is SeatAgent {
+  if (value === null || typeof value !== "object") return false;
+  const label: unknown = Reflect.get(value, "label");
+  return (
+    typeof label === "string" && label !== "" && typeof Reflect.get(value, "round") === "function"
+  );
+}
+
+/** `value` as a queued hand-off: the same checks as a static one, plus an agent that can play. */
+function queuedHandoff(value: unknown): QueuedHandoff | null {
+  if (value === null || typeof value !== "object") return null;
+  const label: unknown = Reflect.get(value, "label");
+  const agent: unknown = Reflect.get(value, "agent");
+  if (typeof label !== "string" || label === "" || !isSeatAgent(agent)) return null;
+  return { label, agent };
 }
 
 /** The `ev` and `ckpt` lines of an engine step, in the order of §10.2. */
@@ -170,6 +206,7 @@ export class MatchHost implements ClockHost {
   private readonly wall: WallSource | undefined;
   private readonly every: number;
   private readonly pending: Handoff[];
+  private readonly queue: HandoffQueue | undefined;
   private readonly counts: HostStats;
   private n = 0;
   private lastSnapHour = 0;
@@ -182,6 +219,7 @@ export class MatchHost implements ClockHost {
     this.agents = o.agents;
     this.clock = o.clock;
     this.wall = o.wall;
+    this.queue = o.handoffQueue;
     this.strict = o.strict ?? false;
     this.every = o.snapshotEvery ?? 24;
     if (!Number.isSafeInteger(this.every) || this.every < 0) {
@@ -448,6 +486,22 @@ export class MatchHost implements ClockHost {
       this.agents.set(seat, h.agent);
       this.write({ k: "controller", t, seat, label: h.label });
     }
+    if (this.queue === undefined) return;
+    let taken: unknown;
+    try {
+      taken = this.queue.take(seat, t);
+    } catch (e) {
+      throw new HostFailure(`the hand-off queue failed on ${seat}'s turn at ${t}`, e);
+    }
+    if (taken === null) return;
+    const h = queuedHandoff(taken);
+    if (h === null) {
+      throw new HostFailure(
+        `the hand-off queue answered ${seat}'s turn at ${t} with something that is not a hand-off (a non-empty label and an agent with a label)`,
+      );
+    }
+    this.agents.set(seat, h.agent);
+    this.write({ k: "controller", t, seat, label: h.label });
   }
 
   private dayCounts(seat: PlayerId, t: GameTime): WakeCounts {

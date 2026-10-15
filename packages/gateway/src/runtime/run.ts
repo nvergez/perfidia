@@ -17,7 +17,13 @@ import type {
   SeatAgent,
   TimeSource,
 } from "@perfidia/protocol";
-import { MatchHost, type Handoff, type WakeCounts, type WallSource } from "./host.ts";
+import {
+  MatchHost,
+  type Handoff,
+  type HandoffQueue,
+  type WakeCounts,
+  type WallSource,
+} from "./host.ts";
 import type { LogSink } from "./sink.ts";
 import { copyOf, type ToolRegistry } from "./tools.ts";
 
@@ -54,6 +60,8 @@ export interface RunMatchOptions {
   readonly sink: LogSink;
   /** A seat handed to another controller; applied when its first turn at or after `at` opens. */
   readonly handoffs?: readonly Handoff[];
+  /** Hand-offs decided while the match runs (e.g. an LLM seat over budget); polled after `handoffs`. */
+  readonly handoffQueue?: HandoffQueue;
   /** Injected by `sim` (system time); absent in tests: no `wall*` keys. */
   readonly wall?: WallSource;
   /** Default `checkpoint`. */
@@ -153,6 +161,7 @@ export async function runMatch(o: RunMatchOptions): Promise<RunResult> {
     agents,
     clock: clockSpec(o.clock),
     ...(o.handoffs === undefined ? {} : { handoffs: o.handoffs }),
+    ...(o.handoffQueue === undefined ? {} : { handoffQueue: o.handoffQueue }),
     ...(o.wall === undefined ? {} : { wall: o.wall }),
     ...(o.snapshotEvery === undefined ? {} : { snapshotEvery: o.snapshotEvery }),
     ...(o.strict === undefined ? {} : { strict: o.strict }),
