@@ -32,6 +32,7 @@ import {
   besiegedRows,
   countdownReads,
   dominationNeed,
+  dominationTakenShort,
   holdSieges,
   moraleVs,
   ownCountdown,
@@ -295,7 +296,11 @@ export function tribute(p: Planner, prm: Opportunist2Params): void {
 
 // Betrayal.
 
-/** True while its own bloc runs a countdown or holds nearly enough cities for one. */
+/**
+ * True while its own bloc runs a countdown, or holds nearly enough cities for one and, where the
+ * threshold also asks for taken cities (hints), enough of those: a bloc short of taken cities can
+ * only get them by conquest, so it is not in reach.
+ */
 export function dominationInReach(w: World): boolean {
   if (ownCountdown(w) !== null) return true;
   const need = dominationNeed(w);
@@ -304,7 +309,7 @@ export function dominationInReach(w: World): boolean {
   for (const [q, kind] of w.relations) if (kind === "ally") bloc.add(q);
   let cities = 0;
   for (const c of w.map?.cities ?? []) if (c.owner !== null && bloc.has(c.owner)) cities += 1;
-  return bloc.size > 1 && cities + NEAR_THRESHOLD >= need;
+  return bloc.size > 1 && cities + NEAR_THRESHOLD >= need && !dominationTakenShort(w);
 }
 
 export function betray(p: Planner, prm: Opportunist2Params): void {

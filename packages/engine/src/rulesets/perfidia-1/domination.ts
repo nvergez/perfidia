@@ -6,7 +6,7 @@ import {
   type GameState,
   type PlayerId,
 } from "@perfidia/protocol";
-import type { PerfidiaConfig } from "./config.ts";
+import type { PerfidiaCore } from "./config.ts";
 import type { BlocKey } from "./ext.ts";
 
 // Domination (perfidia-1 §13.3): blocs, qualification and the order of countdowns ending in the
@@ -51,7 +51,7 @@ export function blocCities(state: DeepReadonly<GameState>, members: readonly Pla
 
 /** The cities a bloc needs: `max(2N, ceilDiv(400 × totalCities, 1000))` (§13.3). */
 export function dominationThreshold(
-  config: DeepReadonly<PerfidiaConfig>,
+  config: DeepReadonly<PerfidiaCore>,
   players: number,
   total: number,
 ): number {
@@ -61,7 +61,7 @@ export function dominationThreshold(
 
 /** Whether a bloc qualifies (from the domination opening on, which the hooks track). */
 export function qualifies(
-  config: DeepReadonly<PerfidiaConfig>,
+  config: DeepReadonly<PerfidiaCore>,
   players: number,
   total: number,
   cities: number,

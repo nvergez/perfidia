@@ -1,13 +1,13 @@
-# Perfidia V1 game rules (`perfidia-1`)
+# Perfidia V1.1 game rules (`perfidia-1`)
 
-> **Ruleset `perfidia-1@1.0.0`.** This document specifies version 1.0.0 of ruleset `perfidia-1`, implemented in `packages/engine/src/rulesets/perfidia-1/` (see `docs/architecture.md` §3).
+> **Ruleset `perfidia-1@1.1.0` (the default: the bare id `perfidia-1` resolves to it).** This document specifies version 1.1.0 of ruleset `perfidia-1`, implemented in `packages/engine/src/rulesets/perfidia-1/` (descriptor `v1_1_0.ts`, see `docs/architecture.md` §3). `perfidia-1@1.0.0` stays registered and frozen; it differs only as listed in §0.1, and its full text is `docs/rulesets/perfidia-1-v1.0.0.md`.
 >
-> - Published versions are frozen. Any change to behaviour, defaults, tables or agent-visible text (cheat sheet, error wording) ships as a new version, such as `perfidia-1@1.1.0`, with its own header; matches recorded under 1.0.0 keep re-simulating exactly.
+> - Published versions are frozen. Any change to behaviour, defaults, tables or agent-visible text (cheat sheet, error wording) ships as a new version, such as `perfidia-1@1.2.0`, with its own header; matches recorded under 1.1.0 (or 1.0.0) keep re-simulating exactly under their own version.
 > - A match may override config numbers. The override is validated by this ruleset's schema and by the checks of `docs/architecture.md` §3.6, and the log stores the ruleset ref, the overrides, the effective config and its hash. Fields marked as fixed in §16 cannot be overridden.
 > - Engineering notes:
 >   - The ruleset ref replaces an `id` field in the config. The §16 schema lives in the ruleset module, not in `protocol`. The sine table of §2.2 is a code constant of the ruleset, not a config field.
 >   - Materialisation (§1.5) happens only inside actions and event handlers. Views and validation compute stock and trickled units without writing (architecture §4.3).
->   - The pacing criteria of §19.5 are measured and reported by `sim batch --pacing`, never asserted. A failed criterion becomes a proposal for `perfidia-1@1.1.0`.
+>   - The pacing criteria of §19.5 are measured and reported by `sim batch --pacing`, never asserted. A failed criterion becomes a proposal for a later version.
 
 > **Status.** These are the final V1 rules for phase 1 (engine, scripted bots, no LLM). They are the source of truth for `protocol`, `engine`, `gateway`, `bots` and `sim`.
 >
@@ -19,7 +19,7 @@
 
 **Contents:**
 
-- 0 Cheat sheet
+- 0 Cheat sheet, and 0.1 Changes from 1.0.0
 - 1 Conventions and determinism
 - 2 Map
 - 3 Starting state
@@ -28,7 +28,7 @@
 - 6 Units
 - 7 Movements
 - 8 Combat
-- 9 Sieges, conquest, the Crown, elimination
+- 9 Sieges, conquest, Olympus, elimination
 - 10 Espionage
 - 11 Diplomacy
 - 12 Visibility
@@ -49,30 +49,79 @@ The `rules` tool returns this block verbatim, followed by the config and the der
 ```
 TIME        integer game-seconds. 1 day = 86400. Match = 7 days = 604800.
             No attack launches before 12:00 (43200). Capitals cannot be besieged before day 3 (172800).
-TRAVEL      same island: 1 h. Other island: tiles × 60 s (with transports), × 45 s (warships only),
+TRAVEL      same island: 1 h. Other island: tiles × 60 s (with transports), × 45 s (triremes only),
             × 30 s (spy, no units). Never less than 1 h. Same time both ways. view_map lists them.
             An incoming attack shows its origin, owner, launch and arrival times, never its units.
-            Its pace therefore shows whether it is warships only.
+            Its pace therefore shows whether it is triremes only.
             A return heading into a city you besiege shows its owner and times only, never its origin.
-PRODUCTION  producer level L: 50 + 20L + 5L² per hour. Frontier ×1.5, inner/hub ×1.25, Crown ×1.5.
+PRODUCTION  producer level L: 50 + 20L + 5L² per hour. Frontier ×1.5, inner/hub ×1.25, Olympus ×1.5.
 STORAGE     warehouse L holds 60L² + 280L + 660 of each resource. 100·L of each is safe from loot.
-POPULATION  hall H allows 2H² + 20H + 40 pop. Every unit homed in the city counts, wherever it is.
-BUILD       level L costs base × (L² + 3L + 6) / 10. It takes baseTime × (L² + 3L + 6) / (9 + hall) s.
+POPULATION  acropolis L allows 2L² + 20L + 40 pop. Every unit homed in the city counts, wherever it is.
+BUILD       level L costs base × (L² + 3L + 6) / 10. It takes baseTime × (L² + 3L + 6) / (9 + acropolis) s.
 RECRUIT     unit time = baseTime × 10 / (9 + barracks or harbor level). Units arrive one by one.
+UNITS       hoplite defends (atk 5, def 20, carries 10). peltast attacks (atk 20, def 5, carries 50).
+            settler founds a city or holds a siege. transport carries 20 pop across water.
+            trireme fights only at sea (naval 50). Only hoplites and peltasts fight on land.
 SETTLER     450 wood / 450 stone / 750 gold × k, where k = your cities + your settlers (k ≤ 10).
-COMBAT      naval phase (only across water): warships 50 each. Losing it sinks the whole attack.
-            land phase: A = Σ attack  vs  D = (Σ defense + 50 + 20·hall) × (1 + 5%·wall).
+COMBAT      naval phase (only across water): triremes 50 each. Losing it sinks the whole attack.
+            land phase: A = Σ attack  vs  D = (Σ defense + 50 + 20·acropolis) × (1 + 5%·wall).
             The defender wins ties. Morale: −10% attack per city you own above the foe (floor 70%).
 LOSSES      The loser loses everything in that phase. The winner loses (loser/winner)² of each stack.
             Example: winning at 2:1 costs 25%; at 3:2 it costs 44%. Below 1.41:1 a lone settler dies.
-AFTER A WIN all defenders die and the wall drops 1. With no settler alive: loot (raider carries 50).
+AFTER A WIN all defenders die and the wall drops 1. With no settler alive: loot (peltast carries 50).
             With a settler alive: a public 6 h SIEGE. The city is yours at the end unless someone
             kills every settler in your garrison first.
-SCORE       100 per city + 1 per building level + 100 for the Crown
+SCORE       100 per city + 1 per building level + 100 for Olympus
             + 1 per 10 enemy pop killed (capped at 1/4 of your city points).
-WIN         From day 4: a bloc (alliance or lone player) holding ≥ 40% of all cities (and ≥ 2N)
-            for 24 h in public. Otherwise the highest score at the end of day 7.
+WIN         From day 4: a bloc (alliance or lone player) holding ≥ 16 cities (35% of the 43 city slots),
+            ≥ 2 of them taken, for 24 h in public. The countdown must start by D7 00:00 to end in time.
+            A city counts as taken when its owner conquered it and no member of the owner's bloc ever
+            held it. Otherwise the highest score at the end of day 7.
 ```
+
+This is the sheet at N = 6. The WIN numbers depend on N (the threshold counts the map's city slots, §13.3): 16 cities of 43 slots at N = 6, 18 of 50 at 7, 18 of 49 at 8, 20 of 55 at 9, 22 of 61 at 10, 24 of 67 at 11 and 26 of 73 at 12. The sheet follows the config:
+
+- UNITS gives each land unit's role from its numbers ("defends" when its defense is the larger, "attacks" when its attack is);
+- the WIN line names the floor per player only when it is the larger term ("≥ 18 cities (3 per player; 35% of the 43 city slots is only 16)"), and the last second a countdown can start, `matchEnd − dominationHold`;
+- with `victory.dominationMinConquests` at 0 the taken clause and its definition drop out;
+- when no countdown could end by `matchEnd` (`dominationStart + dominationHold > matchEnd`, e.g. a match of 3 days or less) the WIN line reads "Domination is off in this match: the highest score at the end of day D wins."
+
+### 0.1 Changes from 1.0.0
+
+`perfidia-1@1.1.0` changes `perfidia-1@1.0.0` in the three ways below. The only default number that changes is the domination share (item 2); every other number, formula, table and tie-break is unchanged, and so are the error codes and wording, the event types (`domination_started` gains two fields) and the gateway's interface text. The cheat sheet gains a UNITS line and a new WIN line (§0). A match recorded under 1.0.0 replays only under 1.0.0 (`docs/rulesets/perfidia-1-v1.0.0.md`).
+
+1. **The Greek setting (a reskin, no new mechanic).** The agent-visible ids below are renamed, with the config keys that name them. Each 1.0.0 id has exactly one 1.1.0 counterpart, on its row (the mapping is one-to-one), but each version accepts only its own ids: 1.1.0 rejects `hall`, `guard` and the other 1.0.0 ids as unknown, with the error that lists its own. The new unit names no longer say which unit attacks (1.0.0's `guard` and `raider` did), so the cheat sheet's UNITS line gives each unit's role from its numbers.
+
+   | Kind                                    | 1.0.0                | 1.1.0                  |
+   | --------------------------------------- | -------------------- | ---------------------- |
+   | buildings                               | `hall`               | `acropolis`            |
+   |                                         | `lumber`             | `sawmill`              |
+   |                                         | `mine`               | `goldmine`             |
+   | units                                   | `guard`              | `hoplite`              |
+   |                                         | `raider`             | `peltast`              |
+   |                                         | `warship`            | `trireme`              |
+   | prize island kind, city tag, start seed | `crown`              | `olympus`              |
+   | score key                               | `scoring.crownBonus` | `scoring.olympusBonus` |
+   | public city flag (§12)                  | `crown: true`        | `olympus: true`        |
+   | travel probe of `view_map`              | `warship`            | `trireme`              |
+   | prose                                   | the Crown            | Olympus                |
+
+   Kept on purpose:
+   - **Resources** `wood`, `stone`, `gold`: they belong to the protocol (the `send_resources` and `spy` arguments, the resource objects) and to the interface text every ruleset shares, so renaming them would change what 1.0.0 agents read. Kept pending the owner's approval.
+   - **Positional island kinds** `home`, `backyard`, `frontier`, `inner`, `hub`: agents reason with them (near-safe or contested), and config keys echo them (`map.radius.backyardOffset`, `frontierOffset`, `innerOffset`, `hub`, `map.hubMaxPlayers`). Kept pending the owner's approval.
+   - `quarry`, `warehouse`, `barracks`, `harbor`, `wall`, `settler`, `transport`: generic words of the setting, echoed by config keys (`economy.warehouseCap`, `movement.shipment.perHarborLevel`, `combat.wallPmPerLevel`, `spy.counterPerWall`, `settler.*`) and by the recruit queues `barracks` and `harbor`.
+
+2. **Domination by conquest (§13.3).** The threshold is 350‰ of the map's city slots, a number fixed for the map (Olympus included), instead of 400‰ of the cities that exist, and a bloc must also hold `victory.dominationMinConquests` (default 2) **taken** cities: cities its members conquered (§9.4, Olympus included) that no member of the bloc ever owned. A former owner's recapture is not taken, and neither is a city conquered from a player who is now in the same bloc (a trade staged before allying, an ally's recapture of a member's city); a conquest that follows a betrayal counts, since the betrayer leaves the alliance first. The views show every taken city and its former owners, and every bloc's cities and taken cities next to the threshold (§12, §13.2); `domination_started` also carries `taken` and `needTaken`. A founding no longer moves the threshold, so it never cancels a countdown. A countdown starts only while it can still end by `matchEnd`, i.e. until `matchEnd − dominationHold` (D7 00:00 by default); 1.0.0 also started countdowns that could only expire.
+3. **Config validation (§16).** `victory.dominationPm` must be within 1..1000, `victory.dominationMinPerPlayer` within 1..1000, `victory.dominationMinConquests` within 0..1000 and every `map.kinds.*.slots` at most 100, whether domination is on or off. For every N, the threshold must be ≥ 1 city and at most the map's city slots, and the taken cities asked for at most the threshold; each failing check is reported once, naming the N it fails for. 1.0.0 accepted 0 and 0 (every bloc qualified at the opening), a share above 1000‰ (domination silently off) and unbounded slots (with 10^14 frontier slots, 1.0.0 hangs in a bot run).
+
+**Why these values.** They were calibrated with the scripted bots before 1.1.0 was released: `sim batch --pacing`, bots pinned, the default lineup (`expander@2`, `rusher@3`, `turtle@3`, `opportunist@3`, `conqueror@3`) and the war-call lineup (`conqueror@3`, `opportunist@3`, `turtle@3`, `conqueror@3`, `expander@2`, `rusher@3`), 60 seeds at 6 seats (120 for the war lineup at 350‰), 30 at 8 and 10 at 12, variants paired by seed; then, after the review that added the bloc rule for taken cities, the countdown cutoff and the bots' reading of the taken cities, again at 6 seats (60 seeds per lineup, with 12 h and 18 h holds), in an aggressive lineup (`conqueror@3` ×4, `opportunist@3` ×2, 20 seeds) and at 9 seats (20 seeds). Numbers and commands are in `docs/architecture.md` §17.5; wins per seat carry Wilson 95% intervals.
+
+- **Domination by conquest closes the peaceful path.** With the same bots, 1.0.0 ends 41 of 120 six-seat matches by domination, 39 of the 41 winning blocs holding 0 or 1 conquered city. Under 1.1.0 every countdown's bloc held at least 2 taken cities, none of them conquered from a member of the bloc. At 9 seats, blocs of three peaceful bots held up to 23 cities with no taken city, and started no countdown.
+- **350‰, not 400‰.** At 400‰ (18 cities at N = 6) blocs that fight reach the threshold only on days 6 and 7: 1 domination in 60 matches in each lineup. At 350‰ (16 cities) 4 of 60 default and 10 of 120 war matches (7–8%) ended by domination before the review; after it, 3 of 60 (5% [2, 14]) and 4 of 60 (7% [3, 16]), every winner a pair holding 16 or 17 cities, exactly 2 of them taken. Conquests, sieges, reliefs and wins per strategy do not move beyond 1–3 seat-wins between 350‰ and 400‰. 1 taken city (`dominationMinConquests` 1) reopens near-peaceful wins (20% of default and 32% of war matches, more than half of the winners holding a single taken city), so `dominationMinConquests` stays 2 and `dominationMinPerPlayer` 2.
+- **The hold against the end of the match, more than the share, sets how often domination happens.** These bots' blocs reach 16 cities late: of the 9 default and 10 war matches in 60 where a bloc met the rule, 6 and 5 met it first after D7 00:00, when a 24 h countdown could no longer end (before the review such countdowns started and expired: 19 of the 35 of the first calibration). A 12 h hold, paired by seed, doubles domination: 3 → 8 of 60 (default) and 4 → 8 (war), 13% [7, 24] each (90% interval of the difference per match [+0.03, +0.15] and [+0.02, +0.12]), seat wins moving by at most +4/−1 per strategy (McNemar p ≥ 0.125) and conquests by −3%; 18 h changes 0 and +1. In the aggressive lineup the 24 h hold gives 5 countdowns on day 6, all broken by rivals, and no domination; at 12 h the same 5 are broken and 3 countdowns started on D7 before 12:00 win (3 of 20). `dominationHold` stays 24 h on purpose: it is the window for counterplay that the decision report kept, and the lateness comes from the bots' founding pace (their peaceful blocs first reach 16 cities on days 6–7), not from a rule; LLM blocs that conquer earlier are not held back by it. If pilot matches show blocs qualifying on day 7, a 12 h hold is the measured lever. The 15–35% of matches ending by domination that the design aims at is not reached with these bots (5–7%), and no bot seeks taken cities: LLM alliances will tell.
+- **Seat counts.** The threshold asks more of some N than of others. A full bloc at its peaceful share (7 cities a player for N ≤ 7, 6 for N ≥ 8; alliances of `max(2, floor(N/3))`) is 2, 4, 6, 2, 4, 6 and 2 cities short of `need` for N = 6..12, i.e. per member 1, 2, 3, 0.67, 1.33, 2 and 0.5 cities above its share of the slots, before the 2 taken cities. Only N = 6 was measured with dominations: none in 90 matches at 8 seats (the best bloc 15 cities on average, 18 needed), 20 at 9 (largest bloc 16.7 on average, but blocs with 2 taken cities 9.1; 20 needed) and 20 at 12 (15–16 of 26). For 1.1.0 matches where domination should be a live path, use N = 6; by the arithmetic, 9 and 12 come next; at 7, 8, 10 and 11 domination is a long shot. A threshold per N (e.g. `allianceMax × floor((slots − 1) / N) + dominationMinConquests`) is an idea for a later version.
+- **No conquest trophy, on the evidence of the lineups, not of the cap.** A score bonus per taken city held (`scoring.conquestBonus`) and cheaper kills (`scoring.killPopPerPoint` 3–5 with `killCapPm` 500) were measured before the review. A trophy of 30 moves no winner in the default lineup, and in the war lineup moves 7 of 60 wins from `opportunist@3` (0.47 → 0.35 wins per seat, McNemar p = 0.016) to `conqueror@3`, `turtle@3` staying at 0: a significant rebalance in one lineup, none in the other. Cheaper kills lift `opportunist@3` to 0.52–0.55 wins per seat in the war lineup and its battle score from 4% to 8–13% of its points. The cap of 0.45 wins per seat cannot decide between these options with 30–60 seeds: a strategy's wins per seat move by about ±0.15 between seed sets (`opportunist@3`: 0.33 on default seeds 1–60, 0.10 [0.03, 0.26] on 61–90; 0.23 at 8 seats on seeds 1–30, 0.43 [0.27, 0.61] on 31–60; 0.48 [0.36, 0.61] on war seeds 1–60 after the review). Both are left out because their effect depends on the lineup, which only LLM play will show, and the score is 1.0.0's; the trophy of 30 stays an open option for a later version.
+- **Times unchanged.** A relief can reach 97–100% of sieges within the 6 h `siegeDuration` (by geometry: transport travel from the owner's or an ally's other city plus the 600 s urgent wake), but only 92–94% within 4 h at 12 seats, and a 4 h siege raised conquests by 19% and 7% in the two lineups, short of a rule-level case. `protectionEnd`, `capitalImmunityEnd` and `matchEnd` stay: first battles come at 15:00–16:10 on day 1, no capital fell and no player was eliminated, and the winner's median margin is 4–9%.
 
 ---
 
@@ -80,27 +129,27 @@ WIN         From day 4: a bloc (alliance or lone player) holding ≥ 40% of all 
 
 ### 1.1 Names and ids
 
-| Kind         | Ids, in canonical order                                                       | Notes                                                                                                                                         |
-| ------------ | ----------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
-| Resources    | `wood`, `stone`, `gold`                                                       |                                                                                                                                               |
-| Buildings    | `hall`, `lumber`, `quarry`, `mine`, `warehouse`, `barracks`, `harbor`, `wall` |                                                                                                                                               |
-| Units        | `guard`, `raider`, `settler`, `transport`, `warship`                          |                                                                                                                                               |
-| Island kinds | `crown`, `home`, `backyard`, `frontier`, `inner`, `hub`                       |                                                                                                                                               |
-| Players      | `p1..pN`                                                                      | seat order                                                                                                                                    |
-| Islands      | `i1..`                                                                        | generation order (§2.3)                                                                                                                       |
-| Cities       | `c1..`                                                                        | `c1..cN` are the capitals of `p1..pN`; `c(N+1)` is the Crown; founded cities take the next number. A city keeps its id when it changes owner. |
-| Movements    | `m` + 5 opaque characters, e.g. `m0k4qz`                                      | private kind (see below)                                                                                                                      |
-| Reports      | `r` + 5 opaque characters                                                     | battle and spy reports; private kind                                                                                                          |
-| Proposals    | `q` + 5 opaque characters                                                     | private kind                                                                                                                                  |
-| Alliances    | `a1..`                                                                        |                                                                                                                                               |
-| Messages     | `g` + 5 opaque characters                                                     | private kind                                                                                                                                  |
-| Queue items  | `#1..` per city                                                               | build items and recruit batches of one city share one counter                                                                                 |
+| Kind         | Ids, in canonical order                                                                 | Notes                                                                                                                                       |
+| ------------ | --------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| Resources    | `wood`, `stone`, `gold`                                                                 |                                                                                                                                             |
+| Buildings    | `acropolis`, `sawmill`, `quarry`, `goldmine`, `warehouse`, `barracks`, `harbor`, `wall` |                                                                                                                                             |
+| Units        | `hoplite`, `peltast`, `settler`, `transport`, `trireme`                                 |                                                                                                                                             |
+| Island kinds | `olympus`, `home`, `backyard`, `frontier`, `inner`, `hub`                               |                                                                                                                                             |
+| Players      | `p1..pN`                                                                                | seat order                                                                                                                                  |
+| Islands      | `i1..`                                                                                  | generation order (§2.3)                                                                                                                     |
+| Cities       | `c1..`                                                                                  | `c1..cN` are the capitals of `p1..pN`; `c(N+1)` is Olympus; founded cities take the next number. A city keeps its id when it changes owner. |
+| Movements    | `m` + 5 opaque characters, e.g. `m0k4qz`                                                | private kind (see below)                                                                                                                    |
+| Reports      | `r` + 5 opaque characters                                                               | battle and spy reports; private kind                                                                                                        |
+| Proposals    | `q` + 5 opaque characters                                                               | private kind                                                                                                                                |
+| Alliances    | `a1..`                                                                                  |                                                                                                                                             |
+| Messages     | `g` + 5 opaque characters                                                               | private kind                                                                                                                                |
+| Queue items  | `#1..` per city                                                                         | build items and recruit batches of one city share one counter                                                                               |
 
 - Ids of public kinds (players, islands, cities, alliances) are counters in creation order.
 - Ids of private kinds (movements, reports, proposals, messages) are **opaque**: 5 characters of lowercase Crockford base 32, from a permutation of (owner, the owner's own counter) keyed by a per-match secret that is not derived from the seed (`docs/architecture.md` §4.1). Their values and gaps reveal nothing about other players' activity, and their order is not creation order. The owner is the mover, the report's recipient, the proposer or the sender.
 - Ids are never reused.
 - Canonical orders apply to every loop, tie-break, serialisation and display.
-- All names are neutral and can be reskinned; the ids stay stable.
+- Ids are stable within a version. 1.1.0 renamed some of 1.0.0's (§0.1).
 
 ### 1.2 Integer maths
 
@@ -172,26 +221,26 @@ Resource stocks (§4.3) and trickling recruit batches (§6.3) are derived from c
 
 ### 2.1 Shape
 
-- The map has one ring of N home islands around a central **Crown** island.
+- The map has one ring of N home islands around a central **Olympus** island.
 - Between each pair of neighbouring homes there is a **frontier** island and an **inner** island, both equidistant from the two homes.
 - Behind each home there is a **backyard** island.
-- For N ≤ 7 a ring of N **hub** islands also surrounds the Crown, which keeps the island count at 30 or more.
+- For N ≤ 7 a ring of N **hub** islands also surrounds Olympus, which keeps the island count at 30 or more.
 - All cities on an island share its coordinates. Island size is cosmetic: display radius `8 + 4·slots`.
 
-| Kind             | Per    | Radius from centre | Angle | Slots                             | Richness  | Role                                                              |
-| ---------------- | ------ | ------------------ | ----- | --------------------------------- | --------- | ----------------------------------------------------------------- |
-| crown            | 1      | 0                  | –     | 1, held by the neutral Crown city | 1500‰     | late-game prize                                                   |
-| home             | sector | `R`                | `A_k` | 2 (slot 0 = capital)              | 1000‰     | start; slot 1 is a safe-ish first colony, 1 h walk                |
-| backyard         | sector | `R + 80 + jr_b`    | `A_k` | 1                                 | 1000‰     | own colony, ~1 h 20                                               |
-| frontier         | sector | `R + jr_f`         | `M_k` | 2                                 | **1500‰** | shared by neighbours k and k+1, ~1 h 30 from both: the day-1 race |
-| inner            | sector | `R − 80 + jr_i`    | `M_k` | 1                                 | 1250‰     | shared by the same pair, closer to the centre, ~1 h 50            |
-| hub (N ≤ 7 only) | sector | `60 + jr_h`        | `M_k` | 1                                 | 1250‰     | near the Crown, contested by everyone                             |
+| Kind             | Per    | Radius from centre | Angle | Slots                               | Richness  | Role                                                              |
+| ---------------- | ------ | ------------------ | ----- | ----------------------------------- | --------- | ----------------------------------------------------------------- |
+| olympus          | 1      | 0                  | –     | 1, held by the neutral Olympus city | 1500‰     | late-game prize                                                   |
+| home             | sector | `R`                | `A_k` | 2 (slot 0 = capital)                | 1000‰     | start; slot 1 is a safe-ish first colony, 1 h walk                |
+| backyard         | sector | `R + 80 + jr_b`    | `A_k` | 1                                   | 1000‰     | own colony, ~1 h 20                                               |
+| frontier         | sector | `R + jr_f`         | `M_k` | 2                                   | **1500‰** | shared by neighbours k and k+1, ~1 h 30 from both: the day-1 race |
+| inner            | sector | `R − 80 + jr_i`    | `M_k` | 1                                   | 1250‰     | shared by the same pair, closer to the centre, ~1 h 50            |
+| hub (N ≤ 7 only) | sector | `60 + jr_h`        | `M_k` | 1                                   | 1250‰     | near Olympus, contested by everyone                               |
 
 ### 2.2 Inputs and constants
 
 - **Inputs:** `matchSeed` (uint32) and `N` ∈ [6, 12].
 - **Home radius:** `R = homeRadius[N] = {6:180, 7:207, 8:235, 9:263, 10:291, 11:319, 12:348}`, i.e. `round(90 / sin(π/N))`. Neighbouring homes are therefore ≈ 180 tiles (3 h by transport) apart for every N.
-- **Centre:** `C = R + 120`. Coordinates are integer tiles, all ≥ 0, and the map spans `[0, 2C]²`. The Crown sits at `(C, C)`.
+- **Centre:** `C = R + 120`. Coordinates are integer tiles, all ≥ 0, and the map spans `[0, 2C]²`. Olympus sits at `(C, C)`.
 - **Angles** are in tenths of a degree (0..3599).
   - `SIN10K[d] = round(10000 · sin(d/10 °))` for d = 0..900 is a **committed 901-entry constant table**. Spot checks: [0] = 0, [300] = 5000, [450] = 7071, [600] = 8660, [900] = 10000. A unit test regenerates it.
   - `sinT(a)`, with a normalised to 0..3599:
@@ -213,7 +262,7 @@ All draws below use stream `map` unless stated.
    - `M_k = 10·rot + floor(3600·(2k+1) / (2N))`
 4. An island at polar position (r, a) has coordinates `x = C + rdiv(r · cosT(a), 10000)` and `y = C + rdiv(r · sinT(a), 10000)`.
 5. Ids:
-   - `i1` is the Crown.
+   - `i1` is Olympus.
    - Then, for k = 0..N−1 in order: home, backyard, frontier, inner, and hub if N ≤ 7.
    - Frontier k and inner k lie between home k and home (k+1) mod N.
 6. Seats: `perm = shuffle([0..N−1])` on stream `seats`. Player `p(j+1)` gets sector `perm[j]`, and its capital `c(j+1)` sits in slot 0 of that home island.
@@ -223,9 +272,9 @@ All draws below use stream `map` unless stated.
 
 ### 2.4 Resulting maps
 
-These figures use the median jitter. They are tiles · transport / warship-only / spy travel time (§7.2).
+These figures use the median jitter. They are tiles · transport / trireme-only / spy travel time (§7.2).
 
-| N   | R   | islands | slots | free slots per player | backyard            | frontier            | inner                | hub                  | Crown                | neighbour home       | opposite home         |
+| N   | R   | islands | slots | free slots per player | backyard            | frontier            | inner                | hub                  | Olympus              | neighbour home       | opposite home         |
 | --- | --- | ------- | ----- | --------------------- | ------------------- | ------------------- | -------------------- | -------------------- | -------------------- | -------------------- | --------------------- |
 | 6   | 180 | 31      | 43    | 6                     | 80 · 1h20/1h00/1h00 | 93 · 1h33/1h09/1h00 | 105 · 1h45/1h19/1h00 | 131 · 2h11/1h38/1h05 | 180 · 3h00/2h15/1h30 | 180 · 3h00/2h15/1h30 | 360 · 6h00/4h30/3h00  |
 | 7   | 207 | 36      | 50    | 6                     | 80 · 1h20/1h00/1h00 | 92 · 1h32/1h09/1h00 | 108 · 1h48/1h21/1h00 | 155 · 2h35/1h56/1h17 | 207 · 3h27/2h35/1h43 | 179 · 2h59/2h14/1h29 | 403 · 6h43/5h02/3h21  |
@@ -235,7 +284,7 @@ These figures use the median jitter. They are tiles · transport / warship-only 
 | 11  | 319 | 45      | 67    | 5                     | 80 · 1h20/1h00/1h00 | 90 · 1h30/1h08/1h00 | 112 · 1h52/1h24/1h00 | –                    | 319 · 5h19/3h59/2h39 | 179 · 2h59/2h14/1h29 | 631 · 10h31/7h53/5h15 |
 | 12  | 348 | 49      | 73    | 5                     | 80 · 1h20/1h00/1h00 | 90 · 1h30/1h08/1h00 | 112 · 1h52/1h24/1h00 | –                    | 348 · 5h48/4h21/2h54 | 180 · 3h00/2h15/1h30 | 696 · 11h36/8h42/5h48 |
 
-- **Slots:** 6N (7N for N ≤ 7) plus 1 for the Crown.
+- **Slots:** 6N (7N for N ≤ 7) plus 1 for Olympus.
 - **Free slots per player:**
   - 2 near-safe ones: the second home slot and the backyard.
   - About 3 shared with the two neighbours: frontier 2 + inner 1 per gap.
@@ -254,13 +303,13 @@ The test checks every N in 6..12 and every seed (fast-check over seeds, plus an 
 
 ## 3. Starting state
 
-|                         | Capital (each player)                                                     | Founded city                | Crown `c(N+1)` (neutral)                                      |
-| ----------------------- | ------------------------------------------------------------------------- | --------------------------- | ------------------------------------------------------------- |
-| Buildings               | hall 1, lumber 1, quarry 1, mine 1, warehouse 1; barracks, harbor, wall 0 | same as a capital           | every building at 5                                           |
-| Stock (wood/stone/gold) | 800 / 800 / 800                                                           | 300 / 300 / 300             | 3000 / 3000 / 3000, frozen while neutral (no production)      |
-| Units                   | 10 guards                                                                 | its escort, re-homed (§7.5) | 400 guards + 10 warships; they never regenerate and never act |
-| Pop used / cap          | 10 / 62                                                                   | escort pop / 62             | –                                                             |
-| Points                  | 105                                                                       | 105                         | 240 to its owner once captured (§13.1)                        |
+|                         | Capital (each player)                                                               | Founded city                | Olympus `c(N+1)` (neutral)                                      |
+| ----------------------- | ----------------------------------------------------------------------------------- | --------------------------- | --------------------------------------------------------------- |
+| Buildings               | acropolis 1, sawmill 1, quarry 1, goldmine 1, warehouse 1; barracks, harbor, wall 0 | same as a capital           | every building at 5                                             |
+| Stock (wood/stone/gold) | 800 / 800 / 800                                                                     | 300 / 300 / 300             | 3000 / 3000 / 3000, frozen while neutral (no production)        |
+| Units                   | 10 hoplites                                                                         | its escort, re-homed (§7.5) | 400 hoplites + 10 triremes; they never regenerate and never act |
+| Pop used / cap          | 10 / 62                                                                             | escort pop / 62             | –                                                               |
+| Points                  | 105                                                                                 | 105                         | 240 to its owner once captured (§13.1)                          |
 
 - **Relations, notes, queues:** empty. No alliances, no pacts.
 - **Attack protection:** no player can **launch** an `attack` before t = 43200 (12:00). Spying, support, shipments and founding are allowed from t = 0.
@@ -272,20 +321,20 @@ The test checks every N in 6..12 and every seed (fast-check over seeds, plus an 
 
 ### 4.1 Per-level values
 
-| L   | w(L) | production / h | warehouse cap | safe from loot | hall pop cap | base defense (hall) | wall factor | build divisor (9 + hall) | recruit factor 10 / (9 + L) |
-| --- | ---- | -------------- | ------------- | -------------- | ------------ | ------------------- | ----------- | ------------------------ | --------------------------- |
-| 1   | 10   | 75             | 1000          | 100            | 62           | 70                  | 1050‰       | 10                       | 1.00                        |
-| 2   | 16   | 110            | 1460          | 200            | 88           | 90                  | 1100‰       | 11                       | 0.91                        |
-| 3   | 24   | 155            | 2040          | 300            | 118          | 110                 | 1150‰       | 12                       | 0.83                        |
-| 4   | 34   | 210            | 2740          | 400            | 152          | 130                 | 1200‰       | 13                       | 0.77                        |
-| 5   | 46   | 275            | 3560          | 500            | 190          | 150                 | 1250‰       | 14                       | 0.71                        |
-| 6   | 60   | 350            | 4500          | 600            | 232          | 170                 | 1300‰       | 15                       | 0.67                        |
-| 7   | 76   | 435            | 5560          | 700            | 278          | 190                 | 1350‰       | 16                       | 0.63                        |
-| 8   | 94   | 530            | 6740          | 800            | 328          | 210                 | 1400‰       | 17                       | 0.59                        |
-| 9   | 114  | 635            | 8040          | 900            | 382          | 230                 | 1450‰       | 18                       | 0.56                        |
-| 10  | 136  | 750            | 9460          | 1000           | 440          | 250                 | 1500‰       | 19                       | 0.53                        |
+| L   | w(L) | production / h | warehouse cap | safe from loot | acropolis pop cap | base defense (acropolis) | wall factor | build divisor (9 + acropolis) | recruit factor 10 / (9 + L) |
+| --- | ---- | -------------- | ------------- | -------------- | ----------------- | ------------------------ | ----------- | ----------------------------- | --------------------------- |
+| 1   | 10   | 75             | 1000          | 100            | 62                | 70                       | 1050‰       | 10                            | 1.00                        |
+| 2   | 16   | 110            | 1460          | 200            | 88                | 90                       | 1100‰       | 11                            | 0.91                        |
+| 3   | 24   | 155            | 2040          | 300            | 118               | 110                      | 1150‰       | 12                            | 0.83                        |
+| 4   | 34   | 210            | 2740          | 400            | 152               | 130                      | 1200‰       | 13                            | 0.77                        |
+| 5   | 46   | 275            | 3560          | 500            | 190               | 150                      | 1250‰       | 14                            | 0.71                        |
+| 6   | 60   | 350            | 4500          | 600            | 232               | 170                      | 1300‰       | 15                            | 0.67                        |
+| 7   | 76   | 435            | 5560          | 700            | 278               | 190                      | 1350‰       | 16                            | 0.63                        |
+| 8   | 94   | 530            | 6740          | 800            | 328               | 210                      | 1400‰       | 17                            | 0.59                        |
+| 9   | 114  | 635            | 8040          | 900            | 382               | 230                      | 1450‰       | 18                            | 0.56                        |
+| 10  | 136  | 750            | 9460          | 1000           | 440               | 250                      | 1500‰       | 19                            | 0.53                        |
 
-The table comes from these formulas. Wall level 0 gives a factor of 1000‰.
+The table comes from these formulas, where H is the acropolis level. Wall level 0 gives a factor of 1000‰.
 
 | Quantity            | Formula                                         |
 | ------------------- | ----------------------------------------------- |
@@ -293,7 +342,7 @@ The table comes from these formulas. Wall level 0 gives a factor of 1000‰.
 | production per hour | `prod(L) = 5L² + 20L + 50`                      |
 | warehouse cap       | `cap(L) = 60L² + 280L + 660`                    |
 | safe from loot      | `protect = 100 · warehouse level`, per resource |
-| hall pop cap        | `pop(H) = 2H² + 20H + 40`                       |
+| acropolis pop cap   | `pop(H) = 2H² + 20H + 40`                       |
 | base defense        | `baseDef(H) = 20H + 50`                         |
 | wall factor         | `1000 + 50 · wall` ‰                            |
 
@@ -301,7 +350,7 @@ The table comes from these formulas. Wall level 0 gives a factor of 1000‰.
 
 ### 4.2 Production
 
-The production rate of a resource in a city, per game hour, is `rate = floor(prod(level of lumber | quarry | mine) × richness / 1000)`, where richness is the island's (§2.1). Example: lumber 5 on a frontier gives `floor(275 × 1500 / 1000) = 412` wood per hour.
+The production rate of a resource in a city, per game hour, is `rate = floor(prod(level of sawmill | quarry | goldmine) × richness / 1000)`, where richness is the island's (§2.1). Example: sawmill 5 on a frontier gives `floor(275 × 1500 / 1000) = 412` wood per hour.
 
 ### 4.3 Exact lazy accrual
 
@@ -315,7 +364,7 @@ The production rate of a resource in a city, per game hour, is `rate = floor(pro
 ### 4.4 Population
 
 - `used(city)` = Σ pop of every unit **homed** in the city, wherever it is (at home, moving, stationed elsewhere, in a siege garrison), plus the pop of units in the city's recruit queues.
-- A recruit order is accepted only if `used + order pop ≤ pop(completed hall level)`.
+- A recruit order is accepted only if `used + order pop ≤ pop(completed acropolis level)`.
 - Buildings use no population.
 - Units that die or are consumed free their pop at once.
 - Re-homing (founding, conquest, §7.7) may push `used` above the cap. That is allowed, but recruiting in that city is blocked until `used` falls back under the cap.
@@ -330,26 +379,26 @@ Every building has max level 10. The level-1 values below are the "base" used in
 
 | id          | Level-1 cost w/s/g | Base time (s) | Requires (projected levels) | Effect                                                                                                      |
 | ----------- | ------------------ | ------------- | --------------------------- | ----------------------------------------------------------------------------------------------------------- |
-| `hall`      | 90 / 90 / 60       | 1800          | –                           | pop cap; build speed `/(9+H)`; base defense `20H + 50`; settlers need hall 3                                |
-| `lumber`    | 20 / 50 / 30       | 1500          | –                           | wood production                                                                                             |
+| `acropolis` | 90 / 90 / 60       | 1800          | –                           | pop cap; build speed `/(9+H)`; base defense `20H + 50`; settlers need acropolis 3                           |
+| `sawmill`   | 20 / 50 / 30       | 1500          | –                           | wood production                                                                                             |
 | `quarry`    | 50 / 20 / 30       | 1500          | –                           | stone production                                                                                            |
-| `mine`      | 50 / 50 / 10       | 1500          | –                           | gold production                                                                                             |
+| `goldmine`  | 50 / 50 / 10       | 1500          | –                           | gold production                                                                                             |
 | `warehouse` | 60 / 60 / 20       | 1200          | –                           | storage cap; loot protection 100/level                                                                      |
-| `barracks`  | 60 / 80 / 50       | 1500          | hall 2                      | trains guard, raider and settler; recruit speed                                                             |
-| `harbor`    | 100 / 60 / 60      | 2400          | hall 3                      | trains transport (harbor 1) and warship (harbor 3); recruit speed; shipment capacity `500 + 500·harbor`     |
+| `barracks`  | 60 / 80 / 50       | 1500          | acropolis 2                 | trains hoplite, peltast and settler; recruit speed                                                          |
+| `harbor`    | 100 / 60 / 60      | 2400          | acropolis 3                 | trains transport (harbor 1) and trireme (harbor 3); recruit speed; shipment capacity `500 + 500·harbor`     |
 | `wall`      | 30 / 120 / 30      | 1500          | barracks 1                  | +5% land defense per level; spy counter-intel +50 per level; loses 1 level on every lost city battle (§8.6) |
 
 ### 5.2 Cost and duration
 
 - **Cost** of level L, per resource: `floor(base_r × w(L) / 10)`. Level 1 equals the base.
-- **Duration:** `max(1, floor(baseTime × w(L) / (9 + H)))`, where H is the city's **completed** hall level at the moment the item is enqueued. The `max(1, …)` changes no default value; it keeps overridden configs valid.
+- **Duration:** `max(1, floor(baseTime × w(L) / (9 + H)))`, where H is the city's **completed** acropolis level at the moment the item is enqueued. The `max(1, …)` changes no default value; it keeps overridden configs valid.
 
-| Example                            | Cost              | Duration |
-| ---------------------------------- | ----------------- | -------- |
-| hall 2 at H1                       | 144 / 144 / 96    | 2880 s   |
-| lumber 5 at H5                     | 92 / 230 / 138    | 4928 s   |
-| harbor 10 at H10                   | 1360 / 816 / 816  | 17178 s  |
-| hall 10 at H9 (finishing the hall) | 1224 / 1224 / 816 | 13600 s  |
+| Example                                      | Cost              | Duration |
+| -------------------------------------------- | ----------------- | -------- |
+| acropolis 2 at H1                            | 144 / 144 / 96    | 2880 s   |
+| sawmill 5 at H5                              | 92 / 230 / 138    | 4928 s   |
+| harbor 10 at H10                             | 1360 / 816 / 816  | 17178 s  |
+| acropolis 10 at H9 (finishing the acropolis) | 1224 / 1224 / 816 | 13600 s  |
 
 Maxing every building of one city costs ≈ 77 k resources (27.8 k / 32.1 k / 17.5 k) and ≈ 135 h of queue time. A turtle therefore maxes its capital only at the end of day 6 or during day 7.
 
@@ -358,8 +407,8 @@ Maxing every building of one city costs ≈ 77 k resources (27.8 k / 32.1 k / 17
 - One queue per city, holding **at most 5 items**, the active one included. Items run strictly one after another.
 - `build(city, [b1, b2, …])` enqueues the items in order. Each item is "+1 level of building b" and gets the city's next queue item number `#n` (build items and recruit batches of a city share one counter, never reused).
 - Its **projected target** is the completed level, plus items of b already queued, plus 1. It must be ≤ 10 at enqueue, and it sets the item's cost and duration.
-- **Requirements** are checked against **projected** levels (completed + queued earlier). So "hall 2, then barracks 1" can be queued in one call.
-- **The cost is paid at enqueue.** The item starts at `max(now, end of the previous item)` and ends at start + duration. Both are fixed at enqueue: a later hall upgrade does not speed up items already queued.
+- **Requirements** are checked against **projected** levels (completed + queued earlier). So "acropolis 2, then barracks 1" can be queued in one call.
+- **The cost is paid at enqueue.** The item starts at `max(now, end of the previous item)` and ends at start + duration. Both are fixed at enqueue: a later acropolis upgrade does not speed up items already queued.
 - **At its end (class 1), an item raises the building's current completed level by 1**, capped at 10. It normally lands on its projected target. After a wall breach (§8.6) it lands one level lower; cost and duration stay those of the projected level.
   - Example: wall 4 with "wall 5" queued as `#12`. A raid breaches the wall to 3. `#12` completes to wall 4. While `#12` is queued, a new `build(wall)` projects 3 + 1 + 1 = 5.
 - **Cancel** is a tail cancel: `cancel_queue(city, item)` removes that item **and every later item of its queue**, so the remaining end times never move.
@@ -376,21 +425,21 @@ Maxing every building of one city costs ≈ 77 k resources (27.8 k / 32.1 k / 17
 
 ### 6.1 Stats
 
-| id          | Domain | Attack | Defense | Naval | Carry | Capacity | Pop | Cost w/s/g          | Base time (s) | Queue    | Requires           |
-| ----------- | ------ | ------ | ------- | ----- | ----- | -------- | --- | ------------------- | ------------- | -------- | ------------------ |
-| `guard`     | land   | 5      | 20      | –     | 10    | –        | 1   | 30 / 60 / 30        | 300           | barracks | barracks 1         |
-| `raider`    | land   | 20     | 5       | –     | 50    | –        | 1   | 50 / 20 / 60        | 300           | barracks | barracks 1         |
-| `settler`   | land   | 0      | 0       | –     | 0     | –        | 10  | 450 / 450 / 750 × k | 5400          | barracks | barracks 2, hall 3 |
-| `transport` | naval  | –      | –       | 0     | –     | 20 pop   | 2   | 120 / 40 / 80       | 1200          | harbor   | harbor 1           |
-| `warship`   | naval  | –      | –       | 50    | –     | –        | 4   | 150 / 100 / 250     | 2400          | harbor   | harbor 3           |
+| id          | Domain | Attack | Defense | Naval | Carry | Capacity | Pop | Cost w/s/g          | Base time (s) | Queue    | Requires                |
+| ----------- | ------ | ------ | ------- | ----- | ----- | -------- | --- | ------------------- | ------------- | -------- | ----------------------- |
+| `hoplite`   | land   | 5      | 20      | –     | 10    | –        | 1   | 30 / 60 / 30        | 300           | barracks | barracks 1              |
+| `peltast`   | land   | 20     | 5       | –     | 50    | –        | 1   | 50 / 20 / 60        | 300           | barracks | barracks 1              |
+| `settler`   | land   | 0      | 0       | –     | 0     | –        | 10  | 450 / 450 / 750 × k | 5400          | barracks | barracks 2, acropolis 3 |
+| `transport` | naval  | –      | –       | 0     | –     | 20 pop   | 2   | 120 / 40 / 80       | 1200          | harbor   | harbor 1                |
+| `trireme`   | naval  | –      | –       | 50    | –     | –        | 4   | 150 / 100 / 250     | 2400          | harbor   | harbor 3                |
 
 - **Roles.**
-  - Guards and raiders fight in the land phase. Guards defend; raiders attack and carry loot.
+  - Hoplites and peltasts fight in the land phase. Hoplites defend; peltasts attack and carry loot.
   - Settlers found cities or hold sieges and never fight.
   - Transports carry land units and never fight.
-  - Warships fight only in the naval phase.
-- **Sea pace** (s per tile): transport 60, warship 45 (§7.2).
-- **Cost identity.** Buildings run on wood and stone, units mostly on gold. Guards need stone; raiders and ships need wood.
+  - Triremes fight only in the naval phase.
+- **Sea pace** (s per tile): transport 60, trireme 45 (§7.2).
+- **Cost identity.** Buildings run on wood and stone, units mostly on gold. Hoplites need stone; peltasts and ships need wood.
 - Recruitment requirements use **completed** levels.
 
 ### 6.2 Settler cost
@@ -406,7 +455,7 @@ Maxing every building of one city costs ≈ 77 k resources (27.8 k / 32.1 k / 17
 - Each queue holds **at most 5 batches**, run in sequence. A batch is `(unit, count)` with 1 ≤ count ≤ 500 (settler: 1).
 - `recruit(city, [{unit, count}, …])` enqueues the batches in order.
 - Cost and pop are reserved at enqueue.
-- **Per-unit time:** `u = max(1, floor(baseTime × 10 / (9 + L)))`, where L is the queue building's completed level at enqueue. Examples: guard 300 s at barracks 1, 214 s at 5, 157 s at 10.
+- **Per-unit time:** `u = max(1, floor(baseTime × 10 / (9 + L)))`, where L is the queue building's completed level at enqueue. Examples: hoplite 300 s at barracks 1, 214 s at 5, 157 s at 10.
 - **Trickle.** A batch that starts at s (= `max(now, end of the previous batch)`) completes unit j (1-based) at `s + j·u`. Completed units are at home immediately; the engine materialises them lazily (§1.5). A batch-end event fires at `s + n·u` (class 2).
 - Each batch gets the city's next queue item number `#n` (§5.3).
 - **Cancel** is a tail cancel: `cancel_queue(city, item)` removes that batch and every later batch of its queue.
@@ -448,7 +497,7 @@ travel(islandA, islandB, pace) = sameIslandTravel                         if A =
 | Group                                                                            | Pace (s/tile) |
 | -------------------------------------------------------------------------------- | ------------- |
 | any group with a transport, or with no ship at all (homebound groups, shipments) | 60            |
-| warships only                                                                    | 45            |
+| triremes only                                                                    | 45            |
 | spy                                                                              | 30            |
 
 - A group's pace is that of its **slowest** ship.
@@ -466,13 +515,13 @@ The gateway explains each failure with numbers, and the engine re-checks every c
 - The transport rule (§6.4) holds.
 - t < 604800.
 
-| Kind     | Extra checks                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
-| -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| attack   | t ≥ 43200; the gateway cap of 20 attack launches per player per game day (§14); the target is a city the mover does not own, or the mover's own city while it is besieged (relief); the target is not besieged by the mover (send `support` instead); at least one land unit with attack > 0, or, across water, at least one warship. The movement records its **foe**: the besieger if the target is besieged at launch, otherwise the owner (a player, or "neutral" for the Crown). |
-| support  | The target is a city other than the origin: a player-owned city, or a besieged city when the mover is its besieger (the neutral Crown included, §9.2, §9.6). If the target is besieged, only its besieger may support it. The movement records its **party**: the besieger if the target is besieged, otherwise the target's owner.                                                                                                                                                   |
-| found    | The target island has ≥ 1 free slot at departure. At least 1 settler.                                                                                                                                                                                                                                                                                                                                                                                                                 |
-| spy      | The target is a city the mover does not own. `100 ≤ gold ≤ stock`; the gold is paid at departure.                                                                                                                                                                                                                                                                                                                                                                                     |
-| shipment | The target is a player-owned city other than the origin and is not besieged. Total load ≥ 1. The cargo in flight from the origin, plus this one, must be ≤ `500 + 500 · harbor(origin)`. Cargo in flight counts the origin's shipments and the returns created by bouncing them, until they arrive. The resources are paid at departure.                                                                                                                                              |
+| Kind     | Extra checks                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| attack   | t ≥ 43200; the gateway cap of 20 attack launches per player per game day (§14); the target is a city the mover does not own, or the mover's own city while it is besieged (relief); the target is not besieged by the mover (send `support` instead); at least one land unit with attack > 0, or, across water, at least one trireme. The movement records its **foe**: the besieger if the target is besieged at launch, otherwise the owner (a player, or "neutral" for Olympus). |
+| support  | The target is a city other than the origin: a player-owned city, or a besieged city when the mover is its besieger (the neutral Olympus included, §9.2, §9.6). If the target is besieged, only its besieger may support it. The movement records its **party**: the besieger if the target is besieged, otherwise the target's owner.                                                                                                                                               |
+| found    | The target island has ≥ 1 free slot at departure. At least 1 settler.                                                                                                                                                                                                                                                                                                                                                                                                               |
+| spy      | The target is a city the mover does not own. `100 ≤ gold ≤ stock`; the gold is paid at departure.                                                                                                                                                                                                                                                                                                                                                                                   |
+| shipment | The target is a player-owned city other than the origin and is not besieged. Total load ≥ 1. The cargo in flight from the origin, plus this one, must be ≤ `500 + 500 · harbor(origin)`. Cargo in flight counts the origin's shipments and the returns created by bouncing them, until they arrive. The resources are paid at departure.                                                                                                                                            |
 
 ### 7.4 Recall and dismissal (`recall_troops`)
 
@@ -534,11 +583,11 @@ There are no other owner changes: founding creates a city, and cities are never 
 
 ### 8.1 Battle types and participants
 
-| Battle            | Trigger                             | Attacker side                                                            | Defender side                                                                                                                                                                                                                              | Wall and base defense                    |
-| ----------------- | ----------------------------------- | ------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------- |
-| city battle       | attack arrival (§7.5)               | the movement's units                                                     | every unit physically in the city **not owned by the attacker**: the owner's units at home and the owner's own stationed groups (units homed in its other cities), every stationed group of other players, or the Crown's neutral garrison | yes                                      |
-| relief battle     | an attack whose foe is the besieger | the movement's units                                                     | the garrison (the besieger's units)                                                                                                                                                                                                        | yes: the besieger holds the city's walls |
-| homecoming battle | a return to a besieged home         | the returning group (the attacker is its owner, the foe is the besieger) | the garrison                                                                                                                                                                                                                               | yes                                      |
+| Battle            | Trigger                             | Attacker side                                                            | Defender side                                                                                                                                                                                                                            | Wall and base defense                    |
+| ----------------- | ----------------------------------- | ------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------- |
+| city battle       | attack arrival (§7.5)               | the movement's units                                                     | every unit physically in the city **not owned by the attacker**: the owner's units at home and the owner's own stationed groups (units homed in its other cities), every stationed group of other players, or Olympus's neutral garrison | yes                                      |
+| relief battle     | an attack whose foe is the besieger | the movement's units                                                     | the garrison (the besieger's units)                                                                                                                                                                                                      | yes: the besieger holds the city's walls |
+| homecoming battle | a return to a besieged home         | the returning group (the attacker is its owner, the foe is the besieger) | the garrison                                                                                                                                                                                                                             | yes                                      |
 
 - **Stand-aside rule.** Units of the attacker that are stationed in the target ("trojan support") do not fight and are unharmed. If a siege starts, they join the garrison.
 - **Morale** (§8.2) is applied, then the **naval phase** runs if the movement's departure island ≠ target island, then the **land phase** runs if the attacker still has land units. For a homecoming, the departure island is the island the return left from.
@@ -547,7 +596,7 @@ There are no other owner changes: founding creates a city, and cities are never 
 ### 8.2 Morale
 
 - `m = clamp(1000 − 100 × (attacker's cities − foe's cities), 700, 1000)` ‰, using city counts at resolution time.
-- Against the neutral Crown, m = 1000.
+- Against the neutral Olympus, m = 1000.
 - Morale scales the attacker's naval and land strength. Bigger players hit smaller ones up to 30% weaker. That gives comebacks a chance without stopping a leader.
 
 ### 8.3 Losses
@@ -569,22 +618,22 @@ There are no other owner changes: founding creates a city, and cities are never 
 
 ### 8.4 Naval phase (only across water)
 
-- `Na = floor(Σ naval of attacking warships × m / 1000)` and `Nd = Σ naval of defending warships` (every owner on the defender side).
+- `Na = floor(Σ naval of attacking triremes × m / 1000)` and `Nd = Σ naval of defending triremes` (every owner on the defender side).
 - If Na = Nd = 0, there is no naval phase.
 - **Na > Nd:** the attacker wins.
   - Every defending ship is sunk, transports included.
-  - Attacking warships lose `cas(n, lossPm(Nd, Na))`.
+  - Attacking triremes lose `cas(n, lossPm(Nd, Na))`.
   - Attacking transports and the land units aboard are untouched.
 - **Na ≤ Nd** (so Nd > 0): the defender wins.
   - **The whole attacking movement is destroyed**, ships and land units aboard.
-  - Defending warships lose `cas(n, lossPm(Na, Nd))`.
+  - Defending triremes lose `cas(n, lossPm(Na, Nd))`.
   - The battle ends.
-- An attack with only warships has no land phase. After the naval phase its survivors return with no loot and no wall change: it is a harbour strike that clears the way for the next attack in a train.
+- An attack with only triremes has no land phase. After the naval phase its survivors return with no loot and no wall change: it is a harbour strike that clears the way for the next attack in a train.
 
 ### 8.5 Land phase
 
 - `A = floor(Σ attack of attacking land units × m / 1000)`
-- `D = floor((Σ defense of defending land units + baseDef(hall)) × (1000 + 50·wall) / 1000)`. D is always ≥ 70.
+- `D = floor((Σ defense of defending land units + baseDef(acropolis)) × (1000 + 50·wall) / 1000)`. D is always ≥ 70.
 - **A > D:** the attacker wins.
   - Every defending unit in the city is destroyed: land units **and** any remaining ships, of every owner.
   - Each attacking land stack, settlers included, loses `cas(n, lossPm(D, A))`.
@@ -605,18 +654,18 @@ Relief and homecoming battles never breach the wall and never loot (§9.3).
 
 ### 8.7 Loot
 
-- `carry = Σ carry × surviving attacking land units` (raider 50, guard 10).
+- `carry = Σ carry × surviving attacking land units` (peltast 50, hoplite 10).
 - `lootable_r = max(0, stock_r − 100 × warehouse)`, and `T = Σ lootable`.
 - If T ≤ carry, take everything lootable. Otherwise `take_r = floor(lootable_r × carry / T)`; the leftover capacity is unused.
 - The loot leaves the city at once and is added at home when the survivors arrive (capped by the warehouse).
 
-**Raid economics** for 100 raiders (13 000 resources) against a stocked target:
+**Raid economics** for 100 peltasts (13 000 resources) against a stocked target:
 
-| Odds  | Raiders lost (resources) | Loot carried |
-| ----- | ------------------------ | ------------ |
-| 2 : 1 | 25 (3 250)               | 3 750        |
-| 3 : 1 | 11 (1 430)               | 4 450        |
-| 4 : 1 | 6 (780)                  | 4 700        |
+| Odds  | Peltasts lost (resources) | Loot carried |
+| ----- | ------------------------- | ------------ |
+| 2 : 1 | 25 (3 250)                | 3 750        |
+| 3 : 1 | 11 (1 430)                | 4 450        |
+| 4 : 1 | 6 (780)                   | 4 700        |
 
 Raiding weak or empty-handed neighbours pays; trading at even odds does not.
 
@@ -625,7 +674,7 @@ Raiding weak or empty-handed neighbours pays; trading at even odds does not.
 - **Attacker credit:** the attacker gains the pop of every defending unit destroyed (ships included).
 - **Defender credit:** the pop of attacking units destroyed is split among the defending owners in proportion to the pop each had in the battle at its start: `floor(killed × ownerPop / totalDefenderPop)`.
   - If totalDefenderPop = 0, everything goes to the city owner (city battle) or to the besieger (garrison battle).
-  - The neutral Crown earns nothing.
+  - The neutral Olympus earns nothing.
   - Remainders are discarded.
 - **Anti-collusion.** No credit is given between two players who share an alliance or a pact at resolution, or did so within the previous 86400 s.
 - Consumed settlers are not "destroyed".
@@ -662,7 +711,7 @@ A train is a series of waves that land close together. Each wave resolves agains
 
 A typical train:
 
-1. A warship strike clears the harbour.
+1. A trireme strike clears the harbour.
 2. A mass raid kills most of the garrison, even if it loses: losing at 0.96:1 still kills 92% of the defenders.
 3. A small wave carrying 2 settlers starts the siege.
 
@@ -675,28 +724,28 @@ All numbers below were checked by script.
 **Setup (day 4):**
 
 - p2 (6 cities) attacks c14 of p5 (4 cities) from c9, 90 tiles away. Travel takes `isqrt(60² · 90²) = 5400` s.
-- Attack: 360 raiders, 1 settler, 19 transports (capacity 380 ≥ 360 + 10 pop) and 8 warships.
-- c14: hall 6, wall 4, warehouse 5, stock 3200 / 2500 / 1800.
-  - p5 at home: 120 guards, 30 raiders, 4 warships, 2 transports.
-  - Ally p7 stationed: 60 guards, 1 warship.
+- Attack: 360 peltasts, 1 settler, 19 transports (capacity 380 ≥ 360 + 10 pop) and 8 triremes.
+- c14: acropolis 6, wall 4, warehouse 5, stock 3200 / 2500 / 1800.
+  - p5 at home: 120 hoplites, 30 peltasts, 4 triremes, 2 transports.
+  - Ally p7 stationed: 60 hoplites, 1 trireme.
 
 **Battle:**
 
-| Step          | Computation                                                                            | Result                                                                                                                                                                                      |
-| ------------- | -------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Morale        | 1000 − 100·(6 − 4)                                                                     | m = 800                                                                                                                                                                                     |
-| Naval         | Na = floor(8·50·800/1000) = 320; Nd = 5·50 = 250                                       | attacker wins; q = lossPm(250, 320): r = 781, q = 609 → p2 loses cas(8, 609) = 5 warships. All 7 defending ships sink (p5: 4 warships + 2 transports; p7: 1 warship).                       |
-| Land          | A = floor(360·20·800/1000) = 5760; D = floor((180·20 + 30·5 + 170) × 1200/1000) = 4704 | attacker wins; q = lossPm(4704, 5760): r = 816, q = 665 → p2 loses cas(360, 665) = 239 raiders (121 survive) **and cas(1, 665) = 1 settler**. All 210 defending land units die. Wall 4 → 3. |
-| Outcome       | the settler died                                                                       | no siege: **raid**                                                                                                                                                                          |
-| Loot          | carry = 121·50 = 6050; lootable = 2700 / 2000 / 1300 (T = 6000 ≤ 6050)                 | p2 takes 2700 / 2000 / 1300                                                                                                                                                                 |
-| Battle points | p2 destroyed 24 ship pop + 210 land pop                                                | p2 +234                                                                                                                                                                                     |
-|               | defenders destroyed 5·4 + 239 + 10 = 269 pop; defending pop was p5 170 and p7 64       | p5 +195, p7 +73                                                                                                                                                                             |
+| Step          | Computation                                                                            | Result                                                                                                                                                                                       |
+| ------------- | -------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Morale        | 1000 − 100·(6 − 4)                                                                     | m = 800                                                                                                                                                                                      |
+| Naval         | Na = floor(8·50·800/1000) = 320; Nd = 5·50 = 250                                       | attacker wins; q = lossPm(250, 320): r = 781, q = 609 → p2 loses cas(8, 609) = 5 triremes. All 7 defending ships sink (p5: 4 triremes + 2 transports; p7: 1 trireme).                        |
+| Land          | A = floor(360·20·800/1000) = 5760; D = floor((180·20 + 30·5 + 170) × 1200/1000) = 4704 | attacker wins; q = lossPm(4704, 5760): r = 816, q = 665 → p2 loses cas(360, 665) = 239 peltasts (121 survive) **and cas(1, 665) = 1 settler**. All 210 defending land units die. Wall 4 → 3. |
+| Outcome       | the settler died                                                                       | no siege: **raid**                                                                                                                                                                           |
+| Loot          | carry = 121·50 = 6050; lootable = 2700 / 2000 / 1300 (T = 6000 ≤ 6050)                 | p2 takes 2700 / 2000 / 1300                                                                                                                                                                  |
+| Battle points | p2 destroyed 24 ship pop + 210 land pop                                                | p2 +234                                                                                                                                                                                      |
+|               | defenders destroyed 5·4 + 239 + 10 = 269 pop; defending pop was p5 170 and p7 64       | p5 +195, p7 +73                                                                                                                                                                              |
 
 **Lesson for agents:** win by more than 1.41 : 1, or bring 2 settlers.
 
 ---
 
-## 9. Sieges, conquest, the Crown, elimination
+## 9. Sieges, conquest, Olympus, elimination
 
 ### 9.1 Siege start
 
@@ -747,16 +796,16 @@ At `endsAt` (class 9, after every attack of that second), if the garrison still 
 
 Before t = 172800, a won conquest attack on a capital (`c1..cN`) is resolved as a raid, and the settlers return home. The launch is accepted, with a warning when the attack carries settlers and lands before 172800. From day 3 on, capitals are ordinary cities, and losing your last city eliminates you.
 
-### 9.6 The Crown
+### 9.6 Olympus
 
-- The neutral Crown city sits on the central island. It has every building at 5, a 3000 / 3000 / 3000 stock, and 400 guards + 10 warships that never regenerate and never act.
+- The neutral Olympus city sits on the central island. It has every building at 5, a 3000 / 3000 / 3000 stock, and 400 hoplites + 10 triremes that never regenerate and never act.
 - **Breaking it:**
   - land D = floor((8000 + 150) × 1250/1000) = 10187;
-  - naval Nd = 500, so attackers crossing water need ≥ 11 warships (11 lose 9; 16 lose 6).
+  - naval Nd = 500, so attackers crossing water need ≥ 11 triremes (11 lose 9; 16 lose 6).
 - It is raidable (500 of each resource is protected) and besiegeable like any city, with morale 1000.
 - Spying on it needs > 750 gold.
-- Once captured it is an ordinary city of its owner. It keeps its island's ×1.5 production and the **+100 Crown bonus** in score.
-- **Soften-then-snipe.** A losing wave of 500 raiders (A = 10000) still kills 96% of the garrison. The day's real drama is who lands the settler second.
+- Once captured it is an ordinary city of its owner. It keeps its island's ×1.5 production and the **+100 Olympus bonus** in score.
+- **Soften-then-snipe.** A losing wave of 500 peltasts (A = 10000) still kills 96% of the garrison. The day's real drama is who lands the settler second.
 
 ### 9.7 Elimination
 
@@ -771,23 +820,23 @@ The seat stops acting. Eliminated players rank last (§13.4).
 
 ### 9.8 Worked example 2: train, siege, reinforcement, relief
 
-All numbers below were checked by script. It continues example 1: c14 now has wall 3, no ships, and 40 newly recruited guards.
+All numbers below were checked by script. It continues example 1: c14 now has wall 3, no ships, and 40 newly recruited hoplites.
 
-| Step                                      | Computation                                                                                                                                                                                                                                                                              | Result                                                                                                                                                                                                          |
-| ----------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Wave                                      | p2 sends 150 raiders, 2 settlers, 9 transports (capacity 180 ≥ 170) and the 3 surviving warships. Naval: Nd = 0, so p2 wins at no cost. A = floor(150·20·800/1000) = 2400; D = floor((800 + 170) × 1150/1000) = 1115                                                                     | p2 wins: q = lossPm(1115, 2400) = 215 → 32 raiders lost, cas(2, 215) = 0 settlers lost. 40 guards die. Wall 3 → 2. **Siege starts**, ending 6 h later (public).                                                 |
-| Garrison                                  | 118 raiders, 2 settlers, 9 transports, 3 warships, all homed in c9                                                                                                                                                                                                                       | garrison D = floor((590 + 170) × 1100/1000) = 836. That is weak, so p2 sends 100 guards as `support`: 60 from c11 and 40 from c12. They join the garrison as two groups → D = floor((2590 + 170) × 1.1) = 3036. |
-| Relief by ally p7 (3 cities; morale 1000) | 4 warships + 130 raiders + transports. Naval: 200 > 150, q = lossPm(150, 200) = 562 → p7 loses 2 warships, and the garrison's 3 warships and 9 transports sink. Land: A = 2600 ≤ D = 3036                                                                                                | **relief lost**, all 130 raiders die. But q = lossPm(2600, 3036) = 732 hits the garrison: −86 raiders, −73 guards and **cas(2, 732) = 1 settler**. One settler is left, so the siege holds.                     |
-| Split stack (§8.3)                        | the 73 guards lost are split over the c11 group (60) and the c12 group (40): floor(73·60/100) = 43 rem. 80; floor(73·40/100) = 29 rem. 20; 1 loss left                                                                                                                                   | it goes to the larger remainder: c11 loses 44 (16 left), c12 loses 29 (11 left). 27 guards remain.                                                                                                              |
-| Alternative: 160 raiders                  | A = 3200 > 3036                                                                                                                                                                                                                                                                          | relief wins with q = 898 (144 lost, 16 go home). The garrison is wiped out and the **siege is broken** (public). No wall change, no loot.                                                                       |
-| Alternative: homecoming                   | after the lost relief, p5 recalls 60 raiders stationed in an ally's city on another island. Garrison: 32 raiders, 27 guards, 1 settler, no ships; D = floor((160 + 540 + 170) × 1100/1000) = 957. Attacker p5 (4 cities), foe p2 (6): morale 1000. Na = Nd = 0, no naval phase. A = 1200 | homecoming wins with q = lossPm(957, 1200) = 635: p5 loses cas(60, 635) = 38 raiders and 22 are home. The garrison is wiped out and the **siege is broken**. No wall change, no loot.                           |
+| Step                                      | Computation                                                                                                                                                                                                                                                                                  | Result                                                                                                                                                                                                            |
+| ----------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Wave                                      | p2 sends 150 peltasts, 2 settlers, 9 transports (capacity 180 ≥ 170) and the 3 surviving triremes. Naval: Nd = 0, so p2 wins at no cost. A = floor(150·20·800/1000) = 2400; D = floor((800 + 170) × 1150/1000) = 1115                                                                        | p2 wins: q = lossPm(1115, 2400) = 215 → 32 peltasts lost, cas(2, 215) = 0 settlers lost. 40 hoplites die. Wall 3 → 2. **Siege starts**, ending 6 h later (public).                                                |
+| Garrison                                  | 118 peltasts, 2 settlers, 9 transports, 3 triremes, all homed in c9                                                                                                                                                                                                                          | garrison D = floor((590 + 170) × 1100/1000) = 836. That is weak, so p2 sends 100 hoplites as `support`: 60 from c11 and 40 from c12. They join the garrison as two groups → D = floor((2590 + 170) × 1.1) = 3036. |
+| Relief by ally p7 (3 cities; morale 1000) | 4 triremes + 130 peltasts + transports. Naval: 200 > 150, q = lossPm(150, 200) = 562 → p7 loses 2 triremes, and the garrison's 3 triremes and 9 transports sink. Land: A = 2600 ≤ D = 3036                                                                                                   | **relief lost**, all 130 peltasts die. But q = lossPm(2600, 3036) = 732 hits the garrison: −86 peltasts, −73 hoplites and **cas(2, 732) = 1 settler**. One settler is left, so the siege holds.                   |
+| Split stack (§8.3)                        | the 73 hoplites lost are split over the c11 group (60) and the c12 group (40): floor(73·60/100) = 43 rem. 80; floor(73·40/100) = 29 rem. 20; 1 loss left                                                                                                                                     | it goes to the larger remainder: c11 loses 44 (16 left), c12 loses 29 (11 left). 27 hoplites remain.                                                                                                              |
+| Alternative: 160 peltasts                 | A = 3200 > 3036                                                                                                                                                                                                                                                                              | relief wins with q = 898 (144 lost, 16 go home). The garrison is wiped out and the **siege is broken** (public). No wall change, no loot.                                                                         |
+| Alternative: homecoming                   | after the lost relief, p5 recalls 60 peltasts stationed in an ally's city on another island. Garrison: 32 peltasts, 27 hoplites, 1 settler, no ships; D = floor((160 + 540 + 170) × 1100/1000) = 957. Attacker p5 (4 cities), foe p2 (6): morale 1000. Na = Nd = 0, no naval phase. A = 1200 | homecoming wins with q = lossPm(957, 1200) = 635: p5 loses cas(60, 635) = 38 peltasts and 22 are home. The garrison is wiped out and the **siege is broken**. No wall change, no loot.                            |
 
 ---
 
 ## 10. Espionage
 
 - `spy(from, target, gold)`: `gold ≥ 100` is paid at departure. Spies need no units and travel at pace 30. They are **invisible** to everyone but the sender and cannot be recalled.
-- Spying is allowed during protection and against the Crown, but not against your own cities. If the spier owns the target at arrival, the spy simply reports.
+- Spying is allowed during protection and against Olympus, but not against your own cities. If the spier owns the target at arrival, the spy simply reports.
 - **Counter-intel** `= 100 + 50 · wall + Σ land pop present in the city` (every owner, garrison included).
   - **Success** iff `gold > counter-intel`; ties go to the target.
   - The gold is spent either way.
@@ -865,21 +914,21 @@ Tribute is a `send_resources` shipment (§7.3). The recipient (and its allies) s
 
 ## 12. Visibility (fog of war)
 
-| Information                                                                                                                                                                                                | Who sees it                                                                               |
-| ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
-| Map: islands, coordinates, kind, richness, slots; every city's id, island, slot, owner, points, capital flag, siege flag and end time                                                                      | everyone                                                                                  |
-| Players: score and its parts (city points, battle score), city count, alliance, pacts with expiry, eliminated flag, domination countdowns, tie-break order, public feed. Raw battle points are not public. | everyone                                                                                  |
-| Own city in full: stock, rates, buildings, queues, pop, units present (foreign groups included), incoming movements                                                                                        | owner, **and the owner's alliance members** (live shared vision, cut off when they leave) |
-| Own units anywhere (stationed groups and garrisons abroad), own movements, settler k, own reports, own notes                                                                                               | owner only (`view_player` on yourself lists them)                                         |
-| Incoming **attack** on a city: id, origin city and owner, its recorded foe, launch and arrival times, "turned back" if recalled. No composition.                                                           | city owner, its allies, and owners of groups stationed there (the besieger included)      |
-| A return heading into a besieged city (a coming homecoming battle): id, owner, launch and arrival times. No composition, no origin.                                                                        | the besieger                                                                              |
-| Incoming support or shipment: full                                                                                                                                                                         | city owner and its allies                                                                 |
-| Spies and founding movements in flight                                                                                                                                                                     | sender only                                                                               |
-| In your briefing: the siege flag and end time of your own besieged cities, the sieges you hold (city, owner, end time) and every running domination countdown                                              | you (the countdowns are public anyway)                                                    |
-| Foreign city details                                                                                                                                                                                       | only through spy or battle reports, shown as timestamped snapshots                        |
-| Messages and proposals                                                                                                                                                                                     | sender and addressees only                                                                |
-| Battle and spy reports                                                                                                                                                                                     | as in §8.10 and §10                                                                       |
-| Everything, including private messages, notes and agent thoughts                                                                                                                                           | spectators, outside the game                                                              |
+| Information                                                                                                                                                                                                                                                                                     | Who sees it                                                                               |
+| ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
+| Map: islands, coordinates, kind, richness, slots; every city's id, island, slot, owner, points, capital flag, siege flag and end time, taken flag (for the owner's bloc, §13.3) and former owners (they follow from the public conquests and alliances, §11.5)                                  | everyone                                                                                  |
+| Players: score and its parts (city points, battle score), city count, taken cities, alliance, pacts with expiry, eliminated flag, every bloc's cities and taken cities against the domination threshold, domination countdowns, tie-break order, public feed. Raw battle points are not public. | everyone                                                                                  |
+| Own city in full: stock, rates, buildings, queues, pop, units present (foreign groups included), incoming movements                                                                                                                                                                             | owner, **and the owner's alliance members** (live shared vision, cut off when they leave) |
+| Own units anywhere (stationed groups and garrisons abroad), own movements, settler k, own reports, own notes                                                                                                                                                                                    | owner only (`view_player` on yourself lists them)                                         |
+| Incoming **attack** on a city: id, origin city and owner, its recorded foe, launch and arrival times, "turned back" if recalled. No composition.                                                                                                                                                | city owner, its allies, and owners of groups stationed there (the besieger included)      |
+| A return heading into a besieged city (a coming homecoming battle): id, owner, launch and arrival times. No composition, no origin.                                                                                                                                                             | the besieger                                                                              |
+| Incoming support or shipment: full                                                                                                                                                                                                                                                              | city owner and its allies                                                                 |
+| Spies and founding movements in flight                                                                                                                                                                                                                                                          | sender only                                                                               |
+| In your briefing: the siege flag and end time of your own besieged cities, the sieges you hold (city, owner, end time), every running domination countdown, and your bloc's cities and taken cities against the threshold                                                                       | you (all of it is public anyway)                                                          |
+| Foreign city details                                                                                                                                                                                                                                                                            | only through spy or battle reports, shown as timestamped snapshots                        |
+| Messages and proposals                                                                                                                                                                                                                                                                          | sender and addressees only                                                                |
+| Battle and spy reports                                                                                                                                                                                                                                                                          | as in §8.10 and §10                                                                       |
+| Everything, including private messages, notes and agent thoughts                                                                                                                                                                                                                                | spectators, outside the game                                                              |
 
 ---
 
@@ -887,7 +936,7 @@ Tribute is a `send_resources` shipment (§7.3). The recipient (and its allies) s
 
 ### 13.1 Score
 
-- **City points** = Σ over owned cities of `100 + Σ building levels + (100 if it is the Crown)`. A fresh city is worth 105, a maxed city 180, and the Crown 240.
+- **City points** = Σ over owned cities of `100 + Σ building levels + (100 if it is Olympus)`. A fresh city is worth 105, a maxed city 180, and Olympus 240. A taken city (§13.3) scores like any other.
 - **Battle score** = `min(floor(battlePoints / 10), floor(cityPoints / 4))`, where battle points come from §8.8.
 - **Score** = city points + battle score. It is computed live and public.
 
@@ -898,7 +947,9 @@ The leaderboard is public. It shows:
 - rank, player, score (city points and battle score), cities;
 - alliance, pacts;
 - eliminated flag;
-- every domination countdown, with the bloc's cities against the threshold.
+- the domination threshold in cities and taken cities, and the map's city slots;
+- every bloc (alliances by id, then lone players) with its members, cities and taken cities;
+- every domination countdown, with the same and its end.
 
 While the match runs, equal scores are ordered by cities, then the public tie-break order. Battle points are private (§12), so they break ties only in the final ranking (§13.4).
 
@@ -906,14 +957,24 @@ Army sizes are not public to players; spectators see them.
 
 ### 13.3 Victory
 
-1. **Domination (bloc).** A **bloc** is an alliance (its current members) or a player outside any alliance.
-   - A bloc qualifies when `t ≥ 259200` (day 4) and `blocCities ≥ max(2N, ceilDiv(400 × totalCities, 1000))`. totalCities counts every city, the Crown included, and a besieged city counts for its owner.
-   - Qualifying starts a public **24 h countdown** (ends at t + 86400, class 11).
-   - The countdown is cancelled the moment the condition fails **or the bloc's membership changes**. A new composition may start a fresh countdown in the same second.
-   - **Evaluation.** From t = 259200 (the `domination_open` timer, class 10), every bloc is evaluated at the end of every step, i.e. after every event and every accepted action (foundings included). First, the countdowns whose condition fails or whose membership changed are cancelled. Then countdowns start for qualifying blocs without one, in bloc order: alliances by id, then lone players by id (`compareIds`).
-   - When a countdown ends and the condition still holds, **the bloc wins** and the match ends.
+1. **Domination (bloc, by conquest).** A **bloc** is an alliance (its current members) or a player outside any alliance.
+   - **Taken cities.** A city is _taken_ for its owner's bloc when the owner got it by conquest (§9.4, Olympus included) and no member of the bloc ever owned it (for a lone player: the owner never owned it before).
+     - Founding never makes a city taken. A former owner that recaptures a city does not take it, even if it first got the city by conquest.
+     - A city conquered from a player who is now a member of the owner's bloc is not taken for that bloc: a city an ally recaptures for a member who had lost it, or two cities a player conquered from another before they allied. It counts again if they part, since taken cities follow the owner's bloc as it is now.
+     - A city taken from a pact partner, an outsider or a former ally counts: a conquest that follows a betrayal counts, since the betrayer leaves the alliance when its attack lands (§8.9) and the victim is outside its bloc.
+     - City views mark the cities taken for their owner's bloc and list every city's former owners (§12).
+   - **Threshold:** `need = max(dominationMinPerPlayer × N, ceilDiv(dominationPm × totalSlots, 1000))` cities, of which `dominationMinConquests` taken.
+     - `totalSlots` is the number of city slots of the map, Olympus included: 43, 50, 49, 55, 61, 67 and 73 for N = 6..12 (§2.4). It is fixed for the match.
+     - With the defaults (350‰, 2 per player, 2 taken), `need` is 16, 18, 18, 20, 22, 24 and 26 cities for N = 6..12, at least 2 of them taken. 1.0.0's share was 400‰ of the cities that existed; §0.1 says why 1.1.0 asks for 350‰ of the slots.
+     - Foundings never raise it, so a founding by another player never cancels a countdown (in 1.0.0 the threshold counted the cities that existed).
+   - **Qualifying:** a bloc qualifies when `t ≥ 259200` (day 4) and `blocCities ≥ need` and `blocTaken ≥ dominationMinConquests`. A besieged city counts for its owner, taken or not.
+   - Qualifying starts a public **24 h countdown** (ends at t + 86400, class 11) while it can still end by `matchEnd`: only until `t = matchEnd − dominationHold` (518400, D7 00:00). A countdown that ends at `matchEnd` still wins, since class 11 runs before the time victory. Its event `domination_started` gives the bloc's cities and taken cities and the threshold's (`threshold`, `needTaken`).
+   - The countdown is cancelled the moment the bloc stops qualifying, with reason `condition` (too few cities or too few taken cities), **or the bloc's membership changes**, with reason `membership`. Taken cities move with their owner when it joins or leaves. A new composition may start a fresh countdown in the same second.
+   - **Evaluation.** From t = 259200 (the `domination_open` timer, class 10), every bloc is evaluated at the end of every step, i.e. after every event and every accepted action (foundings included). First, the countdowns whose bloc no longer qualifies or whose membership changed are cancelled. Then countdowns start for qualifying blocs without one, in bloc order: alliances by id, then lone players by id (`compareIds`). A conquest is recorded in the step of its siege end (class 9), so a conquest in the second a countdown ends (class 11) is resolved first.
+   - When a countdown ends and the bloc still qualifies, **the bloc wins** and the match ends.
    - If several countdowns end in the same second, the order is: more cities, then higher total score, then the best tie-break position among the members.
-   - Expected effort, with every player at its peaceful share: about 4 to 9 conquests for a full bloc, depending on N. Domination is reachable, but only by conquering.
+   - **Expected effort.** A full bloc at its peaceful share (7 cities a player for N ≤ 7, 6 for N ≥ 8) is 2, 4, 6, 2, 4, 6 and 2 cities short of `need` for N = 6..12, and at least 2 of the cities it holds must be taken: domination needs conquest whatever the founding pace. The effort is lowest at N = 6, 9 and 12; with the bots, only N = 6 produced dominations (§0.1, "Seat counts").
+   - **Collusion.** The rule works per bloc: no member can count a city that it or an ally ever owned, so two players cannot trade cities and then ally (in the calibration batches, scripted bots did exactly that by accident: a `conqueror@3` took two cities from an `opportunist@3`, they allied on day 7 and started a countdown at once, which 1.1.0 no longer allows). What still counts needs a third party: a city taken from a player outside the bloc, such as a kingmaker who gives up its cities, or a former ally after a betrayal. Each needs the full city count and public 6 h sieges, and the former owners shown on every city make it visible.
 2. **Last standing.** If an elimination leaves exactly one player, that player wins at once.
 3. **Time.** At t = 604800, after every other event of that second, the highest score wins. This victory is individual, even for allies.
 
@@ -978,7 +1039,7 @@ Urgent, safety and start wakes are exempt from both budgets.
 | ------------------ | -------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `view_city`        | `city`                                                                                 | own or ally city: full; other: public fields + latest snapshot (§12)                                                                                                            |
 | `view_island`      | `island`                                                                               | kind, coords, richness, slots and occupants, travel times from each own city (§2, §7.2)                                                                                         |
-| `view_map`         | `fromCity?`                                                                            | all islands and cities; with `fromCity`, transport / warship / spy times to every island                                                                                        |
+| `view_map`         | `fromCity?`                                                                            | all islands and cities; with `fromCity`, transport / trireme / spy times to every island                                                                                        |
 | `view_player`      | `player`                                                                               | public profile, score parts, cities, relations; on yourself, also your movements, stationed groups abroad, settler k and next settler cost, open proposals and today's counters |
 | `leaderboard`      | –                                                                                      | §13.2                                                                                                                                                                           |
 | `rules`            | –                                                                                      | the interface rules (wakes, caps, formats), cheat sheet (§0), config (§16) and derived tables                                                                                   |
@@ -1014,84 +1075,84 @@ The tool names and argument shapes are the same in every ruleset. `slot` and `un
 - It acts every 2 h (12 decisions per game day, i.e. the own wake budget).
 - Economy first; settlers as soon as they are affordable.
 - It sends its settlers to the home slot, a frontier, the backyard, the inner island, then the next frontier.
-- Its surplus goes to guards and raiders at 1:1.
+- Its surplus goes to hoplites and peltasts at 1:1.
 - It never fights.
 
 These are exact rules, simulated at a 60 s step. A 1 h cadence moves the city rows by −4 h to +2 h; a 3 h cadence delays them by up to 9 h.
 
 | Time                    | Typical player                                                                                                                                      |
 | ----------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 0:00                    | H1, producers 75/h each, 800 of each resource, 10 guards                                                                                            |
-| 0:48 / 2:00 / 2:54      | hall 2, then hall 3, then barracks 2 (settlers unlocked)                                                                                            |
+| 0:00                    | H1, producers 75/h each, 800 of each resource, 10 hoplites                                                                                          |
+| 0:48 / 2:00 / 2:54      | acropolis 2, then acropolis 3, then barracks 2 (settlers unlocked)                                                                                  |
 | 6:00                    | settler 1 queued (450/450/750), with harbor 1 at 6:33                                                                                               |
 | **9:00**                | **city 2** on the free home slot (a 1 h walk)                                                                                                       |
-| **12:00**               | **protection ends.** The expander has 10 guards and 1 transport. A rush opener has ~20 raiders + 1 transport (it is wood-limited).                  |
+| **12:00**               | **protection ends.** The expander has 10 hoplites and 1 transport. A rush opener has ~20 peltasts + 1 transport (it is wood-limited).               |
 | 13:00 / ~13:30 / ~15:00 | earliest possible landings: same island, a frontier colony, a neighbour capital                                                                     |
 | 22:00 → **25:30**       | settler 2 (900/900/1500) → **city 3 on a frontier** (×1.5, shared with a neighbour): the day-1/day-2 race and first contact                         |
 | end of day 1            | 2 cities (the 3rd lands at 25:30); capital H3 with producers L3–4; income ≈ 420/430/310 per h; army ≈ 20 pop                                        |
 | 43:20                   | city 4 (backyard)                                                                                                                                   |
-| end of day 2            | 4 cities; income ≈ 1300/1100/1200 per h; army ≈ 200 pop (92 guards, 82 raiders, 5 transports); score ≈ 496                                          |
+| end of day 2            | 4 cities; income ≈ 1300/1100/1200 per h; army ≈ 200 pop (92 hoplites, 82 peltasts, 5 transports); score ≈ 496                                       |
 | 55:45                   | city 5 (inner, ×1.25)                                                                                                                               |
 | end of day 3            | 5 cities; capital H5, producers L7–8; income ≈ 2000–2300 per h each; army ≈ 680 pop; score ≈ 660                                                    |
 | **73:30**               | **city 6: the bot's 5-slot share of free land is used up.** From here, growth means conquest. For N ≤ 7 (6 free slots) the 7th city comes at 83:45. |
-| end of day 4            | 6 cities; income ≈ 3500–3700 per h each; army ≈ 1200 pop (563 guards, 529 raiders); capital H7                                                      |
-| end of day 5            | **pop cap reached** (2050 / 2050); capital hall and producers at 10; warehouses start to fill                                                       |
+| end of day 4            | 6 cities; income ≈ 3500–3700 per h each; army ≈ 1200 pop (563 hoplites, 529 peltasts); capital H7                                                   |
+| end of day 5            | **pop cap reached** (2050 / 2050); capital acropolis and producers at 10; warehouses start to fill                                                  |
 | end of day 6            | 2374 pop; capital wall 10                                                                                                                           |
-| end of day 7            | ≈ 2580 pop (1260 guards, 1226 raiders, 33 transports); capital fully maxed (80 levels); score ≈ 1029 (6 × 100 + 429 levels)                         |
+| end of day 7            | ≈ 2580 pop (1260 hoplites, 1226 peltasts, 33 transports); capital fully maxed (80 levels); score ≈ 1029 (6 × 100 + 429 levels)                      |
 
 ### 15.2 Defense targets
 
-| Target                                                           | D                     | What breaks it                                                                                                                                                                                                                                                                     |
-| ---------------------------------------------------------------- | --------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| fresh colony (H1, wall 0, empty)                                 | 70                    | 4 raiders; 20 raiders + 1 settler start a siege at q = 30                                                                                                                                                                                                                          |
-| fresh colony with a 10-guard escort                              | 270                   | 20 raiders (lose 9)                                                                                                                                                                                                                                                                |
-| capital at 12:00 (H3, 10 guards)                                 | 310                   | a 20-raider rush wins but keeps 8 raiders (400 carry): rushes are weak                                                                                                                                                                                                             |
-| day-2 colony (H3, 20 guards)                                     | 510                   | ~40 raiders                                                                                                                                                                                                                                                                        |
-| day-4 capital (H7, wall 2, 76 guards + 71 raiders)               | 2271                  | not one city's ~70 raiders. A **3-city train** of 70-raider waves landing a few minutes apart does it, if the defender gets no reinforcement in between: waves 1–2 lose but cut the defenders to 5 + 5 (D = 346); wave 3, carrying a settler, wins with q = 61 and starts a siege. |
-| day-7 capital (H10, wall 10, 200 guards + 200 raiders)           | 7875                  | a 2-wave train of 300 raiders each: wave 1 loses but kills 58%; wave 2 wins against D = 3525 (q = 344, 103 lost, a lone settler survives)                                                                                                                                          |
-| maxed turtle (H10, wall 10, 440 guards, the most one city holds) | 13575                 | three single-city waves across water (400 + 400 + 150 raiders): waves 1–2 lose but cut the guards to 62; wave 3 wins (q = 555). Defense trades about 2:1 in resources, but a coordinated offensive breaks any single city.                                                         |
-| the Crown                                                        | 10187 (+ 10 warships) | a 2-player or 3-city effort, plus ≥ 11 warships                                                                                                                                                                                                                                    |
+| Target                                                             | D                     | What breaks it                                                                                                                                                                                                                                                                       |
+| ------------------------------------------------------------------ | --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| fresh colony (H1, wall 0, empty)                                   | 70                    | 4 peltasts; 20 peltasts + 1 settler start a siege at q = 30                                                                                                                                                                                                                          |
+| fresh colony with a 10-hoplite escort                              | 270                   | 20 peltasts (lose 9)                                                                                                                                                                                                                                                                 |
+| capital at 12:00 (H3, 10 hoplites)                                 | 310                   | a 20-peltast rush wins but keeps 8 peltasts (400 carry): rushes are weak                                                                                                                                                                                                             |
+| day-2 colony (H3, 20 hoplites)                                     | 510                   | ~40 peltasts                                                                                                                                                                                                                                                                         |
+| day-4 capital (H7, wall 2, 76 hoplites + 71 peltasts)              | 2271                  | not one city's ~70 peltasts. A **3-city train** of 70-peltast waves landing a few minutes apart does it, if the defender gets no reinforcement in between: waves 1–2 lose but cut the defenders to 5 + 5 (D = 346); wave 3, carrying a settler, wins with q = 61 and starts a siege. |
+| day-7 capital (H10, wall 10, 200 hoplites + 200 peltasts)          | 7875                  | a 2-wave train of 300 peltasts each: wave 1 loses but kills 58%; wave 2 wins against D = 3525 (q = 344, 103 lost, a lone settler survives)                                                                                                                                           |
+| maxed turtle (H10, wall 10, 440 hoplites, the most one city holds) | 13575                 | three single-city waves across water (400 + 400 + 150 peltasts): waves 1–2 lose but cut the hoplites to 62; wave 3 wins (q = 555). Defense trades about 2:1 in resources, but a coordinated offensive breaks any single city.                                                        |
+| Olympus                                                            | 10187 (+ 10 triremes) | a 2-player or 3-city effort, plus ≥ 11 triremes                                                                                                                                                                                                                                      |
 
 ### 15.3 Why 7 days force contact and conflict
 
 1. **Scarce land.** Each player has only 5 free slots (6 for N ≤ 7), and only 2 of them are near-safe. The other 3 are shared with the two neighbours, and the best (×1.5 frontier) is 1 h 30 from both. An efficient player wants its 3rd city on day 1–2 and has used up its share by day 4. LLM agents will be slower, so expect day 4–5.
 2. **Contact on day 1.** Protection ends at 12:00. Colonies are cheap to besiege (D = 70), and the frontier race starts around 22:00–26:00.
-3. **Idle capacity.** Pop caps bind on day 5 and warehouses fill by day 6, so a passive empire wastes its production. The only ways to grow afterwards are conquest and the Crown.
+3. **Idle capacity.** Pop caps bind on day 5 and warehouses fill by day 6, so a passive empire wastes its production. The only ways to grow afterwards are conquest and Olympus.
 4. **Points are cities.** 100 per city, against 1 per building level. A maxed capital is worth 180; a conquered city swings about 2 × 140 between two players.
 5. **No peace ring.** Alliances are capped at max(2, ⌊N/3⌋). Any split of the ring into blocs that small leaves ≥ 3 borders between blocs, and the two pacts a player may hold expire every 48 h. The time victory is individual, so even allies compete.
-6. **Focal prize.** The Crown sits at the centre (1 h from every hub for N ≤ 7). It holds 9000 stock and is worth 240 points. Its garrison never regenerates, which invites "you soften it, I take it" deals and betrayals.
+6. **Focal prize.** Olympus sits at the centre (1 h from every hub for N ≤ 7). It holds 9000 stock and is worth 240 points. Its garrison never regenerates, which invites "you soften it, I take it" deals and betrayals.
 
 ### 15.4 Anti-turtle and anti-snowball
 
-| Anti-turtle                                                                        | Anti-snowball and comeback                                               |
-| ---------------------------------------------------------------------------------- | ------------------------------------------------------------------------ |
-| the wall loses a level on every lost city battle                                   | settler cost ×k (it resets when you shrink back to 1 city)               |
-| the square law rewards concentration, and trains crack any single city             | morale: up to −30% attack against smaller players                        |
-| spy counter-intel grows with the pop present, but gold always buys the information | 6 h public sieges with relief and homecoming battles                     |
-| full warehouses and pop caps waste idle production                                 | units of a lost city are re-homed, not erased                            |
-| cities are most of the score; battle points (capped) reward both sides             | domination needs a 24 h public hold and cancels on any membership change |
-| pacts expire; the Crown is a jackpot                                               | loot protection (100 per warehouse level); capitals immune until day 3   |
+| Anti-turtle                                                                        | Anti-snowball and comeback                                                                     |
+| ---------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------- |
+| the wall loses a level on every lost city battle                                   | settler cost ×k (it resets when you shrink back to 1 city)                                     |
+| the square law rewards concentration, and trains crack any single city             | morale: up to −30% attack against smaller players                                              |
+| spy counter-intel grows with the pop present, but gold always buys the information | 6 h public sieges with relief and homecoming battles                                           |
+| full warehouses and pop caps waste idle production                                 | units of a lost city are re-homed, not erased                                                  |
+| cities are most of the score; battle points (capped) reward both sides             | domination needs ≥ 2 taken cities and a 24 h public hold, and cancels on any membership change |
+| pacts expire; Olympus is a jackpot                                                 | loot protection (100 per warehouse level); capitals immune until day 3                         |
 
 ---
 
 ## 16. RulesConfig data shape
 
-The ruleset module (`config.ts`) defines this as a Zod schema. The `rules` tool returns it together with the derived per-level tables. The match stores `sha256(canonical JSON, keys sorted)` of the effective config. Numbers change only between matches. Fields marked _fixed_ are `z.literal` values: an override that changes them is rejected with a message naming the field as fixed by `perfidia-1@1.0.0`.
+The ruleset module (`config.ts`) defines this as a Zod schema. The `rules` tool returns it together with the derived per-level tables. The match stores `sha256(canonical JSON, keys sorted)` of the effective config. Numbers change only between matches. Fields marked _fixed_ are `z.literal` values: an override that changes them is rejected with a message naming the field as fixed by `perfidia-1@1.1.0`.
 
 ```ts
 type ResourceId = "wood" | "stone" | "gold";
 type Res = Record<ResourceId, number>;
 type BuildingId =
-  | "hall"
-  | "lumber"
+  | "acropolis"
+  | "sawmill"
   | "quarry"
-  | "mine"
+  | "goldmine"
   | "warehouse"
   | "barracks"
   | "harbor"
   | "wall";
-type UnitId = "guard" | "raider" | "settler" | "transport" | "warship";
-type IslandKind = "crown" | "home" | "backyard" | "frontier" | "inner" | "hub";
+type UnitId = "hoplite" | "peltast" | "settler" | "transport" | "trireme";
+type IslandKind = "olympus" | "home" | "backyard" | "frontier" | "inner" | "hub";
 type Quad = { a: number; b: number; c: number }; // a·L² + b·L + c
 type CitySeed = {
   buildings: Record<BuildingId, number>;
@@ -1122,12 +1183,12 @@ export interface RulesConfig {
     radius: { backyardOffset: 80; frontierOffset: 0; innerOffset: -80; hub: 60 };
     hubMaxPlayers: 7;
     radialJitter: 10;
-    kinds: Record<IslandKind, { slots: number; richnessPm: number }>;
-    // crown 1/1500, home 2/1000, backyard 1/1000, frontier 2/1500, inner 1/1250, hub 1/1250
+    kinds: Record<IslandKind, { slots: number; richnessPm: number }>; // slots ≤ 100
+    // olympus 1/1500, home 2/1000, backyard 1/1000, frontier 2/1500, inner 1/1250, hub 1/1250
   }; // SIN10K (§2.2) is a code constant of the ruleset, not a config field
-  start: { capital: CitySeed; newCity: CitySeed; crown: CitySeed };
-  // capital: L1 hall/producers/warehouse, 800×3, {guard:10}; newCity: same buildings, 300×3, {};
-  // crown: all buildings 5, 3000×3, {guard:400, warship:10}
+  start: { capital: CitySeed; newCity: CitySeed; olympus: CitySeed };
+  // capital: L1 acropolis/producers/warehouse, 800×3, {hoplite:10}; newCity: same buildings, 300×3, {};
+  // olympus: all buildings 5, 3000×3, {hoplite:400, trireme:10}
   economy: {
     resourceScale: 3600; // fixed
     maxLevel: 10;
@@ -1139,7 +1200,7 @@ export interface RulesConfig {
     popCap: Quad; // 2, 20, 40
     baseDefense: Quad; // 0, 20, 50
     buildTimeOffset: 9;
-    recruitTimeOffset: 9; // /(9 + hall), ×10/(9 + level)
+    recruitTimeOffset: 9; // /(9 + acropolis), ×10/(9 + level)
   };
   buildings: Record<
     BuildingId,
@@ -1182,11 +1243,15 @@ export interface RulesConfig {
   scoring: {
     cityBase: 100;
     perBuildingLevel: 1;
-    crownBonus: 100;
+    olympusBonus: 100;
     killPopPerPoint: 10;
     killCapPm: 250;
   };
-  victory: { dominationPm: 400; dominationMinPerPlayer: 2 };
+  victory: {
+    dominationPm: 350; // 1..1000, of the map's city slots
+    dominationMinPerPlayer: 2; // 1..1000
+    dominationMinConquests: 2; // 0..1000 taken cities (§13.3)
+  };
   gateway: {
     roundTripsPerWake: 8;
     toolCallsPerRoundTrip: 10;
@@ -1210,19 +1275,21 @@ export interface RulesConfig {
 - every `requires` refers to an existing building;
 - exactly one unit has `capacity > 0`, and it is naval;
 - `homeRadius` covers `players.min..max`;
-- `kinds.home.slots ≥ 1` (slot 0 holds the capital) and `kinds.crown.slots ≥ 1`;
+- `kinds.home.slots ≥ 1` (slot 0 holds the capital) and `kinds.olympus.slots ≥ 1`; every `kinds.*.slots` is at most 100, so the threshold's `dominationPm × totalSlots` stays a safe integer whether domination is on or off;
 - every derived build and recruit time is ≥ 1 (true by construction with `max(1, …)`);
 - every start stock fits the cap of its city's start warehouse level;
 - every world timer (`dominationStart`) is ≥ 1; timers after `matchEnd` are allowed and never fire;
+- `victory.dominationPm` is within 1..1000, `victory.dominationMinPerPlayer` within 1..1000 and `victory.dominationMinConquests` within 0..1000, each rejected with what the key means, whether domination is on or off;
+- while domination can open (`dominationStart ≤ matchEnd`), for every N: the threshold of §13.3 is ≥ 1 city and at most the map's city slots, and `dominationMinConquests` is at most the threshold. A failing check is reported once, at the key to change, naming every N it fails for (e.g. "N = 6..12: the domination threshold (48 cities at N = 6: …) is more than the map's city slots (43 at N = 6) …");
 - `siegeDuration > recallWindow`, so no movement can still be recalled when its home city changes hands (a besieged city sends nothing, and the recall formula of §7.4 ignores re-homing);
 - `sameIslandTravel ≥ minTravel`, so a same-island attack keeps the speed rule (§7.2);
 - `urgentMinGap < minTravel`, so an urgent warning always comes before the attack lands;
 - the generic gateway checks of `docs/architecture.md` §3.6: `selfWake.min ≥ 1`, `selfWake.min ≤ selfWake.max`, `safetyWake ≥ selfWake.min`, `roundTripsPerWake ≥ 1`, `toolCallsPerRoundTrip ≥ 1`, `ownWakesPerDay ≥ 1`, `socialWakesPerDay ≥ 1`, and `matchEnd ≥ 1`;
-- at match creation, every travel time between two islands, the same island included, is ≥ `minTravel` for transports, warships and spies.
+- at match creation, every travel time between two islands, the same island included, is ≥ `minTravel` for transports, triremes and spies.
 
 Nothing else is cross-checked: in particular `time.matchEnd` may be shorter than `capitalImmunityEnd` or `dominationStart` (1-day test matches use `time.matchEnd=86400`). To disable domination for a full-length match, set `time.dominationStart=604801`: a timer after `matchEnd` never fires, whereas 604800 would open domination in the last second.
 
-**Player count.** `players` is fixed at 6..12 for 1.0.0, and `homeRadius` covers only those N. Phase 2's 4-agent match is planned as a mixed N = 6 match (4 LLM seats and 2 bots); a smaller N needs a new version with `homeRadius` entries for 4 and 5 (`docs/architecture.md` §14).
+**Player count.** `players` is fixed at 6..12, as in 1.0.0, and `homeRadius` covers only those N. Phase 2's 4-agent match is planned as a mixed N = 6 match (4 LLM seats and 2 bots); a smaller N needs a new version with `homeRadius` entries for 4 and 5 (`docs/architecture.md` §14).
 
 ---
 
@@ -1236,11 +1303,11 @@ Nothing else is cross-checked: in particular `time.matchEnd` may be shorter than
   - First blood is possible on day 1. The reference bot's land share runs out early on day 4 (73 h), so LLM agents should run out on days 4–5.
 - **Naval rebalance.** Land units aboard no longer share naval losses. The navy is a gate: you either hold the sea or lose the whole wave. That removes classic-1's "half the navy kills 35% of the army" exploit, and trains (§8.11) make the gate crackable.
 - **Square law** (from Lean Ring) instead of the ×1.5 power law. It is mental maths for LLMs, it rewards concentration (attack trains) against spread-out defenders, and with base defense plus walls the defender still has the edge locally.
-- **Garrisons are not paper.** They fight behind the city's wall and base defense. Holding a siege needs guards, and the rules say so.
+- **Garrisons are not paper.** They fight behind the city's wall and base defense. Holding a siege needs hoplites, and the rules say so.
 - **Re-homing instead of erasure.** Units of a lost city go to the owner's oldest city. Combined with morale and settler cost ×k, this is the anti-snowball brake classic-1 lacked.
 - **Betrayal on impact, named blocs, a shared domination win and an individual time win.** These come from the drama review: they keep the fake/bluff window open, make alliance wars readable, and leave every alliance a late reason to defect.
 - **Bounded kill points** (/10, capped at ¼ of city points, none between recently related players, no day multipliers). This closes the collusion-farming exploit of Ring & Crown's renown.
-- **The Crown** (graft from Ring & Crown), with its bonus cut to +100, is a focal point in the centre that no single battle can turn into a match-deciding win.
+- **Olympus** (graft from Ring & Crown), with its bonus cut to +100, is a focal point in the centre that no single battle can turn into a match-deciding win.
 - **Determinism scaffolding** comes from all three designs:
   - classic-1's named PRNG streams and canonical orders;
   - Ring & Crown's (time, class, seq) keys and lockstep shuffle;
@@ -1248,6 +1315,7 @@ Nothing else is cross-checked: in particular `time.matchEnd` may be shorter than
 
   A committed sine table replaces runtime trig.
 
+- **1.1.0.** The Greek setting gives agents an original, legible world without touching a number. Domination by conquest closes the peaceful path that 1.0.0's threshold left open (a 2-player bloc reached its 2N floor whenever seats founded little: 8 to 12 matches in 30 ended that way with the bots, the winning blocs holding 0 or 1 conquered city), while keeping the alliance-and-betrayal drama: conquests after a betrayal count, but cities a bloc's members conquered from one another do not, so a pair cannot trade cities and then ally. The validation of the domination keys turns silent misconfigurations into explained errors. The share of 350‰ and the absence of a conquest trophy come from calibration batches (§0.1, "Why these values").
 - **Cut for the complexity budget:** rams, renown day multipliers, hideout percentages, refund tiers, unit-specific walking speeds, pact-breaks-at-launch and the drowning rule.
 
 ---
@@ -1256,21 +1324,21 @@ Nothing else is cross-checked: in particular `time.matchEnd` may be shorter than
 
 Change these between matches only. Every pacing number in §15 must be re-measured after any change.
 
-| Symptom in phase-1 / phase-2 matches       | Knobs, in order of preference                                                                                                                                         |
-| ------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Too little fighting, too much building     | `time.protectionEnd` ↓; `map.kinds.frontier.richnessPm` ↑; free slots ↓ (`kinds.*.slots`, e.g. inner 0); `scoring.killPopPerPoint` ↓ or `killCapPm` ↑; `crownBonus` ↑ |
-| Land runs out too early or too late        | `units.settler.cost` and `settler.scaleCap`; `units.settler.time`; slots per kind                                                                                     |
-| Turtles hold too well                      | `combat.wallPmPerLevel` ↓; `wallBreachOnLoss` 2; `economy.baseDefense` ↓; guard `defense` ↓                                                                           |
-| Conquest too easy, leaders snowball        | `time.siegeDuration` ↑; `combat.moraleFloorPm` ↓ (stronger morale); `settler.cost` ↑; guard `defense` ↑                                                               |
-| Sieges almost never hold                   | garrison guards are the answer, so check the bots first; then `siegeDuration` ↓ (fewer relief windows)                                                                |
-| Raiding useless or dominant                | raider `carry`; `economy.lootProtectPerLevel`                                                                                                                         |
-| Navy irrelevant or a hard wall             | warship `naval`, `cost`; transport `capacity`                                                                                                                         |
-| Domination never or too often              | `victory.dominationPm` (400); `dominationMinPerPlayer`; `time.dominationStart`; `diplomacy.allianceSize`                                                              |
-| Peace equilibrium among allies             | `diplomacy.allianceSize.divisor` ↑ (smaller blocs); `maxPacts` ↓; `pactDuration` ↓                                                                                    |
-| Spying ignored or trivial                  | `spy.counterPerLandPop`, `counterPerWall`, `minGold`                                                                                                                  |
-| Fake-attack spam, budget drain             | `gateway.attackLaunchesPerDay` ↓; `time.recallWindow` ↓ (0 disables recalls)                                                                                          |
-| Matches too long or too short in real time | the clock driver's game-hours per real-hour (outside the rules); in the rules, `time.minTravel`, `time.sameIslandTravel` (kept ≥ `minTravel`) and the paces together  |
-| Economy too fast or too slow overall       | `economy.production` (`c` term for the early game, `a` term for the late game); `buildings.*.time`                                                                    |
+| Symptom in phase-1 / phase-2 matches       | Knobs, in order of preference                                                                                                                                           |
+| ------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Too little fighting, too much building     | `time.protectionEnd` ↓; `map.kinds.frontier.richnessPm` ↑; free slots ↓ (`kinds.*.slots`, e.g. inner 0); `scoring.killPopPerPoint` ↓ or `killCapPm` ↑; `olympusBonus` ↑ |
+| Land runs out too early or too late        | `units.settler.cost` and `settler.scaleCap`; `units.settler.time`; slots per kind                                                                                       |
+| Turtles hold too well                      | `combat.wallPmPerLevel` ↓; `wallBreachOnLoss` 2; `economy.baseDefense` ↓; hoplite `defense` ↓                                                                           |
+| Conquest too easy, leaders snowball        | `time.siegeDuration` ↑; `combat.moraleFloorPm` ↓ (stronger morale); `settler.cost` ↑; hoplite `defense` ↑                                                               |
+| Sieges almost never hold                   | garrison hoplites are the answer, so check the bots first; then `siegeDuration` ↓ (fewer relief windows)                                                                |
+| Raiding useless or dominant                | peltast `carry`; `economy.lootProtectPerLevel`                                                                                                                          |
+| Navy irrelevant or a hard wall             | trireme `naval`, `cost`; transport `capacity`                                                                                                                           |
+| Domination never or too often              | `victory.dominationPm` (350); `dominationMinConquests` (2); `dominationMinPerPlayer`; `time.dominationStart`; `diplomacy.allianceSize`                                  |
+| Peace equilibrium among allies             | `diplomacy.allianceSize.divisor` ↑ (smaller blocs); `maxPacts` ↓; `pactDuration` ↓                                                                                      |
+| Spying ignored or trivial                  | `spy.counterPerLandPop`, `counterPerWall`, `minGold`                                                                                                                    |
+| Fake-attack spam, budget drain             | `gateway.attackLaunchesPerDay` ↓; `time.recallWindow` ↓ (0 disables recalls)                                                                                            |
+| Matches too long or too short in real time | the clock driver's game-hours per real-hour (outside the rules); in the rules, `time.minTravel`, `time.sameIslandTravel` (kept ≥ `minTravel`) and the paces together    |
+| Economy too fast or too slow overall       | `economy.production` (`c` term for the early game, `a` term for the late game); `buildings.*.time`                                                                      |
 
 ---
 
@@ -1296,6 +1364,6 @@ The engine and `sim` test suites encode checks 1–4 as tests. Check 5 is a meas
    - at least one siege per player-pair border by day 5;
    - no bot type winning more than 60% of seeds.
 
-   Bots alone may miss them. A missed criterion is recorded with its numbers and becomes a proposal for `perfidia-1@1.1.0`; the numbers of 1.0.0 never change.
+   Bots alone may miss them. A missed criterion is recorded with its numbers and becomes a proposal for a later version; the numbers of a published version never change.
 
-These rules are V1. Revise them once phase-1 data shows which knobs matter.
+These rules are V1.1. Revise them, as a new version, once data shows which knobs matter.

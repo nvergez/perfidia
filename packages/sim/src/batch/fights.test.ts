@@ -153,9 +153,13 @@ describe("a real batch", () => {
     try {
       // No protection and two days: battles on day 1 or 2. Domination open at 6 h with a
       // threshold the bots reach at once: a countdown, then a domination end (exit criterion 5).
-      const fight = parseVariant("fight: perfidia-1 time.protectionEnd=0 time.matchEnd=172800");
+      // Pinned to 1.0.0, whose threshold counts existing cities and accepts a floor of 0 (1.1.0
+      // needs taken cities, which bots do not take in a day).
+      const fight = parseVariant(
+        "fight: perfidia-1@1.0.0 time.protectionEnd=0 time.matchEnd=172800",
+      );
       const dom = parseVariant(
-        "dom: perfidia-1 time.matchEnd=86400 time.dominationStart=21600 time.dominationHold=3600 victory.dominationPm=110 victory.dominationMinPerPlayer=0",
+        "dom: perfidia-1@1.0.0 time.matchEnd=86400 time.dominationStart=21600 time.dominationHold=3600 victory.dominationPm=110 victory.dominationMinPerPlayer=0",
       );
       const result = await runBatch(
         {

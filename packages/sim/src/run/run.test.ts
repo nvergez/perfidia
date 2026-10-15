@@ -139,14 +139,23 @@ describe("sim run", () => {
           'unknown config path "time.nope": "time" has no key "nope" (valid keys: ',
         ],
         [["--override", "time.matchEnd=1.5"], "time.matchEnd: "],
-        [["--override", "time.day=3600"], "time.day: this field is fixed by perfidia-1@1.0.0"],
+        // The default ruleset is the latest published perfidia-1, 1.1.0; 1.0.0 by its exact ref.
+        [["--override", "time.day=3600"], "time.day: this field is fixed by perfidia-1@1.1.0"],
+        [
+          ["--ruleset", "perfidia-1@1.0.0", "--override", "time.day=3600"],
+          "time.day: this field is fixed by perfidia-1@1.0.0",
+        ],
+        [
+          ["--override", "victory.dominationMinPerPlayer=0"],
+          "victory.dominationMinPerPlayer is the floor of the threshold in cities per player",
+        ],
         [["--override", "time.minTravel=60"], "gateway.urgentMinGap"],
         [["--override", "nonsense"], 'override "nonsense" has no "="'],
-        [["--players", "3"], "outside the player range of perfidia-1@1.0.0: 6..12"],
+        [["--players", "3"], "outside the player range of perfidia-1@1.1.0: 6..12"],
         [["--players", "13"], "6..12"],
         [
           ["--ruleset", "nope-1"],
-          'unknown ruleset "nope-1"; this build contains perfidia-1@1.0.0, sandbox-1@1.0.0',
+          'unknown ruleset "nope-1"; this build contains perfidia-1@1.0.0, perfidia-1@1.1.0, sandbox-1@1.0.0',
         ],
         [["--ruleset", "sandbox-1"], "sandbox-1@1.0.0 is a test ruleset"],
         [["--ruleset", "sandbox-1", "--allow-test", "--players", "13"], "sandbox-1@1.0.0: 2..12"],
@@ -321,7 +330,7 @@ describe("sim run", () => {
 describe("the plan of a run", () => {
   test("defaults: the latest published perfidia-1, its minimum seats, seed 1, the seed's id key, lockstep", () => {
     const plan = planRun({});
-    expect(plan.ruleset.ref).toBe("perfidia-1@1.0.0");
+    expect(plan.ruleset.ref).toBe("perfidia-1@1.1.0");
     expect(plan.setup.seats.map((s) => s.id)).toEqual(["p1", "p2", "p3", "p4", "p5", "p6"]);
     expect([plan.setup.seed, plan.setup.idKey]).toEqual([1, idKeyFromSeed(1)]);
     expect(plan.setup.overrides).toEqual({});
@@ -331,14 +340,15 @@ describe("the plan of a run", () => {
       24,
       false,
     ]);
-    expect(defaultRunDir(plan)).toBe(join("runs", "perfidia-1@1.0.0-s1-6p-default-lockstep"));
+    expect(defaultRunDir(plan)).toBe(join("runs", "perfidia-1@1.1.0-s1-6p-default-lockstep"));
+    expect(planRun({ ruleset: "perfidia-1@1.0.0" }).ruleset.ref).toBe("perfidia-1@1.0.0");
     const rt = planRun({ clock: "realtime", days: 2, seed: 5, players: 7 });
     expect(rt.clock).toEqual({
       kind: "virtual",
       speed: { num: 3, den: 1 },
       latencyMs: DEFAULT_VIRTUAL_LATENCY_MS,
     });
-    expect(defaultRunDir(rt)).toBe(join("runs", "perfidia-1@1.0.0-s5-7p-2d-rt-virtual"));
+    expect(defaultRunDir(rt)).toBe(join("runs", "perfidia-1@1.1.0-s5-7p-2d-rt-virtual"));
     expect(planRun({ clock: "realtime", time: "system", speed: { num: 5, den: 2 } }).clock).toEqual(
       {
         kind: "system",

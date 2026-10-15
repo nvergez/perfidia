@@ -282,6 +282,8 @@ describe("goldens", () => {
       expect(published.problems).toEqual([
         "perfidia-1@1.0.0 has no golden",
         `perfidia-1@1.0.0 has no entry in ${FINGERPRINTS_FILE}`,
+        "perfidia-1@1.1.0 has no golden",
+        `perfidia-1@1.1.0 has no entry in ${FINGERPRINTS_FILE}`,
       ]);
 
       // A descriptor whose cheat sheet changed fails on its artefacts.

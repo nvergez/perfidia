@@ -1,7 +1,8 @@
 // Teamwork in a batch row (docs/architecture.md §12.2): joint attacks (allied attackers landing at
 // one city within an hour, with the war call behind them), sieges and how they were held, war-call
-// messages and the reach of the proposed R1 domination rule. Exact on hand-written lines; then one
-// real batch, whose teamwork must agree with its own log and summary.
+// messages and the reach of the R1 domination rule (perfidia-1@1.1.0 §13.3; for a 1.0.0 log, 1.1.0's
+// defaults). Exact on hand-written lines; then one real batch, whose teamwork must agree with
+// its own log and summary.
 
 import { describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
@@ -253,8 +254,19 @@ describe("war-call messages", () => {
 const found = (t: number, city: number, owner: string) =>
   ev(t, "city_founded", { city: `c${city}`, island: "i2", slot: 0, owner });
 
+/** The R1 rule of perfidia-1@1.1.0's defaults at N = 6. */
+const RULE = {
+  pm: 350,
+  minPerPlayer: 3,
+  players: 6,
+  minConquests: 2,
+  open: 259200,
+  hold: 86400,
+  matchEnd: 604800,
+};
+
 describe("R1 reach", () => {
-  // Six seats with their capitals c1..c6, the neutral c7, 43 slots: R1 needs 18 cities.
+  // Six seats with their capitals c1..c6, the neutral c7, 43 slots: R1 needs 16 cities.
   const owners = new Map<string, PlayerId | null>([
     ...Array.from({ length: 6 }, (_, i): [string, PlayerId] => [`c${i + 1}`, `p${i + 1}`]),
     ["c7", null],
@@ -277,23 +289,101 @@ describe("R1 reach", () => {
       ev(5000, "player_eliminated", { player: "p4" }),
     ];
     const r1 = teamRecords(log(rows), initial).r1;
+    // Both conquests took cities from p4, outside the bloc; the log ends as R1 is met, so it was
+    // never held for 24 h.
     expect(r1).toEqual({
       slots: 43,
-      need: 18,
+      need: 16,
+      needTaken: 2,
       maxCities: 18,
       maxConquered: 2,
       maxAt: 5000,
       maxBloc: ["conqueror@2", "expander@2"],
       fightingMax: 18,
+      shortfall: 0,
       mostConquered: 2,
       reachedAt: 5000,
       reachedBy: ["conqueror@2", "expander@2"],
+      takenFromBloc: 0,
+      heldAt: null,
     });
-    // Without the second conquest the bloc stays at 17, one conquered: R1 not met.
+    // Without the second conquest the bloc stays at 17, one conquered: R1 not met. The best bloc
+    // with 2 taken cities is p5's 3, 13 short of 16.
     const short = teamRecords(log(rows.slice(0, -2)), initial).r1;
     expect(short?.reachedAt).toBeNull();
     expect([short?.maxCities, short?.maxConquered, short?.fightingMax]).toEqual([17, 1, 3]);
+    expect(short?.shortfall).toBe(13);
     expect(teamRecords(log(rows), null).r1).toBeNull();
+  });
+
+  test("a city is taken for a bloc none of whose members owned it: a recapture is not, nor an ally's", () => {
+    // A threshold of 1 city with 2 taken: only the taken count matters.
+    const rule = { ...RULE, pm: 1, minPerPlayer: 1, players: 1, minConquests: 2 };
+    const r1 = (rows: readonly unknown[]) =>
+      teamRecords(log([...controllers(SEATS), ...rows]), { slots: 43, owners, rule }).r1;
+    // p1 takes c2 from p2, p2 takes it back (not taken: p2 owned it) and takes c4 from p4: p2
+    // holds one taken city, not two. Counting every conquest, it would have had two.
+    const recapture = [
+      ev(1000, "city_conquered", { city: "c2", from: "p2", to: "p1" }),
+      ev(2000, "city_conquered", { city: "c2", from: "p1", to: "p2" }),
+      ev(3000, "city_conquered", { city: "c4", from: "p4", to: "p2" }),
+    ];
+    expect(r1(recapture)).toMatchObject({ reachedAt: null, mostConquered: 1, fightingMax: null });
+    // p1 takes c3 from p3 and loses it to p4; p1's ally p5 takes it back from p4 (not taken for
+    // the bloc: p1 owned it) and takes c6 from p6: one taken city. c4, taken from p4 at 5000, is
+    // the second: R1 is met with one city conquered from the bloc that does not count.
+    const recaptureForAnAlly = [
+      ev(500, "alliance_formed", { alliance: "a1", name: "a1", members: ["p1", "p5"] }),
+      ev(1000, "city_conquered", { city: "c3", from: "p3", to: "p1" }),
+      ev(2000, "city_conquered", { city: "c3", from: "p1", to: "p4" }),
+      ev(3000, "city_conquered", { city: "c3", from: "p4", to: "p5" }),
+      ev(4000, "city_conquered", { city: "c6", from: "p6", to: "p5" }),
+    ];
+    expect(r1(recaptureForAnAlly)).toMatchObject({ reachedAt: null, mostConquered: 1 });
+    expect(
+      r1([...recaptureForAnAlly, ev(5000, "city_conquered", { city: "c4", from: "p4", to: "p5" })]),
+    ).toMatchObject({ reachedAt: 5000, takenFromBloc: 1, mostConquered: 2 });
+    // A staged trade: p1 takes c2 and c4 from p2, then they ally. p1 alone meets R1 at 2000; the
+    // pair holds no taken city, so R1 is broken at 3000. Without the alliance, p1 holds it for
+    // 24 h from the opening.
+    const staged = [
+      ev(1000, "city_conquered", { city: "c2", from: "p2", to: "p1" }),
+      ev(2000, "city_conquered", { city: "c4", from: "p2", to: "p1" }),
+      ev(3000, "alliance_formed", { alliance: "a1", name: "a1", members: ["p1", "p2"] }),
+      ev(400000, "message", { from: "p4", to: "all", text: "still here" }),
+    ];
+    expect(r1(staged)).toMatchObject({ reachedAt: 2000, takenFromBloc: 0, heldAt: null });
+    expect(r1(staged.slice(0, 2).concat(staged.slice(3)))).toMatchObject({
+      heldAt: 259200 + 86400,
+    });
+  });
+
+  test("with the match's rule: the 2N floor, the taken cities, and a 24 h hold from the opening", () => {
+    // 4 seats' worth of floor (minPerPlayer 3 × 6 = 18) over 1‰ of 43 slots: 18 cities, 1 taken.
+    const rule = { ...RULE, pm: 1, minConquests: 1 };
+    const rows: unknown[] = [
+      ...controllers(SEATS),
+      ...Array.from({ length: 15 }, (_, i) => found(1000 + i, 8 + i, i % 2 === 0 ? "p1" : "p2")),
+      ev(2000, "alliance_formed", { alliance: "a1", name: "a1", members: ["p1", "p2"] }),
+      // 17 cities, then a conquest from p3: 18 with 1 taken, before the opening (day 4).
+      ev(100000, "city_conquered", { city: "c3", from: "p3", to: "p1" }),
+      ev(100000, "player_eliminated", { player: "p3" }),
+      ev(400000, "message", { from: "p4", to: "all", text: "still here" }),
+    ];
+    const r1 = teamRecords(log(rows), { slots: 43, owners, rule }).r1;
+    expect(r1).toMatchObject({ need: 18, needTaken: 1, reachedAt: 100000, takenFromBloc: 0 });
+    // Met from t = 100000, counted from the opening at 259200: held 24 h later.
+    expect(r1?.heldAt).toBe(259200 + 86400);
+    // A member leaving before the hold ends breaks it.
+    const left = [
+      ...rows.slice(0, -1),
+      ev(300000, "alliance_left", { alliance: "a1", player: "p2", cause: "left" }),
+      ...rows.slice(-1),
+    ];
+    expect(teamRecords(log(left), { slots: 43, owners, rule }).r1?.heldAt).toBeNull();
+    // A match ending before the hold ends: never held.
+    const ended = { ...rule, matchEnd: 300000 };
+    expect(teamRecords(log(rows), { slots: 43, owners, rule: ended }).r1?.heldAt).toBeNull();
   });
 });
 
@@ -307,14 +397,18 @@ describe("a variant's teamwork", () => {
       r1: {
         slots: 43,
         need: 18,
+        needTaken: 2,
         maxCities: 12,
         maxConquered: 0,
         maxAt: 100,
         maxBloc: [],
         fightingMax: null,
+        shortfall: null,
         mostConquered: 0,
         reachedAt: null,
         reachedBy: [],
+        takenFromBloc: null,
+        heldAt: null,
       },
     };
     const joint = {
@@ -333,7 +427,16 @@ describe("a variant's teamwork", () => {
         ...base,
         joint: [joint, { ...joint, caller: null }],
         warCalls: { calls: 2, answered: 1, yes: 1, no: 1, cancels: 0, stray: 1 },
-        r1: { ...base.r1!, maxCities: 19, maxConquered: 3, fightingMax: 19, reachedAt: 500 },
+        r1: {
+          ...base.r1!,
+          maxCities: 19,
+          maxConquered: 3,
+          fightingMax: 19,
+          shortfall: 0,
+          reachedAt: 500,
+          takenFromBloc: 1,
+          heldAt: 86900,
+        },
       },
       { ...base, r1: null },
     ]);
@@ -353,11 +456,14 @@ describe("a variant's teamwork", () => {
       r1: {
         runs: 2,
         need: 18,
+        needTaken: 2,
         reached: 1,
+        held: 1,
         maxCities: 15.5,
         maxConquered: 1.5,
         fightingRuns: 1,
         fightingMax: 19,
+        shortfall: 0,
       },
     });
   });
@@ -389,7 +495,7 @@ describe("a real batch", () => {
       expect(
         m.sieges.filter((x) => x.outcome !== "conquered" && x.outcome !== "open"),
       ).toHaveLength(s.events.siegesBroken);
-      expect(m.r1).toMatchObject({ slots: 43, need: 18 });
+      expect(m.r1).toMatchObject({ slots: 43, need: 16 });
       const most = Math.max(...m.seats.map((x) => x.cities ?? 0));
       expect(m.r1?.maxCities).toBeGreaterThanOrEqual(most);
       // The war calls (opportunist@3 sends some): each private message's calls, as the log has them.

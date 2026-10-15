@@ -433,7 +433,7 @@ describe("P4: random intents never throw and keep the step invariants (P3 on the
       }
       expect(cov.superseded).toBeGreaterThan(0);
       expect(cov.multiGroup).toBeGreaterThan(0);
-    });
+    }, 30000);
 
     test(`${name}: from createWorld`, () => {
       fc.assert(

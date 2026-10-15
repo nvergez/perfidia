@@ -235,7 +235,7 @@ const perturbation = (ref: Ref): fc.Arbitrary<Perturbation> => {
     }),
     fc.record({ kind: fc.constant("returnOrigin" as const), pick }),
   ];
-  return fc.oneof(...common, ...(ref === "perfidia-1@1.0.0" ? perfidia : []));
+  return fc.oneof(...common, ...(ref.startsWith("perfidia-1@") ? perfidia : []));
 };
 
 const gwEdit: fc.Arbitrary<GwEdit> = fc.oneof(
@@ -253,7 +253,7 @@ const gwEdit: fc.Arbitrary<GwEdit> = fc.oneof(
   fc.record({ kind: fc.constant("archive" as const), pick: fc.nat(10), n: fc.nat(30) }),
 );
 
-const players = (ref: Ref): number => (ref === "perfidia-1@1.0.0" ? 8 : 6);
+const players = (ref: Ref): number => (ref.startsWith("perfidia-1@") ? 8 : 6);
 
 async function world(ref: Ref): Promise<{ snap: Staged["snap"]; gw: GatewayState }> {
   const run = await cachedRun({
@@ -353,7 +353,7 @@ describe("P10 at tool level: hidden data never changes what a seat gets", () => 
         { tool: "view_player", args: { player: s.ally } },
       ];
       const seen = seenBy(s.snap, structuredClone(gw), "p1", calls);
-      if (ref === "perfidia-1@1.0.0") {
+      if (ref.startsWith("perfidia-1@")) {
         expect(access).toBeNull();
         expect(seen.join("\n")).not.toContain(movement);
         // Another destination and arrival time: p1 sees exactly the same.

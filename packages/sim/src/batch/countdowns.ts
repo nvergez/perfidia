@@ -12,7 +12,8 @@ import { DOMINATION_STARTED } from "./fights.ts";
 // `domination_started` and `domination_cancelled` events and the end line: each countdown's bloc,
 // its cities at the start split into the ones its members took by conquest, the ones they founded
 // and the rest (their starting cities), from the `city_conquered` and `city_founded` events so
-// far; and how it ended: won (the match ended by domination at its `endsAt` with its members as
+// far (from perfidia-1@1.1.0 the event also gives the bloc's taken cities and the taken cities
+// the threshold asks for, §13.3); and how it ended: won (the match ended by domination at its `endsAt` with its members as
 // the winners), cancelled (with the log's reason and the same-second events that explain it:
 // members leaving, joining, eliminated, betraying, or losing cities) or still open at the end.
 
@@ -28,6 +29,9 @@ export interface CountdownRow {
   /** The bloc's cities at the start, as the event counts them, and the threshold it met. */
   readonly cities: number;
   readonly threshold: number | null;
+  /** perfidia-1@1.1.0: the bloc's taken cities at the start, and the taken cities it needed. */
+  readonly taken?: number;
+  readonly needTaken?: number;
   readonly endsAt: GameTime | null;
   /** Of `cities`: held by a member that took it by conquest, or founded it. */
   readonly conquered: number;
@@ -48,6 +52,8 @@ const StartedSchema = z.looseObject({
   members: z.array(PlayerIdSchema).min(1),
   cities: z.int().nonnegative(),
   threshold: z.int().nonnegative().optional(),
+  taken: z.int().nonnegative().optional(),
+  needTaken: z.int().nonnegative().optional(),
   endsAt: z.int().nonnegative().optional(),
 });
 const CancelledSchema = z.looseObject({ key: z.string(), reason: z.string().optional() });
@@ -137,6 +143,8 @@ export function countdownRows(
         reason: null,
         detail: [],
       };
+      if (d.data.taken !== undefined) row.taken = d.data.taken;
+      if (d.data.needTaken !== undefined) row.needTaken = d.data.needTaken;
       out.push(row);
       open.set(row.key, row);
     } else if (type === DOMINATION_CANCELLED) {

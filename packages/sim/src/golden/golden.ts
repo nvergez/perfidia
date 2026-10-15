@@ -4,6 +4,7 @@ import { canonicalJson, sha256Hex } from "@perfidia/engine/core";
 import type { LogLine } from "@perfidia/protocol";
 import { UsageError, errorText } from "../args.ts";
 import { SCENARIO_LATE_NAME, SCENARIO_LATE_REF, runScenarioLate } from "../exit/scenario.ts";
+import { SCENARIO_R1_NAME, SCENARIO_R1_REF, runScenarioR1 } from "../exit/scenario_r1.ts";
 import {
   GoldenExists,
   addFingerprints,
@@ -49,9 +50,18 @@ export type GoldenSpec = BotGoldenSpec | ScenarioGoldenSpec;
 const isScenario = (s: GoldenSpec): s is ScenarioGoldenSpec => !("run" in s);
 
 /**
+ * The seed of 1.1.0's war golden: of seeds 1–30 of that lineup over 6 days, the first whose
+ * countdown ends in a domination win (seed 11's starts on day 6 and is still open at the end): a
+ * pair holding 16 cities, 2 of them taken, starts it on day 5 and wins on day 6, so domination by
+ * conquest is under Level G. A former owner's recapture is in `scenario-r1`.
+ */
+const WAR_SEED_1_1 = 14;
+
+/**
  * The goldens of §13.5: five bot goldens (one at the largest N, 12, so that the seat-count
  * dependent parts of a ruleset are replayed too), one of the war-call bots allied (`-war`, its
- * lineup pinned) and the scripted `scenario-late`.
+ * lineup pinned) and the scripted `scenario-late`; for perfidia-1@1.1.0 the same bot goldens and
+ * the scripted `scenario-r1` (domination by conquest).
  */
 export const GOLDEN_SPECS: readonly GoldenSpec[] = Object.freeze([
   {
@@ -93,6 +103,46 @@ export const GOLDEN_SPECS: readonly GoldenSpec[] = Object.freeze([
     ref: SCENARIO_LATE_REF,
     name: SCENARIO_LATE_NAME,
     play: async (): Promise<readonly LogLine[]> => (await runScenarioLate()).lines,
+  },
+  {
+    ref: "perfidia-1@1.1.0",
+    name: "lockstep-6p-4d",
+    run: { seed: 1, players: 6, days: 4, clock: { kind: "lockstep" }, strict: true },
+  },
+  {
+    ref: "perfidia-1@1.1.0",
+    name: "rt-virtual-6p-1d",
+    run: {
+      seed: 1,
+      players: 6,
+      days: 1,
+      clock: { kind: "virtual", speed: { num: 3, den: 1 }, latencyMs: [2000, 60000] },
+      strict: true,
+    },
+  },
+  {
+    ref: "perfidia-1@1.1.0",
+    name: "lockstep-12p-1d",
+    run: { seed: 1, players: 12, days: 1, clock: { kind: "lockstep" }, strict: true },
+  },
+  {
+    // The war-call bots under domination by conquest: their sieges, conquests and the conquest
+    // records (taken cities, former owners) in the views are under Level G.
+    ref: "perfidia-1@1.1.0",
+    name: "lockstep-6p-6d-war",
+    run: {
+      seed: WAR_SEED_1_1,
+      players: 6,
+      days: 6,
+      bots: ["conqueror@3", "opportunist@3", "turtle@3", "conqueror@3", "expander@2", "rusher@3"],
+      clock: { kind: "lockstep" },
+      strict: true,
+    },
+  },
+  {
+    ref: SCENARIO_R1_REF,
+    name: SCENARIO_R1_NAME,
+    play: async (): Promise<readonly LogLine[]> => (await runScenarioR1()).lines,
   },
   {
     ref: "sandbox-1@1.0.0",
