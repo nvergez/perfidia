@@ -12,7 +12,7 @@ Matches can run different rulesets side by side: the engine core (time, events, 
 - **oxlint** (type-aware rules on) for linting, **oxfmt** for formatting. No ESLint, Prettier or Biome.
 - **Zod** for every schema that crosses a boundary (actions, events, views, API, LLM tools, MCP).
 
-Root scripts (run from the repo root): `bun run typecheck`, `bun run lint`, `bun run format`, `bun run format:check`, `bun test`, `bun run check` (all of the above). Every change must leave `bun run check` green.
+Root scripts (run from the repo root): `bun run typecheck`, `bun run lint`, `bun run format`, `bun run format:check`, `bun test`, `bun run check` (all of the above). Every change must leave `bun run check` green. CLIs: `bun run sim -- <command>` (bot matches, replay verification) and `bun run arena -- <command>` (LLM matches; `--fake` needs no key). `bun run test:exit` runs the exit suites; `bun run test:live` is the only test that calls the Claude API (it spends money, needs `PERFIDIA_LIVE=1` and the key, never in CI).
 
 ## Packages (`packages/*`, scope `@perfidia/*`)
 
@@ -21,7 +21,7 @@ Root scripts (run from the repo root): `bun run typecheck`, `bun run lint`, `bun
 - `gateway` — the only way into the engine for players: fog-of-war projection, briefings, action validation with explanatory errors, per-seat caps. LLM-agnostic. (MCP exposure is deferred to the server phase; phase-2 LLM seats call the tools through function calling in `orchestrator`.)
 - `bots` — scripted players that play exclusively through the gateway (never the engine directly).
 - `sim` — headless match runner (CLI): builds a world, runs a match with bots under the lockstep or real-time clock, writes logs, verifies replays.
-- `orchestrator` — the LLM harness (phase 2): `ModelAdapter` and the Anthropic adapter (the only module that imports `@anthropic-ai/sdk`, in `src/model/anthropic.ts`), `LlmSeatAgent`, prompts and profiles, the budget ledger, `llm_calls.jsonl` logs. Reads only `PERFIDIA_ANTHROPIC_*` from the environment, never `ANTHROPIC_*`; tests never touch the network.
+- `orchestrator` — the LLM harness (phase 2, `docs/phase2.md`): `ModelAdapter` and the Anthropic adapter (the only module that imports `@anthropic-ai/sdk`, in `src/model/anthropic.ts`), `LlmSeatAgent`, prompts and profiles, the budget ledger, `llm_calls.jsonl` logs, and the `arena` CLI (`src/arena/`: plan, preflight, run, report, smoke; bot-backed fake models for tests and `--fake`). Reads only `PERFIDIA_ANTHROPIC_*` from the environment (in `src/arena/` only), never `ANTHROPIC_*`; tests never touch the network.
 - Later phases: `server` (Elysia HTTP/WS/MCP), `web` (spectator SPA).
 
 Dependency direction: `protocol` ← `engine` ← `gateway` ← `bots` ← `sim` ← `orchestrator`. Never import "upwards".

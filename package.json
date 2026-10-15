@@ -20,8 +20,10 @@
     "format": "oxfmt",
     "format:check": "oxfmt --check",
     "test": "bun test",
-    "test:exit": "PERFIDIA_EXIT=1 bun test packages/sim/src/exit",
+    "test:exit": "PERFIDIA_EXIT=1 bun test packages/sim/src/exit packages/orchestrator/src/arena/exit.test.ts",
+    "test:live": "PERFIDIA_LIVE=1 bun test packages/orchestrator/src/live.test.ts",
     "sim": "bun packages/sim/src/cli.ts",
+    "arena": "bun packages/orchestrator/src/arena/cli.ts",
     "check": "bun run typecheck && bun run lint && bun run format:check && bun run test"
   },
   "devDependencies": {

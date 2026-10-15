@@ -514,6 +514,30 @@ export class AnthropicAdapter implements ModelAdapter {
     return { ...common, reply: replyOf(echoContent(raw.content)), stop, refusal: null, raw };
   }
 
+  /**
+   * The input tokens of `req` (`count_tokens`, free, no inference): tools, both system blocks and
+   * the messages, with the same thinking and effort. `arena smoke` checks the prefix size with it.
+   */
+  async countTokens(req: ChatRequest): Promise<number> {
+    const body = this.build(req);
+    try {
+      const out = await this.client.sdk.beta.messages.countTokens(
+        {
+          model: body.model,
+          messages: body.messages,
+          ...(body.system === undefined ? {} : { system: body.system }),
+          ...(body.tools === undefined ? {} : { tools: body.tools }),
+          ...(body.thinking === undefined ? {} : { thinking: body.thinking }),
+          ...(body.output_config === undefined ? {} : { output_config: body.output_config }),
+        },
+        { maxRetries: 0 },
+      );
+      return out.input_tokens;
+    } catch (e) {
+      throw modelErrorOf(e, []);
+    }
+  }
+
   async preflight(sample: ChatRequest): Promise<PreflightReport> {
     const model = this.spec.model;
     let allowed: readonly string[];

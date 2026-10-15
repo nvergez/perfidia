@@ -232,6 +232,8 @@ export interface ModelAdapter {
   chat(req: ChatRequest): Promise<ChatResult>;
   /** Checks credentials, model access, fallback prices and the exact request shape (§2.2). */
   preflight(sample: ChatRequest): Promise<PreflightReport>;
+  /** The provider's count of the request's input tokens, when it has one (`arena smoke`). */
+  countTokens?(req: ChatRequest): Promise<number>;
 }
 
 /** Total prompt tokens of one attempt: uncached input, cache writes and cache reads. */

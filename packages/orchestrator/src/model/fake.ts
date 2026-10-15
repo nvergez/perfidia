@@ -108,8 +108,9 @@ export class FakeAdapter implements ModelAdapter {
     const aborted = (): boolean => req.signal?.aborted === true;
     if (aborted()) throw new ModelError("aborted", "request aborted");
     const answer = await this.brain(req, n);
-    if (aborted()) throw new ModelError("aborted", "request aborted");
+    // A brain's own error first: an aborted brain may carry what the attempt cost.
     if (answer instanceof ModelError) throw answer;
+    if (aborted()) throw new ModelError("aborted", "request aborted");
     return this.resultOf(req, answer, n);
   }
 

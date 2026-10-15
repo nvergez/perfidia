@@ -24,6 +24,8 @@
 - 14 Risks and open questions
 - 15 Task breakdown
 - 16 Review decisions
+- 17 Deviations
+- 18 Phase 2: first agents (the orchestrator; details in `docs/phase2.md`)
 
 ---
 
@@ -2594,3 +2596,21 @@ These numbers are proposals for `perfidia-1@1.1.0`. `perfidia-1@1.0.0` does not 
   - **Hold (kept at 24 h).** Paired by seed, 12 h gives 8 of 60 dominations in both lineups (13% [7, 24]; difference per match [+0.03, +0.15] and [+0.02, +0.12]), seat wins within +4/−1 per strategy (McNemar p ≥ 0.125), conquests −3%; 18 h gives 3 and 5 of 60. In the aggressive lineup (20 seeds), 24 h: 5 countdowns on day 6, all broken by rivals, no domination; 12 h: the same 5 broken, and 3 countdowns started on D7 before 12:00 win; 18 h: 1. The extra dominations of 12 h come from blocs that qualify on day 7, a consequence of the bots' late founding, so the hold stays as the decision report set it (ruleset §0.1); 12 h is the lever to try if LLM blocs also qualify late.
   - **Seat counts.** 9 seats (20 seeds, default lineup): no countdown; blocs of three peaceful bots reached 20 and 23 cities with no taken city, and blocs with 2 taken cities held 9.1 cities on average (20 needed). With the 8- and 12-seat batches above, only N = 6 produced dominations; ruleset §0.1 recommends N = 6 for matches where domination should be live.
 - **For the owner.** Resource ids and positional island kinds keep their 1.0.0 names. Domination by conquest needs players that seek taken cities; pilot LLM matches will show whether 350‰ is reachable often enough.
+
+### 17.6 Phase 2: the orchestrator
+
+- **SDK.** The LLM harness uses the official `@anthropic-ai/sdk` (pinned exactly at `0.131.0` in the root catalog) behind the provider-agnostic `ModelAdapter`, not the Vercel AI SDK the brief names: the latter lags the provider features the harness needs (adaptive thinking with explicit effort, server-side refusal fallbacks, per-block cache TTLs, refusal `stop_details`, per-iteration usage, mid-conversation `system` messages). Only `orchestrator/src/model/anthropic.ts` imports it; an oxlint override and the orchestrator's architecture test enforce it. The brief's stack row is the owner's to update in its source document.
+- **MCP.** Gateway exposure over MCP is deferred to the server phase. Phase-2 LLM seats call the gateway's tools through the provider's function calling, in process (`CLAUDE.md` said "MCP exposure comes in phase 2").
+- **Gateway.** One additive change: `RunMatchOptions.handoffQueue` (§8.7), polled when a seat's turn opens after the static hand-offs, writing the same `controller` line. Existing paths are unchanged (every golden's Level E and G).
+- **Formats.** The run-directory formats of the orchestrator (`llm_calls.jsonl`, `seats.json`, `arena.json`) are Zod schemas in `orchestrator/src/log/schema.ts`, not in `protocol`, until phase 3 reads them. The spectator feed format is phase 3's; the arena writes the readable `feed.txt` only.
+
+## 18. Phase 2: first agents
+
+Roadmap step 2 (4 Claude seats and 2 bots on a 6-seat `perfidia-1` map) is built as `packages/orchestrator`; **`docs/phase2.md` describes it as built**: layers, the LLM seat's turn loop, the Anthropic adapter, budget and hand-offs, failures and the arena pause gate, the run directory and `arena.json`, costs, and how to run the first real match.
+
+- **Dependency direction:** `protocol` ← `engine` ← `gateway` ← `bots` ← `sim` ← `orchestrator`. The future `server` sits downstream of it.
+- **Seat contract.** `LlmSeatAgent implements SeatAgent` (§9.1): the gateway drives the rounds, and engine and gateway stay LLM-agnostic. Every LLM action goes through the same tools, validation and log lines as a bot's, so Level E holds for every arena log in both clocks; Level G does not apply to LLM seats (`resimProblem`).
+- **CLI.** `bun run arena -- <command>` (`run`, `cost`, `personalities`, `smoke`); exit codes as `sim`'s (§12.1). `arena run --fake` plays every LLM seat with a bot-backed fake model: the whole pipe, no network, $0.
+- **Environment.** Only `PERFIDIA_ANTHROPIC_API_KEY` and `PERFIDIA_ANTHROPIC_BASE_URL` (and `PERFIDIA_LIVE` for the opt-in live test) are read, once, by the arena CLI; nothing reads `ANTHROPIC_*`. No test touches the network.
+- **Suites.** The default `bun test` includes a full 7-day lockstep arena match on fake models (Level E, gateway rebuild, exit-criterion report). `bun run test:exit` adds four more 7-day arena matches. `bun run test:live` (opt-in, spends under $0.20) is the only test that calls the API.
+- **Not built in phase 2:** crash resume (lockstep matches that crash are rerun; required before a multi-day real-time match), the optional red-team check, the spectator feed.

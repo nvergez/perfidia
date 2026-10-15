@@ -63,12 +63,25 @@ export interface EntryCost {
   readonly longPrompt: boolean;
 }
 
-/** The cost of one usage entry, in nano-dollars. Never zero for an unknown model, never a crash. */
-export function entryCost(e: UsageEntry): EntryCost {
+/** The card one usage entry is billed at: its model's, the long-prompt card, or `MAX_PRICE`. */
+export function priceFor(e: UsageEntry): {
+  readonly price: Price;
+  readonly unpriced: boolean;
+  readonly longPrompt: boolean;
+} {
   const known = Object.hasOwn(PRICES, e.model) ? PRICES[e.model] : undefined;
   const longPrompt =
     e.model === "claude-haiku-5-5" && promptTokens(e.tokens) > HAIKU_LONG_PROMPT_TOKENS;
-  const p = longPrompt ? HAIKU_LONG : (known ?? MAX_PRICE);
+  return {
+    price: longPrompt ? HAIKU_LONG : (known ?? MAX_PRICE),
+    unpriced: known === undefined,
+    longPrompt,
+  };
+}
+
+/** The cost of one usage entry, in nano-dollars. Never zero for an unknown model, never a crash. */
+export function entryCost(e: UsageEntry): EntryCost {
+  const { price: p, unpriced, longPrompt } = priceFor(e);
   const t = e.tokens;
   const nanoUsd =
     t.input * p.input +
@@ -79,7 +92,7 @@ export function entryCost(e: UsageEntry): EntryCost {
   if (!Number.isSafeInteger(nanoUsd) || nanoUsd < 0) {
     throw new Error(`cost of ${e.model} usage is not a safe integer: ${nanoUsd}`);
   }
-  return { nanoUsd, unpriced: known === undefined, longPrompt };
+  return { nanoUsd, unpriced, longPrompt };
 }
 
 export interface Cost {
