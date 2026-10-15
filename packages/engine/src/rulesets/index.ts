@@ -6,7 +6,7 @@
 import type { AnyRuleset } from "@perfidia/engine/contracts";
 import { domain } from "@perfidia/engine/domain";
 import { checkEventKinds, resolveConfig } from "@perfidia/engine/kernel";
-import { perfidia1_1_0_0 } from "@perfidia/engine/rulesets/perfidia-1";
+import { perfidia1_1_0_0, perfidia1_1_1_0 } from "@perfidia/engine/rulesets/perfidia-1";
 import { sandbox1_1_0_0 } from "@perfidia/engine/rulesets/sandbox-1";
 import {
   DOMAIN_ERROR_CODES,
@@ -24,7 +24,11 @@ import {
 } from "@perfidia/protocol";
 
 /** Every ruleset version of this build, published and test. */
-export const RULESETS: readonly AnyRuleset[] = Object.freeze([perfidia1_1_0_0, sandbox1_1_0_0]);
+export const RULESETS: readonly AnyRuleset[] = Object.freeze([
+  perfidia1_1_0_0,
+  perfidia1_1_1_0,
+  sandbox1_1_0_0,
+]);
 
 /** A ref or id that names no ruleset of the list; `known` lists the refs there are. */
 export class UnknownRuleset extends Error {

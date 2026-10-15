@@ -1,6 +1,6 @@
 // The ruleset boundary in bot sources (docs/architecture.md §2.3, §11.1, §13.4): outside `hints.ts`,
-// no string literal names a perfidia-1 building, unit or queue id (`build` excepted, the generic
-// queue) or a ruleset id; and no module-level mutable state, so bot instances cannot share caches.
+// no string literal names a perfidia-1 building, unit or queue id of any version (`build` excepted,
+// the generic queue) or a ruleset id; and no module-level mutable state, so bot instances cannot share caches.
 // The scan reads every non-test source of this package, comments removed.
 
 import { describe, expect, test } from "bun:test";
@@ -20,6 +20,14 @@ const FORBIDDEN: ReadonlySet<string> = new Set([
   "settler",
   "transport",
   "warship",
+  // perfidia-1@1.1.0's renamed ids (docs/rulesets/perfidia-1.md §0.1).
+  "acropolis",
+  "woodcutter",
+  "goldmine",
+  "hoplite",
+  "peltast",
+  "trireme",
+  "olympus",
   "perfidia-1",
   "sandbox-1",
 ]);

@@ -63,23 +63,23 @@ export const SCENARIO_LATE_OVERRIDES: Readonly<Record<string, Json>> = Object.fr
 });
 
 /** A step of the script: one seat's calls at or after `at`, once `calls` is ready (not null). */
-interface Step {
+export interface Step {
   readonly seat: PlayerId;
   readonly at: number;
   readonly what: string;
   calls(b: Briefing): ToolCall[] | null;
 }
 
-const call = (tool: string, args: Record<string, Json>): ToolCall => ({ tool, args });
+export const call = (tool: string, args: Record<string, Json>): ToolCall => ({ tool, args });
 
-function cityOf(b: Briefing, id: string): BriefingCity {
+export function cityOf(b: Briefing, id: string): BriefingCity {
   const c = b.cities.find((x) => x.id === id);
   if (c === undefined) throw new Error(`scenario: ${b.you} does not own ${id} at t = ${b.t}`);
   return c;
 }
 
 /** Accepts the open proposal of `kind` from `from` once the briefing lists it. */
-function accept(seat: PlayerId, from: PlayerId, kind: "pact" | "alliance"): Step {
+export function accept(seat: PlayerId, from: PlayerId, kind: "pact" | "alliance"): Step {
   return {
     seat,
     at: 0,
@@ -171,13 +171,15 @@ const STEPS: readonly Step[] = [
  * throws, which is fatal in strict mode) and ends its turn with a self-wake at its next timed step.
  */
 export class ScenarioAgent implements SeatAgent {
-  readonly label = SCENARIO_LATE_LABEL;
+  readonly label: string;
   readonly #steps: readonly Step[];
   readonly #done = new Set<Step>();
   #sent: { what: string; calls: number }[] = [];
 
-  constructor(seat: PlayerId, steps: readonly Step[] = STEPS) {
+  /** A seat of a script (`scenario-late`'s by default), under the script's controller label. */
+  constructor(seat: PlayerId, steps: readonly Step[] = STEPS, label = SCENARIO_LATE_LABEL) {
     this.#steps = steps.filter((s) => s.seat === seat);
+    this.label = label;
   }
 
   round(input: RoundInput): Promise<RoundOutput> {
@@ -223,9 +225,15 @@ export class ScenarioAgent implements SeatAgent {
   }
 }
 
-/** One scenario agent per seat. */
-export function scenarioAgents(seats: readonly PlayerId[]): Map<PlayerId, SeatAgent> {
-  return new Map(seats.map((seat): [PlayerId, SeatAgent] => [seat, new ScenarioAgent(seat)]));
+/** One scenario agent per seat (of `scenario-late`'s script by default). */
+export function scenarioAgents(
+  seats: readonly PlayerId[],
+  steps: readonly Step[] = STEPS,
+  label = SCENARIO_LATE_LABEL,
+): Map<PlayerId, SeatAgent> {
+  return new Map(
+    seats.map((seat): [PlayerId, SeatAgent] => [seat, new ScenarioAgent(seat, steps, label)]),
+  );
 }
 
 /** Plays the scenario in lockstep (strict, step invariants) and returns its log. */

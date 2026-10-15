@@ -90,5 +90,5 @@ test("performance of the 1-game-day runs (printed, not asserted)", async () => {
   }
   console.log("\nT16 performance, 1 game day, default bots (ms of wall time):");
   console.table(rows);
-  expect(rows).toHaveLength(8);
+  expect(rows).toHaveLength(REFS.length * 4);
 }, 60000);

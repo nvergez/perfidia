@@ -34,6 +34,23 @@
       "scenario-late": "c57b02bebdd95925b4562cd7a17f3ba52da7c940cbcf35ddbb41b92aa4964fcc"
     }
   },
+  "perfidia-1@1.1.0": {
+    "artefacts": "6b50dfc24f216a7f34a06c739cb9fce505f408eee51a19029bae7ba6d4bc7550",
+    "goldens": {
+      "lockstep-12p-1d": "a482d2d4435ace1e",
+      "lockstep-6p-4d": "8a298af0e233af74",
+      "lockstep-6p-6d-war": "7772cd7da7ca2448",
+      "rt-virtual-6p-1d": "11be87d2310904b0",
+      "scenario-r1": "67a7bd53d3910b18"
+    },
+    "views": {
+      "lockstep-12p-1d": "37064825d443202ec5770a5de3cabd087cee77d26803581d8135f80944269306",
+      "lockstep-6p-4d": "52f773ce40ccb5a726acccc014be2d0e2719606b6157fb4b4270b7730815be2a",
+      "lockstep-6p-6d-war": "2b64d99810e12a5e500bbb9cf299b813ba85920b9be77d07894f63dca8e17f01",
+      "rt-virtual-6p-1d": "f12af72ad19a67ddc8bf6a6a7b81ebe28cb54865738be8d7729f38eb2fd15a9a",
+      "scenario-r1": "7320e5ad5747074728f4cacef62fb8e736060d66c173613fd236bf5246c48bf2"
+    }
+  },
   "sandbox-1@1.0.0": {
     "artefacts": "4be646661d454143623fe992421932aa138ea6e8317008684661e2e49e4e35ab",
     "goldens": {

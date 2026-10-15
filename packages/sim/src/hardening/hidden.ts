@@ -39,7 +39,10 @@ import { editSnapshot } from "./kit.ts";
 
 type Rules = DeepReadonly<CompiledRules>;
 
-const PERFIDIA = "perfidia-1@1.0.0";
+/** The perfidia-1 versions: the staging below edits their `ext`, which 1.1.0 extends. */
+const PERFIDIA: ReadonlySet<string> = new Set(["perfidia-1@1.0.0", "perfidia-1@1.1.0"]);
+/** perfidia-1@1.1.0 and later: conquest records (who took a city, its former owners). */
+const CONQUESTS: ReadonlySet<string> = new Set(["perfidia-1@1.1.0"]);
 
 const byText = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
 
@@ -59,6 +62,8 @@ const alive = (state: GameState): PlayerId[] =>
 /** The perfidia-1 `ext` as plain JSON, for editing. */
 interface PExt {
   sieges: Record<string, { by: string; startedAt: number; endsAt: number; seq: number }>;
+  /** perfidia-1@1.1.0. */
+  conquests?: Record<string, { by: string; former: string[] }>;
   battlePoints: Record<string, number>;
   domination: {
     open: boolean;
@@ -208,7 +213,7 @@ export function stage(
         idKey,
       });
     }
-    if (snap.setup.ruleset !== PERFIDIA) return;
+    if (!PERFIDIA.has(snap.setup.ruleset)) return;
     const fighter = rules.units.find((u) => u.domain === "land" && u.attack > 0)?.id ?? "x";
     /** A siege of `owner`'s capital by `by`, held from `by`'s capital; returns the city. */
     const besiege = (owner: PlayerId, by: PlayerId): City => {
@@ -288,6 +293,23 @@ export function stage(
       const seq = scheduleAt(state, rules, "domination_end", endsAt, lone);
       d.countdowns.push({ bloc: lone, members: [lone], startedAt: state.now, endsAt, seq });
       d.countdowns.sort((a, b) => byText(a.bloc, b.bloc));
+    }
+    // 1.1.0: a city its owner took from another player (public, from `city_conquered`), so the
+    // views show a taken city, its former owner and the players' and blocs' taken counts. A city
+    // of a stranger to X that is no capital when there is one, else a stranger's capital.
+    const x11 = pext(state);
+    if (CONQUESTS.has(snap.setup.ruleset) && x11.conquests !== undefined) {
+      const owned = Object.values(state.cities)
+        .filter((c) => c.owner !== null && c.owner !== x && !friends.has(c.owner))
+        .toSorted(
+          (a, b) =>
+            Number(a.capitalOf !== null) - Number(b.capitalOf !== null) || byText(a.id, b.id),
+        );
+      const taken = owned[0];
+      const from = alive(state).find((p) => p !== taken?.owner);
+      if (taken?.owner !== null && taken?.owner !== undefined && from !== undefined) {
+        x11.conquests[taken.id] = { by: taken.owner, former: [from] };
+      }
     }
   });
   return { snap: staged, x, ally, attackOnX, siege, allyMovement, xSiege };
@@ -423,7 +445,7 @@ export function perturb(
         case "support": {
           // Nothing leaves a besieged city (perfidia-1 §9.2): its owner sends no support from it.
           const besieged = (q: PlayerId): boolean =>
-            s.snap.setup.ruleset === PERFIDIA &&
+            PERFIDIA.has(s.snap.setup.ruleset) &&
             Object.hasOwn(pext(state).sieges, capitalOf(state, q)?.id ?? "");
           const mover = at(
             strangers.filter((q) => !besieged(q)),
@@ -500,7 +522,7 @@ export function perturb(
           break;
         }
         case "battlePoints": {
-          if (s.snap.setup.ruleset !== PERFIDIA) break;
+          if (!PERFIDIA.has(s.snap.setup.ruleset)) break;
           const other = at(
             sortedIds(state.players).filter((x) => x !== s.x && !spared.has(x)),
             p.pick,
@@ -529,7 +551,7 @@ export function perturb(
         case "reschedule": {
           // The seqs of the staged siege's `siege_end` and of each countdown's `domination_end`:
           // engine bookkeeping (§5.1), never shown. Each event is scheduled again, with a new seq.
-          if (s.snap.setup.ruleset !== PERFIDIA) break;
+          if (!PERFIDIA.has(s.snap.setup.ruleset)) break;
           const x = pext(state);
           const again = (kind: string, ref: string, seq: number): number => {
             const ev = state.queue.find((e) => e.seq === seq);
@@ -560,7 +582,7 @@ export function perturb(
         case "allyOutgoing": {
           // Where X's ally's support goes and when it lands: hidden where the ruleset hides an
           // ally's outgoing movements (perfidia-1; sandbox-1 shows them in full).
-          if (s.snap.setup.ruleset !== PERFIDIA || allyMove === null || ally === null) break;
+          if (!PERFIDIA.has(s.snap.setup.ruleset) || allyMove === null || ally === null) break;
           const m = must(state.movements, allyMove);
           const to = at(
             hidden.filter((c) => c.owner !== null && c.owner !== ally && c.id !== m.to),

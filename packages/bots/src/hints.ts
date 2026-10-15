@@ -96,7 +96,11 @@ export const NO_HINTS: StrategyHints = Object.freeze({
   blockedExt: Object.freeze([]),
 });
 
-/** Hints by ruleset id (not ref: every version of a ruleset shares them). */
+/**
+ * Hints by exact ruleset ref (`id@x.y.z`) or by ruleset id: `hintsFor` tries the exact ref first,
+ * then the id, so the id entry serves every version without its own (a version that renames ids
+ * needs its own entry).
+ */
 export const RULESET_HINTS: Readonly<Record<string, StrategyHints>> = Object.freeze({
   // The reference bot of perfidia-1 §15.1: the free home slot, a frontier, the backyard, the inner
   // island, then the next frontier. The Crown is a neutral prize with a garrison bots cannot break.
@@ -135,6 +139,39 @@ export const RULESET_HINTS: Readonly<Record<string, StrategyHints>> = Object.fre
       need: Object.freeze(["domination", "need"]),
     }),
   }),
+  // perfidia-1@1.1.0 (docs/rulesets/perfidia-1.md §0.1): 1.0.0's hints with the ids of the Greek
+  // setting: the acropolis gives the base defense, and the neutral prize city is tagged olympus.
+  "perfidia-1@1.1.0": Object.freeze({
+    settleOrder: Object.freeze(["home", "frontier", "backyard", "inner", "frontier"]),
+    avoidTags: Object.freeze(["olympus"]),
+    blockedExt: Object.freeze(["siege"]),
+    combat: Object.freeze({
+      capitalImmunityEnd: Object.freeze(["time", "capitalImmunityEnd"]),
+      baseDefense: Object.freeze({
+        building: "acropolis",
+        quad: Object.freeze(["economy", "baseDefense"]),
+      }),
+      wallPmPerLevel: Object.freeze(["combat", "wallPmPerLevel"]),
+      morale: Object.freeze({
+        perCity: Object.freeze(["combat", "moralePmPerCity"]),
+        floor: Object.freeze(["combat", "moraleFloorPm"]),
+      }),
+      lootProtectPerLevel: Object.freeze(["economy", "lootProtectPerLevel"]),
+    }),
+    // §12: `siege {by, ends}` as in 1.0.0. §13.2: the briefing's `countdowns [{key, members,
+    // cities, taken, need, needTaken, ends}]`, the leaderboard's `domination.need` (cities).
+    siege: Object.freeze({
+      by: Object.freeze(["siege", "by"]),
+      ends: Object.freeze(["siege", "ends"]),
+      duration: Object.freeze(["time", "siegeDuration"]),
+    }),
+    domination: Object.freeze({
+      countdowns: Object.freeze(["countdowns"]),
+      members: "members",
+      ends: "ends",
+      need: Object.freeze(["domination", "need"]),
+    }),
+  }),
   // sandbox-1 §3.8: the home island's second slot, then the shared islands; capitals fall from
   // `capitalImmunityEnd` on.
   "sandbox-1": Object.freeze({
@@ -152,8 +189,12 @@ export const RULESET_HINTS: Readonly<Record<string, StrategyHints>> = Object.fre
   }),
 });
 
-/** The hints of the ruleset of `ref` (`id@x.y.z` or a bare id), or `NO_HINTS`. */
+/**
+ * The hints of the ruleset of `ref`: the entry of the exact ref (`id@x.y.z`), else the entry of its
+ * id (a bare id reads the id entry only), else `NO_HINTS`.
+ */
 export function hintsFor(ref: string): StrategyHints {
+  if (Object.hasOwn(RULESET_HINTS, ref)) return RULESET_HINTS[ref]!;
   const at = ref.indexOf("@");
   const id = at < 0 ? ref : ref.slice(0, at);
   return Object.hasOwn(RULESET_HINTS, id) ? RULESET_HINTS[id]! : NO_HINTS;

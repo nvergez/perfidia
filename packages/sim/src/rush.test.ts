@@ -13,10 +13,13 @@ const FROM = 43200;
 const RUSHERS: readonly PlayerId[] = ["p2", "p6"];
 const isRusher = (p: unknown): boolean => RUSHERS.some((seat) => seat === p);
 
-/** Day 1 of a 6-seat perfidia-1 match of the four bots, rusher@2 on the rusher seats. */
+/**
+ * Day 1 of a 6-seat perfidia-1@1.0.0 match of the four bots, rusher@2 on the rusher seats (pinned:
+ * the timings and unit ids below are 1.0.0's).
+ */
 async function dayOne(seed: number): Promise<LogLine[]> {
   const prepared = prepareBotRun({
-    ruleset: "perfidia-1",
+    ruleset: "perfidia-1@1.0.0",
     seed,
     players: 6,
     days: 1,

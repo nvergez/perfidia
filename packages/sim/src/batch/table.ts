@@ -357,7 +357,7 @@ export function countdownTable(result: BatchResult): string {
     "start",
     "end",
     "bloc",
-    "cities (threshold)",
+    "cities (threshold), taken (needed)",
     "conquered / founded / initial",
     "outcome",
   ];
@@ -369,7 +369,7 @@ export function countdownTable(result: BatchResult): string {
       gameClockText(c.t),
       gameClockText(c.endedAt ?? c.endsAt),
       blocText(c),
-      `${c.cities}${c.threshold === null ? "" : ` (${c.threshold})`}`,
+      `${c.cities}${c.threshold === null ? "" : ` (${c.threshold})`}${c.taken === undefined ? "" : `, taken ${c.taken}${c.needTaken === undefined ? "" : ` (${c.needTaken})`}`}`,
       `${c.conquered} / ${c.founded} / ${c.initial}`,
       outcomeText(c),
     ]);
@@ -497,8 +497,9 @@ export function teamTable(result: BatchResult): string {
     "cancels",
     "R1 need",
     "R1 met",
-    "largest bloc: cities / conquered",
-    "bloc with ≥ 2 conquered: cities (runs)",
+    "R1 held",
+    "largest bloc: cities / taken",
+    "bloc with the taken cities: cities (runs), short of need",
   ];
   const rows = result.variants.map((v) => {
     const t = v.aggregate.team;
@@ -515,12 +516,15 @@ export function teamTable(result: BatchResult): string {
       String(t.calls.cancels),
       int(t.r1.need),
       `${t.r1.reached} of ${t.r1.runs}`,
+      `${t.r1.held} of ${t.r1.runs}`,
       `${n1(t.r1.maxCities)} / ${n2(t.r1.maxConquered)}`,
-      t.r1.fightingRuns === 0 ? "-" : `${n1(t.r1.fightingMax)} (${t.r1.fightingRuns})`,
+      t.r1.fightingRuns === 0
+        ? "-"
+        : `${n1(t.r1.fightingMax)} (${t.r1.fightingRuns}), ${n1(t.r1.shortfall)}`,
     ];
   });
   const title =
-    "teamwork · joint attack: battles at one city by ≥ 2 players allied at the time, landing within 60 min · war calls: private WAR# messages · R1: a bloc with ≥ 40% of the map's city slots, ≥ 2 of them conquered";
+    "teamwork · joint attack: battles at one city by ≥ 2 players allied at the time, landing within 60 min · war calls: private WAR# messages · R1 (perfidia-1@1.1.0 §13.3, a 1.0.0 log with the proposed values): a bloc with ≥ 40% of the map's city slots and ≥ 2N, ≥ 2 of them taken (conquered by an owner that never owned them before); held: for 24 h from day 4";
   return `${title}\n${withLongNames([head, ...rows], new Set([1, 2, 3, 4, 5, 6, 7, 8, 9, 10])).join("\n")}\n`;
 }
 
@@ -627,7 +631,9 @@ export function matchTeamTable(result: BatchResult): string {
           : `${conquered} / ${relief} / ${abandoned} / ${s.length - conquered - relief - abandoned} (${reinforced})`,
         `${m.warCalls.calls} (${m.warCalls.answered})`,
         r1 === null ? "-" : `${r1.maxCities} / ${r1.maxConquered} (${r1.maxBloc.join(" + ")})`,
-        r1 === null || r1.reachedAt === null ? "-" : gameClockText(r1.reachedAt),
+        r1 === null || r1.reachedAt === null
+          ? "-"
+          : `${gameClockText(r1.reachedAt)}${r1.heldAt === null ? "" : `, held ${gameClockText(r1.heldAt)}`}${r1.takenFromBloc === null || r1.takenFromBloc === 0 ? "" : `, ${r1.takenFromBloc} taken in bloc`}`,
       ];
     }),
   );

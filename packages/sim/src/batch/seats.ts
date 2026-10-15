@@ -11,12 +11,14 @@ import { eliminations } from "./fights.ts";
 
 // Per seat and per bot (docs/architecture.md §12.2). The score and its parts are the final
 // standings' (perfidia-1 exposes `cityPoints` and `battleScore`, sandbox-1 `cityPoints` and
-// `levelPoints`). A part the standings do not expose is derived from the log only: the Crown points
-// from the cities taken from no owner (`city_conquered` with `from: null`, the Crown in perfidia-1)
-// still held at the end, times the header config's `scoring.crownBonus`; the building-level points
-// as `cityPoints − scoring.cityBase × cities − crown points` (the perfidia-1 §13.1 formula), only
-// when the config has those keys and the seat is alive (an eliminated seat's score is frozen with
-// its last city, §9.7, and is not split). Battle points are summed from the full battle reports'
+// `levelPoints`). A part the standings do not expose is derived from the log only: the prize points
+// from the cities taken from no owner (`city_conquered` with `from: null`: the Crown of
+// perfidia-1@1.0.0, Olympus from 1.1.0) still held at the end, times the header config's
+// `scoring.crownBonus` (`scoring.olympusBonus` from 1.1.0); the building-level points as
+// `cityPoints − scoring.cityBase × cities − prize points − scoring.conquestBonus × taken cities
+// held` (the perfidia-1 §13.1 formula; a city is taken when its owner conquered it and never owned
+// it before, 1.1.0 §13.3), only when the config has those keys and the seat is alive (an
+// eliminated seat's score is frozen with its last city, §9.7, and is not split). Battle points are summed from the full battle reports'
 // `points`. Cities founded, conquered (gained, retakes included) and lost come from the public
 // `city_founded` and `city_conquered` events, eliminations from `player_eliminated`.
 
@@ -121,13 +123,15 @@ export function seatRows(
   const header = lines[0];
   const config = header?.k === "header" ? header.config : {};
   const cityBase = scoringValue(config, "cityBase");
-  const crownBonus = scoringValue(config, "crownBonus");
+  const crownBonus = scoringValue(config, "crownBonus") ?? scoringValue(config, "olympusBonus");
+  const conquestBonus = scoringValue(config, "conquestBonus") ?? 0;
   const perLevel = scoringValue(config, "perBuildingLevel");
 
   const founded = new Map<string, number>();
   const conquered = new Map<string, number>();
   const lost = new Map<string, number>();
   const owner = new Map<string, PlayerId>();
+  const formerOwners = new Map<string, Set<string>>();
   const ownerless = new Set<string>();
   for (const line of lines) {
     if (line.k !== "ev") continue;
@@ -139,7 +143,12 @@ export function seatRows(
       if (!c.success) continue;
       bump(conquered, c.data.to);
       if (c.data.from === null) ownerless.add(c.data.city);
-      else bump(lost, c.data.from);
+      else {
+        bump(lost, c.data.from);
+        const former = formerOwners.get(c.data.city) ?? new Set<string>();
+        former.add(c.data.from);
+        formerOwners.set(c.data.city, former);
+      }
       owner.set(c.data.city, c.data.to);
     }
   }
@@ -147,6 +156,10 @@ export function seatRows(
   for (const city of ownerless) {
     const o = owner.get(city);
     if (o !== undefined) bump(crowns, o);
+  }
+  const taken = new Map<string, number>();
+  for (const [city, o] of owner) {
+    if (!(formerOwners.get(city)?.has(o) ?? false)) bump(taken, o);
   }
   const elims = eliminations(lines);
   const inflicted = new Map<string, number>();
@@ -168,7 +181,10 @@ export function seatRows(
     const levelPoints =
       part("levelPoints") ??
       (derivable && crownPoints !== null
-        ? cityPoints - cityBase * (x.cities ?? 0) - crownPoints
+        ? cityPoints -
+          cityBase * (x.cities ?? 0) -
+          crownPoints -
+          conquestBonus * (taken.get(x.seat) ?? 0)
         : null);
     return {
       seat: x.seat,
