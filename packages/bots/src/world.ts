@@ -3,6 +3,8 @@
 
 import {
   compareIds,
+  type ArchiveEntry,
+  type ArchiveHit,
   type Briefing,
   type BuildingId,
   type CityId,
@@ -90,8 +92,15 @@ export interface World {
   readonly board: LeaderboardView | null;
   /** The seat's relations (from `view_player` on itself). */
   readonly relations: ReadonlyMap<PlayerId, "ally" | "pact">;
+  /** `read_notes` results of this turn: the search hits, and the entries opened by id. */
+  readonly archive: {
+    readonly hits: readonly ArchiveHit[];
+    readonly entries: ReadonlyMap<string, ArchiveEntry>;
+  };
   /** Travel time from an own city to an island (`spy`: the spy probe), or null when unknown. */
   travel(from: CityId, island: IslandId, spy: boolean): number | null;
+  /** The travel times from an own city to an island, one per probe (`view_map`), or null when unknown. */
+  travelRow(from: CityId, island: IslandId): readonly number[] | null;
 }
 
 export interface Reads {
@@ -99,10 +108,13 @@ export interface Reads {
   map: MapView | null;
   readonly views: Map<CityId, CityView>;
   board: LeaderboardView | null;
+  /** `read_notes` search hits (in the order read) and opened entries, by id. */
+  readonly hits: ArchiveHit[];
+  readonly entries: Map<string, ArchiveEntry>;
 }
 
 export function emptyReads(): Reads {
-  return { self: null, map: null, views: new Map(), board: null };
+  return { self: null, map: null, views: new Map(), board: null, hits: [], entries: new Map() };
 }
 
 function fullView(v: CityView | undefined): CityViewFull | null {
@@ -201,9 +213,13 @@ export function buildWorld(i: WorldInput): World {
     views: reads.views,
     board: reads.board,
     relations,
+    archive: { hits: reads.hits, entries: reads.entries },
     travel(from: CityId, island: IslandId, spy: boolean): number | null {
       const row = i.travel.get(from)?.[island];
       return row === undefined ? null : pickTravel(kit, row, spy);
+    },
+    travelRow(from: CityId, island: IslandId): readonly number[] | null {
+      return i.travel.get(from)?.[island] ?? null;
     },
   };
 }

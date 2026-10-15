@@ -25,7 +25,18 @@ import {
 } from "./fights.ts";
 import { aggregatePacing, pacingOf, type PacingDay, type PacingRow } from "./pacing.ts";
 import { botName, seatRows, strategyRows, type SeatRow, type StrategyRow } from "./seats.ts";
-import { freeSlotsOf, initialFreeSlots, type FreeSlots } from "./slots.ts";
+import { freeSlotsOf, initialWorld, type FreeSlots } from "./slots.ts";
+import {
+  teamBotRows,
+  teamRecords,
+  teamStat,
+  type JointAttack,
+  type R1Reach,
+  type SiegeHold,
+  type TeamBotRow,
+  type TeamStat,
+  type WarCallStat,
+} from "./teams.ts";
 import type { Variant } from "./variants.ts";
 
 // `sim batch` (docs/architecture.md §12.1, §12.2): every variant over the same seeds with the same
@@ -35,7 +46,8 @@ import type { Variant } from "./variants.ts";
 // ref, overrides, `configHash`, `rulesHash`, `ENGINE_VERSION`, bot labels and seeds, and for each
 // match its final hash and end reason (plus the normalised log hash), with its fight times (first
 // battle, conquest and elimination, domination countdowns) next to its counts, its battles split by
-// what they were fought over, its free city slots, its countdowns and one row per seat; each variant
+// what they were fought over, its free city slots, its countdowns, one row per seat and its
+// teamwork (joint attacks, sieges and how they were held, war calls, R1 reach); each variant
 // aggregates them, with one row per bot (wins per seat and their Wilson interval). With `--out`, every
 // match keeps a full run directory (§10.1: log, snapshots, `summary.json`), and the whole batch is
 // checked before its first match, so a taken directory or a match that cannot be created writes
@@ -45,9 +57,10 @@ import type { Variant } from "./variants.ts";
  * Bumped when the JSON shape changes (§12.2): 2 added the fight times, the end reasons and the
  * pacing days' conquests and eliminations; 3 who eliminated whom; 4 the seats, the battle split,
  * the free slots and the countdowns of each match, and per variant the explicit end counts and the
- * per-bot rows.
+ * per-bot rows; 5 the teamwork of each match (joint attacks, sieges and how they were held,
+ * war-call messages, R1 reach) and per variant its totals and per-bot rows.
  */
-export const BATCH_FORMAT = "perfidia-batch/4";
+export const BATCH_FORMAT = "perfidia-batch/5";
 
 export interface BatchPlan {
   readonly variants: readonly Variant[];
@@ -90,6 +103,15 @@ export interface MatchRow extends FightTimes {
   readonly countdowns: CountdownRow[];
   /** One row per seat, in seat order (empty when the log has no header). */
   readonly seats: SeatRow[];
+  /** Joint attacks: battles at one city by ≥ 2 allied attackers landing within an hour. */
+  readonly joint: JointAttack[];
+  /** Every siege, with how it was held and how it ended. */
+  readonly sieges: SiegeHold[];
+  /** War-call messages (`WAR#` tags), and per sender controller its calls and answers. */
+  readonly warCalls: WarCallStat;
+  readonly warCallers: Record<string, { calls: number; yes: number; no: number }>;
+  /** How near a bloc came to the proposed R1 domination rule; null without a header. */
+  readonly r1: R1Reach | null;
   /** With `--pacing`: whether the Level E replay of the pacing pass matched, and the days. */
   readonly replayOk?: boolean;
   readonly pacing?: PacingDay[];
@@ -156,6 +178,9 @@ export interface VariantAggregate {
   readonly internal: number;
   /** One row per bot label over the seats of the ended runs. */
   readonly strategies: StrategyRow[];
+  /** Teamwork over the runs: joint attacks, war calls, sieges, R1 reach; and per bot label. */
+  readonly team: TeamStat;
+  readonly teamBots: TeamBotRow[];
 }
 
 export interface VariantResult {
@@ -282,6 +307,8 @@ function aggregate(matches: readonly MatchRow[]): VariantAggregate {
     },
     internal: matches.reduce((a, m) => a + m.internal, 0),
     strategies: strategyRows(matches),
+    team: teamStat(matches),
+    teamBots: teamBotRows(matches),
   };
 }
 
@@ -354,6 +381,7 @@ async function playMatch(
 
 /** The row of a match whose log has no summary (it stopped before its header). */
 function failedRow(seed: number, lines: readonly LogLine[], error: string | null): MatchRow {
+  const team = teamRecords(lines, null);
   return {
     seed,
     status: "fatal",
@@ -377,6 +405,11 @@ function failedRow(seed: number, lines: readonly LogLine[], error: string | null
     freeSlots: null,
     countdowns: [],
     seats: [],
+    joint: team.joint,
+    sieges: team.sieges,
+    warCalls: team.calls,
+    warCallers: { ...team.callers },
+    r1: null,
   };
 }
 
@@ -399,6 +432,8 @@ function rowOf(
 ): MatchRow {
   if (s === null) return failedRow(seed, lines, error);
   const header = lines[0];
+  const world = header?.k === "header" ? initialWorld(header.setup, ruleset) : null;
+  const team = teamRecords(lines, world);
   const battles = battleRecords(lines);
   const bots = Object.fromEntries(
     s.seats.map((x) => [x.seat, botName(x.controllers.at(-1)?.label ?? "?")]),
@@ -429,11 +464,16 @@ function rowOf(
     wakesPerSeatPerDay: s.wakes.perSeatPerDay,
     internal: s.internal,
     freeSlots:
-      s.status === "ended" && s.endedAt !== null && header?.k === "header"
-        ? freeSlotsOf(lines, initialFreeSlots(header.setup, ruleset), s.endedAt)
+      s.status === "ended" && s.endedAt !== null && world !== null
+        ? freeSlotsOf(lines, world.free, s.endedAt)
         : null,
     countdowns: countdownRows(lines, bots),
     seats: seatRows(lines, s, battles),
+    joint: team.joint,
+    sieges: team.sieges,
+    warCalls: team.calls,
+    warCallers: { ...team.callers },
+    r1: team.r1,
   };
   if (!pacing || s.status !== "ended") return row;
   const p = pacingOf(lines);

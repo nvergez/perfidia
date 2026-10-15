@@ -18,7 +18,13 @@
 // last seen attacking), `pf` (its last alliance proposal), `l<city>` (a raid lost there), `rv<city>`
 // (a spy for a raid) and the relief module's.
 
-import { compareIds, type CityView, type PlayerId, type ToolCall } from "@perfidia/protocol";
+import {
+  compareIds,
+  type Briefing,
+  type CityView,
+  type PlayerId,
+  type ToolCall,
+} from "@perfidia/protocol";
 import { call, countOf, landPop, res, unitsInReport } from "../kit.ts";
 import { paceBuilds, paceRecruits } from "../pace.ts";
 import { mainCity, nearby, type Planner } from "../plan.ts";
@@ -87,7 +93,7 @@ export function opportunist2Params(rng: BotRng): Opportunist2Params {
 }
 
 /** The raid parameters, drawn after the knobs (so that the economy draws match opportunist@1's). */
-function raidParams(rng: BotRng, base: Opportunist2Params): Opportunist2Params {
+export function raidParams(rng: BotRng, base: Opportunist2Params): Opportunist2Params {
   return {
     ...base,
     raidPm: randInt(rng, 1400, 1800),
@@ -98,17 +104,18 @@ function raidParams(rng: BotRng, base: Opportunist2Params): Opportunist2Params {
 }
 
 /** Friend cities read (and so weighed for a betrayal) per turn. */
-const FRIEND_SCAN = 3;
+export const FRIEND_SCAN = 3;
 /** Raid targets read (and weighed) per turn. */
-const RAID_SCAN = 4;
+export const RAID_SCAN = 4;
 /** A player seen attacking within this long counts as a fighter. */
-const FIGHTER_MEMORY = 2 * 86400;
+export const FIGHTER_MEMORY = 2 * 86400;
 /** Its bloc within this many cities of the threshold waits for a countdown instead of betraying. */
 const NEAR_THRESHOLD = 2;
 
-const isPlayerId = (v: unknown): v is PlayerId => typeof v === "string" && /^p[1-9][0-9]*$/.test(v);
+export const isPlayerId = (v: unknown): v is PlayerId =>
+  typeof v === "string" && /^p[1-9][0-9]*$/.test(v);
 
-const seatNumber = (p: PlayerId): number | null => {
+export const seatNumber = (p: PlayerId): number | null => {
   const m = /^p([1-9][0-9]*)$/.exec(p);
   return m?.[1] === undefined ? null : Number(m[1]);
 };
@@ -133,7 +140,7 @@ function neighbours(w: World): PlayerId[] {
 }
 
 /** Cities of the seat's allies and pact partners, nearest to its main city first, not besieged. */
-function friendCities(w: World): OtherCity[] {
+export function friendCities(w: World): OtherCity[] {
   const from = mainCity(w);
   if (from === null) return [];
   const sieged = besiegedRows(w);
@@ -141,17 +148,17 @@ function friendCities(w: World): OtherCity[] {
 }
 
 /** Cities of players the seat has no relation with, not besieged, nearest to `from` first. */
-function strangerCities(w: World, from: OwnCity): OtherCity[] {
+export function strangerCities(w: World, from: OwnCity): OtherCity[] {
   const sieged = besiegedRows(w);
   return nearby(w, from, (o) => o.owner !== null && !w.relations.has(o.owner) && !sieged.has(o.id));
 }
 
-function topTwo(w: World): boolean {
+export function topTwo(w: World): boolean {
   const me = w.board?.standings.find((s) => s.player === w.seat);
   return me !== undefined && me.rank <= 2;
 }
 
-function weighable(w: World, view: CityView | undefined): view is CityView {
+export function weighable(w: World, view: CityView | undefined): view is CityView {
   return view !== undefined && (view.tag === null || !w.hints.avoidTags.includes(view.tag));
 }
 
@@ -159,14 +166,14 @@ function weighable(w: World, view: CityView | undefined): view is CityView {
  * The estimated defense of a friend's city: seen in full (an ally's), its units and supports behind
  * its base defense and wall; known through reports (a pact partner's), the latest fresh spy report.
  */
-function friendDefense(w: World, view: CityView, stale: number): number | null {
+export function friendDefense(w: World, view: CityView, stale: number): number | null {
   if (view.access === "public") return spiedDefense(w, view, stale)?.d ?? null;
   return seenDefense(w, view);
 }
 
 // Diplomacy.
 
-function remember(p: Planner): void {
+export function remember(p: Planner): void {
   const { w } = p;
   for (const [player, kind] of [...w.relations.entries()].toSorted((a, b) =>
     compareIds(a[0], b[0]),
@@ -177,10 +184,16 @@ function remember(p: Planner): void {
   }
 }
 
-/** Remembers who attacked whom in the public battle headlines (`f<seat>`: last seen attacking). */
-function watchFighters(p: Planner): void {
+/**
+ * Remembers who attacked whom in the public battle headlines (`f<seat>`: last seen attacking), from
+ * `events` (by default the briefing's news and events).
+ */
+export function watchFighters(
+  p: Planner,
+  events: readonly Briefing["events"][number][] = [...p.w.briefing.news, ...p.w.briefing.events],
+): void {
   const { w } = p;
-  for (const e of [...w.briefing.news, ...w.briefing.events]) {
+  for (const e of events) {
     if (e.type !== "battle") continue;
     const attacker = e["attacker"];
     if (!isPlayerId(attacker) || attacker === w.seat) continue;
@@ -189,7 +202,7 @@ function watchFighters(p: Planner): void {
   }
 }
 
-function court(p: Planner, prm: Opportunist2Params): void {
+export function court(p: Planner, prm: Opportunist2Params): void {
   const { w } = p;
   if (w.day !== 0 || p.flag("pr") !== null) return;
   const d = w.kit.rules.diplomacy;
@@ -219,7 +232,7 @@ function court(p: Planner, prm: Opportunist2Params): void {
  * to a neighbour seen attacking within two days (the nearest), else to its nearest neighbour; at
  * most once per proposal lifetime, never to a player it betrayed.
  */
-function courtFighter(p: Planner): void {
+export function courtFighter(p: Planner): void {
   const { w } = p;
   const d = w.kit.rules.diplomacy;
   if (w.day < 1 || d.allianceMax < 2) return;
@@ -259,7 +272,7 @@ function courtFighter(p: Planner): void {
   p.memo(`court ${pick}${fighter(pick) ? " (fighter)" : ""} D${w.day + 1}`);
 }
 
-function tribute(p: Planner, prm: Opportunist2Params): void {
+export function tribute(p: Planner, prm: Opportunist2Params): void {
   const { w } = p;
   if (w.day > 1 || p.flag("tr") !== null || w.board === null) return;
   const ship = w.kit.rules.movement.shipment;
@@ -283,7 +296,7 @@ function tribute(p: Planner, prm: Opportunist2Params): void {
 // Betrayal.
 
 /** True while its own bloc runs a countdown or holds nearly enough cities for one. */
-function dominationInReach(w: World): boolean {
+export function dominationInReach(w: World): boolean {
   if (ownCountdown(w) !== null) return true;
   const need = dominationNeed(w);
   if (need === null) return false;
@@ -294,7 +307,7 @@ function dominationInReach(w: World): boolean {
   return bloc.size > 1 && cities + NEAR_THRESHOLD >= need;
 }
 
-function betray(p: Planner, prm: Opportunist2Params): void {
+export function betray(p: Planner, prm: Opportunist2Params): void {
   const { w } = p;
   if (w.day < prm.betrayDay || p.flag("bt") !== null || !topTwo(w)) return;
   if (w.t < w.kit.rules.time.attackFrom || p.attacksLeft <= 0 || dominationInReach(w)) return;
@@ -319,7 +332,7 @@ function betray(p: Planner, prm: Opportunist2Params): void {
 }
 
 /** Spies a friend's city known only through reports, from the day before the betrayal on. */
-function scoutFriends(p: Planner, prm: Opportunist2Params): void {
+export function scoutFriends(p: Planner, prm: Opportunist2Params): void {
   const { w } = p;
   if (w.day < prm.betrayDay - 1 || p.flag("bt") !== null || !topTwo(w)) return;
   if (dominationInReach(w)) return;
@@ -346,7 +359,7 @@ function scoutFriends(p: Planner, prm: Opportunist2Params): void {
 // Raids.
 
 /** Remembers a raid lost on a city (its latest report), for the cooldown. */
-function noteLosses(p: Planner): void {
+export function noteLosses(p: Planner): void {
   const { w } = p;
   for (const view of w.views.values()) {
     if (view.access !== "public" || view.intel === null) continue;
@@ -360,7 +373,7 @@ function noteLosses(p: Planner): void {
 }
 
 /** Spies sent for raids today (flags `rv<city>` set today). */
-function raidSpiesToday(p: Planner): number {
+export function raidSpiesToday(p: Planner): number {
   const start = p.w.day * 86400;
   return Object.entries(p.memory.x).filter(([k, v]) => k.startsWith("rv") && v >= start).length;
 }
@@ -420,7 +433,7 @@ function raid(p: Planner, prm: Opportunist2Params): void {
 }
 
 /** Drops raid flags that no longer matter, so that the notes stay small. */
-function tidy(p: Planner, prm: Opportunist2Params): void {
+export function tidy(p: Planner, prm: Opportunist2Params): void {
   const { w } = p;
   for (const [name, v] of Object.entries(p.memory.x)) {
     const age = w.t - v;
@@ -434,7 +447,7 @@ function tidy(p: Planner, prm: Opportunist2Params): void {
  * Turns back a betrayal still in its recall window once the seat's own bloc runs a countdown: the
  * betrayal would land during it, and leaving the alliance cancels the countdown.
  */
-function holdBetrayal(p: Planner): void {
+export function holdBetrayal(p: Planner): void {
   const { w } = p;
   if (ownCountdown(w) === null) return;
   for (const m of w.self?.private?.movements ?? []) {

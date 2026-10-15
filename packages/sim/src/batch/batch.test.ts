@@ -43,7 +43,7 @@ async function cli(...argv: string[]): Promise<{ code: number; out: string; err:
 }
 
 function isBatch(v: unknown): v is BatchResult {
-  return typeof v === "object" && v !== null && "format" in v && v.format === "perfidia-batch/4";
+  return typeof v === "object" && v !== null && "format" in v && v.format === "perfidia-batch/5";
 }
 
 /** Every file under `dir` with its bytes, for before/after comparisons. */
@@ -100,6 +100,16 @@ describe("sim batch", () => {
       expect(rows[ends + 2]).toMatch(/^perfidia-1@1\.0\.0 +2 +2 +0 +0 +0 +0 +0 +0 +0 +- +- \/ /);
       expect(rows.find((l) => l.startsWith("battles · "))).toBeDefined();
       expect(rows.find((l) => l.startsWith("bots · "))).toBeDefined();
+      // Then teamwork, one row per variant, and sieges by bot under an `all` row.
+      const team = rows.findIndex((l) => l.startsWith("teamwork · "));
+      expect(rows[team + 1]).toMatch(/^variant +runs +joint attacks\/run +runs with one /);
+      expect(rows[team + 2]).toMatch(
+        /^perfidia-1@1\.0\.0 +2 +\d+\.\d\d +\d+ +0 +0 +0 +0 +0 +0 +18 +0 of 2 /,
+      );
+      const sieges = rows.findIndex((l) => l.startsWith("sieges and teamwork by bot · "));
+      expect(sieges).toBeGreaterThan(team);
+      expect(rows[sieges + 2]).toMatch(/^perfidia-1@1\.0\.0 +all +\d+ /);
+      expect(r.out).not.toContain("teamwork per match · ");
       expect(r.out).not.toContain("domination countdowns · ");
       expect(r.out).not.toContain("seats · ");
       expect(r.out).toContain(`results with provenance: ${json}`);
@@ -115,9 +125,9 @@ describe("sim batch", () => {
       expect(parsed.bots).toEqual([
         "bot:expander@2",
         "bot:rusher@3",
-        "bot:turtle@2",
-        "bot:opportunist@2",
-        "bot:conqueror@2",
+        "bot:turtle@3",
+        "bot:opportunist@3",
+        "bot:conqueror@3",
       ]);
       expect(parsed.clock).toEqual({ kind: "lockstep", maxTurnsPerSecond: 3 });
       const rs = getRuleset("perfidia-1@1.0.0");
@@ -138,7 +148,7 @@ describe("sim batch", () => {
           controllers: {
             p1: "bot:expander@2",
             p2: "bot:rusher@3",
-            p5: "bot:conqueror@2",
+            p5: "bot:conqueror@3",
             p6: "bot:expander@2",
           },
         });
@@ -256,6 +266,9 @@ describe("sim batch", () => {
       }
       expect(rows.find((l) => l.startsWith("seats · "))).toBeDefined();
       expect(rows.find((l) => l.startsWith("battles and land per match"))).toBeDefined();
+      // Teamwork per match; R1 on sandbox-1's 12 slots (3 sectors of 4) asks for 5 cities.
+      expect(rows.find((l) => l.startsWith("teamwork per match · "))).toBeDefined();
+      expect(m?.r1).toMatchObject({ slots: 12, need: 5 });
       // --allow-test silences the note (--pacing replays the match: exit 0 means it matched).
       const quiet = await cli(
         "batch",
@@ -290,7 +303,7 @@ describe("sim batch", () => {
     const ba = await runBatch({ ...plan, variants: [b, a] });
     expect(ab.variants[0]).toEqual(ba.variants[1]);
     expect(ab.variants[1]).toEqual(ba.variants[0]);
-    expect(ab.bots).toEqual(["bot:rusher@3", "bot:turtle@2", "bot:rusher@1"]);
+    expect(ab.bots).toEqual(["bot:rusher@3", "bot:turtle@3", "bot:rusher@1"]);
     expect(ab.variants[0]?.controllers["p3"]).toBe("bot:rusher@1");
     expect(ab.variants.flatMap((v) => v.matches.map((m) => m.replayOk))).toEqual([true, true]);
   }, 30000);

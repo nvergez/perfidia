@@ -31,12 +31,15 @@ const rusher2: StrategyDef = Object.freeze<StrategyDef>({ ...rusher, version: 2 
 const VERSIONS: Readonly<Record<string, readonly number[]>> = {
   expander: [1, 2],
   rusher: [1, 2, 3],
-  turtle: [1, 2],
-  opportunist: [1, 2],
-  conqueror: [1, 2],
+  turtle: [1, 2, 3],
+  opportunist: [1, 2, 3],
+  conqueror: [1, 2, 3],
 };
+/** Previews (`StrategyDef.preview`): registered, but not the default yet (none in this build). */
+const PREVIEWS: Readonly<Record<string, readonly number[]>> = {};
 const versionsOf = (s: string): readonly number[] => VERSIONS[s] ?? [];
-const latest = (s: string): number => versionsOf(s).at(-1) ?? 0;
+const latest = (s: string): number =>
+  versionsOf(s).findLast((v) => !(PREVIEWS[s] ?? []).includes(v)) ?? 0;
 
 describe("the registry of this build", () => {
   test("the five strategies at their latest version, every published version kept", () => {
@@ -61,15 +64,23 @@ describe("the registry of this build", () => {
       "bot:rusher@3",
       "bot:turtle@1",
       "bot:turtle@2",
+      "bot:turtle@3",
       "bot:opportunist@1",
       "bot:opportunist@2",
+      "bot:opportunist@3",
       "bot:conqueror@1",
       "bot:conqueror@2",
+      "bot:conqueror@3",
     ]);
     expect(botFromLabel("bot:rusher@1", P1)?.label).toBe("bot:rusher@1");
     expect(botFromLabel("bot:rusher@2", P1)?.label).toBe("bot:rusher@2");
     expect(botFromLabel("bot:rusher@3", P1)?.label).toBe("bot:rusher@3");
     expect(botFromLabel("bot:conqueror@2", P1)?.label).toBe("bot:conqueror@2");
+    // conqueror@3, a preview before its release, is the default now; conqueror@2 builds by its label.
+    expect(botFromLabel("bot:conqueror@3", P1)?.label).toBe("bot:conqueror@3");
+    expect(createBotVersion("conqueror", 3, P1).label).toBe("bot:conqueror@3");
+    expect(botLabel("conqueror")).toBe("bot:conqueror@3");
+    expect(botLabel("conqueror", 2)).toBe("bot:conqueror@2");
   });
 
   test("labels parse back to their strategy; malformed or unregistered labels do not", () => {
@@ -97,7 +108,7 @@ describe("the registry of this build", () => {
   test("an unregistered version is an error when asked for by number", () => {
     expect(() => botLabel("rusher", 9)).toThrow("no bot:rusher@9; rusher has @1, @2, @3");
     expect(() => createBotVersion("rusher", 9, P1)).toThrow("no bot:rusher@9");
-    expect(() => botLabel("turtle", 3)).toThrow("no bot:turtle@3; turtle has @1, @2");
+    expect(() => botLabel("turtle", 4)).toThrow("no bot:turtle@4; turtle has @1, @2, @3");
   });
 
   test("each createBot call is a new instance", () => {
@@ -148,6 +159,39 @@ describe("several versions of a strategy", () => {
       expect(reg.fromLabel(bad, P1)).toBeNull();
     }
     expect(() => reg.create("turtle", P1, 2)).toThrow("no bot:turtle@2; turtle has @1");
+  });
+
+  test("a preview is registered but not the default until a release drops the flag", () => {
+    const preview: StrategyDef = Object.freeze<StrategyDef>({
+      ...rusher,
+      version: 3,
+      preview: true,
+    });
+    const withPreview = createBotRegistry([
+      expander,
+      rusher2,
+      rusher,
+      preview,
+      turtle,
+      opportunist,
+      conqueror,
+    ]);
+    expect(withPreview.versions("rusher")).toEqual([1, 2, 3]);
+    expect(withPreview.latest("rusher")).toBe(2);
+    expect(withPreview.label("rusher")).toBe("bot:rusher@2");
+    expect(withPreview.create("rusher", P1).label).toBe("bot:rusher@2");
+    expect(withPreview.create("rusher", P1, 3).label).toBe("bot:rusher@3");
+    expect(withPreview.parse("bot:rusher@3")).toEqual({ strategy: "rusher", version: 3 });
+    expect(withPreview.labels()).toContain("bot:rusher@3");
+    // Only previews: the highest of them is the default.
+    const onlyPreview = createBotRegistry([
+      expander,
+      { ...rusher, preview: true },
+      turtle,
+      opportunist,
+      conqueror,
+    ]);
+    expect(onlyPreview.latest("rusher")).toBe(1);
   });
 
   test("the definitions are checked: duplicates, bad versions, strategies without a def", () => {

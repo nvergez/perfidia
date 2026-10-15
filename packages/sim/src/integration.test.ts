@@ -154,9 +154,9 @@ describe("1-game-day matches of the default bots", () => {
       expect(header?.k === "header" && Object.values(header.controllers)).toEqual([
         "bot:expander@2",
         "bot:rusher@3",
-        "bot:turtle@2",
-        "bot:opportunist@2",
-        "bot:conqueror@2",
+        "bot:turtle@3",
+        "bot:opportunist@3",
+        "bot:conqueror@3",
         "bot:expander@2",
       ]);
       expect(first.run.stats.turns).toBe(k["wake"] ?? -1);
@@ -222,7 +222,7 @@ describe("hand-offs", () => {
     const controllers = out.lines.filter((l) => l.k === "controller");
     expect(controllers).toHaveLength(1);
     const [line] = controllers;
-    expect(line).toMatchObject({ k: "controller", seat: "p2", label: "bot:turtle@2" });
+    expect(line).toMatchObject({ k: "controller", seat: "p2", label: "bot:turtle@3" });
     expect(line?.t).toBeGreaterThanOrEqual(43200);
     const next = out.lines[out.lines.findIndex((l) => l.k === "controller") + 1];
     expect(next).toMatchObject({ k: "wake", seat: "p2", t: line?.t });

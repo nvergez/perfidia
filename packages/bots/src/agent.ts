@@ -87,6 +87,8 @@ interface TurnState {
   base: readonly ToolCall[] | null;
   /** Strategy reads, computed once the base reads are in. */
   extra: readonly ToolCall[] | null;
+  /** The strategy's follow-up reads (`Brain.moreReads`), computed once the strategy reads are in. */
+  more: readonly ToolCall[] | null;
   /** The previous round's calls, matched with this round's results. */
   pending: readonly ToolCall[];
   plan: Plan | null;
@@ -158,6 +160,7 @@ export class BotAgent implements SeatAgent {
       issued: new Set(),
       base: null,
       extra: null,
+      more: null,
       pending: [],
       plan: null,
       sent: 0,
@@ -282,6 +285,14 @@ export class BotAgent implements SeatAgent {
         s.reads.board = parsed.data;
         return;
       }
+      case "read_notes": {
+        const parsed = TOOL_RESULT_DATA.read_notes.safeParse(data);
+        if (!parsed.success) return this.malformed(c, parsed.error);
+        s.reads.hits.push(...(parsed.data.hits ?? []));
+        const entry = parsed.data.entry;
+        if (entry !== undefined && entry.id !== null) s.reads.entries.set(entry.id, entry);
+        return;
+      }
       default:
         return;
     }
@@ -358,7 +369,12 @@ export class BotAgent implements SeatAgent {
         return true;
       });
     }
-    return s.extra.filter((c) => !s.issued.has(keyOf(c)));
+    const extra = s.extra.filter((c) => !s.issued.has(keyOf(c)));
+    if (extra.length > 0 || this.brain.moreReads === undefined) return extra;
+    s.more ??= this.brain
+      .moreReads(this.world(s))
+      .filter((c) => READ_TOOLS.includes(c.tool) && !s.issued.has(keyOf(c)));
+    return s.more.filter((c) => !s.issued.has(keyOf(c)));
   }
 
   private world(s: TurnState): World {
