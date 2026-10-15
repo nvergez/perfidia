@@ -1,5 +1,5 @@
 import type { CompiledRules, ConfigIssue, DeepReadonly } from "@perfidia/protocol";
-import type { PerfidiaConfig } from "./config.ts";
+import type { PerfidiaCore } from "./config.ts";
 
 // The ruleset-specific compile checks of perfidia-1 §16 (`Ruleset.check`). The generic checks
 // (durations, budgets, `urgentMinGap < minTravel`, …) are the kernel's `checkRules`
@@ -7,7 +7,7 @@ import type { PerfidiaConfig } from "./config.ts";
 
 /** `siegeDuration > recallWindow` and `sameIslandTravel ≥ minTravel`, each reported at its path. */
 export function checkConfig(
-  config: DeepReadonly<PerfidiaConfig>,
+  config: DeepReadonly<PerfidiaCore>,
   _rules: DeepReadonly<CompiledRules>,
 ): ConfigIssue[] {
   const t = config.time;

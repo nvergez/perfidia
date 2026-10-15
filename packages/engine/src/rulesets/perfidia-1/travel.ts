@@ -1,7 +1,7 @@
 import type { ReadCtx } from "@perfidia/engine/contracts";
 import { isqrt } from "@perfidia/engine/core";
 import type { DeepReadonly, IslandId, TravelGroup } from "@perfidia/protocol";
-import { type PerfidiaConfig, UNIT_IDS } from "./config.ts";
+import type { PerfidiaCore } from "./config.ts";
 
 // Travel times (perfidia-1 §7.2). `time.minTravel` and `time.sameIslandTravel` come from the config,
 // never as a literal.
@@ -29,14 +29,13 @@ export function distanceTiles(a: Point, b: Point): number {
  * slowest ship of the group, or the homebound pace for a group with no ship.
  */
 export function paceOf(
-  config: DeepReadonly<PerfidiaConfig>,
+  config: DeepReadonly<PerfidiaCore>,
   group: DeepReadonly<TravelGroup>,
 ): number {
   if (group.kind === "spy") return config.movement.spyPace;
   if (group.kind === "shipment") return config.movement.shipment.pace;
   let pace: number | null = null;
-  for (const id of UNIT_IDS) {
-    const u = config.units[id];
+  for (const [id, u] of Object.entries(config.units)) {
     const n = group.units[id] ?? 0;
     if (n > 0 && u.domain === "naval") {
       const p = u.seaPace ?? config.movement.homeboundPace;
@@ -51,7 +50,7 @@ export function paceOf(
  * `max(minTravel, isqrt(pace² · d²))`.
  */
 export function travelBetween(
-  config: DeepReadonly<PerfidiaConfig>,
+  config: DeepReadonly<PerfidiaCore>,
   from: Point,
   to: Point,
   sameIsland: boolean,
@@ -64,7 +63,7 @@ export function travelBetween(
 
 /** `hooks.travelTime`: the travel time between two islands of the match for a group. */
 export function travelTime<X>(
-  r: ReadCtx<PerfidiaConfig, X>,
+  r: ReadCtx<PerfidiaCore, X>,
   from: IslandId,
   to: IslandId,
   group: TravelGroup,

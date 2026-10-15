@@ -38,6 +38,7 @@ import {
   own,
   type PCtx,
   type PRead,
+  type PRead100,
 } from "./common.ts";
 import { QUEUES_REFUNDED, SIEGE_BROKEN, SIEGE_STARTED, type SiegeBreakCause } from "./events.ts";
 import type { PerfidiaExt } from "./ext.ts";
@@ -208,94 +209,119 @@ export function breakSiege(ctx: PCtx, city: CityId, cause: SiegeBreakCause): voi
   }
 }
 
-/** The public score parts of `p` now (§13.1). */
-function scorePartsOf(ctx: PCtx, p: PlayerId): ScoreParts {
+/**
+ * How a version computes a player's public score parts now (§13.1), for the score frozen at an
+ * elimination; method-style, so a version's own context type fits.
+ */
+export type ScorePartsOf = { of(r: PRead, p: PlayerId): ScoreParts }["of"];
+
+/** The siege hooks that freeze a score: the same code for every version, with its own score. */
+export interface SiegeHooks {
+  /**
+   * Eliminates `p` (§9.7): its score freezes at `score` (by default its parts now; a conquest
+   * passes the parts it had with its last city), then `std.eliminate` removes its units, movements
+   * and proposals and ends its alliance and pacts. The sieges `p` held lose their garrison with its
+   * units; `afterStep`'s garrison sweep breaks them (cause `eliminated`) at the end of this step,
+   * the one mechanism for every garrison left without a settler.
+   */
+  readonly eliminatePlayer: (ctx: PCtx, p: PlayerId, score?: ScoreParts) => void;
+  /**
+   * `on.siege_end` (class 9, after every attack of that second): the siege ends in a conquest while
+   * its garrison holds a settler. A garrison without one (never left by `afterStep`) only breaks it.
+   */
+  readonly onSiegeEnd: (ctx: PCtx, ev: ScheduledEvent) => void;
+}
+
+/** The siege hooks of a version whose public score parts are `scoreParts`. */
+export function siegeHooksWith(scoreParts: ScorePartsOf): SiegeHooks {
+  function eliminatePlayer(
+    ctx: PCtx,
+    p: PlayerId,
+    score: ScoreParts = scoreParts(ctx.read(), p),
+  ): void {
+    ctx.ext().frozenScores[p] = { cityPoints: score.cityPoints, battleScore: score.battleScore };
+    eliminate(ctx, p);
+  }
+
+  /**
+   * Conquest at the end of a siege (§9.4): one settler of the garrison is consumed, the rest of the
+   * garrison is re-homed to the city as the new owner's units at home, the city changes hands with
+   * its buildings and stock, the public `city_conquered` goes out, and the former owner falls back
+   * on its lowest-numbered city (everything homed in the conquered city is re-homed there and returns
+   * heading to it sail on, §7.7) or is eliminated when it has none left, with the score it had
+   * before this city fell (§9.7). Returns that sail on into a besieged fallback are announced to its
+   * besieger by `afterStep`'s sweep at the end of this step, as every return other code re-homes.
+   */
+  function conquer(ctx: PCtx, city: CityId, by: PlayerId): void {
+    const settler = ctx.rules.roles.settler;
+    const first =
+      holdGroups(ctx.state, city, by).find((g) => (g.units[settler] ?? 0) > 0) ??
+      fail(`the garrison of ${city} has no settler to consume`);
+    removeUnits(
+      ctx,
+      { at: "stationed", city, owner: by, home: first.home, role: "hold" },
+      { [settler]: 1 },
+      "consumed",
+    );
+    const garrison: UnitCounts = {};
+    for (const home of holdGroups(ctx.state, city, by).map((g) => g.home)) {
+      const units = unstation(ctx, city, by, home, undefined, "hold");
+      for (const [unit, n] of Object.entries(units))
+        garrison[unit] = (garrison[unit] ?? 0) + (n ?? 0);
+    }
+    const former = cityOf(ctx.state, city).owner;
+    const lastScore = former === null ? undefined : scoreParts(ctx.read(), former);
+    forgetHomecomings(ctx, city, by);
+    transferCity(ctx, city, by);
+    if (hasUnits(garrison)) putHome(ctx, city, cleanUnits(ctx.rules, garrison));
+    ctx.emit({
+      type: "city_conquered",
+      public: true,
+      to: audience([
+        [by, "self"],
+        [former, "target"],
+      ]),
+      data: { city, from: former, to: by },
+    });
+    if (former === null) return;
+    const fallback = fallbackCity(ctx.read(), former);
+    if (fallback === null) {
+      eliminatePlayer(ctx, former, lastScore);
+      return;
+    }
+    rehomeAll(ctx, city, fallback);
+  }
+
+  function onSiegeEnd(ctx: PCtx, ev: ScheduledEvent): void {
+    const city = CityIdSchema.parse(ev.ref);
+    const x = ctx.ext();
+    const siege = own(x.sieges, city);
+    if (siege === undefined || siege.seq !== ev.seq) {
+      fail(`siege_end (seq ${ev.seq}) of ${city} has no matching siege`);
+    }
+    if (garrisonSettlers(ctx.state, ctx.rules.roles.settler, city, siege.by) === 0) {
+      breakSiege(ctx, city, "abandoned");
+      return;
+    }
+    delete x.sieges[city];
+    conquer(ctx, city, siege.by);
+  }
+
+  return Object.freeze({ eliminatePlayer, onSiegeEnd });
+}
+
+/** The public score parts of `p` now under perfidia-1@1.0.0 (§13.1). */
+function scoreParts100(r: PRead100, p: PlayerId): ScoreParts {
   const row =
-    scoreRows(ctx.config, ctx.state, ctx.ext()).find((r) => r.player === p) ??
+    scoreRows(r.config, r.state, r.ext()).find((x) => x.player === p) ??
     fail(`player ${p} does not exist`);
   return { cityPoints: row.cityPoints, battleScore: row.battleScore };
 }
 
-/**
- * Eliminates `p` (§9.7): its score freezes at `score` (by default its parts now; a conquest passes
- * the parts it had with its last city), then `std.eliminate` removes its units, movements and
- * proposals and ends its alliance and pacts. The sieges `p` held lose their garrison with its
- * units; `afterStep`'s garrison sweep breaks them (cause `eliminated`) at the end of this step,
- * the one mechanism for every garrison left without a settler.
- */
-export function eliminatePlayer(
-  ctx: PCtx,
-  p: PlayerId,
-  score: ScoreParts = scorePartsOf(ctx, p),
-): void {
-  ctx.ext().frozenScores[p] = { cityPoints: score.cityPoints, battleScore: score.battleScore };
-  eliminate(ctx, p);
-}
+const hooks100 = siegeHooksWith(scoreParts100);
 
-/**
- * Conquest at the end of a siege (§9.4): one settler of the garrison is consumed, the rest of the
- * garrison is re-homed to the city as the new owner's units at home, the city changes hands with
- * its buildings and stock, the public `city_conquered` goes out, and the former owner falls back
- * on its lowest-numbered city (everything homed in the conquered city is re-homed there and returns
- * heading to it sail on, §7.7) or is eliminated when it has none left, with the score it had
- * before this city fell (§9.7). Returns that sail on into a besieged fallback are announced to its
- * besieger by `afterStep`'s sweep at the end of this step, as every return other code re-homes.
- */
-function conquer(ctx: PCtx, city: CityId, by: PlayerId): void {
-  const settler = ctx.rules.roles.settler;
-  const first =
-    holdGroups(ctx.state, city, by).find((g) => (g.units[settler] ?? 0) > 0) ??
-    fail(`the garrison of ${city} has no settler to consume`);
-  removeUnits(
-    ctx,
-    { at: "stationed", city, owner: by, home: first.home, role: "hold" },
-    { [settler]: 1 },
-    "consumed",
-  );
-  const garrison: UnitCounts = {};
-  for (const home of holdGroups(ctx.state, city, by).map((g) => g.home)) {
-    const units = unstation(ctx, city, by, home, undefined, "hold");
-    for (const [unit, n] of Object.entries(units))
-      garrison[unit] = (garrison[unit] ?? 0) + (n ?? 0);
-  }
-  const former = cityOf(ctx.state, city).owner;
-  const lastScore = former === null ? undefined : scorePartsOf(ctx, former);
-  forgetHomecomings(ctx, city, by);
-  transferCity(ctx, city, by);
-  if (hasUnits(garrison)) putHome(ctx, city, cleanUnits(ctx.rules, garrison));
-  ctx.emit({
-    type: "city_conquered",
-    public: true,
-    to: audience([
-      [by, "self"],
-      [former, "target"],
-    ]),
-    data: { city, from: former, to: by },
-  });
-  if (former === null) return;
-  const fallback = fallbackCity(ctx.read(), former);
-  if (fallback === null) {
-    eliminatePlayer(ctx, former, lastScore);
-    return;
-  }
-  rehomeAll(ctx, city, fallback);
-}
+/** `SiegeHooks.eliminatePlayer` of perfidia-1@1.0.0. */
+export const eliminatePlayer = hooks100.eliminatePlayer;
 
-/**
- * `on.siege_end` (class 9, after every attack of that second): the siege ends in a conquest while
- * its garrison holds a settler. A garrison without one (never left by `afterStep`) only breaks it.
- */
-export function onSiegeEnd(ctx: PCtx, ev: ScheduledEvent): void {
-  const city = CityIdSchema.parse(ev.ref);
-  const x = ctx.ext();
-  const siege = own(x.sieges, city);
-  if (siege === undefined || siege.seq !== ev.seq) {
-    fail(`siege_end (seq ${ev.seq}) of ${city} has no matching siege`);
-  }
-  if (garrisonSettlers(ctx.state, ctx.rules.roles.settler, city, siege.by) === 0) {
-    breakSiege(ctx, city, "abandoned");
-    return;
-  }
-  delete x.sieges[city];
-  conquer(ctx, city, siege.by);
-}
+/** `on.siege_end` of perfidia-1@1.0.0. */
+export const onSiegeEnd = hooks100.onSiegeEnd;

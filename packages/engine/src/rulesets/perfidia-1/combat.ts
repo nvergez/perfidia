@@ -1,7 +1,7 @@
 import { cas, clamp, lossPm, mulDiv } from "@perfidia/engine/core";
 import { allocateLosses } from "@perfidia/engine/std";
 import { compareIds, type DeepReadonly, type Res } from "@perfidia/protocol";
-import { type PerfidiaConfig, quad } from "./config.ts";
+import { type PerfidiaCore, quad } from "./config.ts";
 
 // Combat maths of perfidia-1 §8 as pure functions over numbers: morale, the naval phase, the land
 // phase, losses (split stacks allocated by `std.allocateLosses`), loot and the battle-point split.
@@ -103,7 +103,7 @@ export interface BattleResult {
 export type StatsTable = Readonly<Record<string, UnitStats>>;
 
 /** The combat stats of the config's units. */
-export function statsOf(config: DeepReadonly<PerfidiaConfig>): StatsTable {
+export function statsOf(config: DeepReadonly<PerfidiaCore>): StatsTable {
   const out: Record<string, UnitStats> = {};
   for (const [id, u] of Object.entries(config.units)) {
     out[id] = {
@@ -123,7 +123,7 @@ export function statsOf(config: DeepReadonly<PerfidiaConfig>): StatsTable {
  * moraleFloorPm, 1000)`; 1000 against the neutral Crown (`foeCities` null).
  */
 export function moralePm(
-  config: DeepReadonly<PerfidiaConfig>,
+  config: DeepReadonly<PerfidiaCore>,
   attackerCities: number,
   foeCities: number | null,
 ): number {
@@ -133,23 +133,23 @@ export function moralePm(
 }
 
 /** Base defense of a city with hall level H (§4.1): `20H + 50` by default. */
-export function baseDefense(config: DeepReadonly<PerfidiaConfig>, hall: number): number {
+export function baseDefense(config: DeepReadonly<PerfidiaCore>, hall: number): number {
   return quad(config.economy.baseDefense, hall);
 }
 
 /** Wall factor in per mille (§4.1): `1000 + 50 · wall`. */
-export function wallFactorPm(config: DeepReadonly<PerfidiaConfig>, wall: number): number {
+export function wallFactorPm(config: DeepReadonly<PerfidiaCore>, wall: number): number {
   return 1000 + config.combat.wallPmPerLevel * wall;
 }
 
 /** The wall after a lost city battle (§8.6): one level lower by default, never below 0. */
-export function wallAfterBreach(config: DeepReadonly<PerfidiaConfig>, wall: number): number {
+export function wallAfterBreach(config: DeepReadonly<PerfidiaCore>, wall: number): number {
   return Math.max(0, wall - config.combat.wallBreachOnLoss);
 }
 
 /** Whether a won conquest may start a siege (§8.6, §9.5): not on a capital before immunity ends. */
 export function canBesiege(
-  config: DeepReadonly<PerfidiaConfig>,
+  config: DeepReadonly<PerfidiaCore>,
   isCapital: boolean,
   now: number,
 ): boolean {
@@ -245,7 +245,7 @@ export function landAttack(
 
 /** `D = floor((Σ defense + baseDef(hall)) × (1000 + 50·wall) / 1000)` (§8.5). */
 export function landDefense(
-  config: DeepReadonly<PerfidiaConfig>,
+  config: DeepReadonly<PerfidiaCore>,
   sumDefense: number,
   hall: number,
   wall: number,
@@ -264,7 +264,7 @@ const fightsAtSea = (w: Working): boolean => isNaval(w) && w.stats.naval > 0;
  * sieges and battle points are applied by the caller from the result.
  */
 export function resolveBattle(
-  config: DeepReadonly<PerfidiaConfig>,
+  config: DeepReadonly<PerfidiaCore>,
   input: BattleInput,
 ): BattleResult {
   const stats = statsOf(config);
@@ -360,7 +360,7 @@ export function carryOf(stats: StatsTable, units: Readonly<Record<string, number
  * lootable when it fits in `carry`, otherwise `floor(lootable_r × carry / T)` of each resource.
  */
 export function lootOf(
-  config: DeepReadonly<PerfidiaConfig>,
+  config: DeepReadonly<PerfidiaCore>,
   stock: DeepReadonly<Res>,
   warehouse: number,
   carry: number,
