@@ -13,10 +13,10 @@ import { perfidia1_1_0_0 } from "./v1_0_0.ts";
 import { perfidia1_1_1_0 } from "./v1_1_0.ts";
 
 // The reskin of perfidia-1@1.1.0 (docs/rulesets/perfidia-1.md §0.1) renames ids and changes no
-// number: with every 1.0.0 id renamed, 1.1.0's defaults, compiled rules (for every N, and under
-// random number overrides) and initial worlds are 1.0.0's, apart from the keys 1.1.0 adds or
-// renames (`victory.dominationMinConquests`, `scoring.conquestBonus`, `scoring.olympusBonus`) and
-// the ext's conquest records.
+// number but the domination share: with every 1.0.0 id renamed, 1.1.0's defaults, compiled rules
+// (for every N, and under random number overrides) and initial worlds are 1.0.0's, apart from the
+// keys 1.1.0 adds or renames (`victory.dominationMinConquests`, `scoring.olympusBonus`), its
+// `victory.dominationPm` (350 instead of 400) and the ext's conquest records.
 
 const P1 = perfidia1_1_0_0;
 const P11 = perfidia1_1_1_0;
@@ -57,10 +57,14 @@ const players = (n: number): PlayerId[] =>
   Array.from({ length: n }, (_, i): PlayerId => `p${i + 1}`);
 
 describe("the defaults", () => {
-  test("are 1.0.0's renamed, plus dominationMinConquests 2 and conquestBonus 0", () => {
+  test("are 1.0.0's renamed, with dominationPm 350 and dominationMinConquests 2", () => {
     const expected = rec(rename(plain(PERFIDIA_1_DEFAULTS)));
-    expected["victory"] = { ...rec(expected["victory"]), dominationMinConquests: 2 };
-    expected["scoring"] = { ...rec(expected["scoring"]), conquestBonus: 0 };
+    expect(rec(expected["victory"])["dominationPm"]).toBe(400);
+    expected["victory"] = {
+      ...rec(expected["victory"]),
+      dominationPm: 350,
+      dominationMinConquests: 2,
+    };
     expect(plain(PERFIDIA_1_1_DEFAULTS)).toEqual(expected);
   });
 });

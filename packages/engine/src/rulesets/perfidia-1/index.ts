@@ -86,7 +86,7 @@ export { perfidiaVisibility } from "./visibility.ts";
 export { perfidiaInvariants, perfidiaInvariantsFor } from "./invariants.ts";
 export { perfidia1_1_0_0 } from "./v1_0_0.ts";
 
-// perfidia-1@1.1.0: the Greek setting, domination by conquest, the conquest trophy.
+// perfidia-1@1.1.0: the Greek setting and domination by conquest.
 export * from "./config_1_1.ts";
 export * from "./check_1_1.ts";
 export * from "./cheatsheet_1_1.ts";

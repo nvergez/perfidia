@@ -37,7 +37,7 @@ import { createWorldWith, DOMINATION_OPEN } from "./world.ts";
 // unchanged modules: travel, departures, arrivals, battles, sieges, errors and the domination
 // opening. What changed is in the `*_1_1.ts` modules: the ids of the Greek setting, domination by
 // conquest (the threshold counts the map's city slots and needs taken cities), the bounds and
-// cross-checks of the domination keys, and the conquest trophy of the score.
+// cross-checks of the domination keys.
 
 /** `perfidia-1@1.1.0`, the default perfidia-1. */
 export const perfidia1_1_1_0: Ruleset<Perfidia11Config, Perfidia11Ext> = Object.freeze({

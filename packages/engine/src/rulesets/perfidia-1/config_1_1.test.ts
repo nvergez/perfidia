@@ -23,7 +23,7 @@ describe("the defaults", () => {
     expect(Object.isFrozen(PERFIDIA_1_1_DEFAULTS.victory)).toBe(true);
     expect(resolveConfig(P11, {}).ok).toBe(true);
     expect(PERFIDIA_1_1_DEFAULTS.victory).toEqual({
-      dominationPm: 400,
+      dominationPm: 350,
       dominationMinPerPlayer: 2,
       dominationMinConquests: 2,
     });
@@ -31,26 +31,25 @@ describe("the defaults", () => {
       cityBase: 100,
       perBuildingLevel: 1,
       olympusBonus: 100,
-      conquestBonus: 0,
       killPopPerPoint: 10,
       killCapPm: 250,
     });
   });
 
-  test("give the thresholds of §13.3: the map's slots and 40% of them, at least 2N", () => {
+  test("give the thresholds of §13.3: the map's slots and 35% of them, at least 2N", () => {
     const table = [];
     for (let n = 6; n <= 12; n += 1) {
       const slots = mapSlots(PERFIDIA_1_1_DEFAULTS, n);
       table.push([n, slots, dominationNeed11(PERFIDIA_1_1_DEFAULTS.victory, n, slots).cities]);
     }
     expect(table).toEqual([
-      [6, 43, 18],
-      [7, 50, 20],
-      [8, 49, 20],
-      [9, 55, 22],
-      [10, 61, 25],
-      [11, 67, 27],
-      [12, 73, 30],
+      [6, 43, 16],
+      [7, 50, 18],
+      [8, 49, 18],
+      [9, 55, 20],
+      [10, 61, 22],
+      [11, 67, 24],
+      [12, 73, 26],
     ]);
   });
 });
@@ -92,6 +91,10 @@ describe("fixed fields and ids", () => {
     // 1.0.0's keys are unknown paths in 1.1.0.
     expect(errors({ "units.guard.attack": 5 }).map((e) => e.path)).toEqual(["units.guard.attack"]);
     expect(errors({ "scoring.crownBonus": 5 }).map((e) => e.path)).toEqual(["scoring.crownBonus"]);
+    // The conquest trophy was measured and left out of 1.1.0 (§0.1): no such key.
+    expect(errors({ "scoring.conquestBonus": 30 }).map((e) => e.path)).toEqual([
+      "scoring.conquestBonus",
+    ]);
   });
 });
 
@@ -101,7 +104,7 @@ describe("R5: the domination keys", () => {
       {
         path: "victory.dominationPm",
         message:
-          "victory.dominationPm is the share of the map's city slots a bloc must hold, in ‰: at least 1 (400 = 40%). To disable domination, set time.dominationStart after time.matchEnd (604801 with the default 7 days).",
+          "victory.dominationPm is the share of the map's city slots a bloc must hold, in ‰: at least 1 (350 = 35%). To disable domination, set time.dominationStart after time.matchEnd (604801 with the default 7 days).",
       },
     ]);
     expect(errors({ "victory.dominationPm": 1001 })).toEqual([
@@ -144,15 +147,15 @@ describe("R5: the domination keys", () => {
   });
 
   test("more taken cities than the threshold is reported once, with the bound to use", () => {
-    expect(errors({ "victory.dominationMinConquests": 19 })).toEqual([
+    expect(errors({ "victory.dominationMinConquests": 17 })).toEqual([
       {
         path: "victory.dominationMinConquests",
         message:
-          "N = 6: victory.dominationMinConquests (19) is above the domination threshold (18 cities at N = 6): lower it to 18 or less.",
+          "N = 6: victory.dominationMinConquests (17) is above the domination threshold (16 cities at N = 6): lower it to 16 or less.",
       },
     ]);
     expect(errors({ "victory.dominationMinConquests": 21 })[0]?.message).toStartWith(
-      "N = 6..8: victory.dominationMinConquests (21)",
+      "N = 6..9: victory.dominationMinConquests (21)",
     );
   });
 

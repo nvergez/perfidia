@@ -15,8 +15,8 @@ import {
 
 // The RulesConfig of perfidia-1@1.1.0 (docs/rulesets/perfidia-1.md §16): 1.0.0's, with the ids of
 // the Greek setting (§0.1), `victory.dominationMinConquests` (domination by conquest, §13.3), the
-// bounds of the domination keys (R5) and `scoring.conquestBonus` (the conquest trophy, §13.1).
-// Every other key and number is 1.0.0's. The cross-checks that need N are `check_1_1.ts`'s.
+// bounds of the domination keys (R5) and a `victory.dominationPm` of 350 (§0.1 says why). Every
+// other key and number is 1.0.0's. The cross-checks that need N are `check_1_1.ts`'s.
 
 export const PERFIDIA_1_1_VERSION = "1.1.0";
 export const PERFIDIA_1_1_REF: RulesetRef = "perfidia-1@1.1.0";
@@ -80,7 +80,7 @@ const VictorySchema = z.strictObject({
   dominationPm: z
     .int()
     .min(1, {
-      error: `victory.dominationPm is the share of the map's city slots a bloc must hold, in ‰: at least 1 (400 = 40%). ${DISABLE_HINT}`,
+      error: `victory.dominationPm is the share of the map's city slots a bloc must hold, in ‰: at least 1 (350 = 35%). ${DISABLE_HINT}`,
     })
     .max(1000, {
       error:
@@ -144,8 +144,6 @@ const ConfigShape = z.strictObject({
     cityBase: Int,
     perBuildingLevel: Int,
     olympusBonus: Int,
-    /** Points of a taken city held (§13.1); 0 leaves conquests out of the score. */
-    conquestBonus: Int,
     killPopPerPoint: AtLeastOne,
     killCapPm: Int,
   }),
@@ -333,11 +331,10 @@ const defaults: Perfidia11Config = {
     cityBase: 100,
     perBuildingLevel: 1,
     olympusBonus: 100,
-    conquestBonus: 0,
     killPopPerPoint: 10,
     killCapPm: 250,
   },
-  victory: { dominationPm: 400, dominationMinPerPlayer: 2, dominationMinConquests: 2 },
+  victory: { dominationPm: 350, dominationMinPerPlayer: 2, dominationMinConquests: 2 },
   gateway: {
     roundTripsPerWake: 8,
     toolCallsPerRoundTrip: 10,

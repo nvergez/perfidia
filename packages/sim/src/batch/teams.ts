@@ -16,10 +16,10 @@ import { botName } from "./seats.ts";
 // each other), how each siege was held (reinforced by its besieger, relieved, and its outcome), the
 // war-call messages (`WAR#` tags of the bots' war-call protocol, `bots/src/war.ts`: private
 // messages are spectator-visible and logged with their text) and how near any bloc came to the R1
-// domination rule of perfidia-1@1.1.0 §13.3 (at least 40% of the map's city slots and 2N, with at
-// least 2 of them taken; a city is taken when its owner conquered it and never owned it before):
-// with the match's own values when its config has `victory.dominationMinConquests`, else (a 1.0.0
-// log) the proposed ones. A bloc is an alliance (its members at the time) or a player outside any
+// domination rule of perfidia-1@1.1.0 §13.3 (by default at least 35% of the map's city slots and
+// 2N, with at least 2 of them taken; a city is taken when its owner conquered it and never owned it
+// before): with the match's own values when its config has `victory.dominationMinConquests`, else
+// (a 1.0.0 log) 1.1.0's defaults. A bloc is an alliance (its members at the time) or a player outside any
 // alliance (perfidia-1 §13.3); a city counts for its owner, besieged or not.
 
 /** Two battles at one city are a joint attack when they land at most this far apart (s). */
@@ -27,11 +27,11 @@ export const JOINT_WINDOW = 3600;
 /** A war call counts behind a joint attack when sent at most this long before its first battle. */
 export const CALL_LEAD = 86400;
 /**
- * The proposed R1 values, for a log whose config has none (1.0.0): bloc cities ≥ `R1_SHARE_PM` ‰
- * of the map's city slots, rounded up (and ≥ `victory.dominationMinPerPlayer` × N), and taken
- * cities ≥ `R1_CONQUERED`.
+ * The R1 values of perfidia-1@1.1.0's defaults, for a log whose config has none (1.0.0): bloc
+ * cities ≥ `R1_SHARE_PM` ‰ of the map's city slots, rounded up (and ≥
+ * `victory.dominationMinPerPlayer` × N), and taken cities ≥ `R1_CONQUERED`.
  */
-export const R1_SHARE_PM = 400;
+export const R1_SHARE_PM = 350;
 export const R1_CONQUERED = 2;
 
 /** The domination rule R1 follows in a match: its numbers and when domination opens. */

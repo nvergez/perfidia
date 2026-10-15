@@ -35,19 +35,19 @@
     }
   },
   "perfidia-1@1.1.0": {
-    "artefacts": "6b50dfc24f216a7f34a06c739cb9fce505f408eee51a19029bae7ba6d4bc7550",
+    "artefacts": "405a82f77113bba0b09d73b6c4347bf551425188e8e94a39d172801b21190df5",
     "goldens": {
-      "lockstep-12p-1d": "a482d2d4435ace1e",
-      "lockstep-6p-4d": "8a298af0e233af74",
-      "lockstep-6p-6d-war": "7772cd7da7ca2448",
-      "rt-virtual-6p-1d": "11be87d2310904b0",
-      "scenario-r1": "67a7bd53d3910b18"
+      "lockstep-12p-1d": "df3e5d95be3be648",
+      "lockstep-6p-4d": "67c141a9fb778b28",
+      "lockstep-6p-6d-war": "a2e34dcb8e700a0d",
+      "rt-virtual-6p-1d": "bc41ce5a5ed8c6ee",
+      "scenario-r1": "1615c9e23442abaa"
     },
     "views": {
-      "lockstep-12p-1d": "37064825d443202ec5770a5de3cabd087cee77d26803581d8135f80944269306",
-      "lockstep-6p-4d": "52f773ce40ccb5a726acccc014be2d0e2719606b6157fb4b4270b7730815be2a",
-      "lockstep-6p-6d-war": "2b64d99810e12a5e500bbb9cf299b813ba85920b9be77d07894f63dca8e17f01",
-      "rt-virtual-6p-1d": "f12af72ad19a67ddc8bf6a6a7b81ebe28cb54865738be8d7729f38eb2fd15a9a",
+      "lockstep-12p-1d": "4a1f145404bcb780df2a0175cf99f969d8479726ce4f31647741b21832b4de4f",
+      "lockstep-6p-4d": "951cef0ad921a6b80d99058f0ed5766aeba1caa6fe31381f369cdfb316b45d3c",
+      "lockstep-6p-6d-war": "d051feaa6714aa54b1d68cf6ffc2b277819e3ce9c994cad4d8f5f093bbf6e539",
+      "rt-virtual-6p-1d": "0fe5e93879f60251803ce45350df74f370eeae3775a61dd5c657e89aafdd48a7",
       "scenario-r1": "7320e5ad5747074728f4cacef62fb8e736060d66c173613fd236bf5246c48bf2"
     }
   },

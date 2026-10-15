@@ -70,16 +70,16 @@ AFTER A WIN all defenders die and the wall drops 1. With no settler alive: loot 
             kills every settler in your garrison first.
 SCORE       100 per city + 1 per building level + 100 for Olympus
             + 1 per 10 enemy pop killed (capped at 1/4 of your city points).
-WIN         From day 4: a bloc (alliance or lone player) holding ≥ 18 cities (40% of the 43 city slots,
+WIN         From day 4: a bloc (alliance or lone player) holding ≥ 16 cities (35% of the 43 city slots,
             and ≥ 2N), ≥ 2 of them taken, for 24 h in public. A city is taken when its owner conquered
             it and never held it before. Otherwise the highest score at the end of day 7.
 ```
 
-This is the sheet at N = 6. The WIN numbers depend on N (the threshold counts the map's city slots, §13.3): 18 cities of 43 slots at N = 6, 20 of 50 at 7, 20 of 49 at 8, 22 of 55 at 9, 25 of 61 at 10, 27 of 67 at 11 and 30 of 73 at 12. The sheet follows the config: with `victory.dominationMinConquests` at 0 the taken clause and its definition drop out; a `scoring.conquestBonus` above 0 adds "+ B per taken city" to SCORE; and when no countdown could end by `matchEnd` (`dominationStart + dominationHold > matchEnd`, e.g. a match of 3 days or less) the WIN line reads "Domination is off in this match: the highest score at the end of day D wins."
+This is the sheet at N = 6. The WIN numbers depend on N (the threshold counts the map's city slots, §13.3): 16 cities of 43 slots at N = 6, 18 of 50 at 7, 18 of 49 at 8, 20 of 55 at 9, 22 of 61 at 10, 24 of 67 at 11 and 26 of 73 at 12. The sheet follows the config: with `victory.dominationMinConquests` at 0 the taken clause and its definition drop out; and when no countdown could end by `matchEnd` (`dominationStart + dominationHold > matchEnd`, e.g. a match of 3 days or less) the WIN line reads "Domination is off in this match: the highest score at the end of day D wins."
 
 ### 0.1 Changes from 1.0.0
 
-`perfidia-1@1.1.0` changes `perfidia-1@1.0.0` in the four ways below. Every other number, formula, table and tie-break is unchanged, and so are the error codes and wording, the event types (`domination_started` gains two fields) and the gateway's interface text. A match recorded under 1.0.0 replays only under 1.0.0 (`docs/rulesets/perfidia-1-v1.0.0.md`).
+`perfidia-1@1.1.0` changes `perfidia-1@1.0.0` in the three ways below. The only number that changes is the domination share (item 2); every other number, formula, table and tie-break is unchanged, and so are the error codes and wording, the event types (`domination_started` gains two fields) and the gateway's interface text. A match recorded under 1.0.0 replays only under 1.0.0 (`docs/rulesets/perfidia-1-v1.0.0.md`).
 
 1. **The Greek setting (a reskin, no new mechanic).** The agent-visible ids below are renamed, with the config keys that name them. The same names work both ways: a 1.0.0 id maps to the 1.1.0 id on its row and back.
 
@@ -102,9 +102,15 @@ This is the sheet at N = 6. The WIN numbers depend on N (the threshold counts th
    - **Positional island kinds** `home`, `backyard`, `frontier`, `inner`, `hub`: agents reason with them (near-safe or contested), and config keys echo them (`map.radius.backyardOffset`, `frontierOffset`, `innerOffset`, `hub`, `map.hubMaxPlayers`). Kept pending the owner's approval.
    - `quarry`, `warehouse`, `barracks`, `harbor`, `wall`, `settler`, `transport`: generic words of the setting, echoed by config keys (`economy.warehouseCap`, `movement.shipment.perHarborLevel`, `combat.wallPmPerLevel`, `spy.counterPerWall`, `settler.*`) and by the recruit queues `barracks` and `harbor`.
 
-2. **Domination by conquest (§13.3).** The threshold counts the map's city slots, a number fixed for the map (Olympus included), instead of the cities that exist, and a bloc must also hold `victory.dominationMinConquests` (default 2) **taken** cities: cities its members conquered (§9.4, Olympus included) and never owned before. A former owner's recapture is not taken. The views show every taken city and its former owners, and every bloc's cities and taken cities next to the threshold (§12, §13.2); `domination_started` also carries `taken` and `needTaken`. A founding no longer moves the threshold, so it never cancels a countdown.
+2. **Domination by conquest (§13.3).** The threshold is 350‰ of the map's city slots, a number fixed for the map (Olympus included), instead of 400‰ of the cities that exist, and a bloc must also hold `victory.dominationMinConquests` (default 2) **taken** cities: cities its members conquered (§9.4, Olympus included) and never owned before. A former owner's recapture is not taken. The views show every taken city and its former owners, and every bloc's cities and taken cities next to the threshold (§12, §13.2); `domination_started` also carries `taken` and `needTaken`. A founding no longer moves the threshold, so it never cancels a countdown.
 3. **Config validation (§16).** `victory.dominationPm` must be within 1..1000, `victory.dominationMinPerPlayer` ≥ 1 and `victory.dominationMinConquests` ≥ 0. For every N, the threshold must be ≥ 1 city and at most the map's city slots, and the taken cities asked for at most the threshold; each failing check is reported once, naming the N it fails for. 1.0.0 accepted 0 and 0 (every bloc qualified at the opening) and a share above 1000‰ (domination silently off).
-4. **The conquest trophy (§13.1).** `scoring.conquestBonus` points for each taken city its owner holds. It is 0 by default, so 1.1.0 scores as 1.0.0 did; calibration batches decide its value, or its removal, in a later version.
+
+**Why these values.** They were calibrated with the scripted bots before 1.1.0 was released: `sim batch --pacing`, bots pinned, the default lineup (`expander@2`, `rusher@3`, `turtle@3`, `opportunist@3`, `conqueror@3`) and the war-call lineup (`conqueror@3`, `opportunist@3`, `turtle@3`, `conqueror@3`, `expander@2`, `rusher@3`), 60 seeds at 6 seats (120 for the war lineup at 350‰), 30 at 8 and 10 at 12, variants paired by seed (numbers and commands in `docs/architecture.md` §17.5).
+
+- **Domination by conquest closes the peaceful path.** With the same bots, 1.0.0 ends 41 of 120 six-seat matches by domination, 39 of the 41 winning blocs holding 0 or 1 conquered city. Under 1.1.0 every countdown's bloc held at least 2 taken cities.
+- **350‰, not 400‰.** At 400‰ (18 cities at N = 6) blocs that fight reach the threshold only on days 6 and 7, too late for the 24 h hold: 1 domination in 60 matches in each lineup. At 350‰ (16 cities) 4 of 60 default and 10 of 120 war matches (7–8%) end by domination, every winner a 2-player bloc holding 16 or 17 cities, exactly 2 of them taken from players outside it; conquests, sieges, reliefs and wins per strategy do not move beyond 1–3 seat-wins. No share that keeps 2 taken cities reaches the 15–35% of matches the design aims at with these bots (300‰: 13% at best), and 1 taken city (`dominationMinConquests` 1) reopens near-peaceful wins (20% of default and 32% of war matches, more than half of the winners holding a single taken city), so `dominationMinConquests` stays 2 and `dominationMinPerPlayer` 2. At 8 seats (18 of 49 slots; alliances of 2 at most) and 12 seats (26 of 73; these bots' alliances reach 2 to 4 players) no bloc reaches the threshold: the best fighting bloc stays 1 to 13 and 7 to 21 cities short. Whether domination happens as often as intended depends on the players, since no bot seeks taken cities: LLM alliances will tell.
+- **No conquest trophy.** A score bonus per taken city held (`scoring.conquestBonus`) and cheaper kills (`scoring.killPopPerPoint` 3–5 with `killCapPm` 500) were measured. Without them no strategy wins more than 0.45 per seat (at most 0.39 [0.31, 0.48], `opportunist@3` over 120 war seeds, 0.47 on the first 60 alone; Wilson 95% intervals). A trophy of 30 moves no winner in the default lineup and moves 7 of 60 war-lineup wins from `opportunist@3` to `conqueror@3`; cheaper kills lift `opportunist@3` to 0.52–0.55 wins per seat in the war lineup and its battle score from 4% to 8–13% of its points. Neither is needed, so both are left out and the score is 1.0.0's.
+- **Times unchanged.** A relief can reach 97–100% of sieges within the 6 h `siegeDuration` (by geometry: transport travel from the owner's or an ally's other city plus the 600 s urgent wake), but only 92–94% within 4 h at 12 seats, and a 4 h siege raised conquests by 19% and 7% in the two lineups, short of a rule-level case. `protectionEnd`, `capitalImmunityEnd` and `matchEnd` stay: first battles come at 15:00–16:10 on day 1, no capital fell and no player was eliminated, and the winner's median margin is 4–9%.
 
 ---
 
@@ -919,7 +925,7 @@ Tribute is a `send_resources` shipment (§7.3). The recipient (and its allies) s
 
 ### 13.1 Score
 
-- **City points** = Σ over owned cities of `100 + Σ building levels + (100 if it is Olympus) + (conquestBonus if it is taken)`. A fresh city is worth 105, a maxed city 180, and Olympus 240. `scoring.conquestBonus` is 0 by default: a taken city (§13.3) then scores like any other. The trophy sits on the city held, so it never adds up over recaptures.
+- **City points** = Σ over owned cities of `100 + Σ building levels + (100 if it is Olympus)`. A fresh city is worth 105, a maxed city 180, and Olympus 240. A taken city (§13.3) scores like any other.
 - **Battle score** = `min(floor(battlePoints / 10), floor(cityPoints / 4))`, where battle points come from §8.8.
 - **Score** = city points + battle score. It is computed live and public.
 
@@ -947,7 +953,7 @@ Army sizes are not public to players; spectators see them.
      - City views mark taken cities and list their former owners (§12).
    - **Threshold:** `need = max(dominationMinPerPlayer × N, ceilDiv(dominationPm × totalSlots, 1000))` cities, of which `dominationMinConquests` taken.
      - `totalSlots` is the number of city slots of the map, Olympus included: 43, 50, 49, 55, 61, 67 and 73 for N = 6..12 (§2.4). It is fixed for the match.
-     - With the defaults (400‰, 2 per player, 2 taken), `need` is 18, 20, 20, 22, 25, 27 and 30 cities for N = 6..12, at least 2 of them taken.
+     - With the defaults (350‰, 2 per player, 2 taken), `need` is 16, 18, 18, 20, 22, 24 and 26 cities for N = 6..12, at least 2 of them taken. 1.0.0's share was 400‰ of the cities that existed; §0.1 says why 1.1.0 asks for 350‰ of the slots.
      - Foundings never raise it, so a founding by another player never cancels a countdown (in 1.0.0 the threshold counted the cities that existed).
    - **Qualifying:** a bloc qualifies when `t ≥ 259200` (day 4) and `blocCities ≥ need` and `blocTaken ≥ dominationMinConquests`. A besieged city counts for its owner, taken or not.
    - Qualifying starts a public **24 h countdown** (ends at t + 86400, class 11). Its event `domination_started` gives the bloc's cities and taken cities and the threshold's (`threshold`, `needTaken`).
@@ -955,7 +961,7 @@ Army sizes are not public to players; spectators see them.
    - **Evaluation.** From t = 259200 (the `domination_open` timer, class 10), every bloc is evaluated at the end of every step, i.e. after every event and every accepted action (foundings included). First, the countdowns whose bloc no longer qualifies or whose membership changed are cancelled. Then countdowns start for qualifying blocs without one, in bloc order: alliances by id, then lone players by id (`compareIds`). A conquest is recorded in the step of its siege end (class 9), so a conquest in the second a countdown ends (class 11) is resolved first.
    - When a countdown ends and the bloc still qualifies, **the bloc wins** and the match ends.
    - If several countdowns end in the same second, the order is: more cities, then higher total score, then the best tie-break position among the members.
-   - **Expected effort.** A full bloc at its peaceful share (7 cities a player for N ≤ 7, 6 for N ≥ 8) is 4, 6, 8, 4, 7, 9 and 6 cities short of `need` for N = 6..12, and at least 2 of the cities it holds must be taken: domination needs conquest whatever the founding pace.
+   - **Expected effort.** A full bloc at its peaceful share (7 cities a player for N ≤ 7, 6 for N ≥ 8) is 2, 4, 6, 2, 4, 6 and 2 cities short of `need` for N = 6..12, and at least 2 of the cities it holds must be taken: domination needs conquest whatever the founding pace.
    - **Collusion.** The anti-ping-pong rule works per player, not per bloc: each player can take a given city at most once, but a city an ally recaptures for a member, a city conquered from an ally after a betrayal, or two players trading cities before they ally all count. Each still needs the full city count, public 6 h sieges that third parties can relieve, and, inside a bloc, a public betrayal; the former owners shown on every city make it visible.
 2. **Last standing.** If an elimination leaves exactly one player, that player wins at once.
 3. **Time.** At t = 604800, after every other event of that second, the highest score wins. This victory is individual, even for allies.
@@ -1226,12 +1232,11 @@ export interface RulesConfig {
     cityBase: 100;
     perBuildingLevel: 1;
     olympusBonus: 100;
-    conquestBonus: 0; // per taken city held (§13.1)
     killPopPerPoint: 10;
     killCapPm: 250;
   };
   victory: {
-    dominationPm: 400; // 1..1000, of the map's city slots
+    dominationPm: 350; // 1..1000, of the map's city slots
     dominationMinPerPlayer: 2; // ≥ 1
     dominationMinConquests: 2; // ≥ 0 taken cities (§13.3)
   };
@@ -1298,7 +1303,7 @@ Nothing else is cross-checked: in particular `time.matchEnd` may be shorter than
 
   A committed sine table replaces runtime trig.
 
-- **1.1.0.** The Greek setting gives agents an original, legible world without touching a number. Domination by conquest closes the peaceful path that 1.0.0's threshold left open (a 2-player bloc reached its 2N floor whenever seats founded little: 8 to 12 matches in 30 ended that way with the bots, the winning blocs holding 0 or 1 conquered city), while keeping the alliance-and-betrayal drama: conquests after a betrayal count. The validation of the domination keys turns silent misconfigurations into explained errors. The conquest trophy exists as a key at 0 until matches measure it.
+- **1.1.0.** The Greek setting gives agents an original, legible world without touching a number. Domination by conquest closes the peaceful path that 1.0.0's threshold left open (a 2-player bloc reached its 2N floor whenever seats founded little: 8 to 12 matches in 30 ended that way with the bots, the winning blocs holding 0 or 1 conquered city), while keeping the alliance-and-betrayal drama: conquests after a betrayal count. The validation of the domination keys turns silent misconfigurations into explained errors. The share of 350‰ and the absence of a conquest trophy come from calibration batches (§0.1, "Why these values").
 - **Cut for the complexity budget:** rams, renown day multipliers, hideout percentages, refund tiers, unit-specific walking speeds, pact-breaks-at-launch and the drowning rule.
 
 ---
@@ -1316,7 +1321,7 @@ Change these between matches only. Every pacing number in §15 must be re-measur
 | Sieges almost never hold                   | garrison hoplites are the answer, so check the bots first; then `siegeDuration` ↓ (fewer relief windows)                                                                |
 | Raiding useless or dominant                | peltast `carry`; `economy.lootProtectPerLevel`                                                                                                                          |
 | Navy irrelevant or a hard wall             | trireme `naval`, `cost`; transport `capacity`                                                                                                                           |
-| Domination never or too often              | `victory.dominationPm` (400); `dominationMinConquests` (2); `dominationMinPerPlayer`; `time.dominationStart`; `diplomacy.allianceSize`; `scoring.conquestBonus`         |
+| Domination never or too often              | `victory.dominationPm` (350); `dominationMinConquests` (2); `dominationMinPerPlayer`; `time.dominationStart`; `diplomacy.allianceSize`                                  |
 | Peace equilibrium among allies             | `diplomacy.allianceSize.divisor` ↑ (smaller blocs); `maxPacts` ↓; `pactDuration` ↓                                                                                      |
 | Spying ignored or trivial                  | `spy.counterPerLandPop`, `counterPerWall`, `minGold`                                                                                                                    |
 | Fake-attack spam, budget drain             | `gateway.attackLaunchesPerDay` ↓; `time.recallWindow` ↓ (0 disables recalls)                                                                                            |

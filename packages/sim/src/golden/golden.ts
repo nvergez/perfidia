@@ -50,11 +50,12 @@ export type GoldenSpec = BotGoldenSpec | ScenarioGoldenSpec;
 const isScenario = (s: GoldenSpec): s is ScenarioGoldenSpec => !("run" in s);
 
 /**
- * The seed of 1.1.0's war golden: of seeds 1–30 of that lineup over 6 days (no countdown starts in
- * any), the first with three conquests or more and a recapture by a former owner (8 conquests, 2
- * recaptures), so that both kinds of conquest record are under Level G.
+ * The seed of 1.1.0's war golden: of seeds 1–30 of that lineup over 6 days, the first whose
+ * countdown ends in a domination win (seed 11's starts on day 6 and is still open at the end): a
+ * pair holding 16 cities, 2 of them taken, starts it on day 5 and wins on day 6, so domination by
+ * conquest is under Level G. A former owner's recapture is in `scenario-r1`.
  */
-const WAR_SEED_1_1 = 7;
+const WAR_SEED_1_1 = 14;
 
 /**
  * The goldens of §13.5: five bot goldens (one at the largest N, 12, so that the seat-count

@@ -22,8 +22,6 @@ import {
 
 type Config = DeepReadonly<Perfidia11Config>;
 
-const TAKEN = "A city is taken when its owner conquered it and never held it before.";
-
 /** "Frontier ×1.5, inner/hub ×1.25, Olympus ×1.5": richness multipliers other than ×1. */
 function richnessText(config: Config): string {
   const k = config.map.kinds;
@@ -79,17 +77,13 @@ function winLines(config: Config, players: number): string[] {
   ];
 }
 
-/** The SCORE lines; the definition of a taken city comes here when the WIN lines lack it. */
+/** The SCORE lines. */
 function scoreLines(config: Config): string[] {
   const s = config.scoring;
-  const trophy = s.conquestBonus > 0 ? ` + ${s.conquestBonus} per taken city` : "";
-  const lines = [
-    `${label("SCORE")}${s.cityBase} per city + ${s.perBuildingLevel} per building level + ${s.olympusBonus} for Olympus${trophy}`,
+  return [
+    `${label("SCORE")}${s.cityBase} per city + ${s.perBuildingLevel} per building level + ${s.olympusBonus} for Olympus`,
     `${INDENT}+ 1 per ${s.killPopPerPoint} enemy pop killed (capped at ${perMilleFraction(s.killCapPm)} of your city points).`,
   ];
-  const definedInWin = dominationOn(config) && config.victory.dominationMinConquests > 0;
-  if (s.conquestBonus > 0 && !definedInWin) lines.push(`${INDENT}${TAKEN}`);
-  return lines;
 }
 
 /** `Ruleset.cheatSheet` of 1.1.0: §0 rendered from the config for `rules.players` players. */

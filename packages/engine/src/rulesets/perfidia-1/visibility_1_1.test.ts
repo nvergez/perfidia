@@ -14,16 +14,15 @@ import {
 import { perfidia11Visibility as V } from "./visibility_1_1.ts";
 import type { PRead11 } from "./victory_1_1.ts";
 
-// The public extras of perfidia-1@1.1.0 (§12, §13.2): city points with the Olympus bonus and the
-// trophy, taken cities and their former owners, each player's taken cities, every bloc's cities and
-// taken cities against the threshold, the countdowns and the seat's own bloc in its briefing.
+// The public extras of perfidia-1@1.1.0 (§12, §13.2): city points with the Olympus bonus, taken
+// cities and their former owners, each player's taken cities, every bloc's cities and taken cities
+// against the threshold, the countdowns and the seat's own bloc in its briefing.
 
 const T = 300000;
 const O = { "victory.dominationPm": 100, "victory.dominationMinPerPlayer": 1 };
 
-function scene(trophy = 0): World11 {
-  const overrides = { ...O, "scoring.conquestBonus": trophy };
-  const w = world11({ now: T, overrides });
+function scene(): World11 {
+  const w = world11({ now: T, overrides: O });
   city11(w, { id: "c1", owner: "p1", island: "i1", buildings: { acropolis: 2 } });
   city11(w, { id: "c2", owner: "p1", island: "i2" });
   taken11(w, "c2", "p1", ["p3"]);
@@ -40,9 +39,9 @@ function scene(trophy = 0): World11 {
   return w;
 }
 
-function read(w: World11, trophy = 0): PRead11 {
+function read(w: World11): PRead11 {
   // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- a 1.1.0 match reads with 1.1.0's types
-  return load11(w, { ...O, "scoring.conquestBonus": trophy }).read() as unknown as PRead11;
+  return load11(w, O).read() as unknown as PRead11;
 }
 
 describe("public extras of 1.1.0", () => {
@@ -52,12 +51,6 @@ describe("public extras of 1.1.0", () => {
     expect(V.publicCity(r, "p6", "c2")).toEqual({ points: 100, taken: true, former: ["p3"] });
     expect(V.publicCity(r, "p6", "c4")).toEqual({ points: 100, former: ["p2", "p3"] });
     expect(V.publicCity(r, "p6", "c7")).toEqual({ points: 200, olympus: true, taken: true });
-  });
-
-  test("the trophy is in a taken city's points", () => {
-    const r = read(scene(30), 30);
-    expect(V.publicCity(r, "p6", "c2")).toEqual({ points: 130, taken: true, former: ["p3"] });
-    expect(V.publicCity(r, "p6", "c4")).toEqual({ points: 100, former: ["p2", "p3"] });
   });
 
   test("a besieged city keeps its siege (by, ends) next to the conquest record", () => {

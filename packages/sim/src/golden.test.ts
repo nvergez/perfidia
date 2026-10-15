@@ -517,7 +517,7 @@ describe("what the perfidia-1@1.1.0 goldens cover (§13.5)", () => {
     });
   });
 
-  test("lockstep-6p-6d-war: the war-call bots take cities, and a former owner takes one back (not taken)", () => {
+  test("lockstep-6p-6d-war: the war-call bots take cities, and a pair wins by domination by conquest", () => {
     const lines = readLog(golden(P11, "lockstep-6p-6d-war").path);
     const header = lines[0];
     if (header?.k !== "header") throw new Error("no header");
@@ -534,17 +534,29 @@ describe("what the perfidia-1@1.1.0 goldens cover (§13.5)", () => {
     expect(conquests.length).toBeGreaterThanOrEqual(3);
     const records = conquestsAt(lines, (l) => l.k === "ev" && conquests.includes(l));
     let taken = 0;
-    let recaptured = 0;
     for (const c of conquests) {
       const city = CityIdSchema.parse(field(c, "city"));
       const to = PlayerIdSchema.parse(field(c, "to"));
       const record = records.get(c)?.[city];
       expect(record?.by).toBe(to);
-      if (record?.former.includes(to) === true) recaptured += 1;
-      else taken += 1;
+      if (record?.former.includes(to) === false) taken += 1;
     }
-    expect(taken).toBeGreaterThan(0);
-    expect(recaptured).toBeGreaterThan(0);
+    expect(taken).toBeGreaterThanOrEqual(2);
+    // The countdown of a bloc holding the threshold (16 cities at N = 6) with 2 taken cities, held
+    // for 24 h: the match ends by domination before day 6 is over.
+    const started = evs(lines, "domination_started");
+    const win = started.at(-1);
+    if (win === undefined) throw new Error("no countdown");
+    expect(Number(field(win, "threshold"))).toBe(16);
+    expect(Number(field(win, "needTaken"))).toBe(2);
+    expect(Number(field(win, "taken"))).toBeGreaterThanOrEqual(2);
+    expect(Number(field(win, "cities"))).toBeGreaterThanOrEqual(16);
+    const end = lines.at(-1);
+    if (end?.k !== "end") throw new Error("no end line");
+    expect(end.result.reason).toBe("domination");
+    expect(end.result.winners as unknown).toEqual(field(win, "members"));
+    expect(end.t).toBe(Number(field(win, "endsAt")));
+    expect(end.t).toBeLessThan(518400);
   }, 60000);
 
   test("scenario-r1: no countdown at one city taken, one at two, cancelled by a recapture, a win after Olympus is taken", () => {

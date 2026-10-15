@@ -1,7 +1,7 @@
 // Teamwork in a batch row (docs/architecture.md §12.2): joint attacks (allied attackers landing at
 // one city within an hour, with the war call behind them), sieges and how they were held, war-call
-// messages and the reach of the R1 domination rule (perfidia-1@1.1.0 §13.3; for a 1.0.0 log, the
-// proposed values). Exact on hand-written lines; then one real batch, whose teamwork must agree with
+// messages and the reach of the R1 domination rule (perfidia-1@1.1.0 §13.3; for a 1.0.0 log, 1.1.0's
+// defaults). Exact on hand-written lines; then one real batch, whose teamwork must agree with
 // its own log and summary.
 
 import { describe, expect, test } from "bun:test";
@@ -256,7 +256,7 @@ const found = (t: number, city: number, owner: string) =>
 
 /** The R1 rule of perfidia-1@1.1.0's defaults at N = 6. */
 const RULE = {
-  pm: 400,
+  pm: 350,
   minPerPlayer: 3,
   players: 6,
   minConquests: 2,
@@ -266,7 +266,7 @@ const RULE = {
 };
 
 describe("R1 reach", () => {
-  // Six seats with their capitals c1..c6, the neutral c7, 43 slots: R1 needs 18 cities.
+  // Six seats with their capitals c1..c6, the neutral c7, 43 slots: R1 needs 16 cities.
   const owners = new Map<string, PlayerId | null>([
     ...Array.from({ length: 6 }, (_, i): [string, PlayerId] => [`c${i + 1}`, `p${i + 1}`]),
     ["c7", null],
@@ -293,7 +293,7 @@ describe("R1 reach", () => {
     // never held for 24 h.
     expect(r1).toEqual({
       slots: 43,
-      need: 18,
+      need: 16,
       needTaken: 2,
       maxCities: 18,
       maxConquered: 2,
@@ -308,11 +308,11 @@ describe("R1 reach", () => {
       heldAt: null,
     });
     // Without the second conquest the bloc stays at 17, one conquered: R1 not met. The best bloc
-    // with 2 taken cities is p5's 3, 15 short of 18.
+    // with 2 taken cities is p5's 3, 13 short of 16.
     const short = teamRecords(log(rows.slice(0, -2)), initial).r1;
     expect(short?.reachedAt).toBeNull();
     expect([short?.maxCities, short?.maxConquered, short?.fightingMax]).toEqual([17, 1, 3]);
-    expect(short?.shortfall).toBe(15);
+    expect(short?.shortfall).toBe(13);
     expect(teamRecords(log(rows), null).r1).toBeNull();
   });
 
@@ -478,7 +478,7 @@ describe("a real batch", () => {
       expect(
         m.sieges.filter((x) => x.outcome !== "conquered" && x.outcome !== "open"),
       ).toHaveLength(s.events.siegesBroken);
-      expect(m.r1).toMatchObject({ slots: 43, need: 18 });
+      expect(m.r1).toMatchObject({ slots: 43, need: 16 });
       const most = Math.max(...m.seats.map((x) => x.cities ?? 0));
       expect(m.r1?.maxCities).toBeGreaterThanOrEqual(most);
       // The war calls (opportunist@3 sends some): each private message's calls, as the log has them.

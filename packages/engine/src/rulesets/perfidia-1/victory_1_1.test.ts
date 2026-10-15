@@ -269,8 +269,8 @@ describe("domination by conquest", () => {
 });
 
 /** p1: c1 (acropolis 3) and c7, the Olympus city; p2: c2, taken from p3; p3: c3. */
-function scoreWorld(overrides: Record<string, number> = {}): World11 {
-  const w = world11({ now: T, overrides: { ...O, ...overrides } });
+function scoreWorld(): World11 {
+  const w = world11({ now: T, overrides: O });
   city11(w, { id: "c1", owner: "p1", island: "i1", buildings: { acropolis: 3 } });
   city11(w, { id: "c7", owner: "p1", island: "i2", tag: "olympus" });
   city11(w, { id: "c2", owner: "p2", island: "i3" });
@@ -283,7 +283,7 @@ function scoreWorld(overrides: Record<string, number> = {}): World11 {
 }
 
 describe("score, standings and the end of the match", () => {
-  test("city points: 100 + levels + 100 on Olympus; the trophy only when conquestBonus > 0", () => {
+  test("city points: 100 + levels + 100 on Olympus; a taken city scores like any other", () => {
     const plain = load11(scoreWorld(), O);
     const rows = (m: typeof plain) =>
       m.ruleset.hooks.standings(m.read()).map((s) => [s.player, s.score]);
@@ -292,52 +292,30 @@ describe("score, standings and the end of the match", () => {
       ["p2", 100],
       ["p3", 100],
     ]);
-    const trophy = { ...O, "scoring.conquestBonus": 30 };
-    const withTrophy = load11(scoreWorld({ "scoring.conquestBonus": 30 }), trophy);
-    expect(rows(withTrophy).slice(0, 3)).toEqual([
-      ["p1", 303],
-      ["p2", 130],
-      ["p3", 100],
-    ]);
   });
 
-  test("the time victory ranks by 1.1.0's score; a recapture removes the trophy", () => {
-    const over = { ...O, "scoring.conquestBonus": 250 };
-    const w = scoreWorld({ "scoring.conquestBonus": 250 });
-    const match = load11(w, over);
+  test("the time victory ranks by 1.1.0's score, Olympus included", () => {
+    const match = load11(scoreWorld(), O);
     match.advanceTo(604800);
-    // p2's taken c2 is worth 350 > p1's 303.
-    expect(match.result).toMatchObject({ reason: "time", winners: ["p2"] });
-    const w2 = scoreWorld({ "scoring.conquestBonus": 250 });
-    city11(w2, { id: "c9", owner: "p3", island: "i1" });
-    besiege11(w2, {
-      city: "c2",
-      by: "p3",
-      garrison: [{ home: "c3", units: GARRISON }],
-      endsAt: T + 100,
-    });
-    const m2 = load11(w2, over);
-    m2.advanceTo(604800);
-    // p3 owned c2 before: no trophy, and p1 wins.
-    expect(m2.result).toMatchObject({ reason: "time", winners: ["p1"] });
+    // p1's 303 (c1 with acropolis 3, Olympus 200) beats every one-city player.
+    expect(match.result).toMatchObject({ reason: "time", winners: ["p1"] });
   });
 
-  test("an eliminated player's frozen score includes the trophy it held", () => {
-    const over = { ...O, "scoring.conquestBonus": 30 };
-    const w = scoreWorld({ "scoring.conquestBonus": 30 });
+  test("an eliminated player's frozen score is its last city's 1.1.0 points", () => {
+    const w = scoreWorld();
     besiege11(w, {
       city: "c2",
       by: "p1",
       garrison: [{ home: "c1", units: GARRISON }],
       endsAt: T + 100,
     });
-    const match = load11(w, over);
+    const match = load11(w, O);
     match.advanceTo(T + 100);
     const x = extOf11(match);
-    expect(x.frozenScores).toEqual({ p2: { cityPoints: 130, battleScore: 0 } });
+    expect(x.frozenScores).toEqual({ p2: { cityPoints: 100, battleScore: 0 } });
     expect(x.conquests["c2"]).toEqual({ by: "p1", former: ["p2", "p3"] });
     const standing = match.ruleset.hooks.standings(match.read()).find((s) => s.player === "p2");
-    expect(standing).toMatchObject({ score: 130, alive: false, cities: 0 });
+    expect(standing).toMatchObject({ score: 100, alive: false, cities: 0 });
   });
 
   test("the last player standing wins at once", () => {

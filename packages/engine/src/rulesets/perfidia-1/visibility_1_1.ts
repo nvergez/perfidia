@@ -44,7 +44,7 @@ function countdowns(r: PRead11, byOwner: ReadonlyMap<PlayerId, Hold>, need: Domi
 function publicCity(r: PRead11, _viewer: PlayerId, city: CityId): JsonObject {
   const c = cityOf(r.state, city);
   const x = r.ext();
-  const out: JsonObject = { points: cityPoints11(r.config, x, c) };
+  const out: JsonObject = { points: cityPoints11(r.config, c) };
   if (c.tag === OLYMPUS_TAG) out["olympus"] = true;
   if (isTaken(x, city, c.owner)) out["taken"] = true;
   const record = conquestOf(x, city);

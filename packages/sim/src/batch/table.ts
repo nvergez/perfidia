@@ -524,7 +524,7 @@ export function teamTable(result: BatchResult): string {
     ];
   });
   const title =
-    "teamwork · joint attack: battles at one city by ≥ 2 players allied at the time, landing within 60 min · war calls: private WAR# messages · R1 (perfidia-1@1.1.0 §13.3, a 1.0.0 log with the proposed values): a bloc with ≥ 40% of the map's city slots and ≥ 2N, ≥ 2 of them taken (conquered by an owner that never owned them before); held: for 24 h from day 4";
+    "teamwork · joint attack: battles at one city by ≥ 2 players allied at the time, landing within 60 min · war calls: private WAR# messages · R1 (perfidia-1@1.1.0 §13.3 with the match's numbers, a 1.0.0 log with 1.1.0's defaults): a bloc with ≥ 35% of the map's city slots and ≥ 2N, ≥ 2 of them taken (conquered by an owner that never owned them before); held: for 24 h from day 4";
   return `${title}\n${withLongNames([head, ...rows], new Set([1, 2, 3, 4, 5, 6, 7, 8, 9, 10])).join("\n")}\n`;
 }
 

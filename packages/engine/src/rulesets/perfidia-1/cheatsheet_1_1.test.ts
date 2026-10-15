@@ -33,7 +33,7 @@ AFTER A WIN all defenders die and the wall drops 1. With no settler alive: loot 
             kills every settler in your garrison first.
 SCORE       100 per city + 1 per building level + 100 for Olympus
             + 1 per 10 enemy pop killed (capped at 1/4 of your city points).
-WIN         From day 4: a bloc (alliance or lone player) holding ≥ 18 cities (40% of the 43 city slots,
+WIN         From day 4: a bloc (alliance or lone player) holding ≥ 16 cities (35% of the 43 city slots,
             and ≥ 2N), ≥ 2 of them taken, for 24 h in public. A city is taken when its owner conquered
             it and never held it before. Otherwise the highest score at the end of day 7.`;
 
@@ -70,25 +70,25 @@ describe("the cheat sheet of 1.1.0", () => {
   test("gives the threshold and the map's slots for each N", () => {
     const firsts = [];
     for (let n = 6; n <= 12; n += 1) {
-      const m = /holding ≥ (\d+) cities \(40% of the (\d+) city slots,/.exec(sheet({}, n));
+      const m = /holding ≥ (\d+) cities \(35% of the (\d+) city slots,/.exec(sheet({}, n));
       firsts.push([n, Number(m?.[1]), Number(m?.[2])]);
     }
     expect(firsts).toEqual([
-      [6, 18, 43],
-      [7, 20, 50],
-      [8, 20, 49],
-      [9, 22, 55],
-      [10, 25, 61],
-      [11, 27, 67],
-      [12, 30, 73],
+      [6, 16, 43],
+      [7, 18, 50],
+      [8, 18, 49],
+      [9, 20, 55],
+      [10, 22, 61],
+      [11, 24, 67],
+      [12, 26, 73],
     ]);
   });
 
   test("names the floor and the taken cities from the config", () => {
     expect(
-      win(sheet({ "victory.dominationMinPerPlayer": 1, "victory.dominationPm": 350 })),
+      win(sheet({ "victory.dominationMinPerPlayer": 1, "victory.dominationPm": 400 })),
     ).toEqual([
-      "WIN         From day 4: a bloc (alliance or lone player) holding ≥ 16 cities (35% of the 43 city slots,",
+      "WIN         From day 4: a bloc (alliance or lone player) holding ≥ 18 cities (40% of the 43 city slots,",
       "            and ≥ N), ≥ 2 of them taken, for 24 h in public. A city is taken when its owner conquered",
       "            it and never held it before. Otherwise the highest score at the end of day 7.",
     ]);
@@ -97,7 +97,7 @@ describe("the cheat sheet of 1.1.0", () => {
 
   test("drops the taken clause and its definition with dominationMinConquests 0", () => {
     expect(win(sheet({ "victory.dominationMinConquests": 0 }))).toEqual([
-      "WIN         From day 4: a bloc (alliance or lone player) holding ≥ 18 cities (40% of the 43 city slots,",
+      "WIN         From day 4: a bloc (alliance or lone player) holding ≥ 16 cities (35% of the 43 city slots,",
       "            and ≥ 2N), for 24 h in public. Otherwise the highest score at the end of day 7.",
     ]);
   });
@@ -121,17 +121,10 @@ describe("the cheat sheet of 1.1.0", () => {
     expect(win(sheet({ "time.matchEnd": 345600 }))[0]).toStartWith("WIN         From day 4:");
   });
 
-  test("adds the conquest trophy to SCORE, and defines a taken city there when WIN does not", () => {
-    expect(score(sheet({ "scoring.conquestBonus": 30 }))).toEqual([
-      "SCORE       100 per city + 1 per building level + 100 for Olympus + 30 per taken city",
+  test("SCORE has no term for taken cities", () => {
+    expect(score(sheet({ "victory.dominationMinConquests": 0 }))).toEqual([
+      "SCORE       100 per city + 1 per building level + 100 for Olympus",
       "            + 1 per 10 enemy pop killed (capped at 1/4 of your city points).",
-    ]);
-    expect(
-      score(sheet({ "scoring.conquestBonus": 30, "victory.dominationMinConquests": 0 })),
-    ).toEqual([
-      "SCORE       100 per city + 1 per building level + 100 for Olympus + 30 per taken city",
-      "            + 1 per 10 enemy pop killed (capped at 1/4 of your city points).",
-      "            A city is taken when its owner conquered it and never held it before.",
     ]);
   });
 });
