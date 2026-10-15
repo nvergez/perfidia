@@ -18,8 +18,9 @@ import {
 import { countdownsQualifyProblems, type PRead11 } from "./victory_1_1.ts";
 
 // Domination by conquest (perfidia-1@1.1.0 §13.3) through the kernel: the threshold counts the
-// map's city slots (fixed), a bloc needs taken cities, conquests record who took a city and who
-// owned it before, and every same-second rule of 1.0.0 still holds. The test map has 4 islands of
+// map's city slots (fixed), a bloc needs taken cities (none of its members owned them before),
+// conquests record who took a city and who owned it before, a countdown starts only while it can
+// end by matchEnd, and every same-second rule of 1.0.0 still holds. The test map has 4 islands of
 // 10 slots (40 slots); with dominationPm 100 and dominationMinPerPlayer 1 at N = 6, a bloc needs
 // max(6, ceil(100 × 40 / 1000) = 4) = 6 cities, 2 of them taken.
 
@@ -99,8 +100,8 @@ describe("domination by conquest", () => {
     const x = extOf11(match);
     // p1 still has 7 cities but only c21 is taken; p3 owned c20 before, so it is not taken.
     expect(x.conquests["c20"]).toEqual({ by: "p3", former: ["p1", "p3"] });
-    expect(isTaken(x, "c20", "p3")).toBe(false);
-    expect(isTaken(x, "c21", "p1")).toBe(true);
+    expect(isTaken(x, "c20", "p3", ["p3"])).toBe(false);
+    expect(isTaken(x, "c21", "p1", ["p1"])).toBe(true);
     expect(x.domination.countdowns).toEqual([]);
   });
 
@@ -168,30 +169,76 @@ describe("domination by conquest", () => {
       ["domination_cancelled", "membership"],
       ["domination_started", null],
     ]);
-    // 7 + 2 + 2 cities; c20, c21 (p1) and c22 (p3) taken.
+    // 7 + 2 + 2 cities; c21 (p1) and c22 (p3) taken. c20, which p1 took from p3, no longer
+    // counts: p3 is now a member.
     expect(ofType(events, "domination_started")[0]?.data).toMatchObject({
       key: "a1",
       members: ["p1", "p2", "p3"],
       cities: 11,
-      taken: 3,
+      taken: 2,
     });
   });
 
   test("a bloc short of taken cities starts its countdown when an ally with one joins", () => {
     const w = baseWorld();
     addAlliance(w.state, "North", ["p1", "p2"]);
-    city11(w, { id: "c22", owner: "p3", island: "i3" });
-    taken11(w, "c22", "p3", ["p5"]);
+    city11(w, { id: "c22", owner: "p4", island: "i3" });
+    taken11(w, "c22", "p4", ["p5"]);
     const match = load11(w, O);
     expect(testStep(match, () => undefined)).toEqual([]);
     const events = testStep(match, (ctx) => {
       const a1 = ctx.state.alliances["a1"];
-      const p3 = ctx.state.players["p3"];
-      if (a1 === undefined || p3 === undefined) throw new Error("fixture");
-      a1.members = ["p1", "p2", "p3"];
-      p3.alliance = "a1";
+      const p4 = ctx.state.players["p4"];
+      if (a1 === undefined || p4 === undefined) throw new Error("fixture");
+      a1.members = ["p1", "p2", "p4"];
+      p4.alliance = "a1";
     });
     expect(ofType(events, "domination_started")[0]?.data).toMatchObject({ key: "a1", taken: 2 });
+  });
+
+  test("a staged trade does not count: cities taken from a player who then allies are not taken", () => {
+    // p2 took c20 and c21 from p3 while apart: alone p2 qualifies, allied with p3 it does not.
+    const staged = (ally: boolean) => {
+      const w = world11({ now: T, overrides: O });
+      cities11(w, "p2", 1, 2);
+      cities11(w, "p3", 10, 2);
+      for (const id of ["c20", "c21"] as const) {
+        city11(w, { id, owner: "p2", island: "i1" });
+        taken11(w, id, "p2", ["p3"]);
+      }
+      cities11(w, "p1", 30, 1);
+      for (const p of ["p4", "p5", "p6"] as const) {
+        city11(w, { id: CityIdSchema.parse(`c4${p.slice(1)}`), owner: p, island: "i4" });
+      }
+      if (ally) addAlliance(w.state, "Pair", ["p2", "p3"]);
+      return testStep(load11(w, O), () => undefined);
+    };
+    // Apart: p2 has 4 cities (below 6); allied: 6 cities, 0 taken.
+    expect(staged(false)).toEqual([]);
+    expect(staged(true)).toEqual([]);
+    const w = world11({ now: T, overrides: O });
+    cities11(w, "p2", 1, 4);
+    for (const id of ["c20", "c21"] as const) {
+      city11(w, { id, owner: "p2", island: "i1" });
+      taken11(w, id, "p2", ["p3"]);
+    }
+    city11(w, { id: "c43", owner: "p3", island: "i4" });
+    const alone = testStep(load11(w, O), () => undefined);
+    expect(ofType(alone, "domination_started")[0]?.data).toMatchObject({ key: "p2", taken: 2 });
+  });
+
+  test("a countdown starts only while it can end by matchEnd; one ending at matchEnd wins", () => {
+    // matchEnd 604800, hold 86400: the last start is 518400 (D7 00:00).
+    const late = qualifying(518401);
+    expect(testStep(late, () => undefined)).toEqual([]);
+    expect(extOf11(late).domination.countdowns).toEqual([]);
+    late.advanceTo(604800);
+    expect(late.result).toMatchObject({ reason: "time" });
+    const last = qualifying(518400);
+    const started = testStep(last, () => undefined);
+    expect(ofType(started, "domination_started")[0]?.data).toMatchObject({ endsAt: 604800 });
+    last.advanceTo(604800);
+    expect(last.result).toMatchObject({ reason: "domination", winners: ["p1"], endedAt: 604800 });
   });
 
   test("a member leaving with the taken cities cancels the countdown (membership)", () => {
@@ -267,6 +314,23 @@ describe("domination by conquest", () => {
     });
   });
 });
+
+/** p1 qualifies (6 cities, 2 taken) at `now`; matchEnd 604800, hold 86400. */
+function qualifying(now: number) {
+  const w = world11({ now, overrides: O });
+  cities11(w, "p1", 1, 4);
+  for (const [id, from] of [
+    ["c20", "p3"],
+    ["c21", "p4"],
+  ] as const) {
+    city11(w, { id, owner: "p1", island: "i1" });
+    taken11(w, id, "p1", [from]);
+  }
+  for (const p of ["p2", "p3", "p4", "p5", "p6"] as const) {
+    city11(w, { id: CityIdSchema.parse(`c4${p.slice(1)}`), owner: p, island: "i4" });
+  }
+  return load11(w, O);
+}
 
 /** p1: c1 (acropolis 3) and c7, the Olympus city; p2: c2, taken from p3; p3: c3. */
 function scoreWorld(): World11 {

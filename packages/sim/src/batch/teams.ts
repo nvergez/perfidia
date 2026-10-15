@@ -17,9 +17,9 @@ import { botName } from "./seats.ts";
 // war-call messages (`WAR#` tags of the bots' war-call protocol, `bots/src/war.ts`: private
 // messages are spectator-visible and logged with their text) and how near any bloc came to the R1
 // domination rule of perfidia-1@1.1.0 §13.3 (by default at least 35% of the map's city slots and
-// 2N, with at least 2 of them taken; a city is taken when its owner conquered it and never owned it
-// before): with the match's own values when its config has `victory.dominationMinConquests`, else
-// (a 1.0.0 log) 1.1.0's defaults. A bloc is an alliance (its members at the time) or a player outside any
+// 2N, with at least 2 of them taken; a city is taken for its owner's bloc when the owner conquered
+// it and no member of the bloc ever owned it): with the match's own values when its config has
+// `victory.dominationMinConquests`, else (a 1.0.0 log) 1.1.0's defaults. A bloc is an alliance (its members at the time) or a player outside any
 // alliance (perfidia-1 §13.3); a city counts for its owner, besieged or not.
 
 /** Two battles at one city are a joint attack when they land at most this far apart (s). */
@@ -129,8 +129,9 @@ export interface R1Reach {
   readonly reachedAt: GameTime | null;
   readonly reachedBy: string[];
   /**
-   * Of the taken cities of the bloc that first met R1, those taken from a player of that bloc (a
-   * betrayal inside the bloc, or a city laundered through an ally); null when none met R1.
+   * Cities the bloc that first met R1 held then that one member had conquered from another (a
+   * staged trade before allying, or a recapture for an ally): R1 does not count them as taken;
+   * null when none met R1.
    */
   readonly takenFromBloc: number | null;
   /**
@@ -270,13 +271,22 @@ export function teamRecords(lines: readonly LogLine[], initial: InitialMap | nul
   const sieges: SiegeHold[] = [];
   const open = new Map<string, OpenSiege>();
 
-  // R1: each city's owner, the cities conquered and their former owners: a city is taken when its
-  // owner conquered it and never owned it before. Per player, cities and taken cities.
+  // R1: each city's owner, the cities conquered and their former owners: a city is taken for its
+  // owner's bloc when the owner conquered it and no member of the bloc ever owned it. Per player,
+  // cities and taken cities.
   const owner = new Map<string, PlayerId | null>(initial?.owners ?? []);
   const conqueredCities = new Set<string>();
   const formerOwners = new Map<string, Set<PlayerId>>();
-  const isTaken = (city: string, o: PlayerId): boolean =>
-    conqueredCities.has(city) && !(formerOwners.get(city)?.has(o) ?? false);
+  /** Conquered, and none of `bloc` (the owner's bloc, the owner included) owned it before. */
+  const isTaken = (city: string, bloc: readonly PlayerId[]): boolean =>
+    conqueredCities.has(city) && !bloc.some((m) => formerOwners.get(city)?.has(m) ?? false);
+  /** Conquered from a member of `bloc` by another: taken for the owner alone, not for the bloc. */
+  const fromOwnBloc = (city: string, o: PlayerId, bloc: readonly PlayerId[]): boolean =>
+    isTaken(city, [o]) && !isTaken(city, bloc);
+  const blocOf = (o: PlayerId): PlayerId[] => {
+    const a = allianceOf.get(o);
+    return a === undefined ? [o] : [...(members.get(a) ?? [o])];
+  };
   const rule = initial?.rule;
   const need =
     initial === null
@@ -312,7 +322,7 @@ export function teamRecords(lines: readonly LogLine[], initial: InitialMap | nul
       if (o === null) continue;
       const x = per.get(o) ?? { cities: 0, conquered: 0 };
       x.cities += 1;
-      if (isTaken(city, o)) x.conquered += 1;
+      if (isTaken(city, blocOf(o))) x.conquered += 1;
       per.set(o, x);
     }
     const blocs = new Map<string, PlayerId[]>();
@@ -340,9 +350,7 @@ export function teamRecords(lines: readonly LogLine[], initial: InitialMap | nul
         if (r.reached === null) {
           let fromBloc = 0;
           for (const [city, o] of owner) {
-            if (o === null || !bloc.includes(o) || !isTaken(city, o)) continue;
-            const former = formerOwners.get(city);
-            if (former !== undefined && bloc.some((m) => former.has(m))) fromBloc += 1;
+            if (o !== null && bloc.includes(o) && fromOwnBloc(city, o, bloc)) fromBloc += 1;
           }
           r.reached = { t, bloc: sorted, fromBloc };
         }
@@ -632,6 +640,8 @@ export interface TeamStat {
   readonly r1: {
     readonly runs: number;
     readonly need: number | null;
+    /** The taken cities R1 asks for, when the same for all runs. */
+    readonly needTaken: number | null;
     readonly reached: number;
     /** Runs where a bloc held R1 for the domination hold from the opening on (a win under R1). */
     readonly held: number;
@@ -694,6 +704,7 @@ export function teamStat(matches: readonly TeamOfMatch[]): TeamStat {
   const sum = (f: (m: TeamOfMatch) => number): number => matches.reduce((a, m) => a + f(m), 0);
   const known = matches.flatMap((m) => (m.r1 === null ? [] : [m.r1]));
   const needs = [...new Set(known.map((r) => r.need))];
+  const takens = [...new Set(known.map((r) => r.needTaken))];
   const fighting = known.flatMap((r) => (r.fightingMax === null ? [] : [r.fightingMax]));
   return {
     runs: matches.length,
@@ -715,6 +726,7 @@ export function teamStat(matches: readonly TeamOfMatch[]): TeamStat {
     r1: {
       runs: known.length,
       need: needs.length === 1 ? (needs[0] ?? null) : null,
+      needTaken: takens.length === 1 ? (takens[0] ?? null) : null,
       reached: known.filter((r) => r.reachedAt !== null).length,
       held: known.filter((r) => r.heldAt !== null).length,
       maxCities: meanOrNull(known.map((r) => r.maxCities)),

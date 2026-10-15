@@ -480,8 +480,9 @@ const n2 = (x: number | null): string => (x === null ? "-" : f2(x));
 /**
  * Per variant, teamwork: joint attacks (mean per run, runs with one, those a war call preceded),
  * the war-call messages (calls, calls answered, answers yes and no, cancels) and how near a bloc came
- * to R1 (its threshold, runs that met it, the largest bloc's cities and conquered cities, and the
- * most cities a bloc held with ≥ 2 conquered: means over the runs).
+ * to R1 (its threshold in cities and taken cities, runs that met it, the largest bloc's cities and
+ * conquered cities, and the most cities a bloc held with the taken cities R1 asks for: means over
+ * the runs).
  */
 export function teamTable(result: BatchResult): string {
   const head = [
@@ -496,6 +497,7 @@ export function teamTable(result: BatchResult): string {
     "no",
     "cancels",
     "R1 need",
+    "taken",
     "R1 met",
     "R1 held",
     "largest bloc: cities / taken",
@@ -515,6 +517,7 @@ export function teamTable(result: BatchResult): string {
       String(t.calls.no),
       String(t.calls.cancels),
       int(t.r1.need),
+      int(t.r1.needTaken),
       `${t.r1.reached} of ${t.r1.runs}`,
       `${t.r1.held} of ${t.r1.runs}`,
       `${n1(t.r1.maxCities)} / ${n2(t.r1.maxConquered)}`,
@@ -524,8 +527,8 @@ export function teamTable(result: BatchResult): string {
     ];
   });
   const title =
-    "teamwork · joint attack: battles at one city by ≥ 2 players allied at the time, landing within 60 min · war calls: private WAR# messages · R1 (perfidia-1@1.1.0 §13.3 with the match's numbers, a 1.0.0 log with 1.1.0's defaults): a bloc with ≥ 35% of the map's city slots and ≥ 2N, ≥ 2 of them taken (conquered by an owner that never owned them before); held: for 24 h from day 4";
-  return `${title}\n${withLongNames([head, ...rows], new Set([1, 2, 3, 4, 5, 6, 7, 8, 9, 10])).join("\n")}\n`;
+    "teamwork · joint attack: battles at one city by ≥ 2 players allied at the time, landing within 60 min · war calls: private WAR# messages · R1 (perfidia-1@1.1.0 §13.3 with each match's own numbers; a 1.0.0 log with 1.1.0's defaults): a bloc with ≥ need cities (dominationPm of the map's city slots, at least dominationMinPerPlayer × N), ≥ taken of them taken (conquered, and no member of the bloc owned them before); `-` when the runs differ; held: for time.dominationHold from time.dominationStart, ending by time.matchEnd";
+  return `${title}\n${withLongNames([head, ...rows], new Set([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11])).join("\n")}\n`;
 }
 
 /** `n (p%)` of a part of `total`, `0` when there is none. */

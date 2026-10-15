@@ -15,8 +15,9 @@ import {
 
 // The RulesConfig of perfidia-1@1.1.0 (docs/rulesets/perfidia-1.md §16): 1.0.0's, with the ids of
 // the Greek setting (§0.1), `victory.dominationMinConquests` (domination by conquest, §13.3), the
-// bounds of the domination keys (R5) and a `victory.dominationPm` of 350 (§0.1 says why). Every
-// other key and number is 1.0.0's. The cross-checks that need N are `check_1_1.ts`'s.
+// bounds of the domination keys and of the city slots per island (R5) and a `victory.dominationPm`
+// of 350 (§0.1 says why). Every other key and number is 1.0.0's. The cross-checks that need N are
+// `check_1_1.ts`'s.
 
 export const PERFIDIA_1_1_VERSION = "1.1.0";
 export const PERFIDIA_1_1_REF: RulesetRef = "perfidia-1@1.1.0";
@@ -24,7 +25,7 @@ export const PERFIDIA_1_1_REF: RulesetRef = "perfidia-1@1.1.0";
 /** Building ids in canonical order (§1.1). */
 export const BUILDING_IDS_1_1 = Object.freeze([
   "acropolis",
-  "woodcutter",
+  "sawmill",
   "quarry",
   "goldmine",
   "warehouse",
@@ -57,7 +58,7 @@ export const OLYMPUS_TAG = "olympus";
 
 const LevelsSchema = z.strictObject({
   acropolis: Int,
-  woodcutter: Int,
+  sawmill: Int,
   quarry: Int,
   goldmine: Int,
   warehouse: Int,
@@ -73,6 +74,11 @@ const CitySeedSchema = z.strictObject({
   units: SeedUnitsSchema,
 });
 
+/** City slots per island kind (§16): far above the defaults (1 or 2). */
+export const MAX_SLOTS = 100;
+/** `victory.dominationMinPerPlayer` and `victory.dominationMinConquests`, in cities. */
+export const MAX_DOMINATION_CITIES = 1000;
+
 const DISABLE_HINT =
   "To disable domination, set time.dominationStart after time.matchEnd (604801 with the default 7 days).";
 
@@ -86,14 +92,35 @@ const VictorySchema = z.strictObject({
       error:
         "victory.dominationPm is a share in ‰ of the map's city slots: at most 1000 (all of them).",
     }),
-  dominationMinPerPlayer: z.int().min(1, {
-    error:
-      "victory.dominationMinPerPlayer is the floor of the threshold in cities per player: at least 1 (2 means a bloc needs at least 2N cities).",
-  }),
-  dominationMinConquests: z.int().min(0, {
-    error:
-      "victory.dominationMinConquests counts taken cities: 0 or more (0 drops the conquest requirement).",
-  }),
+  dominationMinPerPlayer: z
+    .int()
+    .min(1, {
+      error:
+        "victory.dominationMinPerPlayer is the floor of the threshold in cities per player: at least 1 (2 means a bloc needs at least 2N cities).",
+    })
+    .max(MAX_DOMINATION_CITIES, {
+      error: `victory.dominationMinPerPlayer is a number of cities per player: at most ${MAX_DOMINATION_CITIES}.`,
+    }),
+  dominationMinConquests: z
+    .int()
+    .min(0, {
+      error:
+        "victory.dominationMinConquests counts taken cities: 0 or more (0 drops the conquest requirement).",
+    })
+    .max(MAX_DOMINATION_CITIES, {
+      error: `victory.dominationMinConquests counts taken cities: at most ${MAX_DOMINATION_CITIES}.`,
+    }),
+});
+
+/**
+ * City slots of one island kind, at most `MAX_SLOTS`: a map then has at most 6,100 slots (Olympus,
+ * and 12 sectors of five islands), so the threshold `dominationPm × slots` stays a safe integer
+ * whether domination is on or off (§16).
+ */
+const SLOTS_ERROR = `at most ${MAX_SLOTS} city slots per island`;
+const KindSchema11 = KindSchema.extend({ slots: Int.max(MAX_SLOTS, { error: SLOTS_ERROR }) });
+const OccupiedKindSchema11 = OccupiedKindSchema.extend({
+  slots: OccupiedKindSchema.shape.slots.max(MAX_SLOTS, { error: SLOTS_ERROR }),
 });
 
 const core = coreSections(PERFIDIA_1_1_REF);
@@ -103,12 +130,12 @@ const ConfigShape = z.strictObject({
   time: core.time,
   map: core.map.extend({
     kinds: z.strictObject({
-      olympus: OccupiedKindSchema,
-      home: OccupiedKindSchema,
-      backyard: KindSchema,
-      frontier: KindSchema,
-      inner: KindSchema,
-      hub: KindSchema,
+      olympus: OccupiedKindSchema11,
+      home: OccupiedKindSchema11,
+      backyard: KindSchema11,
+      frontier: KindSchema11,
+      inner: KindSchema11,
+      hub: KindSchema11,
     }),
   }),
   start: z.strictObject({
@@ -119,7 +146,7 @@ const ConfigShape = z.strictObject({
   economy: core.economy,
   buildings: z.strictObject({
     acropolis: BuildingSchema,
-    woodcutter: BuildingSchema,
+    sawmill: BuildingSchema,
     quarry: BuildingSchema,
     goldmine: BuildingSchema,
     warehouse: BuildingSchema,
@@ -159,7 +186,7 @@ const res = (wood: number, stone: number, gold: number) => ({ wood, stone, gold 
 
 const START_LEVELS = {
   acropolis: 1,
-  woodcutter: 1,
+  sawmill: 1,
   quarry: 1,
   goldmine: 1,
   warehouse: 1,
@@ -206,7 +233,7 @@ const defaults: Perfidia11Config = {
     olympus: {
       buildings: {
         acropolis: 5,
-        woodcutter: 5,
+        sawmill: 5,
         quarry: 5,
         goldmine: 5,
         warehouse: 5,
@@ -233,7 +260,7 @@ const defaults: Perfidia11Config = {
   },
   buildings: {
     acropolis: { cost: res(90, 90, 60), time: 1800, requires: {} },
-    woodcutter: { cost: res(20, 50, 30), time: 1500, requires: {} },
+    sawmill: { cost: res(20, 50, 30), time: 1500, requires: {} },
     quarry: { cost: res(50, 20, 30), time: 1500, requires: {} },
     goldmine: { cost: res(50, 50, 10), time: 1500, requires: {} },
     warehouse: { cost: res(60, 60, 20), time: 1200, requires: {} },

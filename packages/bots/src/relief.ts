@@ -185,6 +185,24 @@ export function dominationNeed(w: World): number | null {
   return typeof v === "number" && Number.isSafeInteger(v) ? v : null;
 }
 
+/**
+ * True when the threshold also asks for taken (conquered) cities and the seat's bloc holds fewer
+ * (hints); false when the hints or the views do not say.
+ */
+export function dominationTakenShort(w: World): boolean {
+  const h = w.hints.domination;
+  if (h?.needTaken === undefined || h.ownTaken === undefined || w.board === null) return false;
+  const need = at(w.board.ext, h.needTaken);
+  const have = at(w.briefing.ext, h.ownTaken);
+  return (
+    typeof need === "number" &&
+    Number.isSafeInteger(need) &&
+    typeof have === "number" &&
+    Number.isSafeInteger(have) &&
+    have < need
+  );
+}
+
 // Cities and sieges.
 
 /** True when a city's public extras show a siege (or another state the hints say blocks it). */

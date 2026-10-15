@@ -56,6 +56,13 @@ export interface DominationHints {
   readonly ends: string;
   /** Path in the leaderboard's `ext` to the bloc threshold in cities. */
   readonly need?: ConfigPath;
+  /**
+   * Path in the leaderboard's `ext` to the taken (conquered) cities the threshold also asks for,
+   * and path in the briefing's `ext` to the taken cities of the seat's own bloc. Absent (or a path
+   * missing), the threshold is cities only.
+   */
+  readonly needTaken?: ConfigPath;
+  readonly ownTaken?: ConfigPath;
 }
 
 /**
@@ -140,7 +147,8 @@ export const RULESET_HINTS: Readonly<Record<string, StrategyHints>> = Object.fre
     }),
   }),
   // perfidia-1@1.1.0 (docs/rulesets/perfidia-1.md §0.1): 1.0.0's hints with the ids of the Greek
-  // setting: the acropolis gives the base defense, and the neutral prize city is tagged olympus.
+  // setting (the acropolis gives the base defense, and the neutral prize city is tagged olympus),
+  // and where the taken cities domination by conquest asks for are shown.
   "perfidia-1@1.1.0": Object.freeze({
     settleOrder: Object.freeze(["home", "frontier", "backyard", "inner", "frontier"]),
     avoidTags: Object.freeze(["olympus"]),
@@ -159,7 +167,8 @@ export const RULESET_HINTS: Readonly<Record<string, StrategyHints>> = Object.fre
       lootProtectPerLevel: Object.freeze(["economy", "lootProtectPerLevel"]),
     }),
     // §12: `siege {by, ends}` as in 1.0.0. §13.2: the briefing's `countdowns [{key, members,
-    // cities, taken, need, needTaken, ends}]`, the leaderboard's `domination.need` (cities).
+    // cities, taken, need, needTaken, ends}]` and own `bloc {…, taken}`, the leaderboard's
+    // `domination.need` (cities) and `domination.needTaken`: domination needs taken cities.
     siege: Object.freeze({
       by: Object.freeze(["siege", "by"]),
       ends: Object.freeze(["siege", "ends"]),
@@ -170,6 +179,8 @@ export const RULESET_HINTS: Readonly<Record<string, StrategyHints>> = Object.fre
       members: "members",
       ends: "ends",
       need: Object.freeze(["domination", "need"]),
+      needTaken: Object.freeze(["domination", "needTaken"]),
+      ownTaken: Object.freeze(["bloc", "taken"]),
     }),
   }),
   // sandbox-1 §3.8: the home island's second slot, then the shared islands; capitals fall from

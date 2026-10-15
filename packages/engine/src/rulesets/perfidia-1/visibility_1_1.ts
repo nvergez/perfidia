@@ -10,16 +10,18 @@ import {
   type Hold,
   holdByOwner,
   holdOf,
+  takenNow,
   totalSlots,
 } from "./domination_1_1.ts";
 import { siegeOf, tiebreakPosition } from "./ext.ts";
-import { conquestOf, isTaken, type Perfidia11Ext } from "./ext_1_1.ts";
+import { conquestOf, type Perfidia11Ext } from "./ext_1_1.ts";
 import { cityPoints11 } from "./scoring_1_1.ts";
 import { need11, type PRead11 } from "./victory_1_1.ts";
 
 // Fog of war of perfidia-1@1.1.0 (docs/rulesets/perfidia-1.md §12): 1.0.0's public extras, plus what
-// follows from public conquests: whether a city is taken, its former owners, each player's taken
-// cities, and every bloc's cities and taken cities next to the threshold (§13.2).
+// follows from public conquests and alliances: whether a city is taken for its owner's bloc, its
+// former owners, each player's taken cities, and every bloc's cities and taken cities next to the
+// threshold (§13.2).
 
 /** Every running countdown with the bloc's cities and taken cities against the threshold. */
 function countdowns(r: PRead11, byOwner: ReadonlyMap<PlayerId, Hold>, need: DominationNeed) {
@@ -38,15 +40,15 @@ function countdowns(r: PRead11, byOwner: ReadonlyMap<PlayerId, Hold>, need: Domi
 }
 
 /**
- * The public extras of a city: its points, the Olympus flag, whether its owner took it and who
- * owned it before (a conquered city), and its siege with the end time.
+ * The public extras of a city: its points, the Olympus flag, whether it counts as taken for its
+ * owner's bloc and who owned it before (a conquered city), and its siege with the end time.
  */
 function publicCity(r: PRead11, _viewer: PlayerId, city: CityId): JsonObject {
   const c = cityOf(r.state, city);
   const x = r.ext();
   const out: JsonObject = { points: cityPoints11(r.config, c) };
   if (c.tag === OLYMPUS_TAG) out["olympus"] = true;
-  if (isTaken(x, city, c.owner)) out["taken"] = true;
+  if (takenNow(r.state, x, city)) out["taken"] = true;
   const record = conquestOf(x, city);
   if (record !== null && record.former.length > 0) out["former"] = [...record.former];
   const siege = siegeOf(x, city);

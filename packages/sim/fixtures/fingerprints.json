@@ -35,13 +35,13 @@
     }
   },
   "perfidia-1@1.1.0": {
-    "artefacts": "405a82f77113bba0b09d73b6c4347bf551425188e8e94a39d172801b21190df5",
+    "artefacts": "21fe8b073b8d6f57c9df4333be63d3d42f8946d39706532322f70a4834ec6c0b",
     "goldens": {
-      "lockstep-12p-1d": "df3e5d95be3be648",
-      "lockstep-6p-4d": "67c141a9fb778b28",
-      "lockstep-6p-6d-war": "a2e34dcb8e700a0d",
-      "rt-virtual-6p-1d": "bc41ce5a5ed8c6ee",
-      "scenario-r1": "1615c9e23442abaa"
+      "lockstep-12p-1d": "5cc0d64b68f688c0",
+      "lockstep-6p-4d": "27b43d7c1e35f497",
+      "lockstep-6p-6d-war": "58f649c5a73915ac",
+      "rt-virtual-6p-1d": "f9305accc8ba130e",
+      "scenario-r1": "37de035be8baa033"
     },
     "views": {
       "lockstep-12p-1d": "4a1f145404bcb780df2a0175cf99f969d8479726ce4f31647741b21832b4de4f",

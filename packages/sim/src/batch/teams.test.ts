@@ -316,7 +316,7 @@ describe("R1 reach", () => {
     expect(teamRecords(log(rows), null).r1).toBeNull();
   });
 
-  test("a city is taken by an owner that never owned it: a recapture is not, an ally's is", () => {
+  test("a city is taken for a bloc none of whose members owned it: a recapture is not, nor an ally's", () => {
     // A threshold of 1 city with 2 taken: only the taken count matters.
     const rule = { ...RULE, pm: 1, minPerPlayer: 1, players: 1, minConquests: 2 };
     const r1 = (rows: readonly unknown[]) =>
@@ -329,17 +329,33 @@ describe("R1 reach", () => {
       ev(3000, "city_conquered", { city: "c4", from: "p4", to: "p2" }),
     ];
     expect(r1(recapture)).toMatchObject({ reachedAt: null, mostConquered: 1, fightingMax: null });
-    // p1 takes c3 from p3 and loses it to p4; p1's ally p5 takes it from p4 (taken for p5, though
-    // p1 owned it: laundering through an ally) and takes c6 from p6: the bloc has two, one of them
-    // taken from a member of the bloc.
-    const laundering = [
+    // p1 takes c3 from p3 and loses it to p4; p1's ally p5 takes it back from p4 (not taken for
+    // the bloc: p1 owned it) and takes c6 from p6: one taken city. c4, taken from p4 at 5000, is
+    // the second: R1 is met with one city conquered from the bloc that does not count.
+    const recaptureForAnAlly = [
       ev(500, "alliance_formed", { alliance: "a1", name: "a1", members: ["p1", "p5"] }),
       ev(1000, "city_conquered", { city: "c3", from: "p3", to: "p1" }),
       ev(2000, "city_conquered", { city: "c3", from: "p1", to: "p4" }),
       ev(3000, "city_conquered", { city: "c3", from: "p4", to: "p5" }),
       ev(4000, "city_conquered", { city: "c6", from: "p6", to: "p5" }),
     ];
-    expect(r1(laundering)).toMatchObject({ reachedAt: 4000, takenFromBloc: 1, mostConquered: 2 });
+    expect(r1(recaptureForAnAlly)).toMatchObject({ reachedAt: null, mostConquered: 1 });
+    expect(
+      r1([...recaptureForAnAlly, ev(5000, "city_conquered", { city: "c4", from: "p4", to: "p5" })]),
+    ).toMatchObject({ reachedAt: 5000, takenFromBloc: 1, mostConquered: 2 });
+    // A staged trade: p1 takes c2 and c4 from p2, then they ally. p1 alone meets R1 at 2000; the
+    // pair holds no taken city, so R1 is broken at 3000. Without the alliance, p1 holds it for
+    // 24 h from the opening.
+    const staged = [
+      ev(1000, "city_conquered", { city: "c2", from: "p2", to: "p1" }),
+      ev(2000, "city_conquered", { city: "c4", from: "p2", to: "p1" }),
+      ev(3000, "alliance_formed", { alliance: "a1", name: "a1", members: ["p1", "p2"] }),
+      ev(400000, "message", { from: "p4", to: "all", text: "still here" }),
+    ];
+    expect(r1(staged)).toMatchObject({ reachedAt: 2000, takenFromBloc: 0, heldAt: null });
+    expect(r1(staged.slice(0, 2).concat(staged.slice(3)))).toMatchObject({
+      heldAt: 259200 + 86400,
+    });
   });
 
   test("with the match's rule: the 2N floor, the taken cities, and a 24 h hold from the opening", () => {
@@ -440,6 +456,7 @@ describe("a variant's teamwork", () => {
       r1: {
         runs: 2,
         need: 18,
+        needTaken: 2,
         reached: 1,
         held: 1,
         maxCities: 15.5,

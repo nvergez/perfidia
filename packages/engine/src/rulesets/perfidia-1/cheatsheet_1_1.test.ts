@@ -22,6 +22,9 @@ STORAGE     warehouse L holds 60L² + 280L + 660 of each resource. 100·L of eac
 POPULATION  acropolis L allows 2L² + 20L + 40 pop. Every unit homed in the city counts, wherever it is.
 BUILD       level L costs base × (L² + 3L + 6) / 10. It takes baseTime × (L² + 3L + 6) / (9 + acropolis) s.
 RECRUIT     unit time = baseTime × 10 / (9 + barracks or harbor level). Units arrive one by one.
+UNITS       hoplite defends (atk 5, def 20, carries 10). peltast attacks (atk 20, def 5, carries 50).
+            settler founds a city or holds a siege. transport carries 20 pop across water.
+            trireme fights only at sea (naval 50). Only hoplites and peltasts fight on land.
 SETTLER     450 wood / 450 stone / 750 gold × k, where k = your cities + your settlers (k ≤ 10).
 COMBAT      naval phase (only across water): triremes 50 each. Losing it sinks the whole attack.
             land phase: A = Σ attack  vs  D = (Σ defense + 50 + 20·acropolis) × (1 + 5%·wall).
@@ -33,9 +36,10 @@ AFTER A WIN all defenders die and the wall drops 1. With no settler alive: loot 
             kills every settler in your garrison first.
 SCORE       100 per city + 1 per building level + 100 for Olympus
             + 1 per 10 enemy pop killed (capped at 1/4 of your city points).
-WIN         From day 4: a bloc (alliance or lone player) holding ≥ 16 cities (35% of the 43 city slots,
-            and ≥ 2N), ≥ 2 of them taken, for 24 h in public. A city is taken when its owner conquered
-            it and never held it before. Otherwise the highest score at the end of day 7.`;
+WIN         From day 4: a bloc (alliance or lone player) holding ≥ 16 cities (35% of the 43 city slots),
+            ≥ 2 of them taken, for 24 h in public. The countdown must start by D7 00:00 to end in time.
+            A city counts as taken when its owner conquered it and no member of the owner's bloc ever
+            held it. Otherwise the highest score at the end of day 7.`;
 
 function sheet(overrides: Readonly<Record<string, Json>> = {}, n = 6): string {
   const r = resolveConfig(P11, overrides);
@@ -43,6 +47,11 @@ function sheet(overrides: Readonly<Record<string, Json>> = {}, n = 6): string {
   return renderCheatSheet11(r.config, P11.compile(r.config, n));
 }
 
+const units = (text: string): string[] => {
+  const lines = text.split("\n");
+  const at = lines.findIndex((l) => l.startsWith("UNITS"));
+  return lines.slice(at, at + 3);
+};
 const win = (text: string): string[] =>
   text.split("\n").slice(text.split("\n").findIndex((l) => l.startsWith("WIN")));
 const score = (text: string): string[] => {
@@ -70,7 +79,7 @@ describe("the cheat sheet of 1.1.0", () => {
   test("gives the threshold and the map's slots for each N", () => {
     const firsts = [];
     for (let n = 6; n <= 12; n += 1) {
-      const m = /holding ≥ (\d+) cities \(35% of the (\d+) city slots,/.exec(sheet({}, n));
+      const m = /holding ≥ (\d+) cities \(35% of the (\d+) city slots\),/.exec(sheet({}, n));
       firsts.push([n, Number(m?.[1]), Number(m?.[2])]);
     }
     expect(firsts).toEqual([
@@ -84,22 +93,56 @@ describe("the cheat sheet of 1.1.0", () => {
     ]);
   });
 
-  test("names the floor and the taken cities from the config", () => {
+  test("names the floor per player only when it is the larger term, and the taken cities", () => {
     expect(
       win(sheet({ "victory.dominationMinPerPlayer": 1, "victory.dominationPm": 400 })),
     ).toEqual([
-      "WIN         From day 4: a bloc (alliance or lone player) holding ≥ 18 cities (40% of the 43 city slots,",
-      "            and ≥ N), ≥ 2 of them taken, for 24 h in public. A city is taken when its owner conquered",
-      "            it and never held it before. Otherwise the highest score at the end of day 7.",
+      "WIN         From day 4: a bloc (alliance or lone player) holding ≥ 18 cities (40% of the 43 city slots),",
+      "            ≥ 2 of them taken, for 24 h in public. The countdown must start by D7 00:00 to end in time.",
+      "            A city counts as taken when its owner conquered it and no member of the owner's bloc ever",
+      "            held it. Otherwise the highest score at the end of day 7.",
+    ]);
+    expect(win(sheet({ "victory.dominationMinPerPlayer": 3 }))).toEqual([
+      "WIN         From day 4: a bloc (alliance or lone player) holding ≥ 18 cities (3 per player; 35% of the",
+      "            43 city slots is only 16), ≥ 2 of them taken, for 24 h in public. The countdown must start",
+      "            by D7 00:00 to end in time. A city counts as taken when its owner conquered it and no member",
+      "            of the owner's bloc ever held it. Otherwise the highest score at the end of day 7.",
     ]);
     expect(win(sheet({ "victory.dominationMinConquests": 1 }))[1]).toContain("≥ 1 of them taken");
   });
 
   test("drops the taken clause and its definition with dominationMinConquests 0", () => {
     expect(win(sheet({ "victory.dominationMinConquests": 0 }))).toEqual([
-      "WIN         From day 4: a bloc (alliance or lone player) holding ≥ 16 cities (35% of the 43 city slots,",
-      "            and ≥ 2N), for 24 h in public. Otherwise the highest score at the end of day 7.",
+      "WIN         From day 4: a bloc (alliance or lone player) holding ≥ 16 cities (35% of the 43 city slots),",
+      "            for 24 h in public. The countdown must start by D7 00:00 to end in time. Otherwise the",
+      "            highest score at the end of day 7.",
     ]);
+  });
+
+  test("gives the last second a countdown can start: matchEnd − dominationHold", () => {
+    expect(win(sheet({ "time.dominationHold": 43200 }))[1]).toContain(
+      "for 12 h in public. The countdown must start by D7 12:00 to end in time.",
+    );
+    expect(win(sheet({ "time.matchEnd": 345600 }))[1]).toContain("must start by D4 00:00");
+  });
+
+  test("UNITS gives each unit's role from its numbers", () => {
+    expect(units(sheet())).toEqual([
+      "UNITS       hoplite defends (atk 5, def 20, carries 10). peltast attacks (atk 20, def 5, carries 50).",
+      "            settler founds a city or holds a siege. transport carries 20 pop across water.",
+      "            trireme fights only at sea (naval 50). Only hoplites and peltasts fight on land.",
+    ]);
+    const swapped = units(
+      sheet({
+        "units.hoplite.attack": 20,
+        "units.hoplite.defense": 5,
+        "units.peltast.attack": 7,
+        "units.peltast.defense": 7,
+      }),
+    );
+    expect(swapped[0]).toBe(
+      "UNITS       hoplite attacks (atk 20, def 5, carries 10). peltast attacks and defends (atk 7, def 7, carries 50).",
+    );
   });
 
   test("says domination is off when it opens after the end, or when no countdown can end in time", () => {

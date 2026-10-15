@@ -1,6 +1,8 @@
+import { fmtTime } from "@perfidia/engine/core";
 import type { CompiledRules, DeepReadonly } from "@perfidia/protocol";
 import type { Perfidia11Config } from "./config_1_1.ts";
-import { dominationNeed11, mapSlots } from "./domination_1_1.ts";
+import { dominationNeed11, lastCountdownStart, mapSlots } from "./domination_1_1.ts";
+import type { UnitConfig } from "./schema.ts";
 import {
   clock,
   dayCount,
@@ -12,13 +14,13 @@ import {
   perMilleDecimal,
   perMilleFraction,
   perMillePercent,
-  perPlayerText,
   quadText,
 } from "./text.ts";
 
 // The cheat sheet of perfidia-1@1.1.0 (docs/rulesets/perfidia-1.md §0), rendered from the config
-// for N players: 1.0.0's layout with the ids of the Greek setting, and the WIN line of domination
-// by conquest, whose numbers depend on N (the threshold counts the map's city slots).
+// for N players: 1.0.0's layout with the ids of the Greek setting, a UNITS line (the renamed units'
+// roles), and the WIN line of domination by conquest, whose numbers depend on N (the threshold
+// counts the map's city slots).
 
 type Config = DeepReadonly<Perfidia11Config>;
 
@@ -54,6 +56,46 @@ function dominationOn(config: Config): boolean {
   return t.dominationStart <= t.matchEnd && t.dominationStart + t.dominationHold <= t.matchEnd;
 }
 
+/** "35% of the 43 city slots", or the floor per player when it is the larger term. */
+function thresholdText(config: Config, players: number, slots: number, cities: number): string {
+  const v = config.victory;
+  const share = `${perMillePercent(v.dominationPm)}% of the ${slots} city slots`;
+  const byShare = dominationNeed11({ ...v, dominationMinPerPlayer: 0 }, players, slots).cities;
+  return cities === byShare
+    ? share
+    : `${v.dominationMinPerPlayer} per player; ${share} is only ${byShare}`;
+}
+
+/** The widest line `wrapped` writes, label included. */
+const WIDTH = 104;
+
+/**
+ * `text` after the label `name`, wrapped at spaces into lines of at most `WIDTH` characters; a
+ * "≥" stays with the number after it.
+ */
+function wrapped(name: string, text: string): string[] {
+  const words: string[] = [];
+  for (const w of text.split(" ")) {
+    const last = words.at(-1);
+    if (last === "≥") words[words.length - 1] = `≥ ${w}`;
+    else words.push(w);
+  }
+  const lines: string[] = [];
+  let line = label(name);
+  for (const word of words) {
+    if (line.length === INDENT.length) {
+      line += word;
+    } else if (line.length + 1 + word.length > WIDTH) {
+      lines.push(line);
+      line = INDENT + word;
+    } else {
+      line += ` ${word}`;
+    }
+  }
+  lines.push(line);
+  return lines;
+}
+
 /** The WIN lines for N players. */
 function winLines(config: Config, players: number): string[] {
   const t = config.time;
@@ -64,16 +106,43 @@ function winLines(config: Config, players: number): string[] {
   }
   const slots = mapSlots(config, players);
   const need = dominationNeed11(v, players, slots);
-  const first = `${label("WIN")}From ${dayStart(t.dominationStart, t.day)}: a bloc (alliance or lone player) holding ≥ ${need.cities} cities (${perMillePercent(v.dominationPm)}% of the ${slots} city slots,`;
-  const floor = `and ≥ ${perPlayerText(v.dominationMinPerPlayer)})`;
-  const hold = `for ${hours(t.dominationHold)} in public.`;
-  if (need.taken === 0) {
-    return [first, `${INDENT}${floor}, ${hold} Otherwise the highest score ${end}.`];
-  }
+  const taken =
+    need.taken === 0
+      ? []
+      : [
+          `≥ ${need.taken} of them taken,`,
+          "A city counts as taken when its owner conquered it and no member of the owner's bloc ever held it.",
+        ];
+  return wrapped(
+    "WIN",
+    [
+      `From ${dayStart(t.dominationStart, t.day)}: a bloc (alliance or lone player) holding ≥ ${need.cities} cities (${thresholdText(config, players, slots, need.cities)}),`,
+      ...taken.slice(0, 1),
+      `for ${hours(t.dominationHold)} in public. The countdown must start by ${fmtTime(lastCountdownStart(t))} to end in time.`,
+      ...taken.slice(1),
+      `Otherwise the highest score ${end}.`,
+    ].join(" "),
+  );
+}
+
+/** "attacks" or "defends": the larger of a land unit's attack and defense. */
+function roleOf(unit: DeepReadonly<UnitConfig>): string {
+  if (unit.attack === unit.defense) return "attacks and defends";
+  return unit.attack > unit.defense ? "attacks" : "defends";
+}
+
+/** "hoplite defends (atk 5, def 20, carries 10)". */
+function landUnitText(id: string, x: DeepReadonly<UnitConfig>): string {
+  return `${id} ${roleOf(x)} (atk ${x.attack}, def ${x.defense}, carries ${x.carry})`;
+}
+
+/** The UNITS lines: what each unit is for, with the numbers that say it. */
+function unitLines(config: Config): string[] {
+  const u = config.units;
   return [
-    first,
-    `${INDENT}${floor}, ≥ ${need.taken} of them taken, ${hold} A city is taken when its owner conquered`,
-    `${INDENT}it and never held it before. Otherwise the highest score ${end}.`,
+    `${label("UNITS")}${landUnitText("hoplite", u.hoplite)}. ${landUnitText("peltast", u.peltast)}.`,
+    `${INDENT}settler founds a city or holds a siege. transport carries ${u.transport.capacity} pop across water.`,
+    `${INDENT}trireme fights only at sea (naval ${u.trireme.naval}). Only hoplites and peltasts fight on land.`,
   ];
 }
 
@@ -107,6 +176,7 @@ export function renderCheatSheet11(config: Config, rules: DeepReadonly<CompiledR
     `${label("POPULATION")}acropolis L allows ${quadText(e.popCap, "L", "desc")} pop. Every unit homed in the city counts, wherever it is.`,
     `${label("BUILD")}level L costs base × (${weight}) / ${e.levelWeightDiv}. It takes baseTime × (${weight}) / (${e.buildTimeOffset} + acropolis) s.`,
     `${label("RECRUIT")}unit time = baseTime × ${e.recruitTimeOffset + 1} / (${e.recruitTimeOffset} + barracks or harbor level). Units arrive one by one.`,
+    ...unitLines(config),
     `${label("SETTLER")}${settler.wood} wood / ${settler.stone} stone / ${settler.gold} gold × k, where k = your cities + your settlers (k ≤ ${config.settler.scaleCap}).`,
     `${label("COMBAT")}naval phase (only across water): triremes ${u.trireme.naval} each. Losing it sinks the whole attack.`,
     `${INDENT}land phase: A = Σ attack  vs  D = (Σ defense + ${quadText(e.baseDefense, "acropolis", "asc", "·")}) × (1 + ${perMillePercent(c.wallPmPerLevel)}%·wall).`,

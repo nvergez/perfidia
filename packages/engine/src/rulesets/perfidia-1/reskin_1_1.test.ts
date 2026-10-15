@@ -7,7 +7,7 @@ import { idKeyFromSeed } from "@perfidia/engine/core";
 import { testDomain } from "./fixtures.test.ts";
 import type { DeepReadonly, Json, PlayerId, RulesetRef } from "@perfidia/protocol";
 import { PERFIDIA_1_DEFAULTS } from "./config.ts";
-import { PERFIDIA_1_1_DEFAULTS } from "./config_1_1.ts";
+import { MAX_SLOTS, PERFIDIA_1_1_DEFAULTS } from "./config_1_1.ts";
 import { NAMES_1_0_0, NAMES_1_1_0, buildingIds, kindIds, unitIds } from "./names.ts";
 import { perfidia1_1_0_0 } from "./v1_0_0.ts";
 import { perfidia1_1_1_0 } from "./v1_1_0.ts";
@@ -108,6 +108,18 @@ describe("the compiled rules", () => {
           });
           const a = resolveConfig(P1, o100);
           const b = resolveConfig(P11, o110);
+          // 1.1.0 bounds an island kind's slots (§16, R5); 1.0.0 does not.
+          const tooMany = Object.entries(o110).filter(
+            ([p, v]) =>
+              /^map\.kinds\.[a-z]+\.slots$/.test(p) && typeof v === "number" && v > MAX_SLOTS,
+          );
+          if (tooMany.length > 0) {
+            expect(b.ok).toBe(false);
+            if (!b.ok) {
+              for (const [p] of tooMany) expect(b.errors.map((e) => e.path)).toContain(p);
+            }
+            return;
+          }
           expect(b.ok).toBe(a.ok);
           if (!a.ok || !b.ok) {
             if (!a.ok && !b.ok) {

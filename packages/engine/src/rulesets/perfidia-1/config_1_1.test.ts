@@ -1,9 +1,14 @@
 import { describe, expect, test } from "bun:test";
-import { resolveConfig } from "@perfidia/engine/kernel";
-import type { Json } from "@perfidia/protocol";
+import { idKeyFromSeed } from "@perfidia/engine/core";
+import { createMatch, resolveConfig } from "@perfidia/engine/kernel";
+import { testStep } from "@perfidia/engine/testing";
+import type { Json, PlayerId } from "@perfidia/protocol";
 import { playerCounts } from "./check_1_1.ts";
 import { PERFIDIA_1_1_DEFAULTS, Perfidia11ConfigSchema } from "./config_1_1.ts";
 import { dominationNeed11, mapSlots } from "./domination_1_1.ts";
+import { testDomain } from "./fixtures.test.ts";
+import type { PRead11 } from "./victory_1_1.ts";
+import { perfidia11Visibility as V } from "./visibility_1_1.ts";
 import { perfidia1_1_1_0 } from "./v1_1_0.ts";
 
 // The RulesConfig of perfidia-1@1.1.0 (§16): its defaults, the fixed fields naming 1.1.0, the
@@ -73,7 +78,7 @@ describe("fixed fields and ids", () => {
       {
         path: "buildings.wall.requires.hall",
         message:
-          'requires an unknown building "hall"; buildings are acropolis, woodcutter, quarry, goldmine, warehouse, barracks, harbor, wall',
+          'requires an unknown building "hall"; buildings are acropolis, sawmill, quarry, goldmine, warehouse, barracks, harbor, wall',
       },
     ]);
     expect(errors({ "start.capital.units": { guard: 10 } })).toEqual([
@@ -130,6 +135,54 @@ describe("R5: the domination keys", () => {
     ]);
     expect(errors({ "victory.dominationMinConquests": 0 })).toEqual([]);
     expect(errors({ "victory.dominationPm": 1000 })).toEqual([]);
+  });
+
+  test("bounds that hold whether domination is on or off: slots per island and the domination counts", () => {
+    for (const off of [{}, { "time.dominationStart": 604801 }]) {
+      expect(errors({ ...off, "map.kinds.frontier.slots": 100000000000000 })).toEqual([
+        { path: "map.kinds.frontier.slots", message: "at most 100 city slots per island" },
+      ]);
+      expect(errors({ ...off, "map.kinds.olympus.slots": 101 })).toEqual([
+        { path: "map.kinds.olympus.slots", message: "at most 100 city slots per island" },
+      ]);
+      expect(errors({ ...off, "victory.dominationMinPerPlayer": 2000000000000000 })).toEqual([
+        {
+          path: "victory.dominationMinPerPlayer",
+          message: "victory.dominationMinPerPlayer is a number of cities per player: at most 1000.",
+        },
+      ]);
+      expect(errors({ ...off, "victory.dominationMinConquests": 1001 })).toEqual([
+        {
+          path: "victory.dominationMinConquests",
+          message: "victory.dominationMinConquests counts taken cities: at most 1000.",
+        },
+      ]);
+    }
+    expect(errors({ "map.kinds.olympus.slots": 0 })[0]?.message).toBe(
+      "this island kind holds a start city: it needs ≥ 1 slot",
+    );
+  });
+
+  test("domination off with every bound at its maximum: the match steps and its views render", () => {
+    const most: Record<string, Json> = {
+      "time.dominationStart": 604801,
+      "victory.dominationMinPerPlayer": 1000,
+      "victory.dominationMinConquests": 1000,
+      "victory.dominationPm": 1000,
+    };
+    for (const kind of ["olympus", "home", "backyard", "frontier", "inner", "hub"]) {
+      most[`map.kinds.${kind}.slots`] = 100;
+    }
+    expect(errors(most)).toEqual([]);
+    const seats = Array.from({ length: 12 }, (_, i): { id: PlayerId } => ({ id: `p${i + 1}` }));
+    const setup = { ruleset: P11.ref, overrides: most, seed: 5, idKey: idKeyFromSeed(5), seats };
+    const match = createMatch(setup, P11, testDomain, { invariants: "off" });
+    expect(() => testStep(match, () => undefined)).not.toThrow();
+    // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- a 1.1.0 match reads with 1.1.0's types
+    const read = (): PRead11 => match.read() as unknown as PRead11;
+    // 100 Olympus slots, then 12 sectors of five kinds (hubs only up to 7 players): 100 + 12 × 400.
+    expect(V.publicMatch(read())["domination"]).toMatchObject({ need: 12000, slots: 4900 });
+    expect(V.briefing?.(read(), "p1")).toMatchObject({ bloc: { need: 12000, needTaken: 1000 } });
   });
 
   test("a threshold above the map's slots is reported once, with the N it fails for", () => {

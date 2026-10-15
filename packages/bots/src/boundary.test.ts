@@ -22,7 +22,7 @@ const FORBIDDEN: ReadonlySet<string> = new Set([
   "warship",
   // perfidia-1@1.1.0's renamed ids (docs/rulesets/perfidia-1.md §0.1).
   "acropolis",
-  "woodcutter",
+  "sawmill",
   "goldmine",
   "hoplite",
   "peltast",

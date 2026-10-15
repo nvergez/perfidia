@@ -1,12 +1,14 @@
 import { ceilDiv } from "@perfidia/engine/core";
-import type { DeepReadonly, GameState, PlayerId } from "@perfidia/protocol";
+import type { CityId, DeepReadonly, GameState, PlayerId } from "@perfidia/protocol";
+import { own } from "./common.ts";
 import { isTaken, type Perfidia11Ext } from "./ext_1_1.ts";
 import { hasHubs } from "./world.ts";
 import type { PerfidiaCore } from "./schema.ts";
 
 // Domination by conquest (perfidia-1@1.1.0 §13.3): the threshold counts the map's city slots, which
-// are fixed for a map, and a bloc also needs `victory.dominationMinConquests` taken cities. Blocs,
-// countdowns and their same-second order are 1.0.0's (`domination.ts`).
+// are fixed for a map, and a bloc also needs `victory.dominationMinConquests` taken cities: cities
+// its members conquered that no member of the bloc ever owned. Blocs, countdowns and their
+// same-second order are 1.0.0's (`domination.ts`).
 
 /** The domination keys of 1.1.0's config. */
 export interface Victory11 {
@@ -70,18 +72,53 @@ export function dominationNeed11(
   };
 }
 
-/** What every player holds, in one pass over the cities. */
+/** The members of `p`'s bloc (§13.3): its alliance's current members, or `p` alone. */
+export function blocOf(state: DeepReadonly<GameState>, p: PlayerId): readonly PlayerId[] {
+  const alliance = own(state.players, p)?.alliance ?? null;
+  if (alliance === null) return [p];
+  return own(state.alliances, alliance)?.members ?? [p];
+}
+
+/** Whether `city` counts as taken for its owner's bloc now (§13.3). */
+export function takenNow(
+  state: DeepReadonly<GameState>,
+  x: DeepReadonly<Perfidia11Ext>,
+  city: CityId,
+): boolean {
+  const owner = own(state.cities, city)?.owner ?? null;
+  return owner !== null && isTaken(x, city, owner, blocOf(state, owner));
+}
+
+/**
+ * The last second a countdown can start (§13.3): one that starts later would end after `matchEnd`
+ * and could not win. A countdown ending at `matchEnd` still wins (class 11 runs before the end).
+ */
+export function lastCountdownStart(time: {
+  readonly matchEnd: number;
+  readonly dominationHold: number;
+}): number {
+  return time.matchEnd - time.dominationHold;
+}
+
+/**
+ * What every player holds, in one pass over the cities: its cities, and those taken for its bloc
+ * (none of them conquered from a member of the bloc).
+ */
 export function holdByOwner(
   state: DeepReadonly<GameState>,
   x: DeepReadonly<Perfidia11Ext>,
 ): ReadonlyMap<PlayerId, Hold> {
   const out = new Map<PlayerId, { cities: number; taken: number }>();
+  const blocs = new Map<PlayerId, readonly PlayerId[]>();
   for (const city of Object.values(state.cities)) {
-    if (city.owner === null) continue;
-    const h = out.get(city.owner) ?? { cities: 0, taken: 0 };
+    const owner = city.owner;
+    if (owner === null) continue;
+    const h = out.get(owner) ?? { cities: 0, taken: 0 };
     h.cities += 1;
-    if (isTaken(x, city.id, city.owner)) h.taken += 1;
-    out.set(city.owner, h);
+    const bloc = blocs.get(owner) ?? blocOf(state, owner);
+    blocs.set(owner, bloc);
+    if (isTaken(x, city.id, owner, bloc)) h.taken += 1;
+    out.set(owner, h);
   }
   return out;
 }

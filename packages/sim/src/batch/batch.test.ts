@@ -104,7 +104,7 @@ describe("sim batch", () => {
       const team = rows.findIndex((l) => l.startsWith("teamwork · "));
       expect(rows[team + 1]).toMatch(/^variant +runs +joint attacks\/run +runs with one /);
       expect(rows[team + 2]).toMatch(
-        /^perfidia-1@1\.0\.0 +2 +\d+\.\d\d +\d+ +0 +0 +0 +0 +0 +0 +16 +0 of 2 /,
+        /^perfidia-1@1\.0\.0 +2 +\d+\.\d\d +\d+ +0 +0 +0 +0 +0 +0 +16 +2 +0 of 2 /,
       );
       const sieges = rows.findIndex((l) => l.startsWith("sieges and teamwork by bot · "));
       expect(sieges).toBeGreaterThan(team);

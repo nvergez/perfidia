@@ -105,7 +105,7 @@ export const NAMES_1_1_0: PerfidiaNames = Object.freeze({
   ref: "perfidia-1@1.1.0",
   buildings: Object.freeze({
     hall: "acropolis",
-    lumber: "woodcutter",
+    lumber: "sawmill",
     quarry: "quarry",
     mine: "goldmine",
     warehouse: "warehouse",

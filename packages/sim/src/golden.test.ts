@@ -509,7 +509,8 @@ describe("what the perfidia-1@1.1.0 goldens cover (§13.5)", () => {
     if (end?.k !== "end") throw new Error("no end line");
     expect(end.t).toBe(345600);
     expect(evs(four, "siege_started").length).toBeGreaterThan(0);
-    // Domination opens on day 3, but a bloc that took no city cannot start a countdown (§13.3).
+    // Domination opens at the start of day 4 (259200), the last second a countdown could still end
+    // by this match's end (345600), and a bloc that took no city cannot start one (§13.3).
     expect(evs(four, "city_conquered")).toEqual([]);
     expect(evs(four, "domination_started")).toEqual([]);
     expect(readLog(golden(P11, "rt-virtual-6p-1d").path)[0]).toMatchObject({

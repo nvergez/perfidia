@@ -53,6 +53,15 @@ describe("public extras of 1.1.0", () => {
     expect(V.publicCity(r, "p6", "c7")).toEqual({ points: 200, olympus: true, taken: true });
   });
 
+  test("a city taken from a member of its owner's alliance shows its former owner, not taken", () => {
+    const w = scene();
+    city11(w, { id: "c5", owner: "p1", island: "i1" });
+    taken11(w, "c5", "p1", ["p2"]);
+    const r = read(w);
+    expect(V.publicCity(r, "p6", "c5")).toEqual({ points: 100, former: ["p2"] });
+    expect(V.publicPlayer(r, "p1")).toMatchObject({ taken: 1 });
+  });
+
   test("a besieged city keeps its siege (by, ends) next to the conquest record", () => {
     const w = scene();
     besiege11(w, {

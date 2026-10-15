@@ -244,7 +244,7 @@ test("1.1.0 renames only the ids the reskin names; the rest keep their 1.0.0 id"
     ["hoplite", "guard"],
     ["olympus", "crown"],
     ["peltast", "raider"],
+    ["sawmill", "lumber"],
     ["trireme", "warship"],
-    ["woodcutter", "lumber"],
   ]);
 });

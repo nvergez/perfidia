@@ -20,7 +20,7 @@ const P11 = getRuleset("perfidia-1@1.1.0");
 /** 1.0.0 id → 1.1.0 id, for the ids that change. */
 const TO_11: ReadonlyMap<string, string> = new Map([
   ["hall", "acropolis"],
-  ["lumber", "woodcutter"],
+  ["lumber", "sawmill"],
   ["mine", "goldmine"],
   ["guard", "hoplite"],
   ["raider", "peltast"],

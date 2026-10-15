@@ -18,6 +18,7 @@ import {
   type Hold,
   holdByOwner,
   holds,
+  lastCountdownStart,
   totalSlots,
 } from "./domination_1_1.ts";
 import { DOMINATION_STARTED } from "./events.ts";
@@ -36,7 +37,8 @@ import {
 // Victory of perfidia-1@1.1.0 (docs/rulesets/perfidia-1.md §13.3): 1.0.0's bookkeeping after every
 // step, last standing and time victory, with domination by conquest. A bloc qualifies with
 // `need.cities` cities, a threshold fixed for the map, of which `need.taken` are taken: a city is
-// taken when its owner got it by conquest and never owned it before. Conquests are recorded by the
+// taken when its owner got it by conquest and no member of the owner's bloc ever owned it. A
+// countdown starts only when it can still end by `matchEnd`. Conquests are recorded by the
 // `siege_end` hook, before `afterStep` evaluates the countdowns of the same step.
 
 export type PCtx11 = Ctx<Perfidia11Config, Perfidia11Ext>;
@@ -86,13 +88,17 @@ function cancelCountdowns11(
   }
 }
 
-/** Starts a countdown for every qualifying bloc without one, in bloc order. */
+/**
+ * Starts a countdown for every qualifying bloc without one, in bloc order, while a countdown
+ * started now could still end by `matchEnd`.
+ */
 function startCountdowns11(
   ctx: PCtx11,
   blocs: readonly Bloc[],
   byOwner: ReadonlyMap<PlayerId, Hold>,
   need: DominationNeed,
 ): void {
+  if (ctx.now > lastCountdownStart(ctx.config.time)) return;
   const d = ctx.ext().domination;
   for (const bloc of blocs) {
     if (d.countdowns.some((c) => c.bloc === bloc.key)) continue;
@@ -136,23 +142,31 @@ function resultOf11(ctx: PCtx11, reason: string, winners: readonly PlayerId[]): 
 /**
  * `hooks.afterStep` of 1.1.0, in 1.0.0's order: siege abandonment, homecoming warnings, relation
  * history, then (from the `domination_open` timer on) the cancellation of countdowns whose bloc
- * changed or no longer qualifies, the last-standing win, and new countdowns for qualifying blocs.
+ * changed or no longer qualifies, the last-standing win, and new countdowns for qualifying blocs
+ * (until `lastCountdownStart`). Nothing domination needs is computed while it is closed.
  */
 export function afterStep11(ctx: PCtx11, step: StepInfo): void {
   checkGarrisons(ctx);
   announceNewReturns(ctx, step);
   trackRelations(ctx);
-  const open = ctx.ext().domination.open;
-  const blocs = blocsOf(ctx.state);
-  const byOwner = open ? holdByOwner(ctx.state, ctx.ext()) : new Map<PlayerId, Hold>();
-  const need = need11(ctx.read());
-  if (open) cancelCountdowns11(ctx, blocs, byOwner, need);
+  const domination = ctx.ext().domination.open
+    ? {
+        blocs: blocsOf(ctx.state),
+        byOwner: holdByOwner(ctx.state, ctx.ext()),
+        need: need11(ctx.read()),
+      }
+    : null;
+  if (domination !== null) {
+    cancelCountdowns11(ctx, domination.blocs, domination.byOwner, domination.need);
+  }
   const alive = sortedIds(ctx.state.players).filter((p) => own(ctx.state.players, p)?.alive);
   if (alive.length === 1) {
     ctx.endMatch(resultOf11(ctx, "last_standing", alive));
     return;
   }
-  if (open) startCountdowns11(ctx, blocs, byOwner, need);
+  if (domination !== null) {
+    startCountdowns11(ctx, domination.blocs, domination.byOwner, domination.need);
+  }
 }
 
 /**

@@ -12,7 +12,8 @@ import { own } from "./common.ts";
 import { initialExt, PerfidiaExtSchema } from "./ext.ts";
 
 // `state.ext` of perfidia-1@1.1.0: 1.0.0's, plus the conquest record of every city that changed
-// hands by conquest (docs/rulesets/perfidia-1.md §13.3), which says whether its owner took it.
+// hands by conquest (docs/rulesets/perfidia-1.md §13.3), which says whether it counts as taken for
+// its owner's bloc.
 
 /** How the owner of a conquered city got it (§9.4), and who owned it before. */
 export const ConquestSchema = z.strictObject({
@@ -45,12 +46,20 @@ export function conquestOf(x: Ext, city: CityId): DeepReadonly<Conquest> | null 
 }
 
 /**
- * Whether `city` is taken by `owner` (§13.3): `owner` got it by conquest and never owned it before.
- * Founded cities, cities never conquered and cities a former owner recaptured are not taken.
+ * Whether `city` counts as taken for `owner` and its bloc `bloc` (its alliance's members, or the
+ * owner alone; §13.3): `owner` got it by conquest and no member of the bloc ever owned it. Founded
+ * cities, cities never conquered, cities a former owner recaptured and cities conquered from a
+ * member of the owner's bloc are not taken.
  */
-export function isTaken(x: Ext, city: CityId, owner: PlayerId | null): boolean {
+export function isTaken(
+  x: Ext,
+  city: CityId,
+  owner: PlayerId | null,
+  bloc: readonly PlayerId[],
+): boolean {
   const c = conquestOf(x, city);
-  return owner !== null && c !== null && c.by === owner && !c.former.includes(owner);
+  if (owner === null || c === null || c.by !== owner) return false;
+  return !c.former.includes(owner) && !c.former.some((p) => bloc.includes(p));
 }
 
 /**
