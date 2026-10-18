@@ -10,7 +10,7 @@ import {
   type RunMatchOptions,
   type RunResult,
 } from "@perfidia/gateway/runtime";
-import type { LogLine, PlayerId, SeatAgent, TimeSource } from "@perfidia/protocol";
+import type { LogLine, PlayerId, RoundInput, SeatAgent, TimeSource } from "@perfidia/protocol";
 import {
   EXIT,
   RunDirSink,
@@ -31,7 +31,7 @@ import {
   type LlmLogLine,
   type SeatsFile,
 } from "../log/schema.ts";
-import { watchLines } from "../log/watch.ts";
+import { watchFold } from "../log/watch.ts";
 import type { ModelAdapter, ModelSpec } from "../model/adapter.ts";
 import { AnthropicAdapter, AnthropicClient, type HttpFetch } from "../model/anthropic.ts";
 import { seededRandom, type HarnessClock } from "../model/clock.ts";
@@ -52,7 +52,15 @@ import {
   type ArenaPlan,
   type LlmSeatPlan,
 } from "./plan.ts";
-import { HARNESS_VERSION, buildReport, formatReport, type DayRow, type LevelE } from "./report.ts";
+import {
+  HARNESS_VERSION,
+  STOPPED,
+  buildReport,
+  formatReport,
+  turnErrors,
+  type DayRow,
+  type LevelE,
+} from "./report.ts";
 
 // `arena run` (phase-2 design §1.4, §6): builds the agents (LLM seats on the Anthropic adapter, or
 // on the bot-backed fake with `--fake`; bots through the sim harness), runs the preflight before
@@ -64,13 +72,21 @@ import { HARNESS_VERSION, buildReport, formatReport, type DayRow, type LevelE } 
 //   feed.txt                                the `--watch` text of the whole match (a fold of match.jsonl)
 //   arena.json                              the report (§6), rewritten at each status change
 //
-// Systematic API failures close the arena pause gate (§2.6): in lockstep the round waits and a
-// probe (the preflight) reopens it, and after `--pause-max` the arena aborts; in real time it
-// aborts at once. An abort lets the game second it happened in finish (every LLM round of it is
-// refused, so each open turn closes with `why: "error"`), then cuts the log at the first line of
-// a later second: the host's write fails and the driver stops. `match.jsonl` ends without an end
-// line, the summary says `incomplete`, and the exit code is 2. In lockstep no turn is left open;
-// in real time a bot still thinking at the cut keeps its turn open (the gateway rebuild lists it).
+// Systematic API failures close the arena pause gate (§2.6): in lockstep the next LLM round waits
+// and a probe (the preflight) reopens it, and after `--pause-max` the arena aborts; in real time an
+// operator-recoverable failure aborts at once and a tripped breaker is an alert. A breaker that
+// trips again before any LLM turn closed cleanly since its resume (or alert) aborts the arena. An
+// abort lets the game second it happened in finish (every LLM round of it is refused, so each open
+// turn closes with `why: "error"`), then cuts the log at the first line of a later second: the
+// host's write fails and the driver stops. `match.jsonl` ends without an end line, the summary
+// says `incomplete`, and the exit code is 2. In lockstep no turn is left open; in real time a bot
+// still thinking at the cut keeps its turn open (the gateway rebuild lists it).
+//
+// `--stop-after N` cuts the log the same way at the end of game day N (status `stopped`, exit 0
+// when Level E holds up to the cut): the agents play the full-length match they were told about,
+// and no LLM round is called past the cut. A run that ends or stops with at least
+// `DEGRADED_ERROR_PCT` of its LLM turns closed by an error is `degraded` (exit 2), and two
+// consecutive refused turns of a seat are an alert naming the turns' inbox message ids (§3.8).
 
 export const ARENA_FILE = "arena.json";
 export const SEATS_FILE = "seats.json";
@@ -149,6 +165,23 @@ function levelEOf(path: string): LevelE {
   };
 }
 
+/** The game time an LLM round is built on (the latest of its briefing and results). */
+function roundTime(input: RoundInput): number {
+  let t = input.briefing.t;
+  for (const r of input.results) if (r.t > t) t = r.t;
+  return t;
+}
+
+/** `agent` with no model call past `stopAt`: those rounds are cut from the log anyway. */
+function stopping(agent: SeatAgent, stopAt: number | null): SeatAgent {
+  if (stopAt === null) return agent;
+  return {
+    label: agent.label,
+    round: (input) =>
+      roundTime(input) > stopAt ? Promise.resolve({ calls: [] }) : agent.round(input),
+  };
+}
+
 const pauseText = (r: PauseReason): string =>
   `${r.kind}: ${r.message}${r.seat === null ? "" : ` (${r.seat}${r.model === null ? "" : `, ${r.model}`})`}`;
 
@@ -218,6 +251,7 @@ export async function runArena(plan: ArenaPlan, o: RunArenaOptions): Promise<Are
                 seat: s.seat,
                 seed,
                 model: s.model,
+                maxOutputTokens: plan.maxTokens,
                 prefixChars:
                   shared.length + (prompts.get(s.seat) ?? "").length + JSON.stringify(tools).length,
                 ...(latency === undefined ? {} : { latency }),
@@ -235,6 +269,7 @@ export async function runArena(plan: ArenaPlan, o: RunArenaOptions): Promise<Are
     })),
   );
   const pre = await preflight(groups);
+  let preflightNanoUsd = pre.nanoUsd;
   for (const r of pre.reports) {
     say(
       `preflight ${r.model}: ok${r.allowedFallbackModels.length === 0 ? "" : `, fallbacks ${r.allowedFallbackModels.join(", ")}`}\n`,
@@ -255,6 +290,8 @@ export async function runArena(plan: ArenaPlan, o: RunArenaOptions): Promise<Are
   const agentLabels = new Map<PlayerId, string>();
 
   const llmLines: LlmLogLine[] = [];
+  /** Per seat, the last turn closed by a refusal, its inbox, and the streak it ends. */
+  const refused = new Map<PlayerId, { turn: number; inbox: readonly string[]; streak: number }>();
   const log: CallLog = {
     write(line) {
       calls.write(line);
@@ -266,9 +303,22 @@ export async function runArena(plan: ArenaPlan, o: RunArenaOptions): Promise<Are
           );
         }
         if (line.stop === "refusal") {
+          const inbox = line.inbox ?? [];
           io.err(
-            `${line.seat} turn ${line.turn}: refusal (${line.refusal?.category ?? "uncategorised"}) on ${line.servedBy ?? line.model}\n`,
+            `${line.seat} turn ${line.turn}: refusal (${line.refusal?.category ?? "uncategorised"}) on ${line.servedBy ?? line.model}; inbox ${inbox.length === 0 ? "empty" : inbox.join(", ")}\n`,
           );
+          // A refused round closes its turn (a refused thought call does not).
+          const prev = refused.get(line.seat);
+          if (line.kind === "round" && prev?.turn !== line.turn) {
+            const streak = prev?.turn === line.turn - 1 ? prev.streak + 1 : 1;
+            refused.set(line.seat, { turn: line.turn, inbox, streak });
+            if (streak === 2) {
+              const ids = [...new Set([...(prev?.inbox ?? []), ...inbox])];
+              alert(
+                `${line.seat}: 2 consecutive turns refused (${line.turn - 1}, ${line.turn}); a player's message may be the cause (refusal-DoS): their inbox ${ids.length === 0 ? "was empty" : `held ${ids.join(", ")}`}`,
+              );
+            }
+          }
         }
       } else if (line.k === "handoff") {
         io.err(
@@ -300,7 +350,7 @@ export async function runArena(plan: ArenaPlan, o: RunArenaOptions): Promise<Are
       alerts,
       days,
       levelE,
-      preflightNanoUsd: pre.nanoUsd,
+      preflightNanoUsd,
     });
   const writeReport = (r: ArenaReport): void =>
     writeFileAtomic(paths.arena, `${JSON.stringify(r, null, 2)}\n`);
@@ -331,7 +381,8 @@ export async function runArena(plan: ArenaPlan, o: RunArenaOptions): Promise<Are
     mode: plan.clock.kind === "lockstep" ? "wait" : "abort",
     probe: async () => {
       try {
-        await preflight(groups);
+        const r = await preflight(groups);
+        preflightNanoUsd += r.nanoUsd;
         return true;
       } catch {
         return false;
@@ -343,8 +394,13 @@ export async function runArena(plan: ArenaPlan, o: RunArenaOptions): Promise<Are
       pauseStart = { wall: iso(), ms: time.nowMs() };
       status = "paused";
       reason = pauseText(r);
+      const every = Math.round((o.probeEveryMs ?? 120_000) / 1000);
+      const resume =
+        r.kind === "breaker"
+          ? `the preflight is re-run every ${every} s and resumes the arena when it passes, but it cannot replay the failing request: if the breaker trips again before an LLM turn closes cleanly, the arena aborts`
+          : `fix the cause: the preflight is re-run every ${every} s and resumes the arena when it passes`;
       alert(
-        `the arena is paused: ${pauseText(r)}. Game time stands still; the preflight is re-run every ${Math.round((o.probeEveryMs ?? 120_000) / 1000)} s and the arena aborts after ${Math.round(plan.pauseMaxMs / 60_000)} min of pause`,
+        `the arena is paused: ${pauseText(r)}. The next LLM round waits at the gate (game time stands still from there; the bots play until then); ${resume}; it aborts after ${Math.round(plan.pauseMaxMs / 60_000)} min of pause in total`,
       );
       files.flush();
       writeReport(report(null));
@@ -365,6 +421,10 @@ export async function runArena(plan: ArenaPlan, o: RunArenaOptions): Promise<Are
       pauseLine(e.reason, "aborted", pauseStart === null ? 0 : time.nowMs() - pauseStart.ms);
       alert(e.message);
     },
+    onAlert: (r) =>
+      alert(
+        `${pauseText(r)} (real time cannot pause: the failing LLM turns close on their own; if the breaker trips again before an LLM turn closes cleanly, the arena aborts)`,
+      ),
   });
 
   const rates = new RateGates({ clock, maxInflight: plan.maxInflight });
@@ -410,7 +470,7 @@ export async function runArena(plan: ArenaPlan, o: RunArenaOptions): Promise<Are
       rate: rates.gate(adapter.spec.provider, adapter.spec.model),
       policy: plan.policy,
     });
-    agents.set(s.seat, agent);
+    agents.set(s.seat, stopping(agent, plan.stopAt));
     agentLabels.set(s.seat, agent.label);
   }
 
@@ -443,9 +503,10 @@ export async function runArena(plan: ArenaPlan, o: RunArenaOptions): Promise<Are
   writeFileSync(paths.seats, `${JSON.stringify(seatsFile, null, 2)}\n`);
 
   // The plan, then the a-priori estimate (§5.4).
-  const matchDays = Math.round(matchEndOf(plan) / 86_400);
+  const matchDays = matchEndOf(plan) / 86_400;
+  const stopText = plan.stopAt === null ? "" : `, stopping after day ${plan.stopAt / 86_400}`;
   say(
-    `arena: ${plan.setup.ruleset}, seed ${seed}, ${setup.seats.length} players, ${matchDays} day(s), ${plan.clock.kind}${plan.fake ? ", fake models ($0)" : ""}\n`,
+    `arena: ${plan.setup.ruleset}, seed ${seed}, ${setup.seats.length} players, ${matchDays} day(s)${stopText}, ${plan.clock.kind}${plan.fake ? ", fake models ($0)" : ""}\n`,
   );
   for (const s of plan.seats) {
     if (s.kind === "bot") say(`  ${s.seat}  ${s.label}\n`);
@@ -498,15 +559,23 @@ export async function runArena(plan: ArenaPlan, o: RunArenaOptions): Promise<Are
 
   const names: Record<string, string> = {};
   for (const s of llm) names[s.seat] = shortName(s.profile.name);
+  const watch = watchFold({ names });
+  let stopped = false;
   const sink: LogSink = {
     write(line: LogLine) {
       const t = line.k === "header" ? 0 : line.t;
       if (cutAfter !== null && t > cutAfter) {
         throw new ArenaCut(`the arena aborted at t = ${cutAfter}: the log is cut here`);
       }
+      if (plan.stopAt !== null && t > plan.stopAt) {
+        stopped = true;
+        throw new ArenaCut(
+          `--stop-after: the run stops at t = ${plan.stopAt}: the log is cut here`,
+        );
+      }
       lastT = Math.max(lastT, t);
       files.write(line);
-      if (plan.watch) for (const w of watchLines(line, { names })) io.out(`${w}\n`);
+      if (plan.watch) for (const w of watch(line)) io.out(`${w}\n`);
       if (line.k === "ckpt" && line.hour % 24 === 0) dayBoundary(line.hour / 24);
     },
     snapshot(snap) {
@@ -554,14 +623,16 @@ export async function runArena(plan: ArenaPlan, o: RunArenaOptions): Promise<Are
   const lines = [...readLogLines(paths.log)];
   const summary = summarize(lines, { wallMs: elapsedMs });
   writeFileAtomic(paths.summary, `${JSON.stringify(summary, null, 2)}\n`);
-  writeFileAtomic(
-    paths.feed,
-    lines.flatMap((l) => watchLines(l, { names }).map((w) => `${w}\n`)).join(""),
-  );
+  // The feed file keeps player text whole (the live watch cuts it at 120 characters).
+  const feed = watchFold({ names, cut: 100_000 });
+  writeFileAtomic(paths.feed, lines.flatMap((l) => feed(l).map((w) => `${w}\n`)).join(""));
   const abortError = stop.aborted;
   if (abortError !== null) {
     status = "aborted";
     reason = abortError.message;
+  } else if (stopped && summary.status !== "fatal") {
+    status = "stopped";
+    reason = `${STOPPED} ${(plan.stopAt ?? 0) / 86_400} (--stop-after; the match lasts ${matchDays} days)`;
   } else if (summary.status === "fatal") {
     status = "fatal";
     reason = summary.fatal === null ? error : `${summary.fatal.kind}: ${summary.fatal.message}`;
@@ -572,8 +643,21 @@ export async function runArena(plan: ArenaPlan, o: RunArenaOptions): Promise<Are
     status = "incomplete";
     reason = error;
   }
-  const levelE = levelEOf(paths.log);
-  const final = report(levelE);
+  let levelE = levelEOf(paths.log);
+  if (status === "stopped" && !levelE.ok && levelE.divergence?.startsWith("end at") === true) {
+    // The cut log has no end line by design: Level E holds up to the cut.
+    levelE = { ...levelE, ok: true, divergence: null };
+  }
+  let final = report(levelE);
+  const te = turnErrors(final);
+  if ((status === "ended" || status === "stopped") && te.degraded) {
+    const pct = Math.round((te.errors * 100) / te.turns);
+    const why = `${te.errors} of ${te.turns} LLM turns (${pct}%) closed by an error (the seats' errors and turn lines say which)`;
+    reason = status === "stopped" ? `${reason ?? ""}; ${why}` : why;
+    status = "degraded";
+    alert(`degraded run: ${why}`);
+    final = report(levelE);
+  }
   writeReport(final);
   say(formatReport(final));
   say(`run directory: ${o.dir} (${Math.round(elapsedMs / 1000)} s)\n`);
@@ -581,7 +665,8 @@ export async function runArena(plan: ArenaPlan, o: RunArenaOptions): Promise<Are
     say(`ended at ${fmtTime(summary.endedAt)}; verify with: bun run sim -- verify ${o.dir}\n`);
   }
   let code: ExitCode;
-  if (status === "ended") code = levelE.ok ? EXIT.ok : EXIT.divergence;
+  if (status === "ended" || status === "stopped") code = levelE.ok ? EXIT.ok : EXIT.divergence;
+  else if (status === "degraded") code = levelE.ok ? EXIT.fatal : EXIT.divergence;
   else code = EXIT.fatal;
   return { code, status, report: final, paths, error, result };
 }

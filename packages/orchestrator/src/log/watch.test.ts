@@ -1,8 +1,22 @@
 import { describe, expect, test } from "bun:test";
 import type { JsonObject, LogLine } from "@perfidia/protocol";
-import { watchLines } from "./watch.ts";
+import { watchFold, watchLines } from "./watch.ts";
 
 const ctx = { names: { p3: "Odysseus" } };
+
+/** A turn of p3 that ends with `thought`. */
+const turn = (t: number, thought: string): LogLine => ({
+  k: "turn",
+  t,
+  seat: "p3",
+  turn: 1,
+  rounds: 1,
+  calls: 0,
+  why: "end_turn",
+  selfAt: null,
+  next: null,
+  thought,
+});
 
 const ev = (t: number, type: string, data: JsonObject, isPublic = false): LogLine => ({
   k: "ev",
@@ -78,6 +92,7 @@ describe("watchLines", () => {
       "D4 11:20  BETRAYAL: p3 attacks p5 (ally) at c12",
       "D4 11:21:40  p3 takes c12 from p5",
       "D5 12:05  p3 Odysseus handed to bot:opportunist@3",
+      "D5 12:06:40  battle at c1 (city): p1 against p2, the attacker wins",
       "D5 15:06:40  p1 turn 3 closed: error",
     ]);
   });
@@ -88,5 +103,30 @@ describe("watchLines", () => {
       { names: {}, cut: 20 },
     );
     expect(line).toBe(`D1 00:00  p1 → p2 (private): "${"x".repeat(19)}…"`);
+  });
+
+  test("a thought is kept whole up to 400 characters", () => {
+    const thought = `${"y".repeat(399)}z`;
+    expect(watchLines(turn(0, thought), ctx)).toEqual([
+      `D1 00:00  p3 Odysseus thinks: "${thought}"`,
+    ]);
+  });
+});
+
+describe("watchFold", () => {
+  test("after a hand-off the seat shows its bot's label, never the profile's name", () => {
+    const fold = watchFold(ctx);
+    const out = [
+      turn(60, "Hold the line."),
+      { k: "controller", t: 120, seat: "p3", label: "bot:opportunist@3" } as const,
+      turn(180, "opportunist D1 00:03: nothing to do"),
+    ].flatMap((l) => fold(l));
+    expect(out).toEqual([
+      'D1 00:01  p3 Odysseus thinks: "Hold the line."',
+      "D1 00:02  p3 Odysseus handed to bot:opportunist@3",
+      'D1 00:03  p3 [bot:opportunist@3] thinks: "opportunist D1 00:03: nothing to do"',
+    ]);
+    // A fresh fold starts from the given names.
+    expect(watchFold(ctx)(turn(240, "x"))).toEqual(['D1 00:04  p3 Odysseus thinks: "x"']);
   });
 });

@@ -9,7 +9,13 @@ import {
   type TimeSource,
   type ToolResult,
 } from "@perfidia/protocol";
-import { ModelError, type ChatRequest, type UsageEntry } from "../model/adapter.ts";
+import {
+  DEFAULT_MAX_OUTPUT_TOKENS,
+  ModelError,
+  brokenStreamOutput,
+  type ChatRequest,
+  type UsageEntry,
+} from "../model/adapter.ts";
 import { seededRandom, sleepMs } from "../model/clock.ts";
 import type { Brain, FakeReply } from "../model/fake.ts";
 
@@ -20,7 +26,8 @@ import type { Brain, FakeReply } from "../model/fake.ts";
 // request (the briefing is the round-0 user text, the results are the `tool_result` contents, the
 // rest comes from `meta`) and replies with the bot's calls as tool calls. The thought goes out as
 // text on a terminal reply, as the prompt asks a model to do. In real time it can add a seeded
-// latency on the run's time source; an attempt aborted while it "thinks" is charged an estimate.
+// latency on the run's time source; an attempt aborted while it "thinks" is charged as the
+// Anthropic adapter charges a broken stream (`brokenStreamOutput`, from the time it streamed).
 
 export interface BrainLatency {
   readonly time: TimeSource;
@@ -36,6 +43,8 @@ export interface BotBrainOptions {
   readonly latency?: BrainLatency;
   /** The model the usage is reported for (and an aborted attempt's estimate priced at). */
   readonly model?: string;
+  /** The seat's `max_tokens` (default 16 000): an aborted attempt is charged at most this. */
+  readonly maxOutputTokens?: number;
   /**
    * Characters of the stable prefix (tools, both system blocks). When given, the brain reports a
    * usage shaped like the API's with automatic caching: the prefix is written on the seat's first
@@ -128,11 +137,15 @@ export function botBrain(o: BotBrainOptions): Brain {
     if (o.latency !== undefined) {
       const ms = latencyOf(o.seed, o.seat, m.turn, m.round, o.latency);
       latencyMs = ms;
+      const time = o.latency.time;
+      const start = time.nowMs();
       try {
-        await sleepMs(o.latency.time, ms, req.signal);
+        await sleepMs(time, ms, req.signal);
       } catch (e) {
         if (req.signal?.aborted !== true) throw e;
-        return new ModelError("aborted", "request aborted", { spent: estimate(req, o.model) });
+        const maxTokens = req.maxOutputTokens ?? o.maxOutputTokens ?? DEFAULT_MAX_OUTPUT_TOKENS;
+        const spent = estimate(req, o.model, maxTokens, time.nowMs() - start);
+        return new ModelError("aborted", "request aborted", { spent });
       }
     }
     const out = await bot.round(roundInputOf(req));
@@ -148,8 +161,13 @@ export function botBrain(o: BotBrainOptions): Brain {
   };
 }
 
-/** What an aborted fake attempt is charged: its input, and the 4 000-token output floor. */
-function estimate(req: ChatRequest, model: string | undefined): UsageEntry[] {
+/** What an aborted fake attempt is charged: its input, and the broken-stream output estimate. */
+function estimate(
+  req: ChatRequest,
+  model: string | undefined,
+  maxTokens: number,
+  streamedMs: number,
+): UsageEntry[] {
   if (model === undefined) return [];
   return [
     {
@@ -160,7 +178,7 @@ function estimate(req: ChatRequest, model: string | undefined): UsageEntry[] {
         cacheWrite5m: 0,
         cacheWrite1h: 0,
         cacheRead: 0,
-        output: 4_000,
+        output: brokenStreamOutput({ observed: 0, maxTokens, streamedMs }),
       },
       estimated: true,
     },

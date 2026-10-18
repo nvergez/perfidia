@@ -68,6 +68,13 @@ export const MODEL_ALIASES: Readonly<Record<string, string>> = Object.freeze({
   "haiku-5-5": "claude-haiku-5-5",
 });
 
+/**
+ * The models a seat may run on: the 5.5 family the request shape is built for (mid-conversation
+ * `system` messages, adaptive thinking with `effort`). The other priced models are fallback
+ * targets only: Claude Sonnet 5, for one, rejects the operator entries with a 400.
+ */
+export const SEAT_MODELS: readonly string[] = Object.freeze(Object.values(MODEL_ALIASES));
+
 /** An LLM seat of the plan. */
 export interface LlmSeatPlan {
   readonly seat: PlayerId;
@@ -126,6 +133,12 @@ export interface ArenaPlan {
   readonly env: ArenaEnv;
   /** The base URL the client uses (`PERFIDIA_ANTHROPIC_BASE_URL` or the API's). */
   readonly baseURL: string;
+  /**
+   * `--stop-after N`: the run stops at the end of game day N (game second `N × 86 400`), and the
+   * match keeps its full length for the agents (a calibration run plays the real game); `null`:
+   * the run plays the match to its end.
+   */
+  readonly stopAt: number | null;
 }
 
 /** What an `arena run` command line asks for, parsed but not yet checked. */
@@ -135,6 +148,8 @@ export interface ArenaRequest {
   readonly seed?: number | undefined;
   readonly players?: number | undefined;
   readonly days?: number | undefined;
+  /** Stop the run at the end of this game day, the match keeping its length (`--stop-after`). */
+  readonly stopAfterDays?: number | undefined;
   /** `random` (default), `seed`, or 32 hex characters. */
   readonly idKey?: string | undefined;
   readonly seats?: readonly string[] | undefined;
@@ -179,7 +194,10 @@ export const REALTIME_DEADLINE_MARGIN_MS = 10_000;
 const DURATION = /^([0-9]+)(ms|s|m|h)?$/;
 const UNIT_MS: Readonly<Record<string, number>> = { ms: 1, s: 1000, m: 60_000, h: 3_600_000 };
 
-/** `90s`, `5m`, `2h`, `1500ms` or bare milliseconds, as integer milliseconds ≥ 1. */
+/** The longest timer a runtime keeps (2^31 − 1 ms, about 24.8 days); a longer one fires at once. */
+export const MAX_TIMER_MS = 2_147_483_647;
+
+/** `90s`, `5m`, `2h`, `1500ms` or bare milliseconds, as integer milliseconds in 1..`MAX_TIMER_MS`. */
 export function parseDuration(text: string, flag: string): number {
   const m = DURATION.exec(text.trim());
   if (m?.[1] === undefined) {
@@ -189,17 +207,31 @@ export function parseDuration(text: string, flag: string): number {
   if (!Number.isSafeInteger(ms) || ms < 1) {
     throw new UsageError(`${flag} must be a positive duration, got "${text}"`);
   }
+  if (ms > MAX_TIMER_MS) {
+    throw new UsageError(`${flag} must be at most 596h (a timer's limit), got "${text}"`);
+  }
   return ms;
 }
 
+/** The largest amount a USD flag takes: $1 000 000 (nano-dollars stay exact integers). */
+export const MAX_USD_NANO = 1_000_000 * 1_000_000_000;
+
 /** An amount in USD (`100`, `2.5`) as integer nano-dollars; `flag` names it in the error. */
 export function parseUsd(text: string, flag: string): number {
+  let nano: number;
   try {
-    return usdToNano(text);
+    nano = usdToNano(text);
   } catch {
     throw new UsageError(`${flag} must be an amount in USD such as 100 or 2.5, got "${text}"`);
   }
+  if (!Number.isSafeInteger(nano) || nano > MAX_USD_NANO) {
+    throw new UsageError(`${flag} must be at most 1000000 (USD), got "${text}"`);
+  }
+  return nano;
 }
+
+/** Hosts an `http:` base URL may name: the key never leaves the machine in cleartext. */
+const LOOPBACK = new Set(["localhost", "127.0.0.1", "[::1]"]);
 
 function botLabelOf(text: string, what: string): string {
   const raw = text.startsWith("bot:") ? text.slice(4) : text;
@@ -244,6 +276,11 @@ export function parseSeatSpec(seat: PlayerId, value: string): SeatSpec {
   const model = Object.hasOwn(MODEL_ALIASES, alias) ? (MODEL_ALIASES[alias] ?? alias) : alias;
   if (!model.startsWith("claude-")) {
     throw new UsageError(`--seat ${seat}=${value}: unknown model "${alias}"; ${LLM_SPEC_HELP}`);
+  }
+  if (!SEAT_MODELS.includes(model)) {
+    throw new UsageError(
+      `--seat ${seat}=${value}: ${model} is not a seat model; a seat runs on ${SEAT_MODELS.join(", ")} (the other priced models are fallback targets only)`,
+    );
   }
   const e = EFFORTS.find((x) => x === effort);
   if (e === undefined) {
@@ -439,6 +476,11 @@ export function planArena(req: ArenaRequest, env: ArenaEnv, o: PlanOptions = {})
     }
     const retryBudgetMs = req.retryBudgetMs ?? DEFAULT_RETRY_BUDGET_MS;
     const roundTimeoutMs = lockstepRoundTimeoutMs(retryBudgetMs, pauseMaxMs, attemptTimeoutMs);
+    if (roundTimeoutMs > MAX_TIMER_MS) {
+      throw new UsageError(
+        `--retry-budget + --pause-max + 2 × --attempt-timeout is the lockstep round timeout: it must stay under 596h (a timer's limit), got ${Math.ceil(roundTimeoutMs / 3_600_000)}h`,
+      );
+    }
     clock = { kind: "lockstep", roundTimeoutMs };
     policy = {
       retryBudgetMs,
@@ -505,11 +547,35 @@ export function planArena(req: ArenaRequest, env: ArenaEnv, o: PlanOptions = {})
     );
   }
   const baseURL = env.baseURL ?? DEFAULT_BASE_URL;
+  let url: URL;
   try {
-    const url = new URL(baseURL);
+    url = new URL(baseURL);
     if (url.protocol !== "https:" && url.protocol !== "http:") throw new Error(url.protocol);
   } catch {
     throw new UsageError(`${BASE_VAR} is not an http(s) URL: "${baseURL}"`);
+  }
+  if (url.protocol === "http:" && !LOOPBACK.has(url.hostname)) {
+    throw new UsageError(
+      `${BASE_VAR} is http:// on ${url.hostname}: the API key would cross the network in cleartext; use https:// (http:// is for a local proxy on localhost, 127.0.0.1 or [::1])`,
+    );
+  }
+
+  const matchEnd = overrides["time.matchEnd"];
+  const matchDays = typeof matchEnd === "number" ? matchEnd / 86_400 : DEFAULT_ARENA_DAYS;
+  let stopAt: number | null = null;
+  if (req.stopAfterDays !== undefined) {
+    const n = req.stopAfterDays;
+    if (matchDays <= 1) {
+      throw new UsageError(
+        `--stop-after needs a match longer than one day (this one lasts ${matchDays} days)`,
+      );
+    }
+    if (!Number.isSafeInteger(n) || n < 1 || n >= matchDays) {
+      throw new UsageError(
+        `--stop-after must be a whole number of game days from 1 to ${Math.ceil(matchDays) - 1} (the match lasts ${matchDays} days), got ${n}`,
+      );
+    }
+    stopAt = n * 86_400;
   }
 
   const setup = harness.setupFor(ruleset, { seed, players, overrides, idKey });
@@ -537,6 +603,7 @@ export function planArena(req: ArenaRequest, env: ArenaEnv, o: PlanOptions = {})
         : parseUsd(req.calibratedUsdPerDay, "--calibrated-usd-per-day"),
     env,
     baseURL,
+    stopAt,
   };
 }
 

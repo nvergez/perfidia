@@ -120,25 +120,28 @@ const dayWeight = (d: number): number =>
 /** Margin of the projection, in percent (§5.5). */
 export const PROJECTION_MARGIN_PCT = 15;
 
+/** The profile weight of the first `days` game days; a partial day counts for its share. */
+function weightOf(days: number): number {
+  let w = 0;
+  for (let d = 0; d < days; d += 1) w += dayWeight(d) * Math.min(1, days - d);
+  return w;
+}
+
 /**
- * The spend of `measuredDays` (whole game days played) projected to `days`: scaled by the bots'
- * per-day profile, plus 15%. With `days ≤ measuredDays` the measured spend is returned unchanged.
+ * The spend of `measuredDays` game days played (fractional: a run that stopped within a day counts
+ * that share of it) projected to `days`: scaled by the bots' per-day profile, plus 15%. With
+ * `days ≤ measuredDays` the measured spend is returned unchanged; nothing measured projects to 0.
  */
 export function projectSpend(spentNano: number, measuredDays: number, days: number): number {
   if (measuredDays <= 0) return 0;
   if (days <= measuredDays) return spentNano;
-  let measured = 0;
-  let total = 0;
-  for (let d = 0; d < days; d += 1) {
-    const w = dayWeight(d);
-    total += w;
-    if (d < measuredDays) measured += w;
-  }
-  return Math.round((spentNano * total * (100 + PROJECTION_MARGIN_PCT)) / (measured * 100));
+  return Math.round(
+    (spentNano * weightOf(days) * (100 + PROJECTION_MARGIN_PCT)) / (weightOf(measuredDays) * 100),
+  );
 }
 
-/** Whole game days a run covered, from its last game time (a partial day counts). */
-export const daysCovered = (lastT: number): number => Math.max(1, Math.ceil(lastT / DAY));
+/** Game days a run covered, from its last game time: fractional, a partial day for its share. */
+export const daysCovered = (lastT: number): number => Math.max(0, lastT) / DAY;
 
 /** Spend per seat and model, from `llm_call` lines. */
 export interface CostRow {

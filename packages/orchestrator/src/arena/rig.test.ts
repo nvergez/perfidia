@@ -22,6 +22,7 @@ import {
   type ChatRequest,
   type ModelSpec,
   type PreflightReport,
+  type UsageEntry,
 } from "../model/adapter.ts";
 import { FakeAdapter, type Brain } from "../model/fake.ts";
 import { arenaEnv, planArena, type ArenaPlan, type ArenaRequest } from "./plan.ts";
@@ -94,18 +95,29 @@ export async function play(plan: ArenaPlan, o: Partial<RunArenaOptions> = {}): P
   };
 }
 
-/** A fake model whose preflight fails while `down()` holds (the pause gate's probe). */
+/**
+ * A fake model whose preflight fails while `down()` holds (the pause gate's probe); a passing
+ * preflight reports `usage` (default none: free).
+ */
 export class FlakyAdapter extends FakeAdapter {
   private readonly down: () => ModelError | null;
+  private readonly usage: readonly UsageEntry[];
 
-  constructor(spec: ModelSpec, brain: Brain, down: () => ModelError | null) {
+  constructor(
+    spec: ModelSpec,
+    brain: Brain,
+    down: () => ModelError | null,
+    usage: readonly UsageEntry[] = [],
+  ) {
     super(spec, brain);
     this.down = down;
+    this.usage = usage;
   }
 
-  override preflight(sample: ChatRequest): Promise<PreflightReport> {
+  override async preflight(sample: ChatRequest): Promise<PreflightReport> {
     const e = this.down();
-    return e === null ? super.preflight(sample) : Promise.reject(e);
+    if (e !== null) throw e;
+    return { ...(await super.preflight(sample)), usage: this.usage };
   }
 }
 

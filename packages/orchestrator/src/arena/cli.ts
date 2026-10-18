@@ -44,7 +44,7 @@ export const USAGE = [
   "`bun run arena -- <command> --help` lists a command's flags.",
   "environment: PERFIDIA_ANTHROPIC_API_KEY (required for LLM seats unless --fake),",
   "             PERFIDIA_ANTHROPIC_BASE_URL (optional); nothing else is read.",
-  "exit codes: 0 ok, 1 replay divergence, 2 fatal error or abort, 3 usage, config or preflight error",
+  "exit codes: 0 ok, 1 replay divergence, 2 fatal error, abort or degraded run, 3 usage, config or preflight error",
   "",
 ].join("\n");
 
@@ -63,6 +63,11 @@ const RUN_FLAGS: FlagSpecs = {
   },
   players: { type: "string", value: "<N>", help: "seats (default 6)" },
   days: { type: "string", value: "<N>", help: "match length in game days (default 7)" },
+  "stop-after": {
+    type: "string",
+    value: "<N>",
+    help: "stop the run at the end of game day N, the match keeping its length (calibration)",
+  },
   seed: { type: "string", value: "<uint32>", help: "match seed (default: random, printed)" },
   "id-key": {
     type: "string",
@@ -208,6 +213,7 @@ export function runRequestOf(argv: readonly string[]): {
     overrides: f.strings("override"),
     players: int(f.string("players"), "--players", 1, 1000),
     days: int(f.string("days"), "--days", 1, 3650),
+    stopAfterDays: int(f.string("stop-after"), "--stop-after", 1, 3650),
     seed: int(f.string("seed"), "--seed", 0, UINT32_MAX),
     idKey: f.string("id-key"),
     seats: f.strings("seat"),
@@ -245,7 +251,7 @@ async function runCommand(argv: readonly string[], io: CliIo, env: ArenaEnv): Pr
   assertFreeRunDir(out);
   try {
     const outcome = await runArena(plan, { dir: out, io, quiet });
-    if (outcome.status !== "ended") {
+    if (outcome.status !== "ended" && outcome.status !== "stopped") {
       io.err(`arena run: ${outcome.status}: ${outcome.report.reason ?? outcome.error ?? ""}\n`);
     }
     return outcome.code;

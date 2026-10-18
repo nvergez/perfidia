@@ -13,7 +13,7 @@ import type { Profile } from "./personalities.ts";
 // agent-visible text bumps `PROMPT_VERSION` (part of the controller label), pinned by snapshot
 // hashes in prompt.test.ts.
 
-export const PROMPT_VERSION = 1;
+export const PROMPT_VERSION = 2;
 
 /** The shared block (`system[0]`): identical for every seat of the match. */
 export function sharedPrompt(info: RulesInfo, players: number): string {
@@ -67,16 +67,23 @@ const reminder = (n: Slot, maxRounds: Slot, maxCalls: Slot): string =>
 const lastReminder = (maxRounds: Slot, maxCalls: Slot): string =>
   `Round trip ${maxRounds} of ${maxRounds}, the last, up to ${maxCalls} calls: you will not see the results of these calls. Send your final actions and start this reply with your public thought.`;
 
+const wakeEndReminder = (n: Slot, maxRounds: Slot, maxCalls: Slot): string =>
+  `Round trip ${n} of ${maxRounds}, the last of this wake (the harness ends it early), up to ${maxCalls} calls: you will not see the results of these calls. Send your final actions, make end_turn the last call if you want to choose your next wake, and start this reply with your public thought.`;
+
 /** The operator entry after the round-0 briefing. */
 export function turnHeader(input: RoundInput): string {
   return header(input.turn, input.briefing.time, input.maxRounds, input.maxCalls);
 }
 
-/** The operator entry after the results of round `input.round - 1`. */
-export function roundReminder(input: RoundInput): string {
+/**
+ * The operator entry after the results of round `input.round - 1`. `wakeEnds`: the per-wake soft
+ * cap is reached, so this reply is the wake's last (§3.6) even before the last round trip.
+ */
+export function roundReminder(input: RoundInput, wakeEnds = false): string {
   const n = input.round + 1;
-  return n >= input.maxRounds
-    ? lastReminder(input.maxRounds, input.maxCalls)
+  if (n >= input.maxRounds) return lastReminder(input.maxRounds, input.maxCalls);
+  return wakeEnds
+    ? wakeEndReminder(n, input.maxRounds, input.maxCalls)
     : reminder(n, input.maxRounds, input.maxCalls);
 }
 
@@ -94,6 +101,7 @@ export function operatorTemplates(): Readonly<Record<string, string>> {
     turnHeader: header("{turn}", "{time}", "{maxRounds}", "{maxCalls}"),
     roundReminder: reminder("{n}", "{maxRounds}", "{maxCalls}"),
     lastRoundReminder: lastReminder("{maxRounds}", "{maxCalls}"),
+    wakeEndReminder: wakeEndReminder("{n}", "{maxRounds}", "{maxCalls}"),
     thoughtAsk: THOUGHT_ASK,
     thoughtQueued: THOUGHT_QUEUED,
   };

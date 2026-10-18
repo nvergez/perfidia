@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { virtualTime } from "../testkit.test.ts";
+import { rejection, virtualTime } from "../testkit.test.ts";
 import { ArenaAborted, ArenaPauseGate, Breaker, NoPauseGate } from "./pause.ts";
 import { RetryBudget, backoffMs } from "./retry.ts";
 
@@ -28,14 +28,18 @@ describe("Breaker", () => {
     expect(fail("p2")).toBeNull();
   });
 
-  test("3 consecutive LLM turns closed by an error, any seats, trip it; a clean turn resets", () => {
+  test("3 consecutive LLM turns closed by a systemic error, any seats, trip it; a clean turn resets", () => {
     const b = new Breaker();
-    const err = (seat: `p${number}`) => b.record({ k: "turn_error", seat, error: "x" });
+    const err = (seat: `p${number}`, systemic = true) =>
+      b.record({ k: "turn_error", seat, error: "x", systemic });
     expect(err("p1")).toBeNull();
     expect(err("p2")).toBeNull();
     expect(b.record({ k: "turn_ok", seat: "p3" })).toBeNull();
     expect(err("p1")).toBeNull();
     expect(err("p2")).toBeNull();
+    // A refusal, a truncation or a deadline abort neither counts nor resets.
+    expect(err("p4", false)).toBeNull();
+    expect(err("p4", false)).toBeNull();
     expect(err("p3")?.message).toBe("3 consecutive LLM turns closed by an error (last: p3: x)");
   });
 
@@ -53,6 +57,87 @@ describe("Breaker", () => {
     await time.run(() => gate.open());
     expect(gate.isClosed).toBe(false);
     expect(gate.pausedMs()).toBe(120_000);
+  });
+
+  test("a breaker that trips again before any clean LLM turn since its resume aborts: the cause persists", async () => {
+    const time = virtualTime();
+    const aborts: ArenaAborted[] = [];
+    const gate = new ArenaPauseGate({
+      clock: { time, random: () => 0 },
+      mode: "wait",
+      probe: () => Promise.resolve(true),
+      onAbort: (e) => aborts.push(e),
+    });
+    const trip = (): void => {
+      for (const seat of ["p1", "p2", "p3"] as const) {
+        gate.record({ k: "turn_error", seat, error: "bad_request (400)", systemic: true });
+      }
+    };
+    trip();
+    await time.run(() => gate.open());
+    // A clean turn after the resume: a later trip pauses again (and resumes).
+    gate.record({ k: "turn_ok", seat: "p4" });
+    trip();
+    expect(gate.isClosed).toBe(true);
+    await time.run(() => gate.open());
+    expect(aborts).toHaveLength(0);
+    // No clean turn since that resume: the next trip aborts at once.
+    trip();
+    expect(aborts).toHaveLength(1);
+    expect(aborts[0]?.message).toContain("the breaker tripped again before any LLM turn closed");
+    expect(await rejection(gate.open())).toBeInstanceOf(ArenaAborted);
+  });
+
+  test("real time: a tripped breaker is an alert, never an abort; operator errors still abort", async () => {
+    const time = virtualTime();
+    const alerts: string[] = [];
+    const gate = new ArenaPauseGate({
+      clock: { time, random: () => 0 },
+      mode: "abort",
+      probe: () => Promise.resolve(true),
+      onAlert: (r) => alerts.push(r.message),
+    });
+    for (const seat of ["p1", "p2", "p3"] as const) {
+      gate.record({
+        k: "turn_error",
+        seat,
+        error: "rate_limit (429), retries exhausted",
+        systemic: true,
+      });
+    }
+    expect(alerts).toEqual([
+      "3 consecutive LLM turns closed by an error (last: p3: rate_limit (429), retries exhausted)",
+    ]);
+    expect(gate.abortError).toBeNull();
+    await gate.open();
+    gate.close({ kind: "auth", message: "invalid x-api-key", seat: "p1", model: "m" });
+    expect(gate.abortError?.message).toContain("real time cannot pause");
+  });
+
+  test("real time: a second trip with no clean LLM turn since the alert aborts; a clean turn resets", () => {
+    const time = virtualTime();
+    const alerts: string[] = [];
+    const gate = new ArenaPauseGate({
+      clock: { time, random: () => 0 },
+      mode: "abort",
+      probe: () => Promise.resolve(true),
+      onAlert: (r) => alerts.push(r.message),
+    });
+    const trip = (): void => {
+      for (const seat of ["p1", "p2", "p3"] as const) {
+        gate.record({ k: "turn_error", seat, error: "bad_request (400)", systemic: true });
+      }
+    };
+    trip();
+    gate.record({ k: "turn_ok", seat: "p4" });
+    trip();
+    expect(alerts).toHaveLength(2);
+    expect(gate.abortError).toBeNull();
+    trip();
+    expect(alerts).toHaveLength(2);
+    expect(gate.abortError?.message).toContain(
+      "the breaker tripped again before any LLM turn closed cleanly since its last alert",
+    );
   });
 });
 

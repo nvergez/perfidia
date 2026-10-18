@@ -30,7 +30,7 @@ function infoOf(ruleset: AnyRuleset, seed: number, players = 6) {
 /** sha256 of the shared template (the ruleset's texts replaced by placeholders). */
 const SHARED_TEMPLATE_SHA = "0fdd2f53e4b396a8c908277fd229ffa76f7ae5b7d2b4966db24c07be39d1ed22";
 /** sha256 of the four seat blocks and the operator templates. */
-const SEAT_AND_OPERATOR_SHA = "179f572265e86d8e2ac6e0c784609f67eda0f38e5474afee8bd1d0aea1d43d0d";
+const SEAT_AND_OPERATOR_SHA = "e092f7571eeebac98d6caee03c7274cc2c0ee15f38fcabc159f5f6d5813af4b7";
 
 describe("system blocks", () => {
   const ruleset = getRuleset("perfidia-1@1.1.0");
@@ -63,7 +63,7 @@ describe("system blocks", () => {
       .replace(info.cheatSheet, "{cheatSheet}")
       .replace(canonicalJson(info.rules), "{rules}")
       .replace(`${info.title}, ${info.ruleset}`, "{title}, {ruleset}");
-    expect(PROMPT_VERSION).toBe(1);
+    expect(PROMPT_VERSION).toBe(2);
     const t = sha256Hex(template);
     const s = sha256Hex(
       canonicalJson({

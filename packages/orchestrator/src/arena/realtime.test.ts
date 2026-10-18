@@ -2,13 +2,15 @@
 // for a seeded 20–295 s per call against a 5-minute turn timeout (the agent's own deadline is 290 s),
 // so some calls are aborted at the deadline: the attempt is charged its estimate and the turn
 // closes. A hand-off happens through the queue in real time. Level E and the gateway rebuild hold.
-// Then: in real time an operator-recoverable failure aborts the arena at once.
+// Then: a slow spell (every LLM seat's turn past the deadline) closes those turns and the match goes
+// on; an operator-recoverable failure aborts the arena at once.
 
 import { describe, expect, test } from "bun:test";
 import { findRuleset, verifyLog } from "@perfidia/engine";
 import { canonicalJson } from "@perfidia/engine/core";
 import { rebuildGatewayState } from "@perfidia/gateway/runtime";
-import { ModelError } from "../model/adapter.ts";
+import { ModelError, brokenStreamOutput } from "../model/adapter.ts";
+import { sleepMs } from "../model/clock.ts";
 import type { FakeAdapter, Brain } from "../model/fake.ts";
 import { botBrain } from "./brain.ts";
 import type { LlmSeatPlan } from "./plan.ts";
@@ -18,6 +20,26 @@ import { FlakyAdapter, fakePlan, play } from "./rig.test.ts";
 const LONG = 120_000;
 const resolve = (ref: string) => findRuleset(ref);
 const auth = (): ModelError => new ModelError("auth", "invalid x-api-key", { status: 401 });
+
+/** Every LLM seat's turn 2 takes 299 s, past the agent's 290 s deadline (a slow API spell). */
+function slowTurn2(
+  s: LlmSeatPlan,
+  spec: ConstructorParameters<typeof FakeAdapter>[0],
+  ctx: AdapterContext,
+): FakeAdapter {
+  const inner = botBrain({ label: s.brain, seat: s.seat, seed: ctx.seed, model: s.model });
+  const brain: Brain = async (req, n) => {
+    if (req.meta.turn === 2) {
+      try {
+        await sleepMs(ctx.time, 299_000, req.signal);
+      } catch {
+        return new ModelError("aborted", "request aborted");
+      }
+    }
+    return inner(req, n);
+  };
+  return new FlakyAdapter(spec, brain, () => null);
+}
 
 describe("arena in real time (virtual time)", () => {
   test(
@@ -37,11 +59,18 @@ describe("arena in real time (virtual time)", () => {
         turnTimeoutMs: 300_000,
       });
 
-      // Aborted at the round deadline: charged an estimate (the 4 000-token output floor).
+      // Aborted at the round deadline: charged an estimate, by the time the call ran, up to
+      // max_tokens (a call cut at 290 s may have produced all of its 16 000 tokens).
       const aborted = llm.filter((l) => l.error?.kind === "aborted");
       expect(aborted.length).toBeGreaterThan(0);
       for (const l of aborted) {
-        expect(l.usage.every((u) => u.estimated && u.output === 4_000)).toBe(true);
+        const output = brokenStreamOutput({
+          observed: 0,
+          maxTokens: 16_000,
+          streamedMs: l.latencyMs,
+        });
+        expect(output).toBe(16_000);
+        expect(l.usage.every((u) => u.estimated && u.output === output)).toBe(true);
         expect(l.costNanoUsd).toBeGreaterThan(0);
         const turn = lines.find((x) => x.k === "turn" && x.seat === l.seat && x.turn === l.turn);
         expect(turn?.k === "turn" ? [turn.why, turn.error] : []).toEqual([
@@ -67,6 +96,27 @@ describe("arena in real time (virtual time)", () => {
       const rebuilt = rebuildGatewayState(lines, resolve);
       expect(rebuilt.ok).toBe(true);
       expect(canonicalJson(rebuilt.gw)).toBe(canonicalJson(run.outcome.result?.gateway ?? null));
+    },
+    LONG,
+  );
+
+  test(
+    "a slow spell past the deadline closes those turns only: no breaker, no abort, the match ends",
+    async () => {
+      const run = await play(fakePlan({ days: 1, clock: "realtime" }), {
+        adapterFor: slowTurn2,
+        brainLatencyMs: [5_000, 10_000],
+      });
+      expect([run.outcome.status, run.outcome.code]).toEqual(["ended", 0]);
+      for (const seat of ["p1", "p2", "p3", "p4"]) {
+        const t2 = run.lines.find((l) => l.k === "turn" && l.seat === seat && l.turn === 2);
+        expect(t2?.k === "turn" ? t2.error : "").toBe(
+          `AgentError: llm ${seat} turn 2 round 0: request aborted at the round deadline`,
+        );
+      }
+      expect(run.report.alerts.filter((a) => a.includes("breaker"))).toEqual([]);
+      expect(run.report.pauses).toEqual([]);
+      expect(verifyLog(run.lines).ok).toBe(true);
     },
     LONG,
   );

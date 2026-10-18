@@ -9,9 +9,46 @@ export type Effort = (typeof EFFORTS)[number];
 
 export type CacheTtl = "5m" | "1h";
 
-/** Output tokens per call; a `max_tokens` stop is retried once at `RETRY_MAX_OUTPUT_TOKENS`. */
+/** Output tokens per call; a `max_tokens` stop is retried once with a larger limit. */
 export const DEFAULT_MAX_OUTPUT_TOKENS = 16_000;
+/** The smallest limit of the `max_tokens` retry. */
 export const RETRY_MAX_OUTPUT_TOKENS = 32_000;
+/** The output limit of every model of the price table (128K). */
+export const MODEL_MAX_OUTPUT_TOKENS = 128_000;
+
+/**
+ * The limit of the retry after a `max_tokens` stop at `limit`: twice it, at least
+ * `RETRY_MAX_OUTPUT_TOKENS`, at most the model's limit; `null` when that is no larger (no retry).
+ */
+export function retryOutputTokens(limit: number): number | null {
+  const next = Math.min(MODEL_MAX_OUTPUT_TOKENS, Math.max(RETRY_MAX_OUTPUT_TOKENS, 2 * limit));
+  return next > limit ? next : null;
+}
+
+/** Floor of the output charged for a stream that broke after it started (§5.3). */
+export const BROKEN_STREAM_OUTPUT_FLOOR = 4_000;
+/**
+ * An upper bound of any priced model's output speed, in tokens per second: a stream that broke
+ * after `s` seconds may have produced `400 × s` tokens. An assumption, checked against the
+ * measured `output / latencyMs` of `llm_calls.jsonl` in calibration.
+ */
+export const OUTPUT_TOKENS_PER_S_BOUND = 400;
+
+/**
+ * The output charged for a stream that broke before its final usage arrived (aborted, cut, or an
+ * error event): conservative, because the API may bill what was generated before the break, and
+ * the streamed text undercounts it (summarized thinking is shorter than the thinking billed). The
+ * largest of what was seen, the floor and `OUTPUT_TOKENS_PER_S_BOUND × streamed seconds`, capped
+ * at the request's `max_tokens` (the real upper bound).
+ */
+export function brokenStreamOutput(o: {
+  readonly observed: number;
+  readonly maxTokens: number;
+  readonly streamedMs: number;
+}): number {
+  const byTime = Math.ceil((Math.max(0, o.streamedMs) * OUTPUT_TOKENS_PER_S_BOUND) / 1000);
+  return Math.min(o.maxTokens, Math.max(o.observed, BROKEN_STREAM_OUTPUT_FLOOR, byTime));
+}
 
 export interface ModelSpec {
   /** `anthropic` or `fake`; later other providers. */
@@ -124,7 +161,7 @@ export interface UsageEntry {
   readonly model: string;
   readonly kind: "message" | "fallback";
   readonly tokens: TokenUsage;
-  /** An aborted or broken stream: charged from what was seen, conservatively (§5.3). */
+  /** An aborted or broken stream: charged from what was seen, conservatively (§5.3, `brokenStreamOutput`). */
   readonly estimated: boolean;
 }
 

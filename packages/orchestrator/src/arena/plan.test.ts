@@ -119,10 +119,20 @@ describe("arena plan", () => {
     expect(usage({ seatCaps: ["p5=3"] })).toContain("p5 is a bot");
   });
 
-  test("an unpriced model is refused at plan time", () => {
-    expect(usage({ seats: ["p1=claude:claude-opus-9:low:odysseus"] })).toContain(
-      "no price for model claude-opus-9",
+  test("a seat runs on the 5.5 family only: fallback-only and unknown models are refused", () => {
+    // Claude Sonnet 5 is priced (a fallback target) but rejects mid-conversation system messages.
+    expect(usage({ seats: ["p1=claude:claude-sonnet-5:medium:odysseus"] })).toContain(
+      "claude-sonnet-5 is not a seat model; a seat runs on claude-opus-5-5, claude-sonnet-5-5, claude-haiku-5-5",
     );
+    expect(usage({ seats: ["p1=claude:claude-opus-9:low:odysseus"] })).toContain(
+      "claude-opus-9 is not a seat model",
+    );
+  });
+
+  test("USD amounts stay exact integers: at most $1 000 000, before anything is sent", () => {
+    expect(usage({ capUsd: "10000000" })).toContain("--cap-usd must be at most 1000000");
+    expect(usage({ seatCaps: ["p1=1e9"] })).toContain("--seat-cap p1 must be");
+    expect(llmSeatsOf(plan({ capUsd: "1000000" }))[0]?.capNanoUsd).toBe(1e15);
   });
 
   test("LLM seats need the key unless --fake; the base URL must be http(s)", () => {
@@ -135,8 +145,15 @@ describe("arena plan", () => {
         .seats,
     ).toHaveLength(6);
     expect(usage({}, { ...KEY, baseURL: "ftp://x" })).toContain("not an http(s) URL");
-    expect(plan({}, { ...KEY, baseURL: "http://localhost:9999" }).baseURL).toBe(
-      "http://localhost:9999",
+    // http:// only on loopback: the key would cross the network in cleartext.
+    for (const local of ["http://localhost:9999", "http://127.0.0.1:8080/", "http://[::1]:1"]) {
+      expect(plan({}, { ...KEY, baseURL: local }).baseURL).toBe(local);
+    }
+    expect(usage({}, { ...KEY, baseURL: "http://proxy.example.com" })).toContain(
+      "is http:// on proxy.example.com: the API key would cross the network in cleartext",
+    );
+    expect(plan({}, { ...KEY, baseURL: "https://proxy.example.com" }).baseURL).toBe(
+      "https://proxy.example.com",
     );
   });
 
@@ -199,6 +216,20 @@ describe("arena plan", () => {
     expect(p.pauseMaxMs).toBe(15 * 60_000);
   });
 
+  test("--stop-after N: the run stops at the end of day N, the match keeps its length", () => {
+    const p = plan({ stopAfterDays: 1 });
+    expect(p.stopAt).toBe(86_400);
+    expect(p.setup.overrides["time.matchEnd"]).toBe(7 * 86_400);
+    expect(plan({}).stopAt).toBeNull();
+    expect(plan({ days: 3, stopAfterDays: 2 }).stopAt).toBe(2 * 86_400);
+    expect(usage({ stopAfterDays: 7 })).toContain(
+      "--stop-after must be a whole number of game days from 1 to 6 (the match lasts 7 days)",
+    );
+    expect(usage({ days: 1, stopAfterDays: 1 })).toContain(
+      "--stop-after needs a match longer than one day (this one lasts 1 days)",
+    );
+  });
+
   test("length: --days, or --override time.matchEnd, never both", () => {
     expect(plan({ days: 2 }).setup.overrides["time.matchEnd"]).toBe(2 * 86400);
     expect(plan({ overrides: ["time.matchEnd=3600"] }).setup.overrides["time.matchEnd"]).toBe(3600);
@@ -233,5 +264,11 @@ describe("arena plan", () => {
       "--pause-max must be a duration",
     );
     expect(() => parseDuration("0s", "--pause-max")).toThrow("positive");
+    // Past 2^31 − 1 ms a runtime timer fires at once.
+    expect(parseDuration("596h", "--x")).toBe(596 * 3_600_000);
+    expect(() => parseDuration("597h", "--pause-max")).toThrow("at most 596h");
+    expect(usage({ pauseMaxMs: 400 * 3_600_000, retryBudgetMs: 300 * 3_600_000 })).toContain(
+      "the lockstep round timeout: it must stay under 596h",
+    );
   });
 });

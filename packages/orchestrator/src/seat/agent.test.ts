@@ -1,6 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import { canonicalJson } from "@perfidia/engine/core";
-import { ModelError, RETRY_MAX_OUTPUT_TOKENS, type ChatRequest } from "../model/adapter.ts";
+import {
+  MODEL_MAX_OUTPUT_TOKENS,
+  ModelError,
+  RETRY_MAX_OUTPUT_TOKENS,
+  type ChatRequest,
+} from "../model/adapter.ts";
 import { sleepMs } from "../model/clock.ts";
 import type { FakeReply } from "../model/fake.ts";
 import {
@@ -11,9 +16,24 @@ import {
   rejected,
   rejection,
   rig,
+  SPEC,
   virtualTime,
 } from "../testkit.test.ts";
 import { AgentError } from "./agent.ts";
+
+/** An SSE `overloaded` error charged an estimated $1. */
+const overloadedUsd = () =>
+  new ModelError("overloaded", "SSE overloaded", { spent: oneUsdOfOutput(true) });
+
+/** $1 of Opus 5.5 output (50 000 tokens at $20 per million). */
+const oneUsdOfOutput = (estimated: boolean) => [
+  {
+    model: "claude-opus-5-5",
+    kind: "message" as const,
+    tokens: { input: 0, cacheWrite5m: 0, cacheWrite1h: 0, cacheRead: 0, output: 50_000 },
+    estimated,
+  },
+];
 import { ArenaAborted, ArenaPauseGate, NoPauseGate, type PauseReason } from "./pause.ts";
 import { THOUGHT_ASK, THOUGHT_QUEUED } from "./prompt.ts";
 
@@ -77,7 +97,7 @@ describe("conversation layout", () => {
       maxCalls: 10,
       kind: "round",
     });
-    expect(r.agent.label).toBe("llm:fake/claude-opus-5-5/medium:odysseus@1:p1");
+    expect(r.agent.label).toBe("llm:fake/claude-opus-5-5/medium:odysseus@1:p2");
   });
 
   test("parallel calls: one RoundOutput in order; all results back in one user entry, ids matched, is_error kept", async () => {
@@ -291,11 +311,36 @@ describe("stops", () => {
     const line = calls(r.log)[0];
     expect(line?.stop).toBe("refusal");
     expect(line?.refusal).toEqual({ category: "cyber", explanation: null, recommendedModel: null });
+    expect(line?.inbox).toEqual([]);
+    expect(calls(r.log)[1]?.inbox).toBeUndefined();
     expect(line?.costNanoUsd).toBeGreaterThan(0);
     expect(r.ledger.spent("p1")).toBeGreaterThan(0);
     const e = await g.time.run(() => rejection(g.agent.round(inputOf(1, 0))));
     expect(e.message).toBe("llm p1 turn 1 round 0: refusal (uncategorised) on claude-opus-5-5");
-    expect(gate.events.at(-1)).toEqual({ k: "turn_error", seat: "p1", error: e.message });
+    // A refusal is about one request: it does not count toward the breaker.
+    expect(gate.events.at(-1)).toEqual({
+      k: "turn_error",
+      seat: "p1",
+      error: e.message,
+      systemic: false,
+    });
+  });
+
+  test("a refused call names the turn's inbox message ids (refusal-DoS suspects)", async () => {
+    const msgs = [
+      { id: "g09xr2" as const, from: "p5" as const, to: ["p1" as const], text: "…" },
+      { id: "g11ab3" as const, from: "p2" as const, to: "all" as const, text: "…" },
+    ];
+    const r = rig([
+      {
+        stop: "refusal",
+        refusal: { category: "cyber", explanation: null, recommendedModel: null },
+      },
+    ]);
+    await r.time.run(() =>
+      rejection(r.agent.round(inputOf(1, 0, [], { briefing: briefingOf(0, { msgs }) }))),
+    );
+    expect(calls(r.log)[0]?.inbox).toEqual(["g09xr2", "g11ab3"]);
   });
 
   test("max_tokens: one retry of the same entries at 32 000, then success; twice is an error", async () => {
@@ -313,6 +358,28 @@ describe("stops", () => {
     const twice = rig([{ stop: "max_tokens" }, { stop: "max_tokens" }]);
     const e = await twice.time.run(() => rejection(twice.agent.round(inputOf(1, 0))));
     expect(e.message).toBe("llm p1 turn 1 round 0: max_tokens twice");
+    expect(e instanceof AgentError && e.systemic).toBe(false);
+  });
+
+  test("max_tokens with a large --max-tokens: the retry doubles it, up to the model's limit, never lower", async () => {
+    for (const [limit, sent] of [
+      [32_000, [32_000, 64_000]],
+      [40_000, [40_000, 80_000]],
+      [64_000, [64_000, MODEL_MAX_OUTPUT_TOKENS]],
+      [MODEL_MAX_OUTPUT_TOKENS, [MODEL_MAX_OUTPUT_TOKENS]],
+    ] as const) {
+      const r = rig([{ stop: "max_tokens" }, { stop: "max_tokens" }], {
+        spec: { ...SPEC, maxOutputTokens: limit },
+      });
+      // oxlint-disable-next-line no-await-in-loop -- one rig per limit
+      const e = await r.time.run(() => rejection(r.agent.round(inputOf(1, 0))));
+      expect(calls(r.log).map((l) => l.maxTokens)).toEqual([...sent]);
+      expect(e.message).toBe(
+        sent.length === 1
+          ? "llm p1 turn 1 round 0: max_tokens at the model's limit"
+          : "llm p1 turn 1 round 0: max_tokens twice",
+      );
+    }
   });
 
   test("pause_turn and unknown stops close the turn", async () => {
@@ -371,6 +438,30 @@ describe("retries", () => {
     const out = await r.time.run(() => r.agent.round(inputOf(1, 0)));
     expect(out.thought).toBe("Late but fine.");
     expect(calls(r.log)[0]?.error?.kind).toBe("timeout");
+  });
+
+  test("a transcript that cannot be written closes the turn and releases the model's slot", async () => {
+    const r = rig([{ text: ["never"] }]);
+    r.log.transcript = () => {
+      throw new Error("ENOSPC: no space left on device");
+    };
+    const e = await r.time.run(() => rejection(r.agent.round(inputOf(1, 0))));
+    expect(e.message).toContain("ENOSPC");
+    expect(r.rate.inflight).toBe(0);
+    expect(r.fake.requests).toHaveLength(0);
+  });
+
+  test("the thought call is bounded by the attempt timeout", async () => {
+    const r = rig([{ calls: [endTurn] }, hangUntilAborted], {
+      policy: { thoughtCall: true, attemptTimeoutMs: 1_000 },
+    });
+    const out = await r.time.run(() => r.agent.round(inputOf(1, 0)));
+    expect(out).toEqual({ calls: [{ tool: "end_turn", args: { nextWakeIn: 3600 } }] });
+    expect(r.time.nowMs()).toBe(1_000);
+    expect(calls(r.log).map((l) => [l.kind, l.error?.kind ?? null])).toEqual([
+      ["round", null],
+      ["thought_call", "aborted"],
+    ]);
   });
 
   test("the round deadline aborts the request and closes the turn; the attempt is logged", async () => {
@@ -507,16 +598,33 @@ describe("caps", () => {
     expect(r.handoffs[0]?.spentNanoUsd).toBe(r.ledger.spent("p1"));
   });
 
-  test("the per-wake soft cap ends the turn at the next round with a wake_cap line; the next wake starts afresh", async () => {
-    const r = rig([{ calls: view }, { calls: view }], { wakeCapNanoUsd: 1 });
+  test("the per-wake soft cap: one last reply, told so (it can end_turn), then the turn ends; the next wake starts afresh", async () => {
+    const r = rig(
+      [{ calls: view }, { text: ["Last orders: hold."], calls: [endTurn] }, { calls: view }],
+      { wakeCapNanoUsd: 1 },
+    );
     const outs = await r.time.run(async () => [
       await r.agent.round(inputOf(1, 0)),
       await r.agent.round(inputOf(1, 1, [ok(7)])),
+      await r.agent.round(inputOf(1, 2, [ok(8)])),
       await r.agent.round(inputOf(2, 0, [], { briefing: briefingOf(3600) })),
     ]);
-    expect(outs.map((o) => o.calls.length)).toEqual([1, 0, 1]);
-    const capLine = r.log.lines.find((l) => l.k === "wake_cap");
-    expect(capLine).toMatchObject({
+    expect(outs).toEqual([
+      { calls: [{ tool: "view_map", args: {} }] },
+      { calls: [{ tool: "end_turn", args: { nextWakeIn: 3600 } }], thought: "Last orders: hold." },
+      { calls: [] },
+      { calls: [{ tool: "view_map", args: {} }] },
+    ]);
+    // Round 1's reminder says it is the wake's last reply; the cut round makes no call.
+    expect(r.fake.requests).toHaveLength(3);
+    const reminder = r.fake.requests[1]?.entries.at(-1);
+    expect(reminder?.role === "operator" ? reminder.text : "").toContain(
+      "the last of this wake (the harness ends it early)",
+    );
+    expect(reminder?.role === "operator" ? reminder.text : "").toContain("end_turn");
+    const capLines = r.log.lines.filter((l) => l.k === "wake_cap");
+    expect(capLines).toHaveLength(1);
+    expect(capLines[0]).toMatchObject({
       k: "wake_cap",
       seat: "p1",
       turn: 1,
@@ -525,6 +633,20 @@ describe("caps", () => {
       wakeCapNanoUsd: 1,
     });
     expect(r.handoffs).toHaveLength(0);
+  });
+
+  test("the per-wake soft cap is checked before every attempt: retries stop at it", async () => {
+    const r = rig(
+      [overloadedUsd(), overloadedUsd(), overloadedUsd(), overloadedUsd(), { text: ["x"] }],
+      {
+        wakeCapNanoUsd: 2_000_000_000,
+      },
+    );
+    const out = await r.time.run(() => r.agent.round(inputOf(1, 0)));
+    // $1 per attempt: the second reaches $2, the third is the wake's last, no fourth.
+    expect(out).toEqual({ calls: [] });
+    expect(calls(r.log).map((l) => l.wakeSpentNanoUsd / 1e9)).toEqual([1, 2, 3]);
+    expect(r.log.lines.filter((l) => l.k === "wake_cap")).toHaveLength(1);
   });
 
   test("every attempt is charged, failed and estimated ones included; the lines add up to the ledger", async () => {

@@ -8,13 +8,17 @@ import {
   type StablePrompt,
 } from "../model/adapter.ts";
 import { costOf, isPriced } from "../model/prices.ts";
+import { operatorTemplates } from "../seat/prompt.ts";
 
 // The arena's preflight (phase-2 design §2.2, §8), before the run directory exists: for each
 // (provider, model, effort) group, the adapter checks the key and the model (`models.retrieve`),
-// then sends the exact production request shape once (the group's first seat's tools and system
-// blocks, a placeholder user message), which validates betas, tool schemas and `display` and
-// pre-warms the shared prefix. Every model a configured model may fall back to must have a price.
-// The same check is the pause gate's probe (§2.6).
+// then sends the production request shape once (the group's first seat's tools and system blocks,
+// a placeholder user message and the turn-header template as an operator entry, as every round 0
+// sends them), which validates betas, tool schemas, `display` and mid-conversation `system`
+// messages, and pre-warms the shared prefix. Every model a configured model may fall back to must
+// have a price. The same check is the pause gate's probe (§2.6). It cannot replay a later round
+// (an assistant reply carries signed thinking blocks): a breaker whose cause only shows there trips
+// again after its resume, which aborts the arena (seat/pause.ts).
 
 /** A preflight failure: exit code 3, nothing written. */
 export class PreflightError extends Error {
@@ -42,12 +46,15 @@ export interface PreflightResult {
   readonly nanoUsd: number;
 }
 
-/** The placeholder conversation of the shape check: game data only, as every user turn. */
+/** The placeholder conversation of the shape check: a user entry, then an operator entry. */
 export function sampleRequest(g: PreflightGroup): ChatRequest {
   return {
     prompt: g.prompt,
     tools: g.tools,
-    entries: [{ role: "user", parts: [{ kind: "text", text: '{"preflight":true}' }] }],
+    entries: [
+      { role: "user", parts: [{ kind: "text", text: '{"preflight":true}' }] },
+      { role: "operator", text: operatorTemplates()["turnHeader"] ?? "" },
+    ],
     meta: { seat: g.seat, turn: 0, round: 0, maxRounds: 1, maxCalls: 1, kind: "round" },
   };
 }

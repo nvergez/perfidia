@@ -85,6 +85,8 @@ export const LlmCallLineSchema = z.strictObject({
   error: z
     .strictObject({ kind: z.string().min(1), status: z.int().nullable(), message: z.string() })
     .nullable(),
+  /** A refusal: the ids of the turn's inbox messages (a refusal-DoS suspect, §3.8). */
+  inbox: z.array(z.string()).optional(),
 });
 export type LlmCallLine = z.infer<typeof LlmCallLineSchema>;
 
@@ -184,6 +186,10 @@ export const ArenaStatusSchema = z.enum([
   "running",
   "paused",
   "ended",
+  /** `--stop-after`: the run stopped at a day boundary, the match unfinished by design. */
+  "stopped",
+  /** Ended or stopped, but too many LLM turns closed by an error (`DEGRADED_ERROR_PCT`). */
+  "degraded",
   "fatal",
   "aborted",
   "incomplete",
@@ -280,13 +286,14 @@ export type ExitCriterion = z.infer<typeof ExitCriterionSchema>;
 export const ArenaReportSchema = z.strictObject({
   format: z.literal(ARENA_REPORT_FORMAT),
   status: ArenaStatusSchema,
-  /** Why the run stopped early: an abort, a fatal line, a crash. */
+  /** Why the run stopped early (an abort, a fatal line, a crash, `--stop-after`) or is degraded. */
   reason: z.string().nullable(),
   fake: z.boolean(),
   ruleset: z.string(),
   seed: z.int().nonnegative(),
   players: Int,
-  days: Int,
+  /** The match length in game days (fractional below a day). */
+  days: z.number().nonnegative(),
   clock: z.string(),
   promptVersion: z.int().positive(),
   harness: z.string(),
@@ -304,10 +311,16 @@ export const ArenaReportSchema = z.strictObject({
     cacheReadPct: Int,
     /** Attempts a fallback model served, in permille of the attempts. */
     fallbackPermille: Int,
+    /** The preflight and every pause-gate probe (each re-runs it). */
     preflightNanoUsd: Nano,
   }),
   estimate: Estimate,
-  projection: z.strictObject({ fromDays: Int, toDays: Int, costNanoUsd: Nano }),
+  /** `fromDays`: the game days measured, fractional (a run that stopped within a day). */
+  projection: z.strictObject({
+    fromDays: z.number().nonnegative(),
+    toDays: z.number().nonnegative(),
+    costNanoUsd: Nano,
+  }),
   /** speed ≤ 3600 / (10 × 1.5 × p95 think time): null without measured think time. */
   recommendedSpeed: z
     .strictObject({

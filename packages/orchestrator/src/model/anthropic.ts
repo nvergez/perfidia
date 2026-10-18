@@ -10,7 +10,9 @@ import type {
 } from "@anthropic-ai/sdk/resources/beta/messages/messages";
 import {
   adapterLabel,
+  brokenStreamOutput,
   ModelError,
+  type CacheTtl,
   type ChatRequest,
   type ChatResult,
   type Entry,
@@ -31,11 +33,15 @@ import {
 // - The client gets an explicit API key and base URL and reads no `ANTHROPIC_*` variable that
 //   matters: `authToken`, `webhookKey` and `logLevel` are explicit too, and a guarded `fetch` sends
 //   only to the configured origin, with our `x-api-key`, no `authorization` header and only the
-//   SDK's own headers (which also neutralises `ANTHROPIC_CUSTOM_HEADERS`, read by the SDK itself).
+//   SDK's own headers. `ANTHROPIC_CUSTOM_HEADERS`, which the SDK reads itself, is neutralised: the
+//   allowlist drops its other headers, our `defaultHeaders` override its `anthropic-beta` (each
+//   request sends only its own betas) and the guarded fetch pins `anthropic-version`.
 // - `maxRetries: 0`: the harness owns every retry (seat/retry.ts), so each attempt is visible,
 //   logged, priced and jittered.
 // - Every call streams (`.stream().finalMessage()`): no idle connection while the model thinks, a
-//   time-to-first-token, and a known partial usage when the agent aborts.
+//   time-to-first-token, and a known partial usage when the stream breaks. `chat` keeps its own
+//   reference to the latest snapshot (the SDK clears `currentMessage` when a body ends without
+//   `message_stop`) and charges a broken stream conservatively (`brokenStreamOutput`).
 // - Requests: adaptive thinking with `display: "summarized"` (never disabled, never a budget),
 //   explicit `output_config.effort`, no `tool_choice` (forced use is a 400 on the 5.5 models), no
 //   sampling parameters, no prefill; `tools` → `system[0]` (shared) → `system[1]` (seat), both
@@ -57,8 +63,8 @@ export const FALLBACK_BETA = "server-side-fallback-2026-07-01";
 export const MODELS_FALLBACK_BETA = "server-side-fallback-2026-06-01";
 
 export const DEFAULT_BASE_URL = "https://api.anthropic.com";
-/** Floor of the output charged for a stream that broke after `message_start` (§5.3). */
-export const ABORTED_OUTPUT_FLOOR = 4_000;
+/** The API version the SDK sends; pinned by the guarded fetch. */
+export const ANTHROPIC_VERSION = "2023-06-01";
 
 export type HttpFetch = (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
 
@@ -91,6 +97,7 @@ function guardedFetch(inner: HttpFetch, origin: string, apiKey: string): HttpFet
     given.forEach((value, name) => {
       if (ALLOWED_HEADER.test(name)) headers.set(name, value);
     });
+    headers.set("anthropic-version", ANTHROPIC_VERSION);
     headers.set("x-api-key", apiKey);
     return inner(url.toString(), { ...init, headers });
   };
@@ -115,6 +122,8 @@ export class AnthropicClient {
       maxRetries: 0,
       timeout: o.timeoutMs ?? 600_000,
       logLevel: "warn",
+      // Over `ANTHROPIC_CUSTOM_HEADERS`: no default beta (a request's own `betas` still apply).
+      defaultHeaders: { "anthropic-beta": null, "anthropic-version": ANTHROPIC_VERSION },
       fetch: guardedFetch(o.fetch ?? ((input, init) => fetch(input, init)), origin, o.apiKey),
     });
   }
@@ -182,45 +191,60 @@ function checkEntries(entries: readonly Entry[]): void {
 
 // Responses ------------------------------------------------------------------------------------
 
-function tokensOf(u: {
-  readonly input_tokens: number;
-  readonly output_tokens: number;
-  readonly cache_creation_input_tokens: number | null;
-  readonly cache_read_input_tokens: number | null;
-  readonly cache_creation: {
-    readonly ephemeral_5m_input_tokens: number;
-    readonly ephemeral_1h_input_tokens: number;
-  } | null;
-}): TokenUsage {
+/**
+ * Token counts of a usage block. Without the TTL split (absent, not only null, on some responses)
+ * every write is priced at `ttl`, the longest TTL the request marked: never under-charged.
+ */
+function tokensOf(
+  u: {
+    readonly input_tokens: number;
+    readonly output_tokens: number;
+    readonly cache_creation_input_tokens: number | null;
+    readonly cache_read_input_tokens: number | null;
+    readonly cache_creation: {
+      readonly ephemeral_5m_input_tokens: number;
+      readonly ephemeral_1h_input_tokens: number;
+    } | null;
+  },
+  ttl: CacheTtl,
+): TokenUsage {
   const written = u.cache_creation_input_tokens ?? 0;
-  // Absent (not only null) on some responses: then every write counts as a 5-minute one.
   const split = u.cache_creation ?? null;
   return {
     input: u.input_tokens,
-    cacheWrite5m: split === null ? written : split.ephemeral_5m_input_tokens,
-    cacheWrite1h: split === null ? 0 : split.ephemeral_1h_input_tokens,
+    cacheWrite5m: split === null ? (ttl === "5m" ? written : 0) : split.ephemeral_5m_input_tokens,
+    cacheWrite1h: split === null ? (ttl === "1h" ? written : 0) : split.ephemeral_1h_input_tokens,
     cacheRead: u.cache_read_input_tokens ?? 0,
     output: u.output_tokens,
   };
 }
 
-/** One entry per iteration when the API reports them, else one for the whole message. */
-export function usageEntries(usage: BetaUsage, served: string, requested: string): UsageEntry[] {
+/**
+ * One entry per iteration when the API reports them, else one for the whole message. `ttl`: the
+ * longest TTL of the request's markers, for writes reported without their TTL split.
+ */
+export function usageEntries(
+  usage: BetaUsage,
+  served: string,
+  requested: string,
+  ttl: CacheTtl = "5m",
+  estimated = false,
+): UsageEntry[] {
   const its = usage.iterations;
   if (its === null || its === undefined || its.length === 0) {
-    return [{ model: served, kind: "message", tokens: tokensOf(usage), estimated: false }];
+    return [{ model: served, kind: "message", tokens: tokensOf(usage, ttl), estimated }];
   }
   return its.map((it) => {
     const own: unknown = Reflect.get(it, "model");
     const model = typeof own === "string" && own !== "" ? own : undefined;
     if (it.type === "fallback_message") {
-      return { model: model ?? served, kind: "fallback", tokens: tokensOf(it), estimated: false };
+      return { model: model ?? served, kind: "fallback", tokens: tokensOf(it, ttl), estimated };
     }
     return {
       model: model ?? (it.type === "message" ? requested : served),
       kind: "message",
-      tokens: tokensOf(it),
-      estimated: false,
+      tokens: tokensOf(it, ttl),
+      estimated,
     };
   });
 }
@@ -374,17 +398,41 @@ export function modelErrorOf(e: unknown, spent: readonly UsageEntry[]): ModelErr
     if (e.status === undefined) return make(kindOfType(type), e, e.message);
     return make("unknown", e, e.message);
   }
+  if (e instanceof Anthropic.AnthropicError) {
+    // Raised by the stream itself, not by an HTTP status: the body broke or ended early (a reset,
+    // `TypeError: terminated`, no `message_stop`). A transport failure: retryable, out of the breaker.
+    const cause: unknown = e.cause;
+    const why = cause instanceof Error && cause.message !== e.message ? ` (${cause.message})` : "";
+    return new ModelError("connection", oneLine(`the stream broke: ${e.message}${why}`), { spent });
+  }
   const message = e instanceof Error ? `${e.name}: ${e.message}` : String(e);
   return new ModelError("unknown", oneLine(message), { spent });
 }
 
+/** What `chat` saw of a stream before it broke. */
+export interface StreamSeen {
+  /** The latest snapshot (`undefined`: the stream never started, nothing was billed). */
+  readonly snapshot: BetaMessage | undefined;
+  /** A `message_delta` arrived: the snapshot's usage is the API's final count. */
+  readonly final: boolean;
+  /** Wall ms from `message_start` to the break. */
+  readonly streamedMs: number;
+  /** The requested model and the request's `max_tokens`. */
+  readonly model: string;
+  readonly maxTokens: number;
+  /** The longest TTL of the request's cache markers. */
+  readonly ttl: CacheTtl;
+}
+
 /**
- * What a broken stream cost before it broke (§5.3): the input and cache usage of `message_start`
- * and `max(streamed output estimate, 4 000)` output tokens, flagged `estimated`. Nothing when the
- * stream never started (the request was not billed).
+ * What a broken stream cost before it broke (§5.3), flagged `estimated`: nothing when it never
+ * started; the final usage when `message_delta` arrived; else the `message_start` input and cache
+ * usage and `brokenStreamOutput` (what was streamed, the floor, or the time it streamed for).
  */
-export function spentOf(snapshot: BetaMessage | undefined): UsageEntry[] {
+export function spentOf(seen: StreamSeen): UsageEntry[] {
+  const snapshot = seen.snapshot;
   if (snapshot === undefined) return [];
+  if (seen.final) return usageEntries(snapshot.usage, snapshot.model, seen.model, seen.ttl, true);
   let chars = 0;
   for (const b of snapshot.content) {
     if (b.type === "text") chars += b.text.length;
@@ -397,8 +445,12 @@ export function spentOf(snapshot: BetaMessage | undefined): UsageEntry[] {
       }
     }
   }
-  const t = tokensOf(snapshot.usage);
-  const output = Math.max(t.output, Math.ceil(chars / 4), ABORTED_OUTPUT_FLOOR);
+  const t = tokensOf(snapshot.usage, seen.ttl);
+  const output = brokenStreamOutput({
+    observed: Math.max(t.output, Math.ceil(chars / 4)),
+    maxTokens: seen.maxTokens,
+    streamedMs: seen.streamedMs,
+  });
   return [{ model: snapshot.model, kind: "message", tokens: { ...t, output }, estimated: true }];
 }
 
@@ -467,18 +519,32 @@ export class AnthropicAdapter implements ModelAdapter {
     const body = this.build(req);
     const t0 = this.nowMs();
     let ttftMs: number | null = null;
+    let snapshot: BetaMessage | undefined;
+    let startedAt: number | null = null;
+    let final = false;
     const stream = this.client.sdk.beta.messages.stream(body, {
       maxRetries: 0,
       ...(req.signal === undefined ? {} : { signal: req.signal }),
     });
-    stream.on("streamEvent", (event) => {
-      if (ttftMs === null && event.type === "content_block_delta") ttftMs = this.nowMs() - t0;
+    stream.on("streamEvent", (event, snap) => {
+      snapshot = snap;
+      if (event.type === "message_start") startedAt ??= this.nowMs();
+      else if (event.type === "message_delta") final = true;
+      else if (ttftMs === null && event.type === "content_block_delta") ttftMs = this.nowMs() - t0;
     });
     let msg: BetaMessage;
     try {
       msg = await stream.finalMessage();
     } catch (e) {
-      throw modelErrorOf(e, spentOf(stream.currentMessage));
+      const spent = spentOf({
+        snapshot,
+        final,
+        streamedMs: startedAt === null ? 0 : this.nowMs() - startedAt,
+        model: this.spec.model,
+        maxTokens: body.max_tokens,
+        ttl: this.spec.cacheTtl,
+      });
+      throw modelErrorOf(e, spent);
     }
     return this.resultOf(msg, stream.request_id ?? null, this.nowMs() - t0, ttftMs);
   }
@@ -493,7 +559,7 @@ export class AnthropicAdapter implements ModelAdapter {
     const rawStop = msg.stop_reason ?? "null";
     const stop = stopOf(msg.stop_reason);
     const raw = structuredClone(msg);
-    const usage = usageEntries(msg.usage, msg.model, this.spec.model);
+    const usage = usageEntries(msg.usage, msg.model, this.spec.model, this.spec.cacheTtl);
     const fallback =
       usage.some((u) => u.kind === "fallback") || msg.content.some((b) => b.type === "fallback");
     const common = { rawStop, servedBy: msg.model, fallback, usage, requestId, latencyMs, ttftMs };
@@ -563,7 +629,7 @@ export class AnthropicAdapter implements ModelAdapter {
       return {
         model,
         allowedFallbackModels: allowed,
-        usage: usageEntries(msg.usage, msg.model, model),
+        usage: usageEntries(msg.usage, msg.model, model, this.spec.cacheTtl),
       };
     } catch (e) {
       throw modelErrorOf(e, []);

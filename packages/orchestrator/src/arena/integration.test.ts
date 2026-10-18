@@ -1,14 +1,21 @@
 // The arena end to end, with no network (phase-2 design §7, items 7–8): LLM seats on bot-backed fake
 // models (one bot instance per seat: opportunist@3, conqueror@3, expander@2, turtle@3) and the two
 // default bots, on perfidia-1@1.1.0, through `runArena` into a run directory.
-// - A full 7-day lockstep match completes, replays at Level E, rebuilds the live gateway state,
-//   writes every file of the run directory, and reports the exit criterion.
+// - A full 2-day lockstep match completes, replays at Level E, rebuilds the live gateway state,
+//   writes every file of the run directory, and reports the exit criterion (the 7-day matches are
+//   in the exit suite, `bun run test:exit`).
+// - `--stop-after 1` stops a 7-day match at the end of day 1: the agents were told 7 days, Level E
+//   holds up to the cut, the spend is projected from one day; a one-hour match reports a fraction
+//   of a day.
 // - Two runs are identical (match log, LLM log, report, transcripts).
 // - A seat over its cap is handed to its bot mid-match.
 // - A model error closes only its turn; a retryable one is retried; the match goes on.
 // - An operator-recoverable failure pauses a lockstep arena (game time stands still) and the
 //   preflight probe resumes it; a pause longer than --pause-max aborts the arena: every turn of the
 //   aborted second closes, the log is cut there, arena.json says why, the exit code is 2.
+// - A breaker whose cause the preflight cannot see (a 400 from round 1 on) trips again after its
+//   resume: the arena aborts instead of playing on with dead LLM seats.
+// - Two consecutive refused turns of a seat are an alert naming their inbox message ids.
 
 import { describe, expect, test } from "bun:test";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
@@ -20,6 +27,7 @@ import { findRuleset } from "@perfidia/engine";
 import type { LogLine, TurnLine } from "@perfidia/protocol";
 import { harness, summarize } from "@perfidia/sim";
 import { ModelError } from "../model/adapter.ts";
+import { projectSpend } from "./cost.ts";
 import { FakeAdapter, type Brain } from "../model/fake.ts";
 import { botBrain } from "./brain.ts";
 import type { AdapterContext } from "./run.ts";
@@ -53,6 +61,36 @@ function failing(inner: Brain): Brain {
   };
 }
 
+/** A 400 on every request from round 1 on: a shape the preflight never sends. */
+const round1 =
+  (inner: Brain): Brain =>
+  (req, n) =>
+    req.meta.round >= 1
+      ? new ModelError("bad_request", "messages.2: unexpected role system", { status: 400 })
+      : inner(req, n);
+
+/** Refuses the first round of turns 2 and 3. */
+const refusing =
+  (inner: Brain): Brain =>
+  (req, n) =>
+    req.meta.round === 0 && (req.meta.turn === 2 || req.meta.turn === 3)
+      ? {
+          stop: "refusal",
+          refusal: { category: "cyber", explanation: null, recommendedModel: null },
+        }
+      : inner(req, n);
+
+/**
+ * Refuses every round from turn 2 on: refusals close their turns without counting toward the
+ * breaker, a quiet dead match.
+ */
+const refuseAll =
+  (inner: Brain): Brain =>
+  (req, n) =>
+    req.meta.turn >= 2
+      ? { stop: "refusal", refusal: { category: null, explanation: null, recommendedModel: null } }
+      : inner(req, n);
+
 /** The bot-backed brain the arena gives a fake seat, with `wrap` around it. */
 function wrapped(
   wrap: (inner: Brain) => Brain,
@@ -68,11 +106,11 @@ function wrapped(
   };
 }
 
-describe("arena: a full 7-day lockstep match on fake models", () => {
+describe("arena: a full lockstep match on fake models", () => {
   test(
     "completes, replays at Level E, rebuilds the gateway state, writes the run directory, reports the exit criterion",
     async () => {
-      const plan = fakePlan({ days: 7 });
+      const plan = fakePlan({ days: 2 });
       const dir = runDir();
       const run = await play(plan, { dir });
       const { lines, llm, report } = run;
@@ -84,7 +122,7 @@ describe("arena: a full 7-day lockstep match on fake models", () => {
       expect(lines.some((l) => l.k === "fatal")).toBe(false);
       expect(lines.some((l) => l.k === "gw" && l.r.code === "INTERNAL")).toBe(false);
       expect(report.status).toBe("ended");
-      expect(report.endedAt).toBe(7 * 86400);
+      expect(report.endedAt).toBe(2 * 86400);
 
       // Level E, and the gateway rebuild equals the live state.
       const e = verifyLog(lines);
@@ -141,10 +179,10 @@ describe("arena: a full 7-day lockstep match on fake models", () => {
         expect(header?.k === "header" ? header.controllers[s.seat] : "").toBe(s.label);
       }
       expect(run.seats.seats.filter((s) => s.kind === "llm").map((s) => s.label)).toEqual([
-        "llm:fake/claude-opus-5-5/medium:odysseus@1:p1",
-        "llm:fake/claude-opus-5-5/medium:achilles@1:p1",
-        "llm:fake/claude-opus-5-5/medium:penelope@1:p1",
-        "llm:fake/claude-opus-5-5/medium:agamemnon@1:p1",
+        "llm:fake/claude-opus-5-5/medium:odysseus@1:p2",
+        "llm:fake/claude-opus-5-5/medium:achilles@1:p2",
+        "llm:fake/claude-opus-5-5/medium:penelope@1:p2",
+        "llm:fake/claude-opus-5-5/medium:agamemnon@1:p2",
       ]);
 
       // One llm_call line per model call: every round of an LLM turn is one call (no retries here).
@@ -192,15 +230,72 @@ describe("arena: a full 7-day lockstep match on fake models", () => {
       expect(report.exit.betrayals).toBe(sum.events.betrayals);
       expect(report.exit.met).toBe(sum.events.alliancesFormed > 0 && sum.events.betrayals > 0);
       expect(report.exit.llm.betrayals).toBeLessThanOrEqual(report.exit.betrayals);
-      expect(report.projection).toMatchObject({ fromDays: 7, toDays: 7 });
-      expect(report.projection.costNanoUsd).toBe(report.totals.costNanoUsd);
+      // A 2-day match is projected to a week (§5.5).
+      expect(report.projection).toMatchObject({ fromDays: 2, toDays: 7 });
+      expect(report.projection.costNanoUsd).toBe(
+        report.seats.reduce((n, s) => n + projectSpend(s.costNanoUsd, 2, 7), 0),
+      );
       expect(run.stdout).toContain("exit criterion:");
       expect(run.stdout).toContain("Level E: ok");
-      // One line per game-day boundary from the daily tripwire (D2 … D7).
-      expect(report.daily.length).toBe(6 * 4);
+      // One line per seat at the game-day boundary from the daily tripwire (D2).
+      expect(report.daily.length).toBe(4);
       console.log(
-        `7-day fake arena: ${report.exit.alliancesFormed} alliance(s), ${report.exit.betrayals} betrayal(s), exit criterion ${report.exit.met ? "met" : "not met"}; with an LLM seat: ${report.exit.llm.betrayals} betrayal(s), ${report.exit.llm.met ? "met" : "not met"}; ${llm.length} model calls, Level E ${e.actions} actions / ${e.checkpoints} checkpoints`,
+        `2-day fake arena: ${report.exit.alliancesFormed} alliance(s), ${report.exit.betrayals} betrayal(s), exit criterion ${report.exit.met ? "met" : "not met"}; with an LLM seat: ${report.exit.llm.betrayals} betrayal(s), ${report.exit.llm.met ? "met" : "not met"}; ${llm.length} model calls, Level E ${e.actions} actions / ${e.checkpoints} checkpoints`,
       );
+    },
+    LONG,
+  );
+});
+
+describe("arena: --stop-after and short matches", () => {
+  test(
+    "--stop-after 1 stops a 7-day match at the end of day 1: told 7 days, Level E up to the cut, exit 0",
+    async () => {
+      const run = await play(fakePlan({ stopAfterDays: 1 }));
+      const { lines, llm, report } = run;
+      expect([run.outcome.status, run.outcome.code]).toEqual(["stopped", 0]);
+      expect(report.status).toBe("stopped");
+      expect(report.reason).toBe(
+        "stopped at the end of game day 1 (--stop-after; the match lasts 7 days)",
+      );
+      expect(report.days).toBe(7);
+      expect(report.lastT).toBe(86_400);
+      expect(report.endedAt).toBeNull();
+      // The agents played the 7-day game: the shared block and the briefings say so.
+      const shared = readFileSync(join(run.outcome.paths.dir, "prompts", "shared.txt"), "utf8");
+      expect(shared).toContain("604800");
+      expect(lines.some((l) => l.k === "end" || l.k === "fatal")).toBe(false);
+      expect(Math.max(...lines.flatMap((l) => (l.k === "header" ? [] : [l.t])))).toBe(86_400);
+      expect(llm.every((l) => l.t <= 86_400)).toBe(true);
+      // Every checkpoint up to the cut verifies; only the end line is missing.
+      expect(verifyLog(lines).divergence?.kind).toBe("end");
+      expect(report.levelE).toMatchObject({ ok: true, divergence: null });
+      expect(report.levelE?.checkpoints).toBeGreaterThanOrEqual(24);
+      expect(rebuildGatewayState(lines, resolve).openTurns).toEqual([]);
+      // One measured day, projected to the week.
+      expect(report.projection).toMatchObject({ fromDays: 1, toDays: 7 });
+      expect(report.projection.costNanoUsd).toBe(
+        report.seats.reduce((n, s) => n + projectSpend(s.costNanoUsd, 1, 7), 0),
+      );
+      expect(run.stdout).toContain("Level E: ok up to the stop");
+      expect(run.stderr).not.toContain("arena run:");
+    },
+    LONG,
+  );
+
+  test(
+    "a one-hour match reports a fraction of a day: estimate and projection never from 0 or a whole day",
+    async () => {
+      const run = await play(fakePlan({ overrides: ["time.matchEnd=3600"] }));
+      const r = run.report;
+      expect(r.status).toBe("ended");
+      expect(r.days).toBeCloseTo(1 / 24, 10);
+      expect(r.estimate.central).toBeGreaterThan(0);
+      expect(r.projection.fromDays).toBe(0.042);
+      const spent = r.seats[0]?.costNanoUsd ?? 0;
+      expect(spent).toBeGreaterThan(0);
+      expect(r.seats[0]?.projectedNanoUsd).toBe(projectSpend(spent, 1 / 24, 7));
+      expect(r.seats[0]?.projectedNanoUsd ?? 0).toBeGreaterThan(20 * projectSpend(spent, 1, 7));
     },
     LONG,
   );
@@ -249,7 +344,7 @@ describe("arena: determinism, hand-off, failures", () => {
       expect(p2?.handoff?.label).toBe("bot:conqueror@3");
       expect(p2?.handoff?.t).toBe(at);
       expect(p2?.controllers).toMatch(
-        /^llm:fake\/claude-opus-5-5\/medium:achilles@1:p1 → bot:conqueror@3 at D[12] /,
+        /^llm:fake\/claude-opus-5-5\/medium:achilles@1:p2 → bot:conqueror@3 at D[12] /,
       );
       expect(run.stderr).toContain("p2: over its cap");
       expect(verifyLog(lines).ok).toBe(true);
@@ -304,13 +399,26 @@ describe("arena: determinism, hand-off, failures", () => {
           }
           return inner(req, n);
         };
-        return new FlakyAdapter(spec, brain, () => {
-          if (!down) return null;
-          probes += 1;
-          if (probes < 3) return billing();
-          down = false;
-          return null;
-        });
+        return new FlakyAdapter(
+          spec,
+          brain,
+          () => {
+            if (!down) return null;
+            probes += 1;
+            if (probes < 3) return billing();
+            down = false;
+            return null;
+          },
+          // Each passing preflight reads 1 000 prefix tokens from the cache ($0.0002 on Opus 5.5).
+          [
+            {
+              model: s.model,
+              kind: "message",
+              tokens: { input: 0, cacheWrite5m: 0, cacheWrite1h: 0, cacheRead: 1000, output: 0 },
+              estimated: false,
+            },
+          ],
+        );
       };
       const run = await play(fakePlan({ days: 1 }), { adapterFor, probeEveryMs: 60_000 });
       expect(run.outcome.status).toBe("ended");
@@ -327,6 +435,8 @@ describe("arena: determinism, hand-off, failures", () => {
       expect(new Set(r0.map((l) => l.t)).size).toBe(1);
       expect(turns(run.lines).find((l) => l.seat === "p1" && l.turn === 3)?.why).not.toBe("error");
       expect(run.stderr).toContain("ALERT: the arena is paused: billing");
+      // The preflight and the probe that passed are both accounted (failed probes bill nothing).
+      expect(run.report.totals.preflightNanoUsd).toBe(2 * 1000 * 200);
       expect(verifyLog(run.lines).ok).toBe(true);
     },
     LONG,
@@ -381,6 +491,60 @@ describe("arena: determinism, hand-off, failures", () => {
       );
       expect(summary).toMatchObject({ status: "incomplete" });
       expect(run.stderr).toContain("ALERT: arena aborted");
+    },
+    LONG,
+  );
+
+  test(
+    "a breaker the preflight cannot reproduce (a 400 from round 1 on) trips again after its resume: abort, exit 2",
+    async () => {
+      const run = await play(fakePlan({ days: 2 }), {
+        adapterFor: wrapped(round1),
+        probeEveryMs: 60_000,
+      });
+      expect([run.outcome.status, run.outcome.code]).toEqual(["aborted", 2]);
+      expect(run.report.reason).toContain(
+        "the breaker tripped again before any LLM turn closed cleanly since its last resume: the cause persists",
+      );
+      expect(run.report.pauses.map((p) => p.outcome)).toEqual(["resumed", "aborted"]);
+      // Stopped within the first game hour, not played on for two days with dead LLM seats.
+      expect(run.report.lastT).toBeLessThan(3600);
+      expect(run.stderr).toContain("it cannot replay the failing request");
+    },
+    LONG,
+  );
+
+  test(
+    "two consecutive refused turns of a seat raise an alert with their inbox message ids",
+    async () => {
+      const run = await play(fakePlan({ days: 1 }), { adapterFor: wrapped(refusing, "p1") });
+      const refused = run.llm.filter((l) => l.stop === "refusal");
+      expect(refused.map((l) => [l.seat, l.turn])).toEqual([
+        ["p1", 2],
+        ["p1", 3],
+      ]);
+      expect(refused.every((l) => Array.isArray(l.inbox))).toBe(true);
+      const alerts = run.report.alerts.filter((a) => a.includes("consecutive turns refused"));
+      expect(alerts).toHaveLength(1);
+      expect(alerts[0]).toMatch(
+        /^p1: 2 consecutive turns refused \(2, 3\); a player's message may be the cause \(refusal-DoS\): their inbox (was empty|held g[0-9a-z]+(, g[0-9a-z]+)*)$/,
+      );
+      // Refusals close their turns but do not trip the breaker.
+      expect(run.report.pauses).toEqual([]);
+      expect(run.outcome.status).toBe("ended");
+    },
+    LONG,
+  );
+
+  test(
+    "a match whose LLM turns mostly close by an error is degraded (exit 2), even with no breaker trip",
+    async () => {
+      const run = await play(fakePlan({ days: 1 }), { adapterFor: wrapped(refuseAll) });
+      expect([run.outcome.status, run.outcome.code]).toEqual(["degraded", 2]);
+      expect(run.report.reason).toMatch(/^\d+ of \d+ LLM turns \(\d+%\) closed by an error/);
+      expect(run.report.pauses).toEqual([]);
+      expect(run.report.alerts.some((a) => a.startsWith("degraded run:"))).toBe(true);
+      expect(run.report.levelE?.ok).toBe(true);
     },
     LONG,
   );

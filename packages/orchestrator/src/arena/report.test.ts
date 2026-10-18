@@ -6,6 +6,7 @@ import {
   BOT_DAY_PROFILE,
   PROJECTION_MARGIN_PCT,
   costRows,
+  daysCovered,
   estimateSeat,
   projectSpend,
 } from "./cost.ts";
@@ -121,6 +122,12 @@ describe("the projection of a measured run (§5.5)", () => {
     expect(projectSpend(5, 0, 7)).toBe(0);
     // Beyond the profile's 7 days, the last day repeats.
     expect(projectSpend(1_000_000, 7, 8)).toBeGreaterThan(projectSpend(1_000_000, 7, 7));
+    // A partial day counts for its share: half a day's spend projects as a whole day's twice over.
+    const day = projectSpend(1_000_000_000, 1, 7);
+    expect(Math.abs(projectSpend(500_000_000, 0.5, 7) - day)).toBeLessThanOrEqual(1);
+    expect(Math.abs(projectSpend(1_000_000_000, 1 / 24, 7) - 24 * day)).toBeLessThanOrEqual(24);
+    expect(daysCovered(3600)).toBeCloseTo(1 / 24, 12);
+    expect(daysCovered(2 * 86_400)).toBe(2);
   });
 });
 

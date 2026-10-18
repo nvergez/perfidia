@@ -1,16 +1,23 @@
 import { fmtTime } from "@perfidia/engine/core";
 import type { Json, JsonObject, LogLine } from "@perfidia/protocol";
 
-// `arena run --watch` (phase-2 design §6): a pure fold from `match.jsonl` lines to readable lines,
-// fed live from a tee of the log sink (the file on disk is flushed only at checkpoints). The
-// spectator feed proper (file, schema, filters) is phase 3's.
+// `arena run --watch` (phase-2 design §6): a fold from `match.jsonl` lines to readable lines, fed
+// live from a tee of the log sink (the file on disk is flushed only at checkpoints), and written
+// whole to `feed.txt` at the end. `watchLines` reads one line; `watchFold` also follows hand-offs,
+// so a seat a bot took over is shown with that bot's label, not its profile's name. The spectator
+// feed proper (file, schema, filters) is phase 3's.
 
 export interface WatchContext {
   /** Spectator names of the LLM seats' profiles, e.g. `{ p3: "Odysseus" }`. */
   readonly names: Readonly<Record<string, string>>;
-  /** Player text is cut to this many characters; default 120. */
+  /** Player text (messages, proposals, names) is cut to this many characters; default 120. */
   readonly cut?: number;
+  /** Public thoughts are cut to this many characters; default 400, a thought's longest. */
+  readonly thoughtCut?: number;
 }
+
+/** A thought's longest (seat/thought.ts). */
+const THOUGHT_CUT = 400;
 
 const str = (v: Json | undefined): string => (typeof v === "string" ? v : "");
 
@@ -54,6 +61,8 @@ function eventLine(type: string, d: JsonObject, isPublic: boolean, cut: number):
       return `pact ended: ${str(d["a"])} and ${str(d["b"])} (${str(d["cause"])})`;
     case "betrayal":
       return `BETRAYAL: ${str(d["by"])} attacks ${str(d["against"])} (${str(d["relation"])}) at ${str(d["city"])}`;
+    case "battle":
+      return `battle at ${str(d["city"])} (${str(d["kind"])}): ${str(d["attacker"])} against ${str(d["defender"])}, the ${str(d["winner"])} wins`;
     case "city_conquered": {
       const from = d["from"] === null ? "neutral" : str(d["from"]);
       return `${str(d["to"])} takes ${str(d["city"])} from ${from}`;
@@ -76,7 +85,9 @@ export function watchLines(line: LogLine, ctx: WatchContext): string[] {
     const out: string[] = [];
     const at = fmtTime(line.t);
     if (line.thought !== undefined) {
-      out.push(`${at}  ${who(line.seat, ctx)} thinks: ${quote(line.thought, cut * 2)}`);
+      out.push(
+        `${at}  ${who(line.seat, ctx)} thinks: ${quote(line.thought, ctx.thoughtCut ?? THOUGHT_CUT)}`,
+      );
     }
     if (line.why === "error" || line.why === "timeout") {
       out.push(`${at}  ${who(line.seat, ctx)} turn ${line.turn} closed: ${line.why}`);
@@ -94,4 +105,18 @@ export function watchLines(line: LogLine, ctx: WatchContext): string[] {
     return [`${fmtTime(line.t)}  FATAL ${line.error.kind}: ${line.error.message}`];
   }
   return [];
+}
+
+/**
+ * `watchLines` over a whole log, in order: after a `controller` line (a hand-off), the seat is
+ * shown as `p2 [bot:conqueror@3]`, so a bot's thoughts never carry the profile's name.
+ */
+export function watchFold(ctx: WatchContext): (line: LogLine) => string[] {
+  const names: Record<string, string> = { ...ctx.names };
+  const now: WatchContext = { ...ctx, names };
+  return (line) => {
+    const out = watchLines(line, now);
+    if (line.k === "controller") names[line.seat] = `[${line.label}]`;
+    return out;
+  };
 }

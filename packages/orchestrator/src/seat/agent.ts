@@ -5,8 +5,8 @@ import type { CallLog } from "../log/calls.ts";
 import type { LlmCallLine } from "../log/schema.ts";
 import {
   ModelError,
-  RETRY_MAX_OUTPUT_TOKENS,
   isOperatorKind,
+  retryOutputTokens,
   promptTokens,
   servedTokens,
   type CallMeta,
@@ -19,7 +19,7 @@ import {
   type UsageEntry,
   type UserPart,
 } from "../model/adapter.ts";
-import { sleepMs, timeoutSignal, type HarnessClock } from "../model/clock.ts";
+import { AbortedError, sleepMs, timeoutSignal, type HarnessClock } from "../model/clock.ts";
 import type { RateGate } from "../model/rate.ts";
 import { ArenaAborted, type PauseGate } from "./pause.ts";
 import { profileRef, type Profile } from "./personalities.ts";
@@ -47,12 +47,24 @@ import { thoughtOf } from "./thought.ts";
 //   within the retry budget; operator-recoverable errors close the pause gate and wait.
 // - The public thought comes only from a terminal reply: no tool call, a reply carrying
 //   `end_turn`, or the last round trip.
-// - Over the seat's cap: `{calls: []}` and a hand-off request; over the per-wake soft cap:
-//   `{calls: []}` and a `wake_cap` line.
+// - Over the seat's cap: `{calls: []}` and a hand-off request. The per-wake soft cap is checked
+//   before every attempt: the first attempt that finds it reached is the wake's last (a `wake_cap`
+//   line; when it starts a round, that round's reminder tells the model this reply is its last, so
+//   it can end with `end_turn` and keep a self-wake); any later attempt of the wake is not made
+//   (`{calls: []}`).
+// - A turn-closing error is `systemic` (it counts toward the breaker) unless it is a refusal, a
+//   truncation or a deadline abort: those are about one request, not about the API or the harness.
 
 /** A turn-closing failure; its message is one deterministic line (no wall durations). */
 export class AgentError extends Error {
   override readonly name = "AgentError";
+  /** Counts toward the breaker's rule (b): not a refusal, a truncation or a deadline abort. */
+  readonly systemic: boolean;
+
+  constructor(message: string, systemic = true) {
+    super(message);
+    this.systemic = systemic;
+  }
 }
 
 export interface SeatPolicy {
@@ -102,6 +114,8 @@ interface TurnState {
   lastPrompt: number;
   /** Entries already written to the transcript. */
   logged: number;
+  /** The per-wake soft cap: `used` once an attempt was made with the cap reached (the wake's last). */
+  capGrant: "none" | "used";
 }
 
 interface Where {
@@ -158,16 +172,8 @@ export class LlmSeatAgent implements SeatAgent {
       o.gate.record({ k: "turn_ok", seat: this.seat });
       return { calls: [] };
     }
-    if (o.ledger.wakeOver(this.seat, input.turn)) {
-      o.log.write({
-        k: "wake_cap",
-        seat: this.seat,
-        turn: input.turn,
-        round: input.round,
-        t,
-        wakeSpentNanoUsd: o.ledger.wakeSpent(this.seat, input.turn),
-        wakeCapNanoUsd: o.ledger.wakeCapNanoUsd ?? 0,
-      });
+    if (s.capGrant === "used" && o.ledger.wakeOver(this.seat, input.turn)) {
+      // The wake's last reply was made: the turn ends.
       o.gate.record({ k: "turn_ok", seat: this.seat });
       return { calls: [] };
     }
@@ -182,13 +188,18 @@ export class LlmSeatAgent implements SeatAgent {
         where,
         deadline?.signal,
       );
-      if (token !== this.token || res === null) return { calls: [] };
+      if (token !== this.token) return { calls: [] };
+      if (res === null) {
+        o.gate.record({ k: "turn_ok", seat: this.seat });
+        return { calls: [] };
+      }
       s.entries.push({ role: "assistant", reply: res.reply });
       s.pending = res.reply.calls.map((c) => c.callId);
       const terminal =
         res.reply.calls.length === 0 ||
         res.reply.calls.some((c) => c.name === "end_turn") ||
-        input.round >= input.maxRounds - 1;
+        input.round >= input.maxRounds - 1 ||
+        s.capGrant === "used";
       let thought = terminal ? thoughtOf(res.reply.text) : undefined;
       if (terminal && thought === undefined && o.policy.thoughtCall) {
         thought = await this.thoughtCall(s, input, t, deadline?.signal);
@@ -203,12 +214,35 @@ export class LlmSeatAgent implements SeatAgent {
       const error =
         e instanceof AgentError
           ? e
-          : new AgentError(`${where}: ${e instanceof Error ? e.message : String(e)}`);
-      o.gate.record({ k: "turn_error", seat: this.seat, error: error.message });
+          : new AgentError(
+              `${where}: ${e instanceof Error ? e.message : String(e)}`,
+              // A wait cut by the round deadline (backoff, rate gate) is a deadline abort.
+              !(e instanceof AbortedError),
+            );
+      o.gate.record({
+        k: "turn_error",
+        seat: this.seat,
+        error: error.message,
+        systemic: error.systemic,
+      });
       throw error;
     } finally {
       deadline?.cancel();
     }
+  }
+
+  /** The `wake_cap` line: the wake reached its soft cap; this attempt is its last. */
+  private wakeCapLine(input: RoundInput, t: GameTime): void {
+    const o = this.o;
+    o.log.write({
+      k: "wake_cap",
+      seat: this.seat,
+      turn: input.turn,
+      round: input.round,
+      t,
+      wakeSpentNanoUsd: o.ledger.wakeSpent(this.seat, input.turn),
+      wakeCapNanoUsd: o.ledger.wakeCapNanoUsd ?? 0,
+    });
   }
 
   /** The turn's conversation with this round's input appended. */
@@ -223,6 +257,7 @@ export class LlmSeatAgent implements SeatAgent {
         pending: [],
         lastPrompt: 0,
         logged: 0,
+        capGrant: "none",
       };
       this.state = s;
       return s;
@@ -242,7 +277,9 @@ export class LlmSeatAgent implements SeatAgent {
       content: canonicalJson(r),
       isError: !r.ok,
     }));
-    s.entries.push(userOf(parts), operatorOf(roundReminder(input)));
+    // The soft cap reached and not yet used: this round's reply is the wake's last; say so.
+    const wakeEnds = s.capGrant === "none" && this.o.ledger.wakeOver(this.seat, input.turn);
+    s.entries.push(userOf(parts), operatorOf(roundReminder(input, wakeEnds)));
     s.pending = [];
     return s;
   }
@@ -258,7 +295,10 @@ export class LlmSeatAgent implements SeatAgent {
     };
   }
 
-  /** One round's model call with every policy of §2.6; `null` when the seat went over its cap. */
+  /**
+   * One round's model call with every policy of §2.6; `null` when no attempt may be made: the seat
+   * is over its cap, or the wake's last attempt (§3.6) was already made.
+   */
   private async callWithPolicy(
     s: TurnState,
     w: Where,
@@ -278,6 +318,11 @@ export class LlmSeatAgent implements SeatAgent {
       if (o.ledger.over(this.seat)) {
         o.ledger.requestHandoff(this.seat, "cap", w.t);
         return null;
+      }
+      if (o.ledger.wakeOver(this.seat, w.input.turn)) {
+        if (s.capGrant === "used") return null;
+        s.capGrant = "used";
+        this.wakeCapLine(w.input, w.t);
       }
       // oxlint-disable-next-line no-await-in-loop -- one slot per attempt
       const release = await o.rate.acquire(roundSignal);
@@ -299,7 +344,14 @@ export class LlmSeatAgent implements SeatAgent {
         signal,
         meta: this.meta(w.input, "round"),
       };
-      this.logRequest(s, w, attempt, req);
+      try {
+        this.logRequest(s, w, attempt, req);
+      } catch (e) {
+        // A transcript that cannot be written closes the turn, never holds the model's slot.
+        release();
+        attemptTimer.cancel();
+        throw e;
+      }
       const wallStart = o.clock.iso?.();
       const started = o.clock.time.nowMs();
       let res: ChatResult;
@@ -361,8 +413,9 @@ export class LlmSeatAgent implements SeatAgent {
           });
           continue;
         }
-        if (err.kind === "aborted")
-          throw new AgentError(`${where}: request aborted at the round deadline`);
+        if (err.kind === "aborted") {
+          throw new AgentError(`${where}: request aborted at the round deadline`, false);
+        }
         throw new AgentError(`${where}: ${err.kind}${status}`);
       }
       release();
@@ -393,13 +446,20 @@ export class LlmSeatAgent implements SeatAgent {
         case "refusal":
           throw new AgentError(
             `${where}: refusal (${res.refusal?.category ?? "uncategorised"}) on ${res.servedBy}`,
+            false,
           );
-        case "max_tokens":
-          if (maxOutputTokens === undefined) {
-            maxOutputTokens = RETRY_MAX_OUTPUT_TOKENS;
-            continue;
+        case "max_tokens": {
+          if (maxOutputTokens !== undefined) {
+            throw new AgentError(`${where}: max_tokens twice`, false);
           }
-          throw new AgentError(`${where}: max_tokens twice`);
+          // One retry with a larger limit; none when the limit is already the model's.
+          const next = retryOutputTokens(spec.maxOutputTokens);
+          if (next === null) {
+            throw new AgentError(`${where}: max_tokens at the model's limit`, false);
+          }
+          maxOutputTokens = next;
+          continue;
+        }
         case "pause":
         case "other":
           throw new AgentError(`${where}: unexpected stop ${res.rawStop}`);
@@ -415,6 +475,7 @@ export class LlmSeatAgent implements SeatAgent {
    * gateway round. Each pending call is answered "queued" and an operator entry asks for the
    * thought; the conversation of the turn is left untouched, so a turn that goes on (a rejected
    * `end_turn`) never sees the synthetic results. Any failure just leaves the turn without thought.
+   * Never over the seat's cap or the wake's; bounded by the attempt timeout like any attempt.
    */
   private async thoughtCall(
     s: TurnState,
@@ -423,7 +484,7 @@ export class LlmSeatAgent implements SeatAgent {
     roundSignal: AbortSignal | undefined,
   ): Promise<string | undefined> {
     const o = this.o;
-    if (o.ledger.over(this.seat)) return undefined;
+    if (o.ledger.over(this.seat) || o.ledger.wakeOver(this.seat, input.turn)) return undefined;
     const parts: UserPart[] =
       s.pending.length > 0
         ? s.pending.map((callId) => ({
@@ -434,11 +495,16 @@ export class LlmSeatAgent implements SeatAgent {
           }))
         : [{ kind: "text", text: THOUGHT_QUEUED }];
     const w: Where = { input, t, kind: "thought_call" };
+    const attemptTimer = timeoutSignal(o.clock.time, o.policy.attemptTimeoutMs, "attempt timeout");
+    const signal =
+      roundSignal === undefined
+        ? attemptTimer.signal
+        : AbortSignal.any([roundSignal, attemptTimer.signal]);
     const req: ChatRequest = {
       prompt: o.prompt,
       tools: o.tools,
       entries: [...s.entries, userOf(parts), operatorOf(THOUGHT_ASK)],
-      ...(roundSignal === undefined ? {} : { signal: roundSignal }),
+      signal,
       meta: this.meta(input, "thought"),
     };
     let release: (() => void) | null = null;
@@ -474,6 +540,7 @@ export class LlmSeatAgent implements SeatAgent {
       return undefined;
     } finally {
       release?.();
+      attemptTimer.cancel();
     }
   }
 
@@ -566,6 +633,8 @@ export class LlmSeatAgent implements SeatAgent {
       requestId: res?.requestId ?? r.err?.requestId ?? null,
       error:
         r.err === null ? null : { kind: r.err.kind, status: r.err.status, message: r.err.message },
+      // A refusal names the turn's inbox: a player's message can be what tripped it (§3.8).
+      ...(res?.stop === "refusal" ? { inbox: w.input.briefing.msgs.map((m) => m.id) } : {}),
     };
     this.o.log.write(line);
     if (r.err !== null) {

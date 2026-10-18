@@ -5,12 +5,18 @@ import type { PlayerId } from "@perfidia/protocol";
 // The arena pause gate and circuit breaker (phase-2 design §2.6). Every model attempt first awaits
 // the gate. An operator-recoverable failure (key, credit, model access) or a tripped breaker closes
 // it:
-// - lockstep (`mode: "wait"`): the round simply waits, game time stands still, a probe (the
-//   preflight) runs every `probeEveryMs` and reopens the gate when it passes; after `pauseMaxMs` of
-//   pause in total, the arena aborts;
-// - real time (`mode: "abort"`): game time cannot stop, so the gate aborts at once.
+// - lockstep (`mode: "wait"`): the next LLM round waits at the gate (game time stands still once
+//   one waits; the bots play until then), a probe (the preflight) runs every `probeEveryMs` and
+//   reopens the gate when it passes; after `pauseMaxMs` of pause in total, the arena aborts. A
+//   passing probe cannot prove a breaker's cause gone (the preflight is not the failing request),
+//   so a breaker that trips again before any LLM turn closed cleanly since its last resume aborts
+//   the arena: the cause persists, and a match whose LLM seats all fail is not left to "end";
+// - real time (`mode: "abort"`): game time cannot stop, so an operator-recoverable failure aborts
+//   at once, and a tripped breaker is an alert (`onAlert`): aborting would end a multi-day match
+//   with no resume, while LLM turns that fail only close themselves. As in lockstep, a breaker that
+//   trips again before any LLM turn closed cleanly since that alert aborts the arena.
 // Time behind a closed gate never counts against a retry budget (`pausedMs`). The arena (file
-// writing, `arena.json`, exit codes) hooks in through `onPause`, `onResume` and `onAbort`.
+// writing, `arena.json`, exit codes) hooks in through `onPause`, `onResume`, `onAbort`, `onAlert`.
 
 /** Why the gate closed. */
 export interface PauseReason {
@@ -30,7 +36,13 @@ export type GateEvent =
       readonly kind: ModelErrorKind;
     }
   | { readonly k: "turn_ok"; readonly seat: PlayerId }
-  | { readonly k: "turn_error"; readonly seat: PlayerId; readonly error: string };
+  | {
+      readonly k: "turn_error";
+      readonly seat: PlayerId;
+      readonly error: string;
+      /** Not a refusal, a truncation or a deadline abort (`AgentError.systemic`). */
+      readonly systemic: boolean;
+    };
 
 export interface PauseGate {
   /** Resolves while the gate is open; waits while it is closed; rejects with `ArenaAborted` once aborted. */
@@ -56,8 +68,9 @@ export class ArenaAborted extends Error {
 
 /**
  * The circuit breaker: trips on 3 consecutive non-retryable failures (`bad_request`, `too_large`,
- * `unknown`) of one model with no success in between, or on 3 consecutive LLM turns closed by an
- * error, any seats.
+ * `unknown`) of one model with no success in between, or on 3 consecutive LLM turns, any seats,
+ * closed by a systemic error. A refused, truncated or deadline-aborted turn neither counts nor
+ * resets: it is about one request (refusals are watched by the arena's refusal alert, §3.8).
  */
 export class Breaker {
   readonly threshold: number;
@@ -91,6 +104,7 @@ export class Breaker {
       this.turnErrors = 0;
       return null;
     }
+    if (!e.systemic) return null;
     this.turnErrors += 1;
     if (this.turnErrors < this.threshold) return null;
     const n = this.turnErrors;
@@ -118,12 +132,16 @@ export interface GateOptions {
   readonly onPause?: (reason: PauseReason) => void;
   readonly onResume?: (reason: PauseReason, pausedMs: number) => void;
   readonly onAbort?: (error: ArenaAborted) => void;
+  /** Real time: a tripped breaker (no pause, no abort). */
+  readonly onAlert?: (reason: PauseReason) => void;
 }
 
 interface Waiter {
   readonly resolve: () => void;
   readonly reject: (e: Error) => void;
 }
+
+const PERSISTS = "the breaker tripped again before any LLM turn closed cleanly";
 
 /** The gate of a whole arena: one per process, shared by every LLM seat. */
 export class ArenaPauseGate implements PauseGate {
@@ -133,6 +151,8 @@ export class ArenaPauseGate implements PauseGate {
   private closedAt = 0;
   private pausedTotal = 0;
   private aborted: ArenaAborted | null = null;
+  /** A breaker pause was resumed (real time: alerted) and no LLM turn has closed cleanly since. */
+  private breakerOnProbation = false;
   private readonly waiters: Waiter[] = [];
 
   constructor(o: GateOptions) {
@@ -179,14 +199,30 @@ export class ArenaPauseGate implements PauseGate {
   }
 
   record(event: GateEvent): void {
+    if (event.k === "turn_ok") this.breakerOnProbation = false;
     const trip = this.breaker.record(event);
-    if (trip !== null) this.close(trip);
+    if (trip === null) return;
+    if (this.o.mode === "abort") {
+      if (this.aborted !== null) return;
+      if (this.breakerOnProbation) {
+        this.abort(trip, `${PERSISTS} since its last alert: the cause persists`);
+        return;
+      }
+      this.breakerOnProbation = true;
+      this.o.onAlert?.(trip);
+      return;
+    }
+    this.close(trip);
   }
 
   close(reason: PauseReason): void {
     if (this.aborted !== null || this.closedBy !== null) return;
     if (this.o.mode === "abort") {
       this.abort(reason, "real time cannot pause");
+      return;
+    }
+    if (reason.kind === "breaker" && this.breakerOnProbation) {
+      this.abort(reason, `${PERSISTS} since its last resume: the cause persists`);
       return;
     }
     this.closedBy = reason;
@@ -225,6 +261,7 @@ export class ArenaPauseGate implements PauseGate {
     const paused = this.o.clock.time.nowMs() - this.closedAt;
     this.pausedTotal += paused;
     this.closedBy = null;
+    if (reason.kind === "breaker") this.breakerOnProbation = true;
     this.o.onResume?.(reason, paused);
     for (const w of this.waiters.splice(0)) w.resolve();
   }

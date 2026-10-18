@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import {
+  BROKEN_STREAM_OUTPUT_FLOOR,
   ModelError,
   type ChatRequest,
   type Entry,
@@ -8,7 +9,7 @@ import {
   type ModelSpec,
 } from "./adapter.ts";
 import {
-  ABORTED_OUTPUT_FLOOR,
+  ANTHROPIC_VERSION,
   AnthropicAdapter,
   AnthropicClient,
   FALLBACK_BETA,
@@ -250,7 +251,12 @@ function stub(answers: Answer[]): { fetch: HttpFetch; seen: Seen[] } {
   return { fetch, seen };
 }
 
-function adapter(answers: Answer[], spec: ModelSpec = OPUS, timeoutMs?: number) {
+function adapter(
+  answers: Answer[],
+  spec: ModelSpec = OPUS,
+  timeoutMs?: number,
+  nowMs?: () => number,
+) {
   const s = stub(answers);
   const client = new AnthropicClient({
     apiKey: KEY,
@@ -259,8 +265,43 @@ function adapter(answers: Answer[], spec: ModelSpec = OPUS, timeoutMs?: number) 
     ...(timeoutMs === undefined ? {} : { timeoutMs }),
   });
   let now = 1000;
-  return { a: new AnthropicAdapter(spec, client, { nowMs: () => (now += 7) }), seen: s.seen };
+  const clock = nowMs ?? (() => (now += 7));
+  return { a: new AnthropicAdapter(spec, client, { nowMs: clock }), seen: s.seen };
 }
+
+/** A streamed body: `events`, then `end` (a clean EOF, a transport error, or our abort). */
+function brokenStream(
+  events: readonly Ev[],
+  end: { readonly kind: "eof" } | { readonly kind: "error"; readonly error: Error },
+): Answer {
+  return () => {
+    const body = new ReadableStream<Uint8Array>({
+      start(c) {
+        c.enqueue(new TextEncoder().encode(sseOf(events)));
+        if (end.kind === "eof") c.close();
+        else setTimeout(() => c.error(end.error), 5);
+      },
+    });
+    return Promise.resolve(
+      new Response(body, { status: 200, headers: { "content-type": "text/event-stream" } }),
+    );
+  };
+}
+
+/** `message_start`, then a long summarized-thinking block (2 000 characters), no end. */
+const LONG_THINKING: Ev[] = [
+  ...eventsOf({ content: [], stop_reason: "end_turn", usage: USAGE }).slice(0, 1),
+  {
+    type: "content_block_start",
+    index: 0,
+    content_block: { type: "thinking", thinking: "", signature: "" },
+  },
+  ...Array.from({ length: 40 }, () => ({
+    type: "content_block_delta",
+    index: 0,
+    delta: { type: "thinking_delta", thinking: "y".repeat(50) },
+  })),
+];
 
 async function errorOf(p: Promise<unknown>): Promise<ModelError> {
   try {
@@ -466,6 +507,22 @@ describe("AnthropicAdapter responses", () => {
     expect(r.fallback).toBe(false);
     expect(r.latencyMs).toBeGreaterThan(0);
     expect(r.ttftMs).not.toBeNull();
+  });
+
+  test("writes reported without their TTL split are priced at the request's longest TTL", async () => {
+    const noSplit: Usage = { ...USAGE, cache_creation: null };
+    for (const [ttl, w5, w1] of [
+      ["5m", 2000, 0],
+      ["1h", 0, 2000],
+    ] as const) {
+      const { a } = adapter([streamResponse({ ...textReply, usage: noSplit })], {
+        ...OPUS,
+        cacheTtl: ttl,
+      });
+      // oxlint-disable-next-line no-await-in-loop -- one adapter per TTL
+      const r = await a.chat(request([BRIEFING, HEADER]));
+      expect([r.usage[0]?.tokens.cacheWrite5m, r.usage[0]?.tokens.cacheWrite1h]).toEqual([w5, w1]);
+    }
   });
 
   test("a refusal is checked before the content: no calls, stop_details kept (null category allowed)", async () => {
@@ -674,11 +731,104 @@ describe("AnthropicAdapter errors", () => {
           cacheWrite5m: 2000,
           cacheWrite1h: 0,
           cacheRead: 9000,
-          output: ABORTED_OUTPUT_FLOOR,
+          output: BROKEN_STREAM_OUTPUT_FLOOR,
         },
         estimated: true,
       },
     ]);
+  });
+
+  test("an abort after a long stream is charged by the time it streamed, up to max_tokens", async () => {
+    // Summarized thinking is far shorter than the thinking billed: 2 000 characters seen, but the
+    // stream ran 30 s (400 tokens/s bound: 12 000 tokens), then 90 s (capped at max_tokens).
+    for (const [streamedS, output] of [
+      [30, 12_000],
+      [90, 16_000],
+    ] as const) {
+      const ctl = new AbortController();
+      let now = 0;
+      const partial = (init: RequestInit | undefined): Promise<Response> => {
+        const body = new ReadableStream<Uint8Array>({
+          start(c) {
+            c.enqueue(new TextEncoder().encode(sseOf(LONG_THINKING)));
+            init?.signal?.addEventListener("abort", () =>
+              c.error(new DOMException("aborted", "AbortError")),
+            );
+            setTimeout(() => {
+              now += streamedS * 1000;
+              ctl.abort(new Error("round deadline"));
+            }, 5);
+          },
+        });
+        return Promise.resolve(
+          new Response(body, { status: 200, headers: { "content-type": "text/event-stream" } }),
+        );
+      };
+      const { a } = adapter([partial], OPUS, undefined, () => now);
+      // oxlint-disable-next-line no-await-in-loop -- one adapter per stream length
+      const e = await errorOf(a.chat(request([BRIEFING, HEADER], { signal: ctl.signal })));
+      expect([e.kind, e.spent[0]?.tokens.output, e.spent[0]?.estimated]).toEqual([
+        "aborted",
+        output,
+        true,
+      ]);
+    }
+  });
+
+  test("a body that ends without message_stop: a retryable connection error, charged its estimate", async () => {
+    const { a } = adapter([brokenStream(LONG_THINKING, { kind: "eof" })]);
+    const e = await errorOf(a.chat(request([BRIEFING, HEADER])));
+    expect([e.kind, e.retryable]).toEqual(["connection", true]);
+    expect(e.message).toContain("the stream broke");
+    expect(e.spent).toEqual([
+      {
+        model: "claude-opus-5-5",
+        kind: "message",
+        tokens: {
+          input: 120,
+          cacheWrite5m: 2000,
+          cacheWrite1h: 0,
+          cacheRead: 9000,
+          output: BROKEN_STREAM_OUTPUT_FLOOR,
+        },
+        estimated: true,
+      },
+    ]);
+  });
+
+  test("a transport error mid-body (TypeError: terminated) is a retryable connection error", async () => {
+    const { a } = adapter([
+      brokenStream(LONG_THINKING, { kind: "error", error: new TypeError("terminated") }),
+    ]);
+    const e = await errorOf(a.chat(request([BRIEFING, HEADER])));
+    expect([e.kind, e.retryable]).toEqual(["connection", true]);
+    expect(e.message).toContain("terminated");
+    expect(e.spent[0]?.tokens.output).toBe(BROKEN_STREAM_OUTPUT_FLOOR);
+  });
+
+  test("a break after message_delta is charged the final usage the API reported", async () => {
+    const all = eventsOf({
+      content: [{ type: "text", text: "ok" }],
+      stop_reason: "end_turn",
+      usage: USAGE,
+    });
+    const { a } = adapter([brokenStream(all.slice(0, -1), { kind: "eof" })]);
+    const e = await errorOf(a.chat(request([BRIEFING, HEADER])));
+    expect(e.kind).toBe("connection");
+    expect(e.spent).toEqual([
+      {
+        model: "claude-opus-5-5",
+        kind: "message",
+        tokens: { input: 120, cacheWrite5m: 2000, cacheWrite1h: 0, cacheRead: 9000, output: 300 },
+        estimated: true,
+      },
+    ]);
+  });
+
+  test("a body that ends before message_start was not billed: nothing charged", async () => {
+    const { a } = adapter([brokenStream([], { kind: "eof" })]);
+    const e = await errorOf(a.chat(request([BRIEFING, HEADER])));
+    expect([e.kind, e.spent]).toEqual(["connection", []]);
   });
 
   test("an SSE error event mid-stream (overloaded) is retryable and charged as estimated", async () => {
@@ -692,7 +842,7 @@ describe("AnthropicAdapter errors", () => {
     const e = await errorOf(a.chat(request([BRIEFING, HEADER])));
     expect([e.kind, e.retryable, e.status]).toEqual(["overloaded", true, null]);
     expect(e.spent[0]?.estimated).toBe(true);
-    expect(e.spent[0]?.tokens.output).toBe(ABORTED_OUTPUT_FLOOR);
+    expect(e.spent[0]?.tokens.output).toBe(BROKEN_STREAM_OUTPUT_FLOOR);
   });
 });
 
@@ -707,7 +857,8 @@ describe("AnthropicClient isolation", () => {
     ANTHROPIC_ORGANIZATION_ID: "junk-org",
     ANTHROPIC_SERVICE_ACCOUNT_ID: "junk-sa",
     ANTHROPIC_IDENTITY_TOKEN: "junk-identity",
-    ANTHROPIC_CUSTOM_HEADERS: "Authorization: Bearer junk\nX-Junk: 1\nX-Api-Key: sk-junk-header",
+    ANTHROPIC_CUSTOM_HEADERS:
+      "Authorization: Bearer junk\nX-Junk: 1\nX-Api-Key: sk-junk-header\nanthropic-beta: junk-beta-2099-01-01\nAnthropic-Version: 2099-01-01",
     ANTHROPIC_LOG: "debug",
   };
   const saved = new Map<string, string | undefined>();
@@ -726,6 +877,8 @@ describe("AnthropicClient isolation", () => {
     }
     const { a, seen } = adapter([streamResponse(textReply)]);
     await a.chat(request([BRIEFING, HEADER]));
+    const h = adapter([streamResponse(textReply)], HAIKU);
+    await h.a.chat(request([BRIEFING, HEADER]));
     const s = seen[0];
     expect(s?.url.startsWith(`${BASE}/`)).toBe(true);
     expect(s?.headers["x-api-key"]).toBe(KEY);
@@ -736,6 +889,10 @@ describe("AnthropicClient isolation", () => {
         /^(accept|content-type|user-agent|anthropic-version|anthropic-beta|x-api-key|x-stainless-[a-z0-9-]+)$/,
       );
     }
+    // The env's anthropic-beta and anthropic-version never go out: each request sends its own.
+    expect(s?.headers["anthropic-beta"]).toBe(FALLBACK_BETA);
+    expect(h.seen[0]?.headers["anthropic-beta"]).toBeUndefined();
+    for (const r of [s, h.seen[0]]) expect(r?.headers["anthropic-version"]).toBe(ANTHROPIC_VERSION);
   });
 
   test("a request to another origin is refused; an empty key is refused", async () => {

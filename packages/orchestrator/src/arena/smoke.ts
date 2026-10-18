@@ -19,6 +19,7 @@ import {
   type HttpFetch,
 } from "../model/anthropic.ts";
 import { costOf, formatUsd, requirePrice } from "../model/prices.ts";
+import { BRIEFING_TOKENS, PREFIX_TOKENS } from "./cost.ts";
 import { anthropicTools } from "../model/tools.ts";
 import { PROFILES } from "../seat/personalities.ts";
 import { seatPrompt, sharedPrompt, turnHeader } from "../seat/prompt.ts";
@@ -26,7 +27,8 @@ import { PreflightError, preflight } from "./preflight.ts";
 import { DEFAULT_ARENA_DAYS, MODEL_ALIASES, type ArenaEnv } from "./plan.ts";
 
 // `arena smoke` (phase-2 design §8, §9.2 step 5): one live check of the key, the model and the
-// exact request shape, for about $0.20 at most. It refuses to run without
+// exact request shape, at most `smokeBoundNano` (about $0.20 on Opus 5.5, under a cent on Haiku
+// 5.5: the call's output is capped at `SMOKE_MAX_TOKENS`). It refuses to run without
 // PERFIDIA_ANTHROPIC_API_KEY. Steps:
 // 1. the preflight: `models.retrieve` (with `allowed_fallback_models`) and the production shape at
 //    `max_tokens: 0`, which also writes the stable prefix to the cache;
@@ -44,6 +46,20 @@ export interface SmokeOptions {
   /** Tests: a stub. */
   readonly fetch?: HttpFetch;
   readonly baseURL?: string;
+}
+
+/** The smoke call's output limit: room for a first reply, and a small bound on the bill. */
+export const SMOKE_MAX_TOKENS = 4_000;
+
+/**
+ * An upper bound of what `arena smoke` costs on `model`, in nano-dollars: the stable prefix and the
+ * briefing written to the cache twice at a 25% margin (the pre-warm, then the call as if it read
+ * nothing back), and `SMOKE_MAX_TOKENS` of output. `count_tokens` is free.
+ */
+export function smokeBoundNano(model: string): number {
+  const p = requirePrice(model);
+  const prompt = Math.ceil(((PREFIX_TOKENS + BRIEFING_TOKENS) * 5) / 4);
+  return 2 * prompt * p.write5m + SMOKE_MAX_TOKENS * p.output;
 }
 
 /** The first round input of `seat` in a fresh match: what its first wake's request is built from. */
@@ -71,17 +87,18 @@ export async function firstRoundInput(ruleset: AnyRuleset, seat: PlayerId): Prom
 
 export async function smokeCommand(o: SmokeOptions): Promise<number> {
   const io = o.io;
-  if (o.env.apiKey === null) {
-    throw new UsageError(
-      "arena smoke makes one live API call (about $0.20 at most): set PERFIDIA_ANTHROPIC_API_KEY first. Nothing was sent.",
-    );
-  }
   const alias = o.model ?? "haiku-5-5";
   const model = Object.hasOwn(MODEL_ALIASES, alias) ? (MODEL_ALIASES[alias] ?? alias) : alias;
+  let bound: number;
   try {
-    requirePrice(model);
+    bound = smokeBoundNano(model);
   } catch (e) {
     throw new UsageError(e instanceof Error ? e.message : String(e));
+  }
+  if (o.env.apiKey === null) {
+    throw new UsageError(
+      `arena smoke makes one live API call (at most ${formatUsd(bound)} on ${model}): set PERFIDIA_ANTHROPIC_API_KEY first. Nothing was sent.`,
+    );
   }
   const effort: Effort = o.effort ?? "low";
   const ruleset = getRuleset(o.ruleset ?? "perfidia-1");
@@ -104,7 +121,7 @@ export async function smokeCommand(o: SmokeOptions): Promise<number> {
     provider: "anthropic",
     model,
     effort,
-    maxOutputTokens: 16_000,
+    maxOutputTokens: SMOKE_MAX_TOKENS,
     cacheTtl: "5m",
   };
   const client = new AnthropicClient({
@@ -113,7 +130,7 @@ export async function smokeCommand(o: SmokeOptions): Promise<number> {
     ...(o.fetch === undefined ? {} : { fetch: o.fetch }),
   });
   const adapter = new AnthropicAdapter(spec, client);
-  io.out(`smoke: ${adapter.label} on ${client.baseURL}\n`);
+  io.out(`smoke: ${adapter.label} on ${client.baseURL}, at most ${formatUsd(bound)}\n`);
 
   try {
     const pre = await preflight([{ seat: "p1", adapter, prompt, tools }]);

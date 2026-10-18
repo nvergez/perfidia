@@ -212,6 +212,27 @@ export function exitCriterion(lines: readonly LogLine[]): ExitCriterion {
   };
 }
 
+/** A run whose LLM turns closed by an error reach this share (in percent) is `degraded`. */
+export const DEGRADED_ERROR_PCT = 25;
+/** ... once it has at least this many LLM turns. */
+export const DEGRADED_MIN_TURNS = 8;
+
+/** LLM turns closed by an error, of all LLM turns; `degraded` past `DEGRADED_ERROR_PCT`. */
+export function turnErrors(r: ArenaReport): {
+  readonly errors: number;
+  readonly turns: number;
+  readonly degraded: boolean;
+} {
+  let errors = 0;
+  let turns = 0;
+  for (const s of r.seats) {
+    turns += s.thoughts.turns;
+    errors += s.thoughts.byWhy["error"]?.turns ?? 0;
+  }
+  const degraded = turns >= DEGRADED_MIN_TURNS && errors * 100 >= DEGRADED_ERROR_PCT * turns;
+  return { errors, turns, degraded };
+}
+
 /** Builds `arena.json`; validated by its schema. */
 export function buildReport(r: ReportInput): ArenaReport {
   const plan = r.plan;
@@ -223,9 +244,9 @@ export function buildReport(r: ReportInput): ArenaReport {
     if (l.k !== "header") lastT = Math.max(lastT, l.t);
     if (l.k === "end") end = { t: l.t, reason: l.result.reason, winners: [...l.result.winners] };
   }
-  const days = Math.round(matchEndOf(plan) / 86_400);
+  const days = matchEndOf(plan) / 86_400;
   const measuredDays = daysCovered(end?.t ?? lastT);
-  // A calibration run (`--days 1` or 2) is projected to a full match (§5.5).
+  // A calibration run (`--stop-after 1`) or a short match is projected to a full week (§5.5).
   const toDays = Math.max(DEFAULT_ARENA_DAYS, days);
   const clockKind = plan.clock.kind;
   const llmCalls = r.calls.filter((l): l is LlmCallLine => l.k === "llm_call");
@@ -395,7 +416,7 @@ export function buildReport(r: ReportInput): ArenaReport {
       high: seats.reduce((n, s) => n + s.estimate.high, 0),
     },
     projection: {
-      fromDays: measuredDays,
+      fromDays: Math.round(measuredDays * 1000) / 1000,
       toDays,
       costNanoUsd: seats.reduce((n, s) => n + s.projectedNanoUsd, 0),
     },
@@ -411,6 +432,9 @@ export function buildReport(r: ReportInput): ArenaReport {
 }
 
 const usd = formatUsd;
+
+/** The start of a `--stop-after` run's reason. */
+export const STOPPED = "stopped at the end of game day";
 
 /** The report as text, for the end of `arena run`. */
 export function formatReport(r: ArenaReport): string {
@@ -461,8 +485,10 @@ export function formatReport(r: ArenaReport): string {
     `exit criterion: ${e.alliancesFormed} alliance(s) formed, ${e.betrayals} betrayal(s): ${e.met ? "met" : "not met"}; with an LLM seat: ${e.llm.betrayals} betrayal(s) (${e.llm.asBetrayer} as betrayer, ${e.llm.asVictim} as victim), ${e.llm.alliances} alliance(s): ${e.llm.met ? "met" : "not met"}`,
   );
   if (r.levelE !== null) {
+    const ok =
+      r.status === "stopped" || r.reason?.startsWith(STOPPED) === true ? "ok up to the stop" : "ok";
     out.push(
-      `Level E: ${r.levelE.ok ? "ok" : "FAILED"} (${r.levelE.actions} actions, ${r.levelE.checkpoints} checkpoints)${r.levelE.divergence === null ? "" : `: ${r.levelE.divergence}`}`,
+      `Level E: ${r.levelE.ok ? ok : "FAILED"} (${r.levelE.actions} actions, ${r.levelE.checkpoints} checkpoints)${r.levelE.divergence === null ? "" : `: ${r.levelE.divergence}`}`,
     );
   }
   for (const a of r.alerts) out.push(`alert: ${a}`);

@@ -5,9 +5,19 @@
 import { describe, expect, test } from "bun:test";
 import { memoryIo } from "@perfidia/sim";
 import type { HttpFetch } from "../model/anthropic.ts";
-import { smokeCommand } from "./smoke.ts";
+import { SMOKE_MAX_TOKENS, smokeBoundNano, smokeCommand } from "./smoke.ts";
 
 const BASE = "https://api.test.invalid";
+
+/** The roles of a request body's messages. */
+const roleList = (body: Record<string, unknown> | null): unknown[] => {
+  const messages: unknown = body?.["messages"];
+  return Array.isArray(messages)
+    ? messages.map((m: unknown): unknown =>
+        m !== null && typeof m === "object" ? Reflect.get(m, "role") : null,
+      )
+    : [];
+};
 
 interface Seen {
   readonly url: string;
@@ -127,7 +137,9 @@ describe("arena smoke", () => {
     expect(io.stderr()).toBe("");
     expect(code).toBe(0);
     const out = io.stdout();
-    expect(out).toContain("smoke: anthropic/claude-haiku-5-5/low on https://api.test.invalid");
+    expect(out).toContain(
+      "smoke: anthropic/claude-haiku-5-5/low on https://api.test.invalid, at most $0.005437",
+    );
     expect(out).toContain("1. preflight: ok; allowed fallbacks: none");
     expect(out).toContain("2. count_tokens: 10250 input tokens");
     expect(out).toContain("3. one call: stop tool_use, served by claude-haiku-5-5");
@@ -144,8 +156,12 @@ describe("arena smoke", () => {
       expect(x.headers["x-api-key"]).toBe("sk-smoke");
       expect(x.headers["authorization"]).toBeUndefined();
     }
+    // The preflight's shape check carries an operator entry, as every round 0 does.
+    expect(s.seen[1]?.body?.["max_tokens"]).toBe(0);
+    expect(roleList(s.seen[1]?.body ?? null)).toEqual(["user", "system"]);
     // Haiku 5.5: no server-side fallback, so neither the beta nor `fallbacks`.
     const call = s.seen[3]?.body ?? {};
+    expect(call["max_tokens"]).toBe(SMOKE_MAX_TOKENS);
     expect(call["fallbacks"]).toBeUndefined();
     expect(s.seen[3]?.headers["anthropic-beta"]).toBeUndefined();
     expect(call["stream"]).toBe(true);
@@ -168,6 +184,23 @@ describe("arena smoke", () => {
       "tools",
     ]);
   }, 60_000);
+
+  test("the bound: about $0.22 on Opus 5.5, half a cent on Haiku 5.5; said before anything is sent", async () => {
+    expect(smokeBoundNano("claude-opus-5-5")).toBe(217_500_000);
+    expect(smokeBoundNano("claude-haiku-5-5")).toBe(5_437_500);
+    let message = "";
+    try {
+      await smokeCommand({
+        env: { apiKey: null, baseURL: BASE, live: false },
+        io: memoryIo(),
+        model: "opus-5-5",
+      });
+    } catch (e) {
+      message = e instanceof Error ? e.message : String(e);
+    }
+    expect(message).toContain("at most $0.217500 on claude-opus-5-5");
+    expect(message).toContain("Nothing was sent");
+  });
 
   test("an unpriced model is refused before anything is sent", async () => {
     const s = stub();
