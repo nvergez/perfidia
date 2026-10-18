@@ -12,7 +12,7 @@ Matches can run different rulesets side by side: the engine core (time, events, 
 - **oxlint** (type-aware rules on) for linting, **oxfmt** for formatting. No ESLint, Prettier or Biome.
 - **Zod** for every schema that crosses a boundary (actions, events, views, API, LLM tools, MCP).
 
-Root scripts (run from the repo root): `bun run typecheck`, `bun run lint`, `bun run format`, `bun run format:check`, `bun test`, `bun run check` (all of the above). Every change must leave `bun run check` green. CLIs: `bun run sim -- <command>` (bot matches, replay verification), `bun run arena -- <command>` (LLM matches; `--fake` needs no key) and `bun run serve -- --runs <dir> [--cache <dir>] [--publish <file>]` (the read-only spectator server). `bun run test:exit` runs the exit suites; `bun run test:live` is the only test that calls the Claude API (it spends money, needs `PERFIDIA_LIVE=1` and the key, never in CI).
+Root scripts (run from the repo root): `bun run typecheck`, `bun run lint`, `bun run format`, `bun run format:check`, `bun test`, `bun run check` (all of the above). Every change must leave `bun run check` green. CLIs: `bun run sim -- <command>` (bot matches, replay verification), `bun run arena -- <command>` (LLM matches; `--fake` needs no key) and `bun run serve -- --runs <dir> [--cache <dir>] (--publish <file> | --all-runs)` (the read-only spectator server; `--all-runs` lists every run for local development). `bun run test:exit` runs the exit suites; `bun run test:live` is the only test that calls the Claude API (it spends money, needs `PERFIDIA_LIVE=1` and the key, never in CI).
 
 ## Packages (`packages/*`, scope `@perfidia/*`)
 

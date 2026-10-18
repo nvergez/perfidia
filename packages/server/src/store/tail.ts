@@ -7,8 +7,9 @@ import { closeSync, constants, fstatSync, openSync, readSync } from "node:fs";
 // fall anywhere. A file whose inode changes, that shrinks, or whose first line changes was replaced:
 // the read says so and starts over from its first byte.
 //
-// Run files are opened with `O_NOFOLLOW` and checked on the open descriptor (`fstat`), never by
-// path first: a symbolic link swapped in for a file is refused, not followed.
+// Run files are opened with `O_NOFOLLOW | O_NONBLOCK` and checked on the open descriptor (`fstat`),
+// never by path first: a symbolic link swapped in for a file is refused, not followed, and a FIFO
+// cannot block the open (`O_NONBLOCK` changes nothing for regular files).
 
 const NL = 0x0a;
 const decoder = new TextDecoder("utf-8", { fatal: false });
@@ -20,7 +21,7 @@ export const SOURCE_TAIL_BYTES = 64 * 1024;
 export function openRegular(path: string): { fd: number; size: number; ino: number } | null {
   let fd: number;
   try {
-    fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+    fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
   } catch {
     return null;
   }
