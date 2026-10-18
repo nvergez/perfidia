@@ -1,28 +1,100 @@
-import { fmtInt } from "../lib/format.ts";
-import { fmtClock } from "../lib/time.ts";
-import { useMatch, useMomentsSoFar, useStandings } from "../store/hooks.ts";
-import { labelOf } from "../store/selectors.ts";
+import type { Frame } from "@perfidia/protocol/spectator";
+import { Fragment, useMemo } from "react";
+import { GameTime } from "../common/game-time.tsx";
+import { PlainText } from "../common/plain-text.tsx";
+import { PlayerGlyph } from "../common/player-glyph.tsx";
+import { TimeLeft, Who } from "../feed/bits.tsx";
+import { cn } from "../lib/cn.ts";
+import { useDomination, useFeed, useMatch, useMomentsSoFar, useStandings } from "../store/hooks.ts";
+import { buildStory, type StoryPart, type StorySentence } from "./story.ts";
 
-// STUB (owned by view agent B, phase-3 design §4.3 "Story strip"): the day, the leader and the last
-// moment. Agent B replaces this file; the export name and the no-props signature stay.
+// The story strip (phase-3 design §4.3): one line on top of the match view, filled by templates
+// from the frame and the moments (`story.ts`): the time, who leads and by how much, the bloc
+// closest to a domination win, and the last betrayal (or the attack on an ally now at sea).
+
+const NO_ALLIANCES: Frame["alliances"] = Object.freeze({});
+const NO_MOVEMENTS: Frame["movements"] = Object.freeze({});
+
+/** A bloc member in the strip: glyph and id. */
+function Member({ id }: { readonly id: string }) {
+  const color = useMatch((s) => s.meta?.seats.find((x) => x.seat === id)?.color ?? null);
+  return (
+    <span className="whitespace-nowrap">
+      <PlayerGlyph color={color} size={9} className="mr-0.5" />
+      <span className="font-mono text-[0.92em]">{id}</span>
+    </span>
+  );
+}
+
+function Part({ part }: { readonly part: StoryPart }) {
+  switch (part.k) {
+    case "text":
+      return <>{part.text}</>;
+    case "strong":
+      return <strong className="font-semibold">{part.text}</strong>;
+    case "player":
+      return <Who id={part.id} />;
+    case "alliance":
+      return <PlainText text={part.name} className="font-medium italic" />;
+    case "time":
+      return <GameTime t={part.t} className="font-mono text-[0.92em]" />;
+    case "member":
+      return <Member id={part.id} />;
+    case "left":
+      return <TimeLeft at={part.at} className="text-inherit" />;
+  }
+  return null;
+}
+
+/** A sentence's parts with keys (a sentence is rebuilt whole, its parts never reorder). */
+function keyedParts(s: StorySentence): { readonly key: string; readonly part: StoryPart }[] {
+  return s.parts.map((part, i) => ({ key: `${s.key}${i}`, part }));
+}
+
+function Sentence({ s }: { readonly s: StorySentence }) {
+  return (
+    <span
+      data-story={s.key}
+      className={cn(
+        s.tone === "betrayal" && "text-betrayal",
+        s.tone === "danger" && "text-betrayal font-medium",
+      )}
+    >
+      {s.tone === "danger" ? (
+        <span
+          aria-hidden="true"
+          className="bg-betrayal mr-1.5 inline-block size-2 rounded-full align-middle motion-safe:animate-pulse"
+        />
+      ) : null}
+      {keyedParts(s).map((p) => (
+        <Part key={p.key} part={p.part} />
+      ))}
+    </span>
+  );
+}
 
 export function StoryStrip() {
-  const meta = useMatch((s) => s.meta);
-  const playhead = useMatch((s) => s.playhead);
+  // The clock moves once a game minute: the strip re-renders no more often.
+  const t = useMatch((s) => Math.floor(s.playhead / 60) * 60);
   const standings = useStandings();
+  const result = useMatch((s) => s.frame?.result ?? null);
+  const domination = useDomination();
+  const alliances = useMatch((s) => s.frame?.alliances ?? NO_ALLIANCES);
+  const movements = useMatch((s) => s.frame?.movements ?? NO_MOVEMENTS);
   const moments = useMomentsSoFar();
-  const leader = standings[0];
-  const last = moments.at(-1);
+  const feed = useFeed();
+  const sentences = useMemo(
+    () => buildStory({ t, standings, result, domination, alliances, movements, moments, feed }),
+    [t, standings, result, domination, alliances, movements, moments, feed],
+  );
   return (
-    <p data-stub="story" className="bg-card rounded-xl border px-3 py-2 text-sm">
-      <span className="font-mono">{fmtClock(playhead)}</span>
-      {leader === undefined ? null : (
-        <>
-          {" · "}
-          {labelOf(meta, leader.player)} leads with {fmtInt(leader.score)}
-        </>
-      )}
-      {last === undefined ? null : <> · {last.title}</>}
+    <p data-testid="story" className="bg-card rounded-xl border px-3 py-2 text-sm leading-relaxed">
+      {sentences.map((s, i) => (
+        <Fragment key={s.key}>
+          {i === 0 ? null : <span className="text-muted-foreground"> · </span>}
+          <Sentence s={s} />
+        </Fragment>
+      ))}
     </p>
   );
 }
