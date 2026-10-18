@@ -2,7 +2,7 @@
 
 A persistent, Grepolis-like strategy game played only by LLM agents while humans watch.
 Product brief: `docs/brief.md` (read it before any design or engine work).
-Rulesets: `docs/rulesets/` — the active default is `perfidia-1.md`; `candidates/` keeps alternative designs that may become rulesets later. Engine/phase-1 architecture: `docs/architecture.md`.
+Rulesets: `docs/rulesets/` — the active default is `perfidia-1.md`; `candidates/` keeps alternative designs that may become rulesets later. Engine/phase-1 architecture: `docs/architecture.md`. LLM harness: `docs/phase2.md`. Spectator view (Pass A: projection and server): `docs/phase3.md`.
 Matches can run different rulesets side by side: the engine core (time, events, determinism, logs, replay, clocks) is ruleset-agnostic; a ruleset is an immutable, versioned module (`id@version`). Never change a published ruleset version's behavior — publish a new version.
 
 ## Toolchain (non-negotiable)
@@ -12,7 +12,7 @@ Matches can run different rulesets side by side: the engine core (time, events, 
 - **oxlint** (type-aware rules on) for linting, **oxfmt** for formatting. No ESLint, Prettier or Biome.
 - **Zod** for every schema that crosses a boundary (actions, events, views, API, LLM tools, MCP).
 
-Root scripts (run from the repo root): `bun run typecheck`, `bun run lint`, `bun run format`, `bun run format:check`, `bun test`, `bun run check` (all of the above). Every change must leave `bun run check` green. CLIs: `bun run sim -- <command>` (bot matches, replay verification) and `bun run arena -- <command>` (LLM matches; `--fake` needs no key). `bun run test:exit` runs the exit suites; `bun run test:live` is the only test that calls the Claude API (it spends money, needs `PERFIDIA_LIVE=1` and the key, never in CI).
+Root scripts (run from the repo root): `bun run typecheck`, `bun run lint`, `bun run format`, `bun run format:check`, `bun test`, `bun run check` (all of the above). Every change must leave `bun run check` green. CLIs: `bun run sim -- <command>` (bot matches, replay verification), `bun run arena -- <command>` (LLM matches; `--fake` needs no key) and `bun run serve -- --runs <dir> [--cache <dir>] [--publish <file>]` (the read-only spectator server). `bun run test:exit` runs the exit suites; `bun run test:live` is the only test that calls the Claude API (it spends money, needs `PERFIDIA_LIVE=1` and the key, never in CI).
 
 ## Packages (`packages/*`, scope `@perfidia/*`)
 
@@ -22,9 +22,11 @@ Root scripts (run from the repo root): `bun run typecheck`, `bun run lint`, `bun
 - `bots` — scripted players that play exclusively through the gateway (never the engine directly).
 - `sim` — headless match runner (CLI): builds a world, runs a match with bots under the lockstep or real-time clock, writes logs, verifies replays.
 - `orchestrator` — the LLM harness (phase 2, `docs/phase2.md`): `ModelAdapter` and the Anthropic adapter (the only module that imports `@anthropic-ai/sdk`, in `src/model/anthropic.ts`), `LlmSeatAgent`, prompts and profiles, the budget ledger, `llm_calls.jsonl` logs, and the `arena` CLI (`src/arena/`: plan, preflight, run, report, smoke; bot-backed fake models for tests and `--fake`). Reads only `PERFIDIA_ANTHROPIC_*` from the environment (in `src/arena/` only), never `ANTHROPIC_*`; tests never touch the network.
-- Later phases: `server` (Elysia HTTP/WS/MCP), `web` (spectator SPA).
+- `spectator` — the spectator projection (phase 3, `docs/phase3.md`), **pure like `gateway`**: `match.jsonl` folded line by line (the engine's `createReplay` and the gateway's `createGatewayFold`) into frames, steps, feed items, moments and keyframes; `./annotations` folds `llm_calls.jsonl` and `replies.jsonl`; `./reduce` (imports `@perfidia/protocol/spectator` only) applies steps for the server and the web. Ruleset event names live in `src/fold/rulesets.ts` only.
+- `server` — the read-only spectator server (Elysia 2 beta behind a framework-free service layer, with a tested raw `Bun.serve` fallback): run directories discovered under a root, `publish.json`, folds in worker threads only, a gzipped timeline cache, REST + OpenAPI and one WebSocket with resumable cursors. `src/config.ts` alone reads the environment (`PORT`, `PERFIDIA_SERVE_TRUST_PROXY`); it never imports `@anthropic-ai/sdk` or the orchestrator (a dev dependency for tests).
+- Later phases: `web` (spectator SPA, Pass B), MCP on a separate listener.
 
-Dependency direction: `protocol` ← `engine` ← `gateway` ← `bots` ← `sim` ← `orchestrator`. Never import "upwards".
+Dependency direction: `protocol` ← `engine` ← `gateway` ← `bots` ← `sim` ← `orchestrator`, and `gateway` ← `spectator` ← `server`. Never import "upwards".
 
 ## Code conventions
 

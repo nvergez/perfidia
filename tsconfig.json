@@ -7,6 +7,8 @@
     { "path": "./packages/bots" },
     { "path": "./packages/sim" },
     { "path": "./packages/orchestrator" },
-    { "path": "./packages/spectator" }
+    { "path": "./packages/spectator" },
+    { "path": "./packages/server" },
+    { "path": "./scripts" }
   ]
 }

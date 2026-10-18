@@ -2,6 +2,11 @@
 # Each workspace package only sees the dependencies it declares, so an
 # undeclared import (e.g. engine -> gateway) fails to resolve.
 linker = "isolated"
+# Supply-chain age floor (phase-3 design §5.2): a version must be at least 14
+# days old to be resolved. It does not hold back an exact pin, so every direct
+# dependency is pinned exactly and its date checked when added; CI checks every
+# locked version (scripts/check-dep-ages.ts).
+minimumReleaseAge = 1209600
 
 [run]
 # Run package bins (tsc, oxlint, oxfmt) with Bun even when their shebang says node.

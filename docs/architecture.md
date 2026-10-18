@@ -26,6 +26,7 @@
 - 16 Review decisions
 - 17 Deviations
 - 18 Phase 2: first agents (the orchestrator; details in `docs/phase2.md`)
+- 19 Phase 3: the spectator view (Pass A: the spectator projection and the read-only server; details in `docs/phase3.md`)
 
 ---
 
@@ -2614,3 +2615,13 @@ Roadmap step 2 (4 Claude seats and 2 bots on a 6-seat `perfidia-1` map) is built
 - **Environment.** Only `PERFIDIA_ANTHROPIC_API_KEY` and `PERFIDIA_ANTHROPIC_BASE_URL` (and `PERFIDIA_LIVE` for the opt-in live test) are read, once, by the arena CLI; nothing reads `ANTHROPIC_*`. No test touches the network.
 - **Suites.** The default `bun test` includes a full 2-day lockstep arena match on fake models (Level E, gateway rebuild, exit-criterion report) and a 7-day match stopped after day 1 (`--stop-after`). `bun run test:exit` runs four 7-day arena matches to their end. `bun run test:live` (opt-in, spends under $0.20) is the only test that calls the API.
 - **Not built in phase 2:** crash resume (lockstep matches that crash are rerun; required before a multi-day real-time match), the optional red-team check, the spectator feed.
+
+## 19. Phase 3: the spectator view
+
+Roadmap step 3 (a live map, a diplomatic feed and a leaderboard) is built in passes; **`docs/phase3.md` describes Pass A as built** (data and server, no web UI): the incremental replay and gateway fold, the `@perfidia/spectator` projection, the spectator schemas, the read-only server, how to run it, its API, what is public, the tests and the measurements.
+
+- **Dependency direction:** `protocol` ← `engine` ← `gateway` ← `spectator` ← `server`, beside `bots` ← `sim` ← `orchestrator`. The web app (Pass B) will import only `@perfidia/protocol/spectator` and `@perfidia/spectator/reduce`.
+- **Purity.** The engine's replayer and the spectator projection stay browser-pure (the pure lint override covers `packages/spectator/src`; `src/reduce` imports `@perfidia/protocol/spectator` only). The server folds in worker threads only, never on its main thread.
+- **Steps depend on `match.jsonl` only.** Costs, reasoning and replies are annotations, served apart, so a live fold, a refold after a restart and a fold of the finished file give the same steps and clients resume by cursor.
+- **CLI.** `bun run serve -- --runs <dir> [--cache <dir>] [--publish <file>]`. It binds 127.0.0.1 unless given a `publish.json`; it reads only `PORT` and `PERFIDIA_SERVE_TRUST_PROXY`, and never serves seeds, id keys, prompts, transcripts, request ids or error texts.
+- **Not built in Pass A:** the web app, static serving, the Playwright smoke test (Pass B); turn detail, dossier extras, live per-round reasoning (Pass C); hosting, the database and MCP (later steps).

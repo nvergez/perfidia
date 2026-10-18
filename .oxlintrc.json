@@ -825,6 +825,33 @@
       }
     },
     {
+      "files": ["packages/server/src/**"],
+      "excludeFiles": ["**/*.test.ts"],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "paths": [
+              {
+                "name": "@anthropic-ai/sdk",
+                "message": "The spectator server never talks to a model provider (phase-3 design §2.1)."
+              },
+              {
+                "name": "@perfidia/orchestrator",
+                "message": "The server reads run directories; the orchestrator is a dev dependency for tests only."
+              }
+            ],
+            "patterns": [
+              {
+                "group": ["@anthropic-ai/sdk/*"],
+                "message": "The spectator server never talks to a model provider (phase-3 design §2.1)."
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
       "files": ["packages/orchestrator/src/**"],
       "rules": {
         "no-restricted-imports": [
