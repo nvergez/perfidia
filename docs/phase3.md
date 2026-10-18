@@ -381,8 +381,9 @@ least 14 days old): `elysia@2.0.0-beta.21` (2026-10-02), `@elysia/openapi@2.0.0-
 - `bunfig.toml` sets `minimumReleaseAge = 1209600` (14 days). It does not hold back an exact pin,
   so every direct dependency is pinned exactly and its date checked when added.
 - `scripts/check-dep-ages.ts` checks locked versions against the registry: with `--base <old
-  lock>` only the versions a change adds. CI's `deps` job runs it blocking on pull requests'
-  additions, and informational on the whole lock (four tooling versions locked before phase 3 are
+  lock>` only the versions a change adds. A CI `deps` job (not yet in `ci.yml`: workflow files can
+  only be changed by the owner, the patch is in the phase-3 pull request) runs it blocking on pull
+  requests' additions, and informational on the whole lock (four tooling versions locked before phase 3 are
   younger than 14 days today: `oxlint@1.87.0`, `oxfmt@0.72.0`, `@types/node@26.6.5`,
   `@babel/runtime@7.29.10`), plus `bun audit` (informational).
 - Elysia betas move fast (betas 22–32 came out after beta 21): re-pin at most monthly, together
