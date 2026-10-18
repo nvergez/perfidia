@@ -13,14 +13,19 @@ import type {
   TimePair,
   UnitCounts,
 } from "@perfidia/protocol";
-import type { PerfidiaConfig } from "./config.ts";
+import type { PerfidiaConfig, PerfidiaCore } from "./config.ts";
 import type { PerfidiaExt } from "./ext.ts";
 
 // Shared helpers of the perfidia-1 hooks: typed contexts, lookups that fail loudly (a missing
 // entity inside a hook is an engine bug, docs/architecture.md §5.3) and small state queries.
 
-export type PCtx = Ctx<PerfidiaConfig, PerfidiaExt>;
-export type PRead = ReadCtx<PerfidiaConfig, PerfidiaExt>;
+/** The context of the hooks every perfidia-1 version shares: its config read through the core type. */
+export type PCtx = Ctx<PerfidiaCore, PerfidiaExt>;
+export type PRead = ReadCtx<PerfidiaCore, PerfidiaExt>;
+
+/** The context of the hooks of perfidia-1@1.0.0 only (its scoring, victory and views). */
+export type PCtx100 = Ctx<PerfidiaConfig, PerfidiaExt>;
+export type PRead100 = ReadCtx<PerfidiaConfig, PerfidiaExt>;
 
 type State = DeepReadonly<GameState>;
 

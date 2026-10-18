@@ -36,8 +36,8 @@ import { runBots, type BotRun, type BotRunSpec, type ClockChoice } from "../harn
 // snapshots and edited as plain JSON, the gateway state at a checkpoint (rebuilt from the log), and
 // a tool session that calls a seat's tools on a match outside any turn, as the host would.
 
-/** The two rulesets every hardening property runs on. */
-export const REFS = ["perfidia-1@1.0.0", "sandbox-1@1.0.0"] as const;
+/** The rulesets every hardening property runs on: both perfidia-1 versions and sandbox-1. */
+export const REFS = ["perfidia-1@1.0.0", "perfidia-1@1.1.0", "sandbox-1@1.0.0"] as const;
 export type Ref = (typeof REFS)[number];
 
 export const LOCKSTEP: ClockChoice = { kind: "lockstep" };

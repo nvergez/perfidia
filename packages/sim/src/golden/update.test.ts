@@ -1,7 +1,7 @@
 // `sim golden` (docs/architecture.md §3.5, §12.1, §13.5, §13.6, §15 T15): `--update` adds a missing
 // golden and the fingerprint entries and refuses to overwrite an existing golden; `--check` passes
 // on what it wrote and fails on a tampered copy; a new bot version gets a new golden; the scripted
-// `scenario-late` is written once and checked at Level E only. Every match here lasts at most 1
+// scenarios (`scenario-late`, `scenario-r1`) are written once and checked at Level E only. Every match here lasts at most 1
 // game day (§13): the CLI writes only the 1-day goldens of `GOLDEN_SPECS` and the scenario, named
 // on its command line. The committed fixtures are guarded by `src/golden.test.ts`.
 
@@ -51,6 +51,11 @@ describe("sim golden", () => {
       ["perfidia-1@1.0.0/lockstep-12p-1d", 1, "lockstep"],
       ["perfidia-1@1.0.0/lockstep-6p-6d-war", 6, "lockstep"],
       ["perfidia-1@1.0.0/scenario-late", "scenario", "lockstep"],
+      ["perfidia-1@1.1.0/lockstep-6p-4d", 4, "lockstep"],
+      ["perfidia-1@1.1.0/rt-virtual-6p-1d", 1, "virtual"],
+      ["perfidia-1@1.1.0/lockstep-12p-1d", 1, "lockstep"],
+      ["perfidia-1@1.1.0/lockstep-6p-6d-war", 6, "lockstep"],
+      ["perfidia-1@1.1.0/scenario-r1", "scenario", "lockstep"],
       ["sandbox-1@1.0.0/lockstep-6p-3d", 3, "lockstep"],
       ["sandbox-1@1.0.0/rt-virtual-6p-1d", 1, "virtual"],
     ]);
@@ -59,10 +64,14 @@ describe("sim golden", () => {
   test("--update adds goldens once and refuses to overwrite them; --check passes, then fails on a tampered golden", async () => {
     const dir = tempDir();
     // The 1-day goldens of each published ref: `--check` wants one golden per published ref.
-    const names = ["perfidia-1@1.0.0/rt-virtual-6p-1d", "sandbox-1@1.0.0/rt-virtual-6p-1d"];
-    const name = names[1] ?? "";
+    const names = [
+      "perfidia-1@1.0.0/rt-virtual-6p-1d",
+      "perfidia-1@1.1.0/rt-virtual-6p-1d",
+      "sandbox-1@1.0.0/rt-virtual-6p-1d",
+    ];
+    const name = names[2] ?? "";
     const specs = GOLDEN_SPECS.filter((s) => names.includes(`${s.ref}/${s.name}`));
-    expect(specs.map((s) => ("run" in s ? s.run.days : null))).toEqual([1, 1]);
+    expect(specs.map((s) => ("run" in s ? s.run.days : null))).toEqual([1, 1, 1]);
     try {
       const first = await cli("golden", "--update", "--fixtures", dir, ...names);
       expect(first.code).toBe(EXIT.ok);
@@ -71,6 +80,8 @@ describe("sim golden", () => {
           ...names.map((n) => `added golden ${n}`),
           "added fingerprint entry perfidia-1@1.0.0",
           "added fingerprint entry perfidia-1@1.0.0/rt-virtual-6p-1d",
+          "added fingerprint entry perfidia-1@1.1.0",
+          "added fingerprint entry perfidia-1@1.1.0/rt-virtual-6p-1d",
           "added fingerprint entry sandbox-1@1.0.0",
           "added fingerprint entry sandbox-1@1.0.0/rt-virtual-6p-1d",
           "",
@@ -78,7 +89,7 @@ describe("sim golden", () => {
       );
       expect(listGoldens(dir).map((g) => `${g.ref}/${g.name}`)).toEqual(names);
       const fp = readFingerprints(dir);
-      expect(Object.keys(fp)).toEqual(["perfidia-1@1.0.0", "sandbox-1@1.0.0"]);
+      expect(Object.keys(fp)).toEqual(["perfidia-1@1.0.0", "perfidia-1@1.1.0", "sandbox-1@1.0.0"]);
       expect(Object.keys(fp["sandbox-1@1.0.0"]?.goldens ?? {})).toEqual(["rt-virtual-6p-1d"]);
 
       const before = snapshotFiles(dir);
@@ -92,7 +103,7 @@ describe("sim golden", () => {
       expect(check.code).toBe(EXIT.ok);
       for (const n of names) expect(check.out).toContain(`${n}: Level E `);
       expect(check.out).toContain(" · Level G pass");
-      expect(check.out).toContain("golden check: ok (2 golden(s))");
+      expect(check.out).toContain("golden check: ok (3 golden(s))");
 
       // Append-only against an older fingerprints file: unchanged passes, a rewritten entry fails.
       const older = join(dir, "older-fingerprints.json");
@@ -142,30 +153,36 @@ describe("sim golden", () => {
     }
   }, 30000);
 
-  test("--update writes the scripted scenario golden once, then refuses to rewrite it", async () => {
+  test("--update writes the scripted scenario goldens once, then refuses to rewrite them", async () => {
     const dir = tempDir();
-    const name = "perfidia-1@1.0.0/scenario-late";
+    const names = ["perfidia-1@1.0.0/scenario-late", "perfidia-1@1.1.0/scenario-r1"];
     try {
-      const first = await cli("golden", "--update", "--fixtures", dir, name);
+      const first = await cli("golden", "--update", "--fixtures", dir, ...names);
       expect(first.code).toBe(EXIT.ok);
       expect(first.out).toBe(
         [
-          `added golden ${name}`,
+          ...names.map((n) => `added golden ${n}`),
           "added fingerprint entry perfidia-1@1.0.0",
-          `added fingerprint entry ${name}`,
+          `added fingerprint entry ${names[0] ?? ""}`,
+          "added fingerprint entry perfidia-1@1.1.0",
+          `added fingerprint entry ${names[1] ?? ""}`,
           "added fingerprint entry sandbox-1@1.0.0",
           "",
         ].join("\n"),
       );
       const before = snapshotFiles(dir);
-      const again = await cli("golden", "--update", "--fixtures", dir, name);
-      expect(again.code).toBe(EXIT.usage);
-      expect(again.err).toContain(`refusing to overwrite ${name}`);
+      for (const name of names) {
+        // oxlint-disable-next-line no-await-in-loop -- one update at a time
+        const again = await cli("golden", "--update", "--fixtures", dir, name);
+        expect(again.code).toBe(EXIT.usage);
+        expect(again.err).toContain(`refusing to overwrite ${name}`);
+      }
       expect(snapshotFiles(dir)).toEqual(before);
       // A scenario golden is checked at Level E only: its agents are not bots of the registry.
       const check = await cli("golden", "--check", "--fixtures", dir);
-      expect(check.out).toContain(`${name}: Level E `);
+      for (const name of names) expect(check.out).toContain(`${name}: Level E `);
       expect(check.out).toContain(" · Level G skipped");
+      expect(check.out).not.toContain(" · Level G pass");
       // sandbox-1 is a test ruleset: without a golden of its own it is not a problem.
       expect(check.code).toBe(EXIT.ok);
     } finally {

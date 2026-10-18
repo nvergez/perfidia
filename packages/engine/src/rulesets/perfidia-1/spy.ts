@@ -1,12 +1,12 @@
 import type { DeepReadonly } from "@perfidia/protocol";
-import type { PerfidiaConfig } from "./config.ts";
+import type { PerfidiaCore } from "./config.ts";
 
 // Espionage maths (perfidia-1 §10). The `arrive.spy` hook counts the land pop present (every owner,
 // garrison included) and builds the report.
 
 /** Counter-intel of a city: `100 + 50 · wall + Σ land pop present` (§10). */
 export function counterIntel(
-  config: DeepReadonly<PerfidiaConfig>,
+  config: DeepReadonly<PerfidiaCore>,
   wall: number,
   landPopPresent: number,
 ): number {

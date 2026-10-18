@@ -484,6 +484,37 @@ describe("opportunist@2", () => {
     }
   });
 
+  test("with 1.1.0's hints, a bloc short of taken cities is not in reach: the betrayal goes ahead", async () => {
+    const seed = 11;
+    const outcomes: [string, number, boolean][] = [];
+    for (const ref of ["perfidia-1@1.0.0", "perfidia-1@1.1.0"]) {
+      for (const taken of [1, 2]) {
+        const game = betrayalDay(seed);
+        Object.defineProperty(game, "rules", { value: { ...game.rules, ruleset: ref } });
+        const respond = game.respond.bind(game);
+        game.respond = (seat: PlayerId, c: ToolCall) => {
+          const r = respond(seat, c);
+          if (c.tool !== "leaderboard" || !r.ok) return r;
+          return { ...r, data: { ...r.data, ext: { domination: { need: 4, needTaken: 2 } } } };
+        };
+        const bloc = { key: "a1", members: ["p1", "p2"], cities: 2, taken, need: 4, needTaken: 2 };
+        withBriefingExt(game, { countdowns: [], bloc });
+        // oxlint-disable-next-line no-await-in-loop -- one game at a time
+        const log = await playTurn(v2("opportunist", "p1", seed), game, "p1");
+        noViolations(game);
+        outcomes.push([ref, taken, attacks(log).some((a) => a.to === "c2")]);
+      }
+    }
+    // 1.0.0's hints have no taken cities: within 2 cities of the threshold, it waits. With 1.1.0's,
+    // it waits only when its bloc also holds the taken cities asked for.
+    expect(outcomes).toEqual([
+      ["perfidia-1@1.0.0", 1, false],
+      ["perfidia-1@1.0.0", 2, false],
+      ["perfidia-1@1.1.0", 1, true],
+      ["perfidia-1@1.1.0", 2, false],
+    ]);
+  });
+
   test("turns back a betrayal still in its recall window once its own bloc's countdown starts", async () => {
     const seed = 11;
     for (const counting of [false, true]) {

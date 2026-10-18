@@ -8,7 +8,16 @@ import {
   type Standing,
 } from "@perfidia/protocol";
 import { relationsOf, sortedIds } from "@perfidia/engine/std";
-import { cancelIfQueued, fail, own, sameMembers, type PCtx, type PRead } from "./common.ts";
+import {
+  cancelIfQueued,
+  fail,
+  own,
+  sameMembers,
+  type PCtx,
+  type PCtx100,
+  type PRead,
+  type PRead100,
+} from "./common.ts";
 import {
   type Bloc,
   bestTiebreak,
@@ -48,7 +57,7 @@ function comparePairs(a: PairKey, b: PairKey): number {
 }
 
 /** Records when each pair stopped being related (§8.8), and the pairs related now. */
-function trackRelations(ctx: PCtx): void {
+export function trackRelations(ctx: PCtx): void {
   const x = ctx.ext();
   const now = relatedPairs(ctx.read());
   for (const key of x.related) if (!now.includes(key)) x.relationEnds[key] = ctx.now;
@@ -59,7 +68,7 @@ function trackRelations(ctx: PCtx): void {
  * Breaks every siege whose garrison has no settler left (§9.3): recalled ("abandoned"), or gone
  * with its eliminated besieger ("eliminated", §9.7). The one path for both.
  */
-function checkGarrisons(ctx: PCtx): void {
+export function checkGarrisons(ctx: PCtx): void {
   const x = ctx.ext();
   const settler = ctx.rules.roles.settler;
   for (const city of sortedIds(x.sieges)) {
@@ -78,7 +87,7 @@ function checkGarrisons(ctx: PCtx): void {
  * another player that does not record that besieger as its party yet, plus the movements recalled
  * in this step (a turned-back attack keeps its launch party).
  */
-function announceNewReturns(ctx: PCtx, step: StepInfo): void {
+export function announceNewReturns(ctx: PCtx, step: StepInfo): void {
   const recalled = new Set<string>();
   for (const e of step.events) {
     const m = e.data["movement"];
@@ -95,7 +104,8 @@ function announceNewReturns(ctx: PCtx, step: StepInfo): void {
   for (const p of pending.toSorted((a, b) => a.seq - b.seq)) announceHomecoming(ctx, p.id);
 }
 
-function cancelCountdown(ctx: PCtx, key: BlocKey, reason: CountdownCancelReason): void {
+/** Removes the countdown of `key` and its `domination_end` event, and emits the public cancellation. */
+export function cancelCountdown(ctx: PCtx, key: BlocKey, reason: CountdownCancelReason): void {
   const d = ctx.ext().domination;
   const cd = d.countdowns.find((c) => c.bloc === key) ?? fail(`no countdown for ${key}`);
   cancelIfQueued(ctx, cd.seq);
@@ -155,7 +165,7 @@ function startCountdowns(ctx: PCtx, blocs: readonly Bloc[]): void {
 }
 
 /** The result of a match won now by `winners` (one player, or a bloc's members). */
-function resultOf(ctx: PCtx, reason: string, winners: readonly PlayerId[]): MatchResult {
+function resultOf(ctx: PCtx100, reason: string, winners: readonly PlayerId[]): MatchResult {
   const sorted = winners.toSorted(compareIds);
   return {
     endedAt: ctx.now,
@@ -171,7 +181,7 @@ function resultOf(ctx: PCtx, reason: string, winners: readonly PlayerId[]): Matc
  * countdowns whose bloc changed or no longer qualifies, the last-standing win when exactly one
  * player is left, and new countdowns for qualifying blocs, in bloc order.
  */
-export function afterStep(ctx: PCtx, step: StepInfo): void {
+export function afterStep(ctx: PCtx100, step: StepInfo): void {
   checkGarrisons(ctx);
   announceNewReturns(ctx, step);
   trackRelations(ctx);
@@ -197,7 +207,7 @@ export function onDominationOpen(ctx: PCtx, _ev: ScheduledEvent): void {
  * qualifies with the same members wins and ends the match; the countdown of this event is removed.
  * One always does: a countdown that stopped qualifying was cancelled by the step that changed it.
  */
-export function onDominationEnd(ctx: PCtx, ev: ScheduledEvent): void {
+export function onDominationEnd(ctx: PCtx100, ev: ScheduledEvent): void {
   const x = ctx.ext();
   const d = x.domination;
   const mine = d.countdowns.find((c) => c.bloc === ev.ref && c.seq === ev.seq);
@@ -242,7 +252,7 @@ export function onDominationEnd(ctx: PCtx, ev: ScheduledEvent): void {
  * points, the third key of the final ranking (§13.4), would otherwise show through the order of
  * tied players (§12). Once the match is over, the final ranking, the winners first.
  */
-export function standings(r: PRead): Standing[] {
+export function standings(r: PRead100): Standing[] {
   const result = r.state.result;
   if (result !== null) return computeStandings(r.config, r.state, r.ext(), result.winners);
   const rows = scoreRows(r.config, r.state, r.ext()).map((row) =>
@@ -255,7 +265,7 @@ export function standings(r: PRead): Standing[] {
  * `hooks.finish` at `matchEnd`, after every other event of that second: the highest score wins, an
  * individual victory even for allies (§13.3).
  */
-export function finish(ctx: PCtx): MatchResult {
+export function finish(ctx: PCtx100): MatchResult {
   const x = ctx.ext();
   const winner = timeWinner(scoreRows(ctx.config, ctx.state, x), x.tiebreak);
   return resultOf(ctx, "time", winner === null ? [] : [winner]);

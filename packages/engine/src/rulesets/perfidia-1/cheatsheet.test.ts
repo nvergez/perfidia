@@ -3,8 +3,8 @@ import { renderCheatSheet } from "./cheatsheet.ts";
 import { compileRules } from "./compile.ts";
 import { PERFIDIA_1_DEFAULTS, type PerfidiaConfig, PerfidiaConfigSchema } from "./config.ts";
 
-// The cheat sheet equals docs/rulesets/perfidia-1.md §0 verbatim for the defaults (the block below
-// is copied from the document) and follows every override.
+// The cheat sheet equals docs/rulesets/perfidia-1-v1.0.0.md §0 verbatim for the defaults (the
+// block below is copied from the document) and follows every override.
 
 const SECTION_0 = [
   "TIME        integer game-seconds. 1 day = 86400. Match = 7 days = 604800.",

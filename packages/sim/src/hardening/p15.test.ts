@@ -208,7 +208,7 @@ const perturbation = (ref: Ref): fc.Arbitrary<Perturbation> => {
       g: fc.nat(5),
     }),
   ];
-  if (ref === "perfidia-1@1.0.0") {
+  if (ref.startsWith("perfidia-1@")) {
     list.push(
       fc.record({ kind: fc.constant("battlePoints" as const), pick, units: fc.nat(9) }),
       fc.record({ kind: fc.constant("garrison" as const), count: fc.integer({ min: 1, max: 30 }) }),
@@ -229,7 +229,7 @@ const perturbation = (ref: Ref): fc.Arbitrary<Perturbation> => {
   return fc.oneof(...list);
 };
 
-const players = (ref: Ref): number => (ref === "perfidia-1@1.0.0" ? 8 : 6);
+const players = (ref: Ref): number => (ref.startsWith("perfidia-1@") ? 8 : 6);
 
 async function world(ref: Ref, hour = HOUR): Promise<{ snap: Staged["snap"]; gw: GatewayState }> {
   const run = await cachedRun({

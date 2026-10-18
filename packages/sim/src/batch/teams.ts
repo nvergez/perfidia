@@ -15,18 +15,37 @@ import { botName } from "./seats.ts";
 // city by attackers of at least two players allied at the time, landing within `JOINT_WINDOW` of
 // each other), how each siege was held (reinforced by its besieger, relieved, and its outcome), the
 // war-call messages (`WAR#` tags of the bots' war-call protocol, `bots/src/war.ts`: private
-// messages are spectator-visible and logged with their text) and how near any bloc came to the
-// proposed R1 domination rule (at least 40% of the map's city slots, with at least 2 of them taken
-// by conquest). A bloc is an alliance (its members at the time) or a player outside any alliance
-// (perfidia-1 §13.3); a city counts for its owner, besieged or not.
+// messages are spectator-visible and logged with their text) and how near any bloc came to the R1
+// domination rule of perfidia-1@1.1.0 §13.3 (by default at least 35% of the map's city slots and
+// 2N, with at least 2 of them taken; a city is taken for its owner's bloc when the owner conquered
+// it and no member of the bloc ever owned it): with the match's own values when its config has
+// `victory.dominationMinConquests`, else (a 1.0.0 log) 1.1.0's defaults. A bloc is an alliance (its members at the time) or a player outside any
+// alliance (perfidia-1 §13.3); a city counts for its owner, besieged or not.
 
 /** Two battles at one city are a joint attack when they land at most this far apart (s). */
 export const JOINT_WINDOW = 3600;
 /** A war call counts behind a joint attack when sent at most this long before its first battle. */
 export const CALL_LEAD = 86400;
-/** R1: bloc cities ≥ `R1_SHARE_PM` ‰ of the map's city slots, rounded up, and conquered ≥ `R1_CONQUERED`. */
-export const R1_SHARE_PM = 400;
+/**
+ * The R1 values of perfidia-1@1.1.0's defaults, for a log whose config has none (1.0.0): bloc
+ * cities ≥ `R1_SHARE_PM` ‰ of the map's city slots, rounded up (and ≥
+ * `victory.dominationMinPerPlayer` × N), and taken cities ≥ `R1_CONQUERED`.
+ */
+export const R1_SHARE_PM = 350;
 export const R1_CONQUERED = 2;
+
+/** The domination rule R1 follows in a match: its numbers and when domination opens. */
+export interface R1Rule {
+  readonly pm: number;
+  /** The threshold's floor per seat (`victory.dominationMinPerPlayer`), and the seats. */
+  readonly minPerPlayer: number;
+  readonly players: number;
+  readonly minConquests: number;
+  /** `time.dominationStart`, `time.dominationHold` and `time.matchEnd`. */
+  readonly open: GameTime;
+  readonly hold: number;
+  readonly matchEnd: GameTime;
+}
 
 /** Battles at one city by attackers of ≥ 2 players allied at the time, landing within the window. */
 export interface JointAttack {
@@ -88,24 +107,39 @@ export interface WarCallStat {
   readonly stray: number;
 }
 
-/** How near a bloc came to the proposed R1 domination rule. */
+/** How near a bloc came to the R1 domination rule. */
 export interface R1Reach {
-  /** City slots of the map (every island's), and the cities R1 asks for. */
+  /** City slots of the map (every island's), and the cities and taken cities R1 asks for. */
   readonly slots: number;
   readonly need: number;
+  readonly needTaken: number;
   /** The bloc with the most cities at any time (ties: the most conquered, then the earliest). */
   readonly maxCities: number;
   readonly maxConquered: number;
   readonly maxAt: GameTime | null;
   /** Its members' controllers, without `bot:`. */
   readonly maxBloc: string[];
-  /** The most cities a bloc held while ≥ 2 of them were conquered; null when none ever had 2. */
+  /** The most cities a bloc held while ≥ `needTaken` of them were taken; null when none ever did. */
   readonly fightingMax: number | null;
-  /** The most conquered cities any bloc held at once. */
+  /** `need − fightingMax` (≥ 0): how many cities the best fighting bloc lacked; null when none. */
+  readonly shortfall: number | null;
+  /** The most taken cities any bloc held at once. */
   readonly mostConquered: number;
   /** When a bloc first met R1, and its members' controllers; null and empty when none did. */
   readonly reachedAt: GameTime | null;
   readonly reachedBy: string[];
+  /**
+   * Cities the bloc that first met R1 held then that one member had conquered from another (a
+   * staged trade before allying, or a recapture for an ally): R1 does not count them as taken;
+   * null when none met R1.
+   */
+  readonly takenFromBloc: number | null;
+  /**
+   * When a bloc first held R1 for `time.dominationHold` from the domination opening on, with the
+   * same members (a domination win under R1); null when none did. With the match's own rule
+   * (1.1.0) it is when the domination win fell due.
+   */
+  readonly heldAt: GameTime | null;
 }
 
 export interface TeamRecords {
@@ -118,10 +152,14 @@ export interface TeamRecords {
   readonly r1: R1Reach | null;
 }
 
-/** The initial world R1 needs: every city's starting owner (null: neutral) and the map's slots. */
+/**
+ * The initial world R1 needs: every city's starting owner (null: neutral) and the map's slots, and
+ * the rule to follow (without one: the proposed values, no floor, a 24 h hold from t = 0).
+ */
 export interface InitialMap {
   readonly slots: number;
   readonly owners: ReadonlyMap<string, PlayerId | null>;
+  readonly rule?: R1Rule;
 }
 
 const SiegeStartedSchema = z.looseObject({
@@ -186,7 +224,10 @@ interface R1Track {
   best: { cities: number; conquered: number; t: GameTime; bloc: PlayerId[] } | null;
   fightingMax: number | null;
   mostConquered: number;
-  reached: { t: GameTime; bloc: PlayerId[] } | null;
+  reached: { t: GameTime; bloc: PlayerId[]; fromBloc: number } | null;
+  /** Since when each bloc (keyed by its members joined by `,`) has met R1 without a break. */
+  since: Map<string, { t: GameTime; bloc: PlayerId[] }>;
+  held: { t: GameTime; bloc: PlayerId[] } | null;
 }
 
 /** Union-find over battle indexes. */
@@ -230,11 +271,50 @@ export function teamRecords(lines: readonly LogLine[], initial: InitialMap | nul
   const sieges: SiegeHold[] = [];
   const open = new Map<string, OpenSiege>();
 
-  // R1: each city's owner and whether it was taken by conquest; per player, cities and conquered.
+  // R1: each city's owner, the cities conquered and their former owners: a city is taken for its
+  // owner's bloc when the owner conquered it and no member of the bloc ever owned it. Per player,
+  // cities and taken cities.
   const owner = new Map<string, PlayerId | null>(initial?.owners ?? []);
-  const taken = new Set<string>();
-  const need = initial === null ? 0 : Math.floor((R1_SHARE_PM * initial.slots + 999) / 1000);
-  const r: R1Track = { best: null, fightingMax: null, mostConquered: 0, reached: null };
+  const conqueredCities = new Set<string>();
+  const formerOwners = new Map<string, Set<PlayerId>>();
+  /** Conquered, and none of `bloc` (the owner's bloc, the owner included) owned it before. */
+  const isTaken = (city: string, bloc: readonly PlayerId[]): boolean =>
+    conqueredCities.has(city) && !bloc.some((m) => formerOwners.get(city)?.has(m) ?? false);
+  /** Conquered from a member of `bloc` by another: taken for the owner alone, not for the bloc. */
+  const fromOwnBloc = (city: string, o: PlayerId, bloc: readonly PlayerId[]): boolean =>
+    isTaken(city, [o]) && !isTaken(city, bloc);
+  const blocOf = (o: PlayerId): PlayerId[] => {
+    const a = allianceOf.get(o);
+    return a === undefined ? [o] : [...(members.get(a) ?? [o])];
+  };
+  const rule = initial?.rule;
+  const need =
+    initial === null
+      ? 0
+      : Math.max(
+          rule === undefined ? 0 : rule.minPerPlayer * rule.players,
+          Math.floor(((rule?.pm ?? R1_SHARE_PM) * initial.slots + 999) / 1000),
+        );
+  const needTaken = rule?.minConquests ?? R1_CONQUERED;
+  const opensAt = rule?.open ?? 0;
+  const holdFor = rule?.hold ?? 86400;
+  const r: R1Track = {
+    best: null,
+    fightingMax: null,
+    mostConquered: 0,
+    reached: null,
+    since: new Map(),
+    held: null,
+  };
+  /** Records the first hold of `key` complete by `t`: `holdFor` from the opening on, by matchEnd. */
+  const heldBy = (key: string, t: GameTime): void => {
+    const start = r.since.get(key);
+    if (start === undefined || r.held !== null) return;
+    const done = Math.max(start.t, opensAt) + holdFor;
+    if (done <= t && done <= (rule?.matchEnd ?? Number.MAX_SAFE_INTEGER)) {
+      r.held = { t: done, bloc: start.bloc };
+    }
+  };
   const evaluate = (t: GameTime): void => {
     if (initial === null) return;
     const per = new Map<PlayerId, { cities: number; conquered: number }>();
@@ -242,7 +322,7 @@ export function teamRecords(lines: readonly LogLine[], initial: InitialMap | nul
       if (o === null) continue;
       const x = per.get(o) ?? { cities: 0, conquered: 0 };
       x.cities += 1;
-      if (taken.has(city)) x.conquered += 1;
+      if (isTaken(city, blocOf(o))) x.conquered += 1;
       per.set(o, x);
     }
     const blocs = new Map<string, PlayerId[]>();
@@ -250,6 +330,7 @@ export function teamRecords(lines: readonly LogLine[], initial: InitialMap | nul
       const key = allianceOf.get(p) ?? p;
       blocs.set(key, [...(blocs.get(key) ?? []), p]);
     }
+    const meeting = new Map<string, PlayerId[]>();
     for (const bloc of blocs.values()) {
       let cities = 0;
       let conquered = 0;
@@ -262,10 +343,27 @@ export function teamRecords(lines: readonly LogLine[], initial: InitialMap | nul
         r.best = { cities, conquered, t, bloc: sortIds(bloc) };
       }
       r.mostConquered = Math.max(r.mostConquered, conquered);
-      if (conquered >= R1_CONQUERED) r.fightingMax = Math.max(r.fightingMax ?? 0, cities);
-      if (r.reached === null && cities >= need && conquered >= R1_CONQUERED) {
-        r.reached = { t, bloc: sortIds(bloc) };
+      if (conquered >= needTaken) r.fightingMax = Math.max(r.fightingMax ?? 0, cities);
+      if (cities >= need && conquered >= needTaken) {
+        const sorted = sortIds(bloc);
+        meeting.set(sorted.join(","), sorted);
+        if (r.reached === null) {
+          let fromBloc = 0;
+          for (const [city, o] of owner) {
+            if (o !== null && bloc.includes(o) && fromOwnBloc(city, o, bloc)) fromBloc += 1;
+          }
+          r.reached = { t, bloc: sorted, fromBloc };
+        }
       }
+    }
+    for (const key of r.since.keys()) {
+      if (meeting.has(key)) continue;
+      heldBy(key, t);
+      r.since.delete(key);
+    }
+    for (const [key, bloc] of meeting) {
+      if (!r.since.has(key)) r.since.set(key, { t, bloc });
+      heldBy(key, t);
     }
   };
   evaluate(0);
@@ -301,22 +399,28 @@ export function teamRecords(lines: readonly LogLine[], initial: InitialMap | nul
       if (!d.success) continue;
       members.get(d.data.alliance)?.delete(d.data.player);
       allianceOf.delete(d.data.player);
+      evaluate(t);
     } else if (type === "alliance_dissolved") {
       const d = STANDARD_EVENT_DATA.alliance_dissolved.safeParse(data);
       if (!d.success) continue;
       for (const m of members.get(d.data.alliance) ?? []) allianceOf.delete(m);
       members.delete(d.data.alliance);
+      evaluate(t);
     } else if (type === "city_founded") {
       const d = STANDARD_EVENT_DATA.city_founded.safeParse(data);
       if (!d.success) continue;
       owner.set(d.data.city, d.data.owner);
-      taken.delete(d.data.city);
       evaluate(t);
     } else if (type === "city_conquered") {
       const d = STANDARD_EVENT_DATA.city_conquered.safeParse(data);
       if (!d.success) continue;
       owner.set(d.data.city, d.data.to);
-      taken.add(d.data.city);
+      conqueredCities.add(d.data.city);
+      if (d.data.from !== null) {
+        const former = formerOwners.get(d.data.city) ?? new Set<PlayerId>();
+        former.add(d.data.from);
+        formerOwners.set(d.data.city, former);
+      }
       const s = open.get(d.data.city);
       if (s !== undefined) {
         s.row.outcome = d.data.to === s.row.by ? "conquered" : "other";
@@ -472,21 +576,31 @@ export function teamRecords(lines: readonly LogLine[], initial: InitialMap | nul
   }
   joint.sort((a, b) => a.t - b.t || byCodeUnit(a.city, b.city));
 
-  const { best, reached } = r;
+  let lastT: GameTime = 0;
+  for (const line of lines) {
+    if (line.k === "end") lastT = Math.max(lastT, line.result.endedAt);
+    else if (line.k === "ev" || line.k === "act") lastT = Math.max(lastT, line.t);
+  }
+  for (const key of r.since.keys()) heldBy(key, lastT);
+  const { best, reached, held } = r;
   const r1: R1Reach | null =
     initial === null
       ? null
       : {
           slots: initial.slots,
           need,
+          needTaken,
           maxCities: best?.cities ?? 0,
           maxConquered: best?.conquered ?? 0,
           maxAt: best?.t ?? null,
           maxBloc: best === null ? [] : best.bloc.map((p) => botAt(p, best.t)),
           fightingMax: r.fightingMax,
+          shortfall: r.fightingMax === null ? null : Math.max(0, need - r.fightingMax),
           mostConquered: r.mostConquered,
           reachedAt: reached?.t ?? null,
           reachedBy: reached === null ? [] : reached.bloc.map((p) => botAt(p, reached.t)),
+          takenFromBloc: reached?.fromBloc ?? null,
+          heldAt: held?.t ?? null,
         };
   return { joint, sieges, calls, callers, r1 };
 }
@@ -526,13 +640,21 @@ export interface TeamStat {
   readonly r1: {
     readonly runs: number;
     readonly need: number | null;
+    /** The taken cities R1 asks for, when the same for all runs. */
+    readonly needTaken: number | null;
     readonly reached: number;
+    /** Runs where a bloc held R1 for the domination hold from the opening on (a win under R1). */
+    readonly held: number;
     /** Means of the largest bloc's cities and conquered cities. */
     readonly maxCities: number | null;
     readonly maxConquered: number | null;
-    /** Runs where a bloc held ≥ 2 conquered cities, and the mean of the most cities it then held. */
+    /**
+     * Runs where a bloc held the taken cities R1 asks for, the mean of the most cities it then
+     * held, and the mean of what it lacked of the threshold (`R1Reach.shortfall`).
+     */
     readonly fightingRuns: number;
     readonly fightingMax: number | null;
+    readonly shortfall: number | null;
   };
 }
 
@@ -582,6 +704,7 @@ export function teamStat(matches: readonly TeamOfMatch[]): TeamStat {
   const sum = (f: (m: TeamOfMatch) => number): number => matches.reduce((a, m) => a + f(m), 0);
   const known = matches.flatMap((m) => (m.r1 === null ? [] : [m.r1]));
   const needs = [...new Set(known.map((r) => r.need))];
+  const takens = [...new Set(known.map((r) => r.needTaken))];
   const fighting = known.flatMap((r) => (r.fightingMax === null ? [] : [r.fightingMax]));
   return {
     runs: matches.length,
@@ -603,11 +726,14 @@ export function teamStat(matches: readonly TeamOfMatch[]): TeamStat {
     r1: {
       runs: known.length,
       need: needs.length === 1 ? (needs[0] ?? null) : null,
+      needTaken: takens.length === 1 ? (takens[0] ?? null) : null,
       reached: known.filter((r) => r.reachedAt !== null).length,
+      held: known.filter((r) => r.heldAt !== null).length,
       maxCities: meanOrNull(known.map((r) => r.maxCities)),
       maxConquered: meanOrNull(known.map((r) => r.maxConquered)),
       fightingRuns: fighting.length,
       fightingMax: meanOrNull(fighting),
+      shortfall: meanOrNull(known.flatMap((r) => (r.shortfall === null ? [] : [r.shortfall]))),
     },
   };
 }

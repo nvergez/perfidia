@@ -1,7 +1,7 @@
 import type { Visibility } from "@perfidia/engine/contracts";
 import { defaultVisibility, sortedIds } from "@perfidia/engine/std";
 import type { CityId, JsonObject, MovementId, PlayerId } from "@perfidia/protocol";
-import { cityOf, own, type PRead, timePair } from "./common.ts";
+import { cityOf, own, type PRead100, timePair } from "./common.ts";
 import { BUILDING_IDS, CROWN_TAG, type PerfidiaConfig } from "./config.ts";
 import { blocCities, dominationThreshold, totalCities } from "./domination.ts";
 import { type PerfidiaExt, siegeOf, tiebreakPosition } from "./ext.ts";
@@ -13,7 +13,7 @@ import { cityPoints } from "./scoring.ts";
 // points never appear (only the capped battle score, through the standings).
 
 /** Every running countdown with the bloc's cities against the threshold (§13.2). */
-function countdowns(r: PRead): JsonObject[] {
+function countdowns(r: PRead100): JsonObject[] {
   const need = dominationThreshold(r.config, r.rules.players, totalCities(r.state));
   return r.ext().domination.countdowns.map((c) => ({
     key: c.bloc,
@@ -25,7 +25,7 @@ function countdowns(r: PRead): JsonObject[] {
 }
 
 /** The public extras of a city: its points, the Crown flag, and its siege with the end time. */
-function publicCity(r: PRead, _viewer: PlayerId, city: CityId): JsonObject {
+function publicCity(r: PRead100, _viewer: PlayerId, city: CityId): JsonObject {
   const c = cityOf(r.state, city);
   let levels = 0;
   for (const b of BUILDING_IDS) levels += c.buildings[b] ?? 0;
@@ -38,12 +38,12 @@ function publicCity(r: PRead, _viewer: PlayerId, city: CityId): JsonObject {
 }
 
 /** The public extras of a player: its position in the public tie-break order (1 = best). */
-function publicPlayer(r: PRead, p: PlayerId): JsonObject {
+function publicPlayer(r: PRead100, p: PlayerId): JsonObject {
   return { tiebreak: tiebreakPosition(r.ext(), p) + 1 };
 }
 
 /** The public extras of the match: the tie-break order and the domination state. */
-function publicMatch(r: PRead): JsonObject {
+function publicMatch(r: PRead100): JsonObject {
   const x = r.ext();
   return {
     tiebreak: [...x.tiebreak],
@@ -59,7 +59,7 @@ function publicMatch(r: PRead): JsonObject {
  * The seat's briefing extras (§8.2): the sieges it holds (city, owner, end) and every running
  * domination countdown. Its own besieged cities show their siege through `publicCity`.
  */
-function briefing(r: PRead, viewer: PlayerId): JsonObject {
+function briefing(r: PRead100, viewer: PlayerId): JsonObject {
   const sieges = r.ext().sieges;
   const holding = sortedIds(sieges).flatMap((city) => {
     const siege = own(sieges, city);
@@ -71,10 +71,10 @@ function briefing(r: PRead, viewer: PlayerId): JsonObject {
 
 /** `hooks.visibility` of perfidia-1. */
 export const perfidiaVisibility: Visibility<PerfidiaConfig, PerfidiaExt> = Object.freeze({
-  cityAccess(r: PRead, viewer: PlayerId, city: CityId): "full" | "public" {
+  cityAccess(r: PRead100, viewer: PlayerId, city: CityId): "full" | "public" {
     return defaultVisibility.cityAccess(r, viewer, city);
   },
-  movementAccess(r: PRead, viewer: PlayerId, m: MovementId): "own" | "full" | "incoming" | null {
+  movementAccess(r: PRead100, viewer: PlayerId, m: MovementId): "own" | "full" | "incoming" | null {
     return defaultVisibility.movementAccess(r, viewer, m);
   },
   publicCity,

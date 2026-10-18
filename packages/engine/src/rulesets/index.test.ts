@@ -7,7 +7,7 @@ import type { AnyRuleset, ExtraTool } from "@perfidia/engine/contracts";
 import { LogRecorder } from "@perfidia/engine/testing";
 import { idKeyFromSeed } from "@perfidia/engine/core";
 import { RulesetRefSchema, z, type CompiledRules } from "@perfidia/protocol";
-import { perfidia1_1_0_0 } from "./perfidia-1/index.ts";
+import { perfidia1_1_0_0, perfidia1_1_1_0 } from "./perfidia-1/index.ts";
 import { sandbox1_1_0_0 } from "./sandbox-1/index.ts";
 import {
   RULESETS,
@@ -63,9 +63,10 @@ const readTool = (name: string, args: z.ZodType = z.strictObject({})): ExtraTool
 });
 
 describe("the registry", () => {
-  test("RULESETS lists perfidia-1@1.0.0 (published) and sandbox-1@1.0.0 (test), and validates", () => {
+  test("RULESETS lists perfidia-1@1.0.0 and @1.1.0 (published) and sandbox-1@1.0.0 (test), and validates", () => {
     expect(RULESETS.map((rs) => [rs.ref, rs.status])).toEqual([
       ["perfidia-1@1.0.0", "published"],
+      ["perfidia-1@1.1.0", "published"],
       ["sandbox-1@1.0.0", "test"],
     ]);
     expect(() => validateRegistry()).not.toThrow();
@@ -89,7 +90,10 @@ describe("the registry", () => {
 
   test("findRuleset resolves exact refs and bare ids; a bare id falls back to a test version", () => {
     expect(findRuleset("perfidia-1@1.0.0")).toBe(perfidia1_1_0_0);
-    expect(findRuleset("perfidia-1")).toBe(perfidia1_1_0_0);
+    expect(findRuleset("perfidia-1@1.1.0")).toBe(perfidia1_1_1_0);
+    // The bare id is the latest published version, 1.1.0; 1.0.0 stays reachable by its exact ref.
+    expect(findRuleset("perfidia-1")).toBe(perfidia1_1_1_0);
+    expect(findRuleset("perfidia-1@1.0.1")).toBeUndefined();
     // sandbox-1 has no published version: the bare id resolves to its latest test version.
     expect(findRuleset("sandbox-1")).toBe(sandbox);
     expect(findRuleset("sandbox-1@1.0.0")).toBe(sandbox);
@@ -110,7 +114,9 @@ describe("the registry", () => {
   });
 
   test("getRuleset throws UnknownRuleset listing the refs of the build", () => {
-    expect(getRuleset("perfidia-1")).toBe(perfidia1_1_0_0);
+    expect(getRuleset("perfidia-1")).toBe(perfidia1_1_1_0);
+    expect(getRuleset("perfidia-1@1.0.0")).toBe(perfidia1_1_0_0);
+    expect(getRuleset("perfidia-1@1.1.0")).toBe(perfidia1_1_1_0);
     let caught: unknown;
     try {
       getRuleset("perfidia-9@1.0.0");
@@ -119,8 +125,8 @@ describe("the registry", () => {
     }
     expect(caught).toBeInstanceOf(UnknownRuleset);
     if (!(caught instanceof UnknownRuleset)) throw new Error("no error");
-    expect(caught.known).toEqual(["perfidia-1@1.0.0", "sandbox-1@1.0.0"]);
-    expect(caught.message).toContain("perfidia-1@1.0.0, sandbox-1@1.0.0");
+    expect(caught.known).toEqual(["perfidia-1@1.0.0", "perfidia-1@1.1.0", "sandbox-1@1.0.0"]);
+    expect(caught.message).toContain("perfidia-1@1.0.0, perfidia-1@1.1.0, sandbox-1@1.0.0");
   });
 
   test("getRuleset validates its list before looking it up", () => {

@@ -158,6 +158,20 @@ const CONFIGS: Readonly<Record<Ref, readonly Readonly<Record<string, Json>>[]>> 
       "time.dominationStart": 7200,
     },
   ],
+  // 1.1.0: the same, then a threshold of N cities with one taken, so that countdowns start, are
+  // cancelled on recaptures and membership changes, and can end the match.
+  "perfidia-1@1.1.0": [
+    {},
+    {
+      "time.protectionEnd": 0,
+      "time.capitalImmunityEnd": 3600,
+      "time.siegeDuration": 3600,
+      "time.dominationStart": 7200,
+      "victory.dominationPm": 1,
+      "victory.dominationMinPerPlayer": 1,
+      "victory.dominationMinConquests": 1,
+    },
+  ],
   "sandbox-1@1.0.0": [{}],
 };
 
@@ -219,7 +233,7 @@ describe("P4 at scale: random intents and time advances", () => {
       expect(all.events["shipment_delivered"] ?? 0).toBeGreaterThan(0);
       expect(all.events["city_founded"] ?? 0).toBeGreaterThan(0);
       expect(all.events["city_conquered"] ?? 0).toBeGreaterThan(0);
-      if (ref === "perfidia-1@1.0.0") {
+      if (ref.startsWith("perfidia-1@")) {
         // The compressed config (the explicit example among its runs) reaches the late game.
         const late = tallies[last]?.events ?? {};
         for (const type of ["siege_started", "city_conquered", "player_eliminated"]) {

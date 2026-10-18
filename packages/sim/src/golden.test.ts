@@ -11,10 +11,12 @@ import { cpSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { RULESETS, getRuleset, verifyLog, type AnyRuleset } from "@perfidia/engine";
-import type { EvLine, LogLine } from "@perfidia/protocol";
+import { CityIdSchema, PlayerIdSchema, type EvLine, type LogLine } from "@perfidia/protocol";
+import { Perfidia11ExtSchema, type Perfidia11Ext } from "@perfidia/engine/rulesets/perfidia-1";
 import { parseWar } from "@perfidia/bots";
 import { teamRecords } from "./batch/index.ts";
 import { SCENARIO_LATE_LABEL, runScenarioLate } from "./exit/scenario.ts";
+import { SCENARIO_R1_LABEL, SCENARIO_R1_OVERRIDES, runScenarioR1 } from "./exit/scenario_r1.ts";
 import { FIXTURES_DIR } from "./golden/index.ts";
 import {
   FINGERPRINTS_FILE,
@@ -28,6 +30,7 @@ import {
 } from "./harness/index.ts";
 
 const PERFIDIA = "perfidia-1@1.0.0";
+const P11 = "perfidia-1@1.1.0";
 const SANDBOX = "sandbox-1@1.0.0";
 
 /** The phase-1 bots: the controllers of the first bot goldens. */
@@ -92,6 +95,8 @@ describe("the freeze guard", () => {
     // bot golden exists for the phase-1 bots and, suffixed with a hash of its labels, for the
     // default bots of PR #7 (rusher@2, conqueror@1), of PR #8 (the relief release) and of this
     // build (every strategy at its latest version): the older ones keep their Level G check.
+    // perfidia-1@1.1.0 has the same bot goldens, for the default bots of its release, and the
+    // scripted `scenario-r1`.
     expect(report.goldens.map((g) => `${g.ref}/${g.name} ${g.levelG}`)).toEqual([
       `${PERFIDIA}/lockstep-12p-1d-${RELIEF_12P} pass`,
       `${PERFIDIA}/lockstep-12p-1d-${BOTS_12P} pass`,
@@ -107,6 +112,11 @@ describe("the freeze guard", () => {
       `${PERFIDIA}/rt-virtual-6p-1d-${BOTS_6P} pass`,
       `${PERFIDIA}/rt-virtual-6p-1d pass`,
       `${PERFIDIA}/scenario-late skipped`,
+      `${P11}/lockstep-12p-1d pass`,
+      `${P11}/lockstep-6p-4d pass`,
+      `${P11}/lockstep-6p-6d-war pass`,
+      `${P11}/rt-virtual-6p-1d pass`,
+      `${P11}/scenario-r1 skipped`,
       `${SANDBOX}/lockstep-6p-3d-${FIGHT_6P} pass`,
       `${SANDBOX}/lockstep-6p-3d-${RELIEF_6P} pass`,
       `${SANDBOX}/lockstep-6p-3d-${BOTS_6P} pass`,
@@ -119,14 +129,14 @@ describe("the freeze guard", () => {
     // Every published ref of the registry has at least one golden and a fingerprint entry.
     const fp = readFingerprints(FIXTURES_DIR);
     const published = RULESETS.filter((rs) => rs.status === "published");
-    expect(published.map((rs) => rs.ref)).toContain(PERFIDIA);
+    expect(published.map((rs) => rs.ref)).toEqual([PERFIDIA, P11]);
     for (const rs of published) {
       expect(report.goldens.some((g) => g.ref === rs.ref)).toBe(true);
       expect(fp[rs.ref]?.artefacts).toBe(report.fingerprints[rs.ref] ?? "");
       expect(Object.keys(fp[rs.ref]?.goldens ?? {}).length).toBeGreaterThan(0);
     }
     for (const g of report.goldens) expect(fp[g.ref]?.goldens[g.name]).toBe(g.finalHash ?? "");
-  }, 60000);
+  }, 240000);
 
   test("a tampered copy of the fixtures fails: a flipped result, then a deleted golden", async () => {
     const dir = fixturesCopy();
@@ -459,6 +469,142 @@ describe("what the goldens cover (§13.5)", () => {
   test("the scenario agent still plays scenario-late byte for byte", async () => {
     const lines = readLog(golden(PERFIDIA, "scenario-late").path);
     const again = await runScenarioLate();
+    expect(normalisedText(again.lines)).toBe(normalisedText(lines));
+  });
+});
+
+/** The conquest records of a 1.1.0 match after `line`, from a replay of its log. */
+function conquestsAt(
+  lines: readonly LogLine[],
+  at: (line: LogLine) => boolean,
+): Map<LogLine, Perfidia11Ext["conquests"]> {
+  const out = new Map<LogLine, Perfidia11Ext["conquests"]>();
+  const report = verifyLog(lines, {
+    onLine: (line, r) => {
+      if (at(line)) out.set(line, Perfidia11ExtSchema.parse(r.ext()).conquests);
+    },
+  });
+  expect(report.ok).toBe(true);
+  return out;
+}
+
+describe("what the perfidia-1@1.1.0 goldens cover (§13.5)", () => {
+  test("the bot goldens: the default bots of this build, the renamed ids, no countdown without conquests", () => {
+    for (const name of ["lockstep-6p-4d", "lockstep-12p-1d", "rt-virtual-6p-1d"]) {
+      const lines = readLog(golden(P11, name).path);
+      const header = lines[0];
+      if (header?.k !== "header") throw new Error(`no header in ${name}`);
+      expect(header.setup.ruleset).toBe(P11);
+      expect(new Set(Object.values(header.controllers))).toEqual(new Set(DEFAULT_LABELS));
+      expect(Object.keys(header.config["buildings"] ?? {})).toContain("acropolis");
+      const units = Object.keys(header.config["units"] ?? {});
+      for (const unit of ["hoplite", "peltast", "trireme"]) expect(units).toContain(unit);
+      for (const old of ["hall", "lumber", "mine", "guard", "raider", "warship", "crown"]) {
+        expect(JSON.stringify(header.config)).not.toContain(`"${old}"`);
+      }
+    }
+    const four = readLog(golden(P11, "lockstep-6p-4d").path);
+    expect(four[0]).toMatchObject({ setup: { overrides: { "time.matchEnd": 345600 } } });
+    const end = four.at(-1);
+    if (end?.k !== "end") throw new Error("no end line");
+    expect(end.t).toBe(345600);
+    expect(evs(four, "siege_started").length).toBeGreaterThan(0);
+    // Domination opens at the start of day 4 (259200), the last second a countdown could still end
+    // by this match's end (345600), and a bloc that took no city cannot start one (§13.3).
+    expect(evs(four, "city_conquered")).toEqual([]);
+    expect(evs(four, "domination_started")).toEqual([]);
+    expect(readLog(golden(P11, "rt-virtual-6p-1d").path)[0]).toMatchObject({
+      clock: { kind: "realtime", speed: [3, 1], time: "virtual", latencyMs: [2000, 60000] },
+    });
+  });
+
+  test("lockstep-6p-6d-war: the war-call bots take cities, and a pair wins by domination by conquest", () => {
+    const lines = readLog(golden(P11, "lockstep-6p-6d-war").path);
+    const header = lines[0];
+    if (header?.k !== "header") throw new Error("no header");
+    expect(header.setup.overrides).toEqual({ "time.matchEnd": 518400 });
+    expect(header.controllers).toEqual({
+      p1: "bot:conqueror@3",
+      p2: "bot:opportunist@3",
+      p3: "bot:turtle@3",
+      p4: "bot:conqueror@3",
+      p5: "bot:expander@2",
+      p6: "bot:rusher@3",
+    });
+    const conquests = evs(lines, "city_conquered");
+    expect(conquests.length).toBeGreaterThanOrEqual(3);
+    const records = conquestsAt(lines, (l) => l.k === "ev" && conquests.includes(l));
+    let taken = 0;
+    for (const c of conquests) {
+      const city = CityIdSchema.parse(field(c, "city"));
+      const to = PlayerIdSchema.parse(field(c, "to"));
+      const record = records.get(c)?.[city];
+      expect(record?.by).toBe(to);
+      if (record?.former.includes(to) === false) taken += 1;
+    }
+    expect(taken).toBeGreaterThanOrEqual(2);
+    // The countdown of a bloc holding the threshold (16 cities at N = 6) with 2 taken cities, held
+    // for 24 h: the match ends by domination before day 6 is over.
+    const started = evs(lines, "domination_started");
+    const win = started.at(-1);
+    if (win === undefined) throw new Error("no countdown");
+    expect(Number(field(win, "threshold"))).toBe(16);
+    expect(Number(field(win, "needTaken"))).toBe(2);
+    expect(Number(field(win, "taken"))).toBeGreaterThanOrEqual(2);
+    expect(Number(field(win, "cities"))).toBeGreaterThanOrEqual(16);
+    const end = lines.at(-1);
+    if (end?.k !== "end") throw new Error("no end line");
+    expect(end.result.reason).toBe("domination");
+    expect(end.result.winners as unknown).toEqual(field(win, "members"));
+    expect(end.t).toBe(Number(field(win, "endsAt")));
+    expect(end.t).toBeLessThan(518400);
+  }, 60000);
+
+  test("scenario-r1: no countdown at one city taken, one at two, cancelled by a recapture, a win after Olympus is taken", () => {
+    const lines = readLog(golden(P11, "scenario-r1").path);
+    const header = lines[0];
+    if (header?.k !== "header") throw new Error("no header");
+    expect(new Set(Object.values(header.controllers))).toEqual(new Set([SCENARIO_R1_LABEL]));
+    expect(header.setup.overrides).toEqual(SCENARIO_R1_OVERRIDES);
+    const conquests = evs(lines, "city_conquered");
+    expect(conquests.map((l) => [l.t, field(l, "city"), field(l, "from"), field(l, "to")])).toEqual(
+      [
+        [11400, "c4", "p4", "p1"],
+        [12000, "c5", "p5", "p2"],
+        [22200, "c4", "p1", "p4"],
+        [29800, "c7", null, "p1"],
+      ],
+    );
+    const started = evs(lines, "domination_started");
+    expect(
+      started.map((l) => [l.t, field(l, "members"), field(l, "taken"), field(l, "needTaken")]),
+    ).toEqual([
+      [12000, ["p1", "p2"], 2, 2],
+      [29800, ["p1", "p2"], 2, 2],
+    ]);
+    expect(
+      evs(lines, "domination_cancelled").map((l) => [l.t, field(l, "key"), field(l, "reason")]),
+    ).toEqual([[22200, "a1", "condition"]]);
+    const end = lines.at(-1);
+    if (end?.k !== "end") throw new Error("no end line");
+    expect(end.result.reason).toBe("domination");
+    expect(end.result.winners as unknown).toEqual(["p1", "p2"]);
+    expect(started.map((l) => field(l, "key"))).toEqual(["a1", "a1"]);
+    const win = started.at(-1);
+    if (win === undefined) throw new Error("no countdown");
+    expect(end.t).toBe(Number(field(win, "endsAt")));
+    // The recapture is recorded with its former owners, so c4 is not a taken city of p4.
+    const last = conquests.at(-1);
+    if (last === undefined) throw new Error("unreachable");
+    const records = conquestsAt(lines, (l) => l === last).get(last);
+    expect(records?.["c4"]).toEqual({ by: "p4", former: ["p1", "p4"] });
+    expect(records?.["c5"]).toEqual({ by: "p2", former: ["p5"] });
+    expect(records?.["c7"]).toEqual({ by: "p1", former: [] });
+  });
+
+  test("the scenario agent still plays scenario-r1 byte for byte", async () => {
+    const lines = readLog(golden(P11, "scenario-r1").path);
+    const again = await runScenarioR1();
     expect(normalisedText(again.lines)).toBe(normalisedText(lines));
   });
 });
