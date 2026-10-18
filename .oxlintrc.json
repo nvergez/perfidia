@@ -49,6 +49,7 @@
         "packages/protocol/**",
         "packages/engine/**",
         "packages/gateway/src/**",
+        "packages/spectator/src/**",
         "packages/bots/src/**"
       ],
       "excludeFiles": ["**/*.test.ts"],
@@ -608,7 +609,11 @@
       }
     },
     {
-      "files": ["packages/gateway/**/*.test.ts", "packages/bots/**/*.test.ts"],
+      "files": [
+        "packages/gateway/**/*.test.ts",
+        "packages/bots/**/*.test.ts",
+        "packages/spectator/**/*.test.ts"
+      ],
       "plugins": ["import"],
       "rules": {
         "typescript/triple-slash-reference": [
@@ -650,6 +655,66 @@
           }
         ],
         "import/no-unassigned-import": "off"
+      },
+      "excludeFiles": [
+        "packages/spectator/src/testkit.test.ts",
+        "packages/spectator/src/architecture.test.ts"
+      ]
+    },
+    {
+      "files": ["packages/spectator/src/reduce/**"],
+      "excludeFiles": ["**/*.test.ts"],
+      "plugins": ["import"],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "paths": [
+              {
+                "name": "bun",
+                "message": "Pure code (protocol, engine, gateway and bot sources, docs/architecture.md §2.4): no Bun APIs."
+              },
+              {
+                "name": "elysia",
+                "message": "Pure package: HTTP lives in the server package."
+              },
+              {
+                "name": "@perfidia/protocol",
+                "message": "The reduce sub-path is the web's part of the spectator package: it imports @perfidia/protocol/spectator only (phase-3 design §2.1)."
+              },
+              {
+                "name": "@perfidia/engine",
+                "message": "The reduce sub-path is the web's part of the spectator package: it imports @perfidia/protocol/spectator only (phase-3 design §2.1)."
+              },
+              {
+                "name": "@perfidia/gateway",
+                "message": "The reduce sub-path is the web's part of the spectator package: it imports @perfidia/protocol/spectator only (phase-3 design §2.1)."
+              }
+            ],
+            "patterns": [
+              {
+                "group": ["bun:*"],
+                "message": "Pure code (protocol, engine, gateway and bot sources, docs/architecture.md §2.4): no Bun APIs."
+              },
+              {
+                "group": ["node:*"],
+                "message": "Pure code (protocol, engine, gateway and bot sources, docs/architecture.md §2.4): no Node APIs."
+              },
+              {
+                "group": ["@elysiajs/*"],
+                "message": "Pure package: HTTP lives in the server package."
+              },
+              {
+                "group": ["@perfidia/engine/*", "@perfidia/gateway/*"],
+                "message": "The reduce sub-path is the web's part of the spectator package: it imports @perfidia/protocol/spectator only (phase-3 design §2.1)."
+              },
+              {
+                "group": ["../fold/*", "../annotations/*", "../*.ts"],
+                "message": "The reduce sub-path is the web's part of the spectator package: it imports @perfidia/protocol/spectator only (phase-3 design §2.1)."
+              }
+            ]
+          }
+        ]
       }
     },
     {
@@ -753,6 +818,33 @@
               {
                 "group": ["@perfidia/engine/rulesets", "@perfidia/engine/rulesets/*"],
                 "message": "Engine core layers (core, contracts, kernel, std, domain) never import a ruleset or the registry; the kernel receives the ruleset as an argument (§2.3)."
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "files": ["packages/server/src/**"],
+      "excludeFiles": ["**/*.test.ts"],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "paths": [
+              {
+                "name": "@anthropic-ai/sdk",
+                "message": "The spectator server never talks to a model provider (phase-3 design §2.1)."
+              },
+              {
+                "name": "@perfidia/orchestrator",
+                "message": "The server reads run directories; the orchestrator is a dev dependency for tests only."
+              }
+            ],
+            "patterns": [
+              {
+                "group": ["@anthropic-ai/sdk/*"],
+                "message": "The spectator server never talks to a model provider (phase-3 design §2.1)."
               }
             ]
           }

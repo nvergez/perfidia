@@ -2,9 +2,11 @@ import { canonicalJson, HOUR } from "@perfidia/engine/core";
 import type { AnyRuleset, DomainModule, ReadCtx } from "@perfidia/engine/contracts";
 import type {
   CkptLine,
+  DeepReadonly,
   DomainEvent,
   EndLine,
   EvLine,
+  GameState,
   GameTime,
   Hash64,
   HeaderLine,
@@ -12,7 +14,7 @@ import type {
   Snapshot,
 } from "@perfidia/protocol";
 import { resolveConfigFull, rulesHashOf } from "./config.ts";
-import { errorMessage } from "./errors.ts";
+import { EngineMisuse, errorMessage } from "./errors.ts";
 import type { InvariantLevel } from "./invariants.ts";
 import { createMatch, loadMatch, type ApplyOutput, type Match } from "./match.ts";
 import { ENGINE_VERSION } from "./version.ts";
@@ -21,7 +23,8 @@ import { ENGINE_VERSION } from "./version.ts";
 // engine and compares the config, the compiled rules, the initial hash, every act result, every
 // event (in the line order of §10.2), every checkpoint, the result and the final hash. Pure and
 // browser-runnable. In a divergence, `expected` is what the log records (or what a complete log
-// has) and `actual` what the replay produced.
+// has) and `actual` what the replay produced. `createReplay` is the incremental form (a log being
+// written, line by line, for the spectator fold); `verifyLog` is a loop over it.
 
 export type DivergenceKind =
   | "header"
@@ -119,23 +122,131 @@ function lineN(line: LogLine): number | undefined {
     : undefined;
 }
 
-class Replayer {
-  private readonly report: ReplayReport;
+/** What one pushed line did. */
+export interface ReplayStep {
+  /** False once the replay has diverged, at this line or an earlier one: nothing more is replayed. */
+  readonly ok: boolean;
+  /**
+   * The engine state may have changed at this line: an act was applied, or at least one scheduled
+   * event ran while the engine advanced to the line's time. A world timer that emits nothing (such
+   * as perfidia-1's `domination_open`) counts: it moves neither the event hash nor any `ev` line.
+   * Checkpoints alone change nothing but `now`.
+   */
+  readonly changed: boolean;
+  /**
+   * The events the engine produced at this line, in emission order: the next `ev` lines of the log,
+   * this one included when it is an `ev` line at a new time (the same events, when the log holds up).
+   */
+  readonly events: readonly DomainEvent[];
+  /** The engine's verdict on an act line. */
+  readonly applied?: ApplyOutput;
+}
+
+export interface FinishOptions {
+  /** Default true: a log without an end line diverges. False for a log that is still being written. */
+  readonly requireEnd?: boolean;
+}
+
+/**
+ * The incremental Level E replay of one log (§10.4): created from its header, then fed every later
+ * line in file order. `verifyLog` is a loop over it. After a divergence nothing more is replayed:
+ * `push` returns `ok: false`, and the report names the first divergence.
+ */
+export interface Replay {
+  push(line: LogLine): ReplayStep;
+  /** The engine's read view after the last line pushed; throws when no match could be created. */
+  read(): ReadCtx;
+  /** The first divergence, once there is one. */
+  readonly divergence: ReplayDivergence | null;
+  /** The end line was replayed. */
+  readonly ended: boolean;
+  /** Lines given so far, the header included. */
+  readonly lines: number;
+  /**
+   * The engine snapshot right after the last line pushed, which must be the header or a `ckpt`
+   * line: `opts.from` of a later replay of the same log resumes there. `EngineMisuse` elsewhere.
+   */
+  snapshot(): Snapshot;
+  /**
+   * The report so far. With `requireEnd` (the default) a log without an end line is an `end`
+   * divergence, latched like any other; without it, events and checkpoints the engine produced past
+   * the last line are not divergences (the log is still being written).
+   */
+  finish(o?: FinishOptions): ReplayReport;
+}
+
+const NOT_OK: ReplayStep = Object.freeze({ ok: false, changed: false, events: [] });
+
+class Replayer implements Replay {
+  private readonly report: ReplayReport = {
+    ok: true,
+    actions: 0,
+    checkpoints: 0,
+    finalHash: null,
+    warnings: [],
+  };
   private readonly opts: VerifyOptions;
   private readonly compare: boolean;
   private readonly pending: Pending[] = [];
   private readonly pendingCk: { hour: number; t: GameTime; h: Hash64 }[] = [];
   private match: Match | null = null;
+  private state: DeepReadonly<GameState> | null = null;
   /**
    * The last act line, while only its `ev` lines follow it: an `ev` line at its time carries one of
    * its events (§10.2), so a missing event is attributed to its `n`.
    */
   private lastAct: { readonly t: GameTime; readonly n: number } | null = null;
+  /** With `opts.from`: skipping the lines up to the `ckpt` line of the snapshot's hour. */
+  private skipping = false;
+  private skipN = 0;
+  private prevT = 0;
+  private prevN = 0;
+  private lastKind: LogLine["k"] | null = null;
+  private diverged: ReplayDivergence | null = null;
+  private done = false;
+  private count = 0;
+  /** What the line being pushed did. */
+  private stepEvents: DomainEvent[] = [];
+  private stepChanged = false;
 
-  constructor(report: ReplayReport, opts: VerifyOptions) {
-    this.report = report;
+  constructor(
+    first: LogLine | undefined,
+    resolve: (ref: string) => AnyRuleset | undefined,
+    domain: DomainModule,
+    opts: VerifyOptions,
+  ) {
     this.opts = opts;
     this.compare = opts.compareEvents ?? true;
+    if (first !== undefined) this.count = 1;
+    try {
+      if (first === undefined || first.k !== "header") {
+        diverge({
+          kind: "header",
+          t: 0,
+          expected: "a header line first",
+          actual: first === undefined ? "an empty log" : `a ${first.k} line`,
+        });
+      }
+      const ruleset = this.start(first, resolve, domain);
+      const from = opts.from;
+      if (from === undefined) this.opts.onLine?.(first, this.m.read());
+      else this.skipping = this.loadSnapshot(first, from, ruleset, domain);
+    } catch (error) {
+      if (!(error instanceof Diverged)) throw error;
+      this.latch(error.divergence);
+    }
+  }
+
+  get divergence(): ReplayDivergence | null {
+    return this.diverged;
+  }
+
+  get ended(): boolean {
+    return this.done;
+  }
+
+  get lines(): number {
+    return this.count;
   }
 
   private get m(): Match {
@@ -143,143 +254,186 @@ class Replayer {
     return this.match;
   }
 
-  run(
-    lines: Iterable<LogLine>,
-    resolve: (ref: string) => AnyRuleset | undefined,
-    domain: DomainModule,
-  ): void {
-    const it = lines[Symbol.iterator]();
-    const first = it.next();
-    if (first.done === true || first.value.k !== "header") {
-      diverge({
-        kind: "header",
-        t: 0,
-        expected: "a header line first",
-        actual: first.done === true ? "an empty log" : `a ${first.value.k} line`,
-      });
+  read(): ReadCtx {
+    if (this.match === null) {
+      throw new EngineMisuse(
+        `replay: no match to read (${this.diverged?.kind ?? "header"} divergence)`,
+      );
     }
-    const header = first.value;
-    const ruleset = this.start(header, resolve, domain);
-
-    let prevT = 0;
-    let prevN = 0;
-    const from = this.opts.from;
-    if (from !== undefined) {
-      [prevT, prevN] = this.skipToSnapshot(it, header, from, ruleset, domain);
-    } else {
-      this.opts.onLine?.(header, this.m.read());
-    }
-
-    let ended = false;
-    for (let next = it.next(); next.done !== true; next = it.next()) {
-      const line = next.value;
-      if (line.k === "header") {
-        diverge({
-          kind: "order",
-          t: prevT,
-          expected: "one header line, first",
-          actual: "another header line",
-        });
-      }
-      const n = lineN(line);
-      if (ended) {
-        diverge(
-          withN(
-            {
-              kind: "order",
-              t: line.t,
-              expected: "no line after the end line",
-              actual: `a ${line.k} line`,
-            },
-            n,
-          ),
-        );
-      }
-      if (line.t < prevT) {
-        diverge(
-          withN(
-            {
-              kind: "order",
-              t: line.t,
-              expected: `t ≥ ${prevT}`,
-              actual: `a ${line.k} line at t = ${line.t}`,
-            },
-            n,
-          ),
-        );
-      }
-      if (n !== undefined) {
-        // The host numbers act, gw, obs and note lines without gaps (§10.2): a missing one, which
-        // changes no engine state and so no hash, would otherwise go unnoticed.
-        if (n !== prevN + 1) {
-          diverge({
-            kind: "order",
-            t: line.t,
-            n,
-            expected: `n = ${prevN + 1}`,
-            actual: `a ${line.k} line with n = ${n}`,
-          });
-        }
-        prevN = n;
-      }
-      prevT = line.t;
-      let applied: ApplyOutput | undefined;
-      switch (line.k) {
-        case "ev":
-          this.advance(line.t);
-          this.matchEvent(line);
-          break;
-        case "ckpt":
-          this.advance(line.t);
-          this.matchCheckpoint(line);
-          break;
-        case "act":
-          this.advance(line.t);
-          this.caughtUp(line.k, line.t, n);
-          applied = this.applyAct(line);
-          break;
-        case "wake":
-        case "batch":
-        case "defer":
-        case "controller":
-          this.advance(line.t);
-          this.caughtUp(line.k, line.t, n);
-          break;
-        case "gw":
-        case "obs":
-        case "note":
-        case "turn":
-          this.advance(line.t);
-          break;
-        case "end":
-          this.advance(line.t);
-          this.caughtUp(line.k, line.t, n);
-          this.finish(line);
-          ended = true;
-          break;
-        case "fatal":
-          diverge({
-            kind: "end",
-            t: line.t,
-            expected: "a log that ends with an end line",
-            actual: `a fatal line (${line.error.kind}): ${line.error.message}`,
-          });
-      }
-      if (line.k === "act") this.lastAct = { t: line.t, n: line.n };
-      else if (line.k !== "ev") this.lastAct = null;
-      this.opts.onLine?.(line, this.m.read(), applied);
-    }
-    if (!ended) {
-      diverge({
-        kind: "end",
-        t: prevT,
-        expected: "an end line",
-        actual: `the log stops at t = ${prevT}`,
-      });
-    }
+    return this.match.read();
   }
 
-  /** Step 1 of §10.4: ruleset, config, compiled rules; then the match from the header or a snapshot. */
+  snapshot(): Snapshot {
+    const atCheckpoint =
+      this.lastKind === "ckpt" || (this.count === 1 && this.opts.from === undefined);
+    if (this.match === null || this.diverged !== null || this.skipping || !atCheckpoint) {
+      throw new EngineMisuse(
+        "replay.snapshot(): only right after the header or a ckpt line of a replay that holds up",
+      );
+    }
+    return this.match.snapshot(this.prevN);
+  }
+
+  push(line: LogLine): ReplayStep {
+    this.count += 1;
+    if (this.diverged !== null) return NOT_OK;
+    const events: DomainEvent[] = [];
+    this.stepEvents = events;
+    this.stepChanged = false;
+    let applied: ApplyOutput | undefined;
+    try {
+      if (this.skipping) this.skip(line);
+      else applied = this.line(line);
+    } catch (error) {
+      if (!(error instanceof Diverged)) throw error;
+      this.latch(error.divergence);
+      return { ok: false, changed: this.stepChanged, events };
+    }
+    this.lastKind = line.k;
+    return applied === undefined
+      ? { ok: true, changed: this.stepChanged, events }
+      : { ok: true, changed: this.stepChanged, events, applied };
+  }
+
+  finish(o: FinishOptions = {}): ReplayReport {
+    if (this.diverged === null && (o.requireEnd ?? true) && !this.done) {
+      const from = this.opts.from;
+      this.latch(
+        this.skipping && from !== undefined
+          ? {
+              kind: "snapshot",
+              t: from.t,
+              hour: from.hour,
+              expected: `a ckpt line for hour ${from.hour}`,
+              actual: "none before the end of the log",
+            }
+          : {
+              kind: "end",
+              t: this.prevT,
+              expected: "an end line",
+              actual: `the log stops at t = ${this.prevT}`,
+            },
+      );
+    }
+    const r = this.report;
+    return {
+      ok: r.ok,
+      actions: r.actions,
+      checkpoints: r.checkpoints,
+      finalHash: r.finalHash,
+      warnings: [...r.warnings],
+      ...(r.divergence === undefined ? {} : { divergence: r.divergence }),
+    };
+  }
+
+  private latch(d: ReplayDivergence): void {
+    this.diverged = d;
+    this.report.ok = false;
+    this.report.finalHash = null;
+    this.report.divergence = d;
+  }
+
+  /** One line after the header (or after the snapshot's `ckpt` line). */
+  private line(line: LogLine): ApplyOutput | undefined {
+    if (line.k === "header") {
+      diverge({
+        kind: "order",
+        t: this.prevT,
+        expected: "one header line, first",
+        actual: "another header line",
+      });
+    }
+    const n = lineN(line);
+    if (this.done) {
+      diverge(
+        withN(
+          {
+            kind: "order",
+            t: line.t,
+            expected: "no line after the end line",
+            actual: `a ${line.k} line`,
+          },
+          n,
+        ),
+      );
+    }
+    if (line.t < this.prevT) {
+      diverge(
+        withN(
+          {
+            kind: "order",
+            t: line.t,
+            expected: `t ≥ ${this.prevT}`,
+            actual: `a ${line.k} line at t = ${line.t}`,
+          },
+          n,
+        ),
+      );
+    }
+    if (n !== undefined) {
+      // The host numbers act, gw, obs and note lines without gaps (§10.2): a missing one, which
+      // changes no engine state and so no hash, would otherwise go unnoticed.
+      if (n !== this.prevN + 1) {
+        diverge({
+          kind: "order",
+          t: line.t,
+          n,
+          expected: `n = ${this.prevN + 1}`,
+          actual: `a ${line.k} line with n = ${n}`,
+        });
+      }
+      this.prevN = n;
+    }
+    this.prevT = line.t;
+    let applied: ApplyOutput | undefined;
+    switch (line.k) {
+      case "ev":
+        this.advance(line.t);
+        this.matchEvent(line);
+        break;
+      case "ckpt":
+        this.advance(line.t);
+        this.matchCheckpoint(line);
+        break;
+      case "act":
+        this.advance(line.t);
+        this.caughtUp(line.k, line.t, n);
+        applied = this.applyAct(line);
+        break;
+      case "wake":
+      case "batch":
+      case "defer":
+      case "controller":
+        this.advance(line.t);
+        this.caughtUp(line.k, line.t, n);
+        break;
+      case "gw":
+      case "obs":
+      case "note":
+      case "turn":
+        this.advance(line.t);
+        break;
+      case "end":
+        this.advance(line.t);
+        this.caughtUp(line.k, line.t, n);
+        this.end(line);
+        this.done = true;
+        break;
+      case "fatal":
+        diverge({
+          kind: "end",
+          t: line.t,
+          expected: "a log that ends with an end line",
+          actual: `a fatal line (${line.error.kind}): ${line.error.message}`,
+        });
+    }
+    if (line.k === "act") this.lastAct = { t: line.t, n: line.n };
+    else if (line.k !== "ev") this.lastAct = null;
+    this.opts.onLine?.(line, this.m.read(), applied);
+    return applied;
+  }
+
+  /** Step 1 of §10.4: ruleset, config, compiled rules; then the match from the header (no `from`). */
   private start(
     header: HeaderLine,
     resolve: (ref: string) => AnyRuleset | undefined,
@@ -358,14 +512,16 @@ class Replayer {
     return ruleset;
   }
 
-  /** Loads `from` and skips to the line right after the `ckpt` line of its hour. */
-  private skipToSnapshot(
-    it: Iterator<LogLine>,
+  /**
+   * Loads `from`; returns whether the lines up to the `ckpt` line of its hour must be skipped
+   * (false for the snapshot of hour 0, taken before any line).
+   */
+  private loadSnapshot(
     header: HeaderLine,
     from: Snapshot,
     ruleset: AnyRuleset,
     domain: DomainModule,
-  ): [number, number] {
+  ): boolean {
     const t = from.t;
     const logged = logText(header.setup, "the header's setup", { kind: "snapshot", t });
     const snapped = logText(from.setup, "the snapshot's setup", { kind: "snapshot", t });
@@ -397,54 +553,61 @@ class Replayer {
           actual: `${from.hash}, afterN ${from.afterN}`,
         });
       }
-      return [0, 0];
+      return false;
     }
-    let lastN = 0;
-    for (let next = it.next(); next.done !== true; next = it.next()) {
-      const line = next.value;
-      const n = lineN(line);
-      if (n !== undefined) {
-        if (n !== lastN + 1) {
-          diverge({
-            kind: "order",
-            t: line.k === "header" ? 0 : line.t,
-            n,
-            expected: `n = ${lastN + 1}`,
-            actual: `a ${line.k} line with n = ${n}`,
-          });
-        }
-        lastN = n;
+    return true;
+  }
+
+  /** A line before the snapshot's `ckpt` line: its `n` is checked, nothing is replayed. */
+  private skip(line: LogLine): void {
+    const from = this.opts.from;
+    if (from === undefined) throw new Error("replay: skipping without a snapshot");
+    const n = lineN(line);
+    if (n !== undefined) {
+      if (n !== this.skipN + 1) {
+        diverge({
+          kind: "order",
+          t: line.k === "header" ? 0 : line.t,
+          n,
+          expected: `n = ${this.skipN + 1}`,
+          actual: `a ${line.k} line with n = ${n}`,
+        });
       }
-      if (line.k === "ckpt" && line.hour === from.hour) {
-        if (line.h !== from.hash) {
-          diverge({
-            kind: "snapshot",
-            t: line.t,
-            hour: line.hour,
-            expected: line.h,
-            actual: from.hash,
-          });
-        }
-        if (lastN !== from.afterN) {
-          diverge({
-            kind: "snapshot",
-            t: line.t,
-            hour: line.hour,
-            expected: `afterN ${lastN}`,
-            actual: `afterN ${from.afterN}`,
-          });
-        }
-        return [line.t, lastN];
-      }
-      if (line.k === "end" || line.k === "fatal") break;
+      this.skipN = n;
     }
-    return diverge({
-      kind: "snapshot",
-      t,
-      hour: from.hour,
-      expected: `a ckpt line for hour ${from.hour}`,
-      actual: "none before the end of the log",
-    });
+    if (line.k === "ckpt" && line.hour === from.hour) {
+      if (line.h !== from.hash) {
+        diverge({
+          kind: "snapshot",
+          t: line.t,
+          hour: line.hour,
+          expected: line.h,
+          actual: from.hash,
+        });
+      }
+      if (this.skipN !== from.afterN) {
+        diverge({
+          kind: "snapshot",
+          t: line.t,
+          hour: line.hour,
+          expected: `afterN ${this.skipN}`,
+          actual: `afterN ${from.afterN}`,
+        });
+      }
+      this.skipping = false;
+      this.prevT = line.t;
+      this.prevN = this.skipN;
+      return;
+    }
+    if (line.k === "end" || line.k === "fatal") {
+      diverge({
+        kind: "snapshot",
+        t: from.t,
+        hour: from.hour,
+        expected: `a ckpt line for hour ${from.hour}`,
+        actual: "none before the end of the log",
+      });
+    }
   }
 
   /**
@@ -462,6 +625,12 @@ class Replayer {
   /** `advanceTo(t)`, split at every hour boundary so `onCheckpoint` sees each checkpoint state. */
   private advance(t: GameTime): void {
     const m = this.m;
+    // The live state (read views never copy it); its fields are read again after the advance.
+    const state = this.state ?? m.read().state;
+    this.state = state;
+    const head = state.queue[0];
+    const queued = state.queue.length;
+    const evHash = state.evHash;
     while (!m.ended) {
       const ck = (Math.floor(m.now / HOUR) + 1) * HOUR;
       if (ck > t) break;
@@ -470,13 +639,20 @@ class Replayer {
     }
     const out = this.engine({ kind: "event", t }, () => m.advanceTo(t));
     this.collect(out.events, out.checkpoints);
+    // A scheduled event that ran left the head of the queue (a new event never reuses its object).
+    if (state.queue[0] !== head || state.queue.length !== queued || state.evHash !== evHash) {
+      this.stepChanged = true;
+    }
   }
 
   private collect(
     events: readonly DomainEvent[],
     checkpoints: readonly { hour: number; t: GameTime; h: Hash64 }[],
   ): void {
-    if (this.compare) for (const e of events) this.pending.push({ e });
+    for (const e of events) {
+      this.stepEvents.push(e);
+      if (this.compare) this.pending.push({ e });
+    }
     for (const c of checkpoints) {
       this.pendingCk.push(c);
       this.opts.onCheckpoint?.(c.hour, this.m.read());
@@ -579,11 +755,17 @@ class Replayer {
     const actual = canonicalJson(out.ok ? { ok: true } : { ok: false, code: out.violation.code });
     if (actual !== expected) diverge({ ...at, expected, actual });
     this.report.actions += 1;
-    if (out.ok && this.compare) for (const e of out.events) this.pending.push({ e, n: line.n });
+    if (out.ok) {
+      this.stepChanged = true;
+      for (const e of out.events) {
+        this.stepEvents.push(e);
+        if (this.compare) this.pending.push({ e, n: line.n });
+      }
+    }
     return out;
   }
 
-  private finish(line: EndLine): void {
+  private end(line: EndLine): void {
     const m = this.m;
     if (!m.ended) {
       diverge({
@@ -603,10 +785,24 @@ class Replayer {
 }
 
 /**
- * Level E verification of a log (§10.4). Returns a report naming the first divergence; never throws
- * for a bad log (a non-integer number in a line included) or an engine error during the replay. An
- * error thrown by the caller's `onCheckpoint` or `onLine` propagates unchanged: it is not a
- * divergence of the log.
+ * Starts the incremental Level E replay of a log from its header (§10.4); the later lines go to
+ * `push`, in file order. Never throws for a bad header, config or snapshot: the replay starts
+ * diverged. An error thrown by the caller's `onCheckpoint` or `onLine` propagates unchanged.
+ */
+export function createReplay(
+  header: HeaderLine,
+  resolve: (ref: string) => AnyRuleset | undefined,
+  domain: DomainModule,
+  opts: VerifyOptions = {},
+): Replay {
+  return new Replayer(header, resolve, domain, opts);
+}
+
+/**
+ * Level E verification of a log (§10.4): `createReplay` over its lines, stopping at the first
+ * divergence. Returns a report naming the first divergence; never throws for a bad log (a
+ * non-integer number in a line included) or an engine error during the replay. An error thrown by
+ * the caller's `onCheckpoint` or `onLine` propagates unchanged: it is not a divergence of the log.
  */
 export function verifyLog(
   lines: Iterable<LogLine>,
@@ -614,20 +810,13 @@ export function verifyLog(
   domain: DomainModule,
   opts: VerifyOptions = {},
 ): ReplayReport {
-  const report: ReplayReport = {
-    ok: true,
-    actions: 0,
-    checkpoints: 0,
-    finalHash: null,
-    warnings: [],
-  };
-  try {
-    new Replayer(report, opts).run(lines, resolve, domain);
-  } catch (error) {
-    if (!(error instanceof Diverged)) throw error;
-    report.ok = false;
-    report.finalHash = null;
-    report.divergence = error.divergence;
+  const it = lines[Symbol.iterator]();
+  const first = it.next();
+  const replay = new Replayer(first.done === true ? undefined : first.value, resolve, domain, opts);
+  if (replay.divergence === null) {
+    for (let next = it.next(); next.done !== true; next = it.next()) {
+      if (!replay.push(next.value).ok) break;
+    }
   }
-  return report;
+  return replay.finish();
 }

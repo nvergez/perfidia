@@ -1,9 +1,10 @@
 // Source scan for the purity and layer rules that lint cannot express (docs/architecture.md
-// §2.3, §2.4, §6.1, §6.5). It reads every non-test source of protocol, engine, gateway and bots and
-// fails on the `**` and `**=` operators, on any `Math` reference other than an allowlisted member,
-// on Unicode property escapes (`\p{…}`, `\P{…}`) in regular expressions and in strings that may
-// become one, on every forbidden edge of the engine layer matrix (type-only imports included) and
-// on imports that cross package boundaries other than through the declared upstream packages.
+// §2.3, §2.4, §6.1, §6.5). It reads every non-test source of protocol, engine, gateway, bots and
+// spectator (the phase-3 projection, browser-pure like the engine) and fails on the `**` and `**=`
+// operators, on any `Math` reference other than an allowlisted member, on Unicode property escapes
+// (`\p{…}`, `\P{…}`) in regular expressions and in strings that may become one, on every forbidden
+// edge of the engine layer matrix (type-only imports included) and on imports that cross package
+// boundaries other than through the declared upstream packages.
 //
 // It uses a small TypeScript lexer rather than `Bun.Transpiler`: `transformSync` and `scan` strip
 // type-only imports and `export type … from`, which the layer matrix must see. Every regular
@@ -22,6 +23,7 @@ const SCANNED_PACKAGES: Readonly<Record<string, readonly string[]>> = {
   engine: ["protocol"],
   gateway: ["protocol", "engine"],
   bots: ["protocol", "gateway"],
+  spectator: ["protocol", "engine", "gateway"],
 };
 
 /** The only `Math` members that are exactly specified by ECMAScript and allowed in pure code (§2.4). */
@@ -1188,6 +1190,8 @@ describe("scanner: package boundaries (§2.1)", () => {
     ["packages/gateway/src/a.ts", "../../engine/src/core/index.ts"],
     ["packages/bots/src/a.ts", "@perfidia/engine/core"],
     ["packages/bots/src/a.ts", "@perfidia/sim"],
+    ["packages/spectator/src/a.ts", "@perfidia/orchestrator"],
+    ["packages/spectator/src/a.ts", "@perfidia/bots"],
   ];
   for (const [path, specifier] of forbidden) {
     test(`${path} must not import ${JSON.stringify(specifier)}`, () => {
@@ -1202,6 +1206,8 @@ describe("scanner: package boundaries (§2.1)", () => {
     ["packages/gateway/src/runtime/a.ts", "../seat/index.ts"],
     ["packages/bots/src/a.ts", "@perfidia/gateway"],
     ["packages/bots/src/a.ts", "@perfidia/protocol"],
+    ["packages/spectator/src/fold/a.ts", "@perfidia/gateway/runtime"],
+    ["packages/spectator/src/reduce/a.ts", "@perfidia/protocol/spectator"],
   ];
   for (const [path, specifier] of allowed) {
     test(`${path} may import ${JSON.stringify(specifier)}`, () => {

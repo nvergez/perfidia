@@ -2,26 +2,28 @@
 
 A persistent, Grepolis-like strategy game played only by LLM agents while humans watch.
 Product brief: [`docs/brief.md`](docs/brief.md). Phase 1 (the engine, driven by scripted bots) is
-done; phase 2 adds the first LLM agents ([`docs/phase2.md`](docs/phase2.md)). No database or web UI
-yet.
+done; phase 2 adds the first LLM agents ([`docs/phase2.md`](docs/phase2.md)); phase 3 adds the
+spectator projection and a read-only server ([`docs/phase3.md`](docs/phase3.md)). No database or
+web UI yet.
 
 ## Commands
 
 Run from the repo root with Bun 1.4.3 (the only package manager and runtime).
 
-| Command                  | What it does                                                    |
-| ------------------------ | --------------------------------------------------------------- |
-| `bun install`            | Install the workspace (isolated linker, see `bunfig.toml`)      |
-| `bun run typecheck`      | `tsc -b` with TypeScript 7 over every package                   |
-| `bun run lint`           | oxlint with type-aware rules (uses `oxlint-tsgolint`)           |
-| `bun run format`         | oxfmt, rewrites files in place                                  |
-| `bun run format:check`   | oxfmt, fails if anything is unformatted                         |
-| `bun run test`           | `bun test` across all packages                                  |
-| `bun run check`          | typecheck, lint, format:check, test; stops at the first error   |
-| `bun run sim -- <cmd>`   | bot matches, replay verification, batches (`--help`)            |
-| `bun run arena -- <cmd>` | LLM matches (`run`, `cost`, `personalities`, `smoke`; `--help`) |
-| `bun run test:exit`      | the exit suites (7-day matches, both phases)                    |
-| `bun run test:live`      | opt-in: calls the Claude API (needs the key; spends < $0.20)    |
+| Command                    | What it does                                                    |
+| -------------------------- | --------------------------------------------------------------- |
+| `bun install`              | Install the workspace (isolated linker, see `bunfig.toml`)      |
+| `bun run typecheck`        | `tsc -b` with TypeScript 7 over every package                   |
+| `bun run lint`             | oxlint with type-aware rules (uses `oxlint-tsgolint`)           |
+| `bun run format`           | oxfmt, rewrites files in place                                  |
+| `bun run format:check`     | oxfmt, fails if anything is unformatted                         |
+| `bun run test`             | `bun test` across all packages                                  |
+| `bun run check`            | typecheck, lint, format:check, test; stops at the first error   |
+| `bun run sim -- <cmd>`     | bot matches, replay verification, batches (`--help`)            |
+| `bun run arena -- <cmd>`   | LLM matches (`run`, `cost`, `personalities`, `smoke`; `--help`) |
+| `bun run serve -- <flags>` | the read-only spectator server (`--runs <dir> --all-runs`)      |
+| `bun run test:exit`        | the exit suites (7-day matches, both phases)                    |
+| `bun run test:live`        | opt-in: calls the Claude API (needs the key; spends < $0.20)    |
 
 CI (`.github/workflows/ci.yml`) runs `bun install --frozen-lockfile` and `bun run check`.
 
@@ -39,7 +41,8 @@ TypeScript is `typescript@7.0.2`, the Go-native compiler. The npm package is a t
 
 ## Packages
 
-Dependency direction: `protocol` ← `engine` ← `gateway` ← `bots` ← `sim` ← `orchestrator`. Each package only
+Dependency direction: `protocol` ← `engine` ← `gateway` ← `bots` ← `sim` ← `orchestrator`, and
+`gateway` ← `spectator` ← `server`. Each package only
 declares its allowed upstream packages, and the isolated linker makes any other `@perfidia/*`
 import fail to resolve.
 
@@ -51,6 +54,8 @@ import fail to resolve.
 | `@perfidia/bots`         | Scripted players that act only through the gateway             | Bun         |
 | `@perfidia/sim`          | Headless match runner (both clocks), logs and replay verifier  | Bun         |
 | `@perfidia/orchestrator` | LLM harness and `arena` CLI: adapters, LLM seats, budget, logs | Bun         |
+| `@perfidia/spectator`    | Spectator projection: frames, steps, feed, moments, reduce     | pure        |
+| `@perfidia/server`       | Read-only spectator server: REST, WebSocket, timeline cache    | Bun         |
 
 Each package exports `./src/index.ts` directly: Bun runs TypeScript without a build step.
 Relative imports may use the `.ts` extension (`allowImportingTsExtensions`).

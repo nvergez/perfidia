@@ -1,11 +1,11 @@
-import type { JsonObject, PlayerId } from "@perfidia/protocol";
+import { EFFORTS, type Effort, type JsonObject, type PlayerId } from "@perfidia/protocol";
 
 // The provider-agnostic model contract (phase-2 design §2.1). The seat layer talks to a model only
 // through `ModelAdapter`; the Anthropic adapter (`anthropic.ts`) is the only module that knows the
 // SDK, and `FakeAdapter` (`fake.ts`) plays scripted or bot-backed replies with no network.
 
-export const EFFORTS = ["low", "medium", "high", "xhigh", "max"] as const;
-export type Effort = (typeof EFFORTS)[number];
+/** The reasoning efforts (defined with the run-directory formats in `@perfidia/protocol`). */
+export { EFFORTS, type Effort };
 
 export type CacheTtl = "5m" | "1h";
 

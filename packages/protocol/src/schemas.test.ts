@@ -31,6 +31,7 @@ import {
 } from "./fixtures.test.ts";
 import * as protocol from "./index.ts";
 import { STANDARD_EVENT_DATA, TOOL_ARGS, TOOL_RESULT_DATA, z, type ZodType } from "./index.ts";
+import { ARENA_CASES, SPECTATOR_CASES } from "./spectator.fixtures.test.ts";
 
 type Path = readonly (string | number)[];
 interface Invalid {
@@ -1187,6 +1188,9 @@ const CASES: Record<string, Case> = {
       protoKeyAt(snapshot, ["state", "movements"]),
     ],
   },
+  // arena.ts and spectator.ts (spectator.fixtures.test.ts)
+  ...ARENA_CASES,
+  ...SPECTATOR_CASES,
 };
 
 /**

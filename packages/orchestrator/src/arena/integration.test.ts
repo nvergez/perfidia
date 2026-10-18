@@ -16,6 +16,9 @@
 // - A breaker whose cause the preflight cannot see (a 400 from round 1 on) trips again after its
 //   resume: the arena aborts instead of playing on with dead LLM seats.
 // - Two consecutive refused turns of a seat are an alert naming their inbox message ids.
+// - Phase 3: `replies.jsonl` holds one line per reply the conversation keeps, right after its
+//   `llm_call` line, with the fake brain's reasoning; `match.jsonl` is on disk line by line while
+//   the run goes (a seat's wake line is there before its first model call).
 
 import { describe, expect, test } from "bun:test";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
@@ -24,7 +27,7 @@ import { verifyLog } from "@perfidia/engine";
 import { canonicalJson } from "@perfidia/engine/core";
 import { rebuildGatewayState } from "@perfidia/gateway/runtime";
 import { findRuleset } from "@perfidia/engine";
-import type { LogLine, TurnLine } from "@perfidia/protocol";
+import { LogLineSchema, ReplyLineSchema, type LogLine, type TurnLine } from "@perfidia/protocol";
 import { harness, summarize } from "@perfidia/sim";
 import { ModelError } from "../model/adapter.ts";
 import { projectSpend } from "./cost.ts";
@@ -242,6 +245,70 @@ describe("arena: a full lockstep match on fake models", () => {
       console.log(
         `2-day fake arena: ${report.exit.alliancesFormed} alliance(s), ${report.exit.betrayals} betrayal(s), exit criterion ${report.exit.met ? "met" : "not met"}; with an LLM seat: ${report.exit.llm.betrayals} betrayal(s), ${report.exit.llm.met ? "met" : "not met"}; ${llm.length} model calls, Level E ${e.actions} actions / ${e.checkpoints} checkpoints`,
       );
+    },
+    LONG,
+  );
+});
+
+describe("arena: spectator data (phase 3)", () => {
+  test(
+    "replies.jsonl: one line per kept reply, reasoning included; match.jsonl on disk line by line",
+    async () => {
+      const dir = runDir();
+      const probe: { lines: LogLine[] | null } = { lines: null };
+      const adapterFor = (
+        s: LlmSeatPlan,
+        spec: ConstructorParameters<typeof FakeAdapter>[0],
+        ctx: AdapterContext,
+      ) => {
+        const inner = botBrain({ label: s.brain, seat: s.seat, seed: ctx.seed, model: s.model });
+        const brain: Brain = (req, n) => {
+          if (s.seat === "p1" && req.meta.turn === 3 && req.meta.round === 0) {
+            const text = readFileSync(join(dir, "match.jsonl"), "utf8");
+            expect(text.endsWith("\n")).toBe(true);
+            probe.lines = text
+              .trimEnd()
+              .split("\n")
+              .map((row) => LogLineSchema.parse(JSON.parse(row)));
+          }
+          return inner(req, n);
+        };
+        return new FakeAdapter(spec, brain);
+      };
+      const run = await play(fakePlan({ days: 1 }), { dir, adapterFor });
+      expect(run.outcome.status).toBe("ended");
+      expect(run.outcome.paths.replies).toBe(join(dir, "replies.jsonl"));
+      // Flushed line by line: the wake that opened p1's turn 3 is on disk before its model call.
+      const onDisk = probe.lines ?? [];
+      expect(onDisk.some((l) => l.k === "wake" && l.seat === "p1" && l.turn === 3)).toBe(true);
+      expect(onDisk.at(-1)?.k).not.toBe("end");
+
+      const replies = readFileSync(join(dir, "replies.jsonl"), "utf8")
+        .trimEnd()
+        .split("\n")
+        .map((row) => ReplyLineSchema.parse(JSON.parse(row)));
+      const kept = run.llm.filter((l) => l.stop === "end_turn" || l.stop === "tool_use");
+      expect(replies.length).toBe(kept.length);
+      for (const [i, r] of replies.entries()) {
+        const l = kept[i];
+        if (l === undefined) throw new Error(`no llm_call line for reply ${i}`);
+        expect([r.seat, r.turn, r.round, r.attempt, r.kind, r.t, r.stop]).toEqual([
+          l.seat,
+          l.turn,
+          l.round,
+          l.attempt,
+          l.kind,
+          l.t,
+          l.stop,
+        ]);
+        expect(r.reasoning.join("").length).toBe(l.reasoningChars);
+        expect(r.text.join("").length).toBe(l.textChars);
+        expect(r.calls.length).toBe(l.calls);
+      }
+      expect(replies.every((r) => r.reasoning[0]?.startsWith("Fake reasoning:") === true)).toBe(
+        true,
+      );
+      expect(run.llm.every((l) => l.reasoningChars > 0)).toBe(true);
     },
     LONG,
   );

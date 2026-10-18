@@ -1,0 +1,21 @@
+{
+  "name": "@perfidia/spectator",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./annotations": "./src/annotations/index.ts",
+    "./reduce": "./src/reduce/index.ts"
+  },
+  "dependencies": {
+    "@perfidia/engine": "workspace:*",
+    "@perfidia/gateway": "workspace:*",
+    "@perfidia/protocol": "workspace:*"
+  },
+  "devDependencies": {
+    "@perfidia/orchestrator": "workspace:*",
+    "@types/bun": "catalog:",
+    "fast-check": "catalog:"
+  }
+}

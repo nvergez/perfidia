@@ -27,6 +27,26 @@ async function cli(...argv: string[]): Promise<{ code: number; out: string; err:
   return { code, out: io.stdout(), err: io.stderr() };
 }
 
+describe("sim run --live-flush", () => {
+  test("writes the same log as without the flag (wall keys aside)", async () => {
+    const dir = tempDir();
+    try {
+      const args = ["run", "--ruleset", "sandbox-1", "--allow-test", "--players", "3"];
+      const short = ["--override", "time.matchEnd=21600", "--seed", "5"];
+      const live = await cli(...args, ...short, "--live-flush", "--out", join(dir, "live"));
+      const plain = await cli(...args, ...short, "--out", join(dir, "plain"));
+      expect([live.code, plain.code]).toEqual([EXIT.ok, EXIT.ok]);
+      const a = readLog(join(dir, "live", "match.jsonl"));
+      const b = readLog(join(dir, "plain", "match.jsonl"));
+      expect(a.at(-1)?.k).toBe("end");
+      expect(normalisedText(a)).toBe(normalisedText(b));
+      expect(existsSync(join(dir, "live", "snapshots", "final.json"))).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("sim run", () => {
   test("writes a run that verify and summary accept, and running it twice gives the same log", async () => {
     const dir = tempDir();

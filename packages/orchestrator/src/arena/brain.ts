@@ -25,9 +25,12 @@ import type { Brain, FakeReply } from "../model/fake.ts";
 // match (bots keep a per-turn state and per-match caches), rebuilds the bot's `RoundInput` from the
 // request (the briefing is the round-0 user text, the results are the `tool_result` contents, the
 // rest comes from `meta`) and replies with the bot's calls as tool calls. The thought goes out as
-// text on a terminal reply, as the prompt asks a model to do. In real time it can add a seeded
-// latency on the run's time source; an attempt aborted while it "thinks" is charged as the
-// Anthropic adapter charges a broken stream (`brokenStreamOutput`, from the time it streamed).
+// text on a terminal reply, as the prompt asks a model to do. Every reply also carries one
+// deterministic reasoning summary ("Fake reasoning: …", the calls and the bot's thought), so the
+// spectator path of reasoning (`replies.jsonl`) is exercised with no network; it is left out of the
+// usage, so fake costs are those of a reply without it. In real time it can add a seeded latency on
+// the run's time source; an attempt aborted while it "thinks" is charged as the Anthropic adapter
+// charges a broken stream (`brokenStreamOutput`, from the time it streamed).
 
 export interface BrainLatency {
   readonly time: TimeSource;
@@ -52,6 +55,35 @@ export interface BotBrainOptions {
    * what was appended is written. Without it, `FakeAdapter` derives a flat usage.
    */
   readonly prefixChars?: number;
+}
+
+/**
+ * The JSON length of a request's entries as if its replies carried no reasoning (empty summaries,
+ * no thinking blocks): the fake usage leaves the fake reasoning out.
+ */
+function entriesChars(req: ChatRequest): number {
+  return JSON.stringify(req.entries, (key, value: unknown) => {
+    if (key === "reasoning") return [];
+    if (Array.isArray(value)) {
+      const blocks: readonly unknown[] = value;
+      return blocks.filter(
+        (b) => !(b !== null && typeof b === "object" && Reflect.get(b, "type") === "thinking"),
+      );
+    }
+    return value;
+  }).length;
+}
+
+/** The fake reasoning summary of a reply: what the bot called and thought, deterministic. */
+export function fakeReasoning(
+  label: string,
+  turn: number,
+  round: number,
+  calls: readonly { readonly name: string }[],
+  thought: string | undefined,
+): string {
+  const what = calls.length === 0 ? "no call" : calls.map((c) => c.name).join(", ");
+  return `Fake reasoning: ${label} plays turn ${turn}, round ${round}: ${what}.${thought === undefined ? "" : ` ${thought}`}`;
 }
 
 /** The text of the round-0 briefing entry. */
@@ -107,7 +139,7 @@ export function botBrain(o: BotBrainOptions): Brain {
   const usageOf = (req: ChatRequest, reply: unknown): UsageEntry[] | undefined => {
     if (o.prefixChars === undefined || o.model === undefined) return undefined;
     const prefix = Math.ceil(o.prefixChars / 4);
-    const chars = JSON.stringify(req.entries).length;
+    const chars = entriesChars(req);
     const prev = last?.turn === req.meta.turn ? last.chars : 0;
     const first = !warm;
     warm = true;
@@ -131,7 +163,8 @@ export function botBrain(o: BotBrainOptions): Brain {
     const m = req.meta;
     if (m.kind === "thought") {
       // The out-of-band thought call: the turn's last thought, never a tool call.
-      return { text: [lastThought?.turn === m.turn ? lastThought.text : "Holding course."] };
+      const text = lastThought?.turn === m.turn ? lastThought.text : "Holding course.";
+      return { text: [text], reasoning: [fakeReasoning(o.label, m.turn, m.round, [], text)] };
     }
     let latencyMs = 0;
     if (o.latency !== undefined) {
@@ -157,7 +190,8 @@ export function botBrain(o: BotBrainOptions): Brain {
       out.thought ?? (terminal && lastThought?.turn === m.turn ? lastThought.text : undefined);
     const text = thought === undefined ? [] : [thought];
     const usage = usageOf(req, { text, calls });
-    return { text, calls, latencyMs, ...(usage === undefined ? {} : { usage }) };
+    const reasoning = [fakeReasoning(o.label, m.turn, m.round, calls, out.thought)];
+    return { text, calls, reasoning, latencyMs, ...(usage === undefined ? {} : { usage }) };
   };
 }
 

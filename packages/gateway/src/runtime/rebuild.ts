@@ -122,12 +122,49 @@ function gwMessage(line: GwLine, r: ReadCtx, gw: GatewayState): string {
   return line.r.code === "INTERNAL" ? INTERNAL_FALLBACK.message : line.r.code;
 }
 
-/** The fold of the gateway lines (§10.5). */
-class Fold {
+/**
+ * The fold of the gateway lines (§10.5), one line at a time, each right after the engine replay
+ * processed it (`verifyLog`'s or `createReplay`'s `onLine`): the incremental form of
+ * `rebuildGatewayState`, for a log that is still being written (the spectator fold). After a drift
+ * it folds nothing more.
+ */
+export interface GatewayFold {
+  /** Folds `line` (the header first), with the engine's read view and an act line's verdict. */
+  line(line: LogLine, r: ReadCtx, applied: ApplyOutput | undefined): void;
+  /** The gateway state so far: plain JSON, no seat before the header. */
+  readonly gw: GatewayState;
+  /** The first line the fold could not apply, or `null`. */
+  readonly drift: RebuildDrift | null;
+  /** The wake scheduler over `gw` once the header is folded: `peek(seat)` is a seat's next wake. */
+  readonly wake: WakeScheduler | null;
+}
+
+/**
+ * Where a resumed fold starts: a gateway state the fold reached (a JSON copy) and the index of the
+ * last line it folded. The wake scheduler is rebuilt from the first line's read view.
+ */
+export interface GatewayFoldStart {
+  readonly gw: GatewayState;
+  readonly index: number;
+}
+
+/** A new fold of a log's gateway lines, from its header, or from `from` (a resumed fold). */
+export function createGatewayFold(from?: GatewayFoldStart): GatewayFold {
+  return new Fold(from);
+}
+
+class Fold implements GatewayFold {
   gw: GatewayState = createGatewayState([]);
-  private wake: WakeScheduler | null = null;
+  wake: WakeScheduler | null = null;
   private index = -1;
   drift: RebuildDrift | null = null;
+
+  constructor(from?: GatewayFoldStart) {
+    if (from !== undefined) {
+      this.gw = from.gw;
+      this.index = from.index;
+    }
+  }
 
   private get scheduler(): WakeScheduler {
     if (this.wake === null) throw new Drift("a header line first", "no gateway state");
@@ -137,6 +174,9 @@ class Fold {
   line(line: LogLine, r: ReadCtx, applied: ApplyOutput | undefined): void {
     this.index += 1;
     if (this.drift !== null) return;
+    if (this.wake === null && line.k !== "header" && this.index > 0) {
+      this.wake = createWakeScheduler(this.gw, gatewayRulesCopy(r.rules.gateway));
+    }
     try {
       this.apply(line, r, applied);
     } catch (e) {
@@ -275,7 +315,7 @@ export function rebuildGatewayState(
   resolve: (ref: string) => AnyRuleset | undefined,
   opts: RebuildOptions = {},
 ): GatewayRebuild {
-  const fold = new Fold();
+  const fold = createGatewayFold();
   const report = verifyLog(lines, resolve, {
     ...(opts.invariants === undefined ? {} : { invariants: opts.invariants }),
     onLine: (line, r, applied) => fold.line(line, r, applied),
