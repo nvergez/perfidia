@@ -5,7 +5,8 @@ import { PlainText } from "../common/plain-text.tsx";
 import { cn } from "../lib/cn.ts";
 import type { PlayerId } from "../lib/ids.ts";
 import { fmtUsd, plural } from "../lib/format.ts";
-import { useAnnotation } from "../store/hooks.ts";
+import { isFakeSeat } from "../lib/models.ts";
+import { useAnnotation, useSeat } from "../store/hooks.ts";
 import { loaders } from "../store/session.ts";
 import { Button } from "../ui/button.tsx";
 
@@ -26,7 +27,7 @@ function turnCost(a: TurnAnnotation): number {
   return a.rounds.reduce((n, r) => n + r.costNanoUsd, 0);
 }
 
-function Rounds({ a }: { readonly a: TurnAnnotation }) {
+function Rounds({ a, fake }: { readonly a: TurnAnnotation; readonly fake: boolean }) {
   const any = a.rounds.some((r) => r.reasoning.length > 0 || r.text.length > 0);
   const cost = turnCost(a);
   return (
@@ -69,6 +70,7 @@ function Rounds({ a }: { readonly a: TurnAnnotation }) {
               {a.capNanoUsd === null ? null : <> of a {fmtUsd(a.capNanoUsd)} cap</>}.
             </>
           )}
+          {fake ? " (Simulated prices: a fake model costs nothing.)" : null}
         </p>
       )}
     </div>
@@ -78,6 +80,8 @@ function Rounds({ a }: { readonly a: TurnAnnotation }) {
 /** The reasoning of turn `turn` of `seat`, loaded when shown. */
 export function TurnReasoning({ seat, turn }: { readonly seat: PlayerId; readonly turn: number }) {
   const a = useAnnotation(seat, turn, true);
+  const info = useSeat(seat);
+  const fake = info !== null && isFakeSeat(info);
   if (a === null || a.status === "loading") {
     return (
       <p className="text-muted-foreground flex items-center gap-2 text-xs">
@@ -91,7 +95,7 @@ export function TurnReasoning({ seat, turn }: { readonly seat: PlayerId; readonl
   }
   return (
     <div className="flex flex-col gap-2">
-      <Rounds a={a.value} />
+      <Rounds a={a.value} fake={fake} />
       {a.value.complete ? null : (
         <p className="text-muted-foreground flex items-center gap-2 text-xs">
           This turn's side files may still grow.

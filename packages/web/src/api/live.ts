@@ -137,6 +137,14 @@ export class LiveConnection {
     s?.close(1000, "bye");
   }
 
+  /** While waiting to reconnect: tries at once (the viewer's "Retry now"). */
+  retryNow(): void {
+    if (this.stopped || this.socket !== null) return;
+    if (this.retryTimer !== null) this.timers.clear(this.retryTimer);
+    this.retryTimer = null;
+    this.open();
+  }
+
   /** Continues from `cursor` (after a catch-up over REST): subscribes again. */
   resubscribe(cursor: number): void {
     this.cursorV = Math.max(this.cursorV, cursor);

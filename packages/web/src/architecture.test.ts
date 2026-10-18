@@ -9,7 +9,7 @@
 
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
-import { join, relative, resolve } from "node:path";
+import { dirname, join, relative, resolve, sep } from "node:path";
 import { RULESETS } from "@perfidia/engine/rulesets";
 import { field, isRecord } from "./lib/json.ts";
 
@@ -55,16 +55,38 @@ const ALLOWED = new Set([
   "@perfidia/spectator/reduce",
 ]);
 
+/** Whether a relative specifier of `file` names a source under `src` (not another package's). */
+export function staysInSrc(file: string, spec: string, src = SRC): boolean {
+  if (!/^\.\.?\/[A-Za-z0-9/_.-]+\.tsx?$/.test(spec)) return false;
+  const target = resolve(src, dirname(file), spec);
+  return target.startsWith(src + sep);
+}
+
 describe("imports", () => {
   test("web sources import React, the UI packages, the spectator sub-paths and their own files only", () => {
     const files = sources();
     expect(files.length).toBeGreaterThan(30);
     for (const file of files) {
       for (const spec of specifiers(read(file))) {
-        const ok = ALLOWED.has(spec) || /^\.\.?\/[A-Za-z0-9/_.-]+\.tsx?$/.test(spec);
+        const ok = ALLOWED.has(spec) || staysInSrc(file, spec);
         expect([file, spec, ok]).toEqual([file, spec, true]);
       }
     }
+  });
+
+  test("a relative import must resolve under src: another package's files are refused", () => {
+    expect(staysInSrc("map/layers.tsx", "../lib/ids.ts")).toBe(true);
+    expect(staysInSrc("main.tsx", "./app.tsx")).toBe(true);
+    expect(staysInSrc("main.tsx", "../../engine/src/index.ts")).toBe(false);
+    expect(staysInSrc("map/layers.tsx", "../../../protocol/src/log.ts")).toBe(false);
+    expect(staysInSrc("map/layers.tsx", "../../scripts/build.ts")).toBe(false);
+    expect(staysInSrc("main.tsx", "../src/app.tsx")).toBe(true);
+    expect(staysInSrc("main.tsx", "@perfidia/engine")).toBe(false);
+  });
+
+  test("main.tsx loads zod-jitless.ts before anything else (no CSP eval probe)", () => {
+    expect(specifiers(read("main.tsx"))[0]).toBe("./zod-jitless.ts");
+    expect(specifiers(read("zod-jitless.ts"))).toEqual([]);
   });
 
   test("no host globals: Bun, process, require", () => {
@@ -114,25 +136,82 @@ describe("ruleset knowledge stays in src/skins", () => {
   });
 });
 
+/** HTML sinks, code from strings and navigation to a string (none is used by the app). */
+const SINKS: readonly RegExp[] = [
+  /\.(?:inner|outer)HTML\b/,
+  /\[\s*["'`](?:inner|outer)HTML["'`]\s*\]/,
+  /insertAdjacentHTML/,
+  /createContextualFragment/,
+  /parseFromString/,
+  /setHTMLUnsafe/,
+  /\bsrc[dD]oc\b/,
+  /javascript:/i,
+  /document\.write/,
+  /\beval\(/,
+  /new Function\(/,
+  /window\.open\(/,
+  /\blocation\.(?:href\s*=|assign\(|replace\()/,
+];
+
+/**
+ * A link target (`href=`) the app may render: a literal path of the app (not `//host`), the router's
+ * `matchHref`/`routeHref`, or `AppLink` passing its own (checked) prop through.
+ */
+function linkOk(file: string, value: string): boolean {
+  if (value.startsWith('"') || value.startsWith("'")) {
+    const href = value.slice(1, -1);
+    return href.startsWith("/") && !href.startsWith("//");
+  }
+  const expr = value.slice(1, -1).trim();
+  if (file === "common/link.tsx" && expr === "href") return true;
+  return /^(?:matchHref|routeHref)\(/.test(expr);
+}
+
 describe("plain text only", () => {
   const DANGER = ["dangerously", "SetInnerHTML"].join("");
 
-  test("nothing under src renders HTML from a string", () => {
+  test("nothing under src renders HTML from a string or navigates to a string", () => {
     for (const file of all()) {
       const text = read(file);
       expect([file, text.includes(DANGER)]).toEqual([file, false]);
       if (file === "architecture.test.ts") continue;
-      for (const re of [
-        /\.innerHTML\b/,
-        /\.outerHTML\b/,
-        /insertAdjacentHTML/,
-        /document\.write/,
-        /\beval\(/,
-        /new Function\(/,
-      ]) {
+      for (const re of SINKS) {
         expect([file, re.source, re.test(text)]).toEqual([file, re.source, false]);
       }
     }
+  });
+
+  test("the sink patterns catch the HTML and navigation sinks", () => {
+    const probes = [
+      "el.innerHTML = t",
+      'el["innerHTML"] = t',
+      "el[`outerHTML`] = t",
+      "document.createRange().createContextualFragment(t)",
+      'new DOMParser().parseFromString(t, "text/html")',
+      "el.setHTMLUnsafe(t)",
+      "<iframe srcDoc={t} />",
+      "<a href={`javascript:${t}`}>",
+      "window.open(u)",
+      "window.location.href = u",
+      "location.assign(u)",
+      "document.location.replace(u)",
+      "new Function(t)",
+    ];
+    for (const p of probes) expect([p, SINKS.some((re) => re.test(p))]).toEqual([p, true]);
+  });
+
+  test("every link is a literal app path or comes from matchHref/routeHref", () => {
+    for (const file of sources().filter((f) => f.endsWith(".tsx"))) {
+      const text = code(read(file));
+      for (const m of text.matchAll(/\bhref=(\{[^}]*\}|"[^"]*"|'[^']*')/g)) {
+        expect([file, m[1], linkOk(file, m[1] ?? "")]).toEqual([file, m[1], true]);
+      }
+    }
+    expect(linkOk("x.tsx", '"/"')).toBe(true);
+    expect(linkOk("x.tsx", '"//evil.example/phish"')).toBe(false);
+    expect(linkOk("x.tsx", "{matchHref(item.id)}")).toBe(true);
+    expect(linkOk("x.tsx", "{t}")).toBe(false);
+    expect(linkOk("x.tsx", "{`javascript:${t}`}")).toBe(false);
   });
 
   test("localStorage only through lib/storage.ts", () => {

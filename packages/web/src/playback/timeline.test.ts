@@ -122,6 +122,22 @@ describe("the client timeline", () => {
     expect(tl.feedUntil(0)).toEqual([]);
   });
 
+  test("an overlapping page adds only the steps past what is held: no duplicates", () => {
+    const tl = new Timeline();
+    tl.addFrame(frame(0, 0));
+    const steps = stepsOf([0, 0, 0, 0, 0, 0, 0], [1, 1, 1, 1, 1, 1, 1]);
+    expect(tl.addSteps(0, 4, steps.slice(0, 4))).toBe(true);
+    // (2, 7] overlaps the held (0, 4]: steps 3 and 4 are already there.
+    expect(tl.addSteps(2, 7, steps.slice(2))).toBe(true);
+    expect(tl.feedUntil(7).map((e) => e.seq)).toEqual([1, 4, 7]);
+    expect(score(tl.frameAt(tl.locateSeq(7) ?? { segment: 0, index: 0 }))).toBe(7);
+    // A page wholly inside what is held changes nothing; one past a gap does not join.
+    const v = tl.version;
+    expect(tl.addSteps(1, 3, steps.slice(1, 3))).toBe(true);
+    expect(tl.version).toBe(v);
+    expect(tl.addSteps(9, 12, [])).toBe(false);
+  });
+
   test("seq positions: just after a line, null when not held", () => {
     const tl = new Timeline();
     tl.addFrame(frame(0, 0));

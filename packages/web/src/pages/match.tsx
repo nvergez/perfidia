@@ -1,5 +1,5 @@
-import { ArrowLeft, CircleHelp, Hourglass, Loader2, TriangleAlert } from "lucide-react";
-import { useEffect, type ReactNode } from "react";
+import { ArrowLeft, CircleHelp, Hourglass, Loader2, TriangleAlert, WifiOff } from "lucide-react";
+import { useEffect, useState, type ReactNode } from "react";
 import { BlocProgress } from "../board/bloc-progress.tsx";
 import { Leaderboard } from "../board/leaderboard.tsx";
 import { AppLink } from "../common/link.tsx";
@@ -13,12 +13,13 @@ import { HowToWatch } from "../onboarding/how-to-watch.tsx";
 import { PlayerSheet } from "../players/player-sheet.tsx";
 import { PlayersPanel } from "../players/players-panel.tsx";
 import { useLayout, useMatch, useUi } from "../store/hooks.ts";
-import { closeMatch, openMatch } from "../store/session.ts";
+import { closeMatch, controls, isRunningStatus, openMatch } from "../store/session.ts";
 import { isPhoneTab, isSideTab, uiActions } from "../store/ui.ts";
 import { StoryStrip } from "../story/story-strip.tsx";
 import { ThoughtsPanel } from "../thoughts/thoughts-panel.tsx";
 import { KeyMomentsReel } from "../timeline/key-moments-reel.tsx";
 import { TimelineBar } from "../timeline/timeline-bar.tsx";
+import { Badge } from "../ui/badge.tsx";
 import { Button, buttonVariants } from "../ui/button.tsx";
 import { Skeleton } from "../ui/skeleton.tsx";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../ui/tabs.tsx";
@@ -125,9 +126,46 @@ function MapBox({ className }: { readonly className?: string }) {
   );
 }
 
-function DesktopLayout() {
+/** Focuses `selector` on the next frame (after a tab switch has rendered). */
+function focusLater(selector: string): void {
+  window.requestAnimationFrame(() => {
+    document.querySelector<HTMLElement>(selector)?.focus();
+  });
+}
+
+/** Focus moves past the leaderboard and the map's cities (keyboard users). */
+function SkipLinks() {
+  const layout = useLayout();
+  const skip =
+    "focus:bg-popover sr-only focus:not-sr-only focus:absolute focus:z-50 focus:rounded-md focus:border focus:px-3 focus:py-1.5 focus:text-sm";
   return (
-    <div className="grid min-h-0 flex-1 grid-cols-[minmax(17rem,20rem)_minmax(0,1fr)_minmax(20rem,26rem)] gap-3 px-3 pb-3">
+    <div className="absolute top-1 left-12 flex gap-2">
+      <button
+        type="button"
+        className={skip}
+        onClick={() => focusLater('[data-timeline] [role="slider"]')}
+      >
+        Skip to the timeline
+      </button>
+      <button
+        type="button"
+        className={skip}
+        onClick={() => {
+          if (layout === "phone") uiActions.setPhoneTab("feed");
+          else uiActions.setSideTab("feed");
+          focusLater('[data-testid="feed"] button');
+        }}
+      >
+        Skip to the feed
+      </button>
+    </div>
+  );
+}
+
+function DesktopLayout() {
+  // 1280–1365 px wide: narrower side columns, so the map and the timeline keep their room.
+  return (
+    <div className="grid min-h-0 flex-1 grid-cols-[18.5rem_minmax(0,1fr)_18rem] gap-3 px-3 pb-3 min-[1366px]:grid-cols-[minmax(17rem,20rem)_minmax(0,1fr)_minmax(20rem,26rem)]">
       <Scroller label="Leaderboard and blocs" className="flex flex-col gap-3">
         <Leaderboard />
         <BlocProgress />
@@ -205,12 +243,71 @@ function PhoneLayout() {
   );
 }
 
+/** `performance.now()`, re-read every second while `on` (for "in 4 s", "2 min ago"). */
+function useClientNow(on: boolean): number {
+  const [now, setNow] = useState(() => performance.now());
+  useEffect(() => {
+    if (!on) return undefined;
+    const h = window.setInterval(() => setNow(performance.now()), 1_000);
+    return () => window.clearInterval(h);
+  }, [on]);
+  return now;
+}
+
+/** "45 s", "3 min". */
+function ago(ms: number): string {
+  const s = Math.max(0, Math.round(ms / 1000));
+  return s < 90 ? `${s} s` : `${Math.round(s / 60)} min`;
+}
+
+/** Shown while a running match's socket is down: the view is not live any more. */
+function ConnectionBanner() {
+  const running = useMatch((s) => isRunningStatus(s.status));
+  const connection = useMatch((s) => s.connection);
+  const retryAt = useMatch((s) => s.retryAt);
+  const lost = running && connection === "closed";
+  const now = useClientNow(lost);
+  if (!lost) return null;
+  const secs = retryAt === null ? null : Math.max(0, Math.ceil((retryAt - now) / 1000));
+  return (
+    <output
+      data-testid="connection-lost"
+      className="border-gold/50 bg-gold/10 mx-3 mb-2 flex flex-wrap items-center gap-x-3 gap-y-1 rounded-lg border px-3 py-1.5 text-sm"
+    >
+      <WifiOff className="text-gold size-4 shrink-0" aria-hidden="true" />
+      <span>
+        Connection to the server lost: the match goes on without you.{" "}
+        {secs === null || secs === 0 ? "Reconnecting…" : `Reconnecting in ${secs} s.`}
+      </span>
+      <Button size="sm" variant="outline" className="h-7" onClick={() => controls.reconnect()}>
+        Retry now
+      </Button>
+    </output>
+  );
+}
+
+/** Lockstep and live: why the clock stands still, and how long since the last move. */
+function LockstepNote() {
+  const lockstep = useMatch((s) => s.meta?.clock.kind === "lockstep");
+  const live = useMatch((s) => s.mode === "live" && s.connection !== "closed");
+  const lastLiveAt = useMatch((s) => s.lastLiveAt);
+  const on = lockstep && live;
+  const now = useClientNow(on);
+  if (!on) return null;
+  const quiet = lastLiveAt === null ? null : now - lastLiveAt;
+  return (
+    <span className="text-muted-foreground hidden text-xs lg:inline">
+      Game time stands still while the agents think
+      {quiet !== null && quiet >= 30_000 ? ` (last move ${ago(quiet)} ago)` : ""}.
+    </span>
+  );
+}
+
 function Header() {
   const meta = useMatch((s) => s.meta);
   const status = useMatch((s) => s.status);
-  const mode = useMatch((s) => s.mode);
+  const lost = useMatch((s) => s.connection === "closed" && isRunningStatus(s.status));
   const fake = meta?.seats.some((s) => isFakeSeat(s)) ?? false;
-  const lockstepLive = meta?.clock.kind === "lockstep" && mode === "live";
   return (
     <header className="flex min-w-0 items-center gap-2 px-3 py-2">
       <AppLink
@@ -223,15 +320,29 @@ function Header() {
       <h1 className="min-w-0 truncate font-serif text-lg sm:text-xl">
         <bdi>{meta?.title ?? "Loading…"}</bdi>
       </h1>
-      {status === null ? null : <StatusBadge status={status} />}
+      {status === null ? null : lost ? (
+        <Badge variant="secondary" className="uppercase tracking-wide">
+          Offline
+        </Badge>
+      ) : (
+        <StatusBadge status={status} />
+      )}
       {fake ? <FakeBadge /> : null}
-      {lockstepLive ? (
-        <span className="text-muted-foreground hidden text-xs lg:inline">
-          Game time stands still while the agents think.
-        </span>
-      ) : null}
-      <span className="text-muted-foreground ml-auto hidden font-mono text-xs md:inline">
-        {meta?.ruleset}
+      {meta === null || fake || meta.seats.some((s) => s.kind === "llm") ? null : (
+        <Badge
+          variant="outline"
+          className="uppercase tracking-wide"
+          title="Every player is a scripted bot, not a language model: a test match"
+        >
+          Bots only
+        </Badge>
+      )}
+      <LockstepNote />
+      <span
+        className="text-muted-foreground ml-auto hidden font-mono text-xs md:inline"
+        title="The rules this match is played under (a published, versioned ruleset)"
+      >
+        {meta === null ? null : `rules ${meta.ruleset}`}
       </span>
       <Button variant="ghost" size="sm" onClick={() => uiActions.openHowToWatch()}>
         <CircleHelp aria-hidden="true" /> <span className="hidden sm:inline">How to watch</span>
@@ -314,9 +425,11 @@ export function MatchPage({ id, pair, reel, start }: MatchPageProps) {
 
   if (phase === "error") return <ErrorView />;
   return (
-    <div className={layout === "desktop" ? "flex h-dvh flex-col" : "flex min-h-dvh flex-col"}>
+    <div className={cn("relative flex flex-col", layout === "desktop" ? "h-dvh" : "min-h-dvh")}>
+      <SkipLinks />
       <Header />
       <Banner />
+      <ConnectionBanner />
       {!hasFrame ? (
         <LoadingView />
       ) : (

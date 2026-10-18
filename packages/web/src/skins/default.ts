@@ -32,6 +32,7 @@ export function defaultSkin(ruleset: string): Skin {
     player: (p: PlayerEnt) => genericPlayer(p),
     domination: (_meta: MatchMeta, _frame: Frame) => null,
     ruleSentence: (meta: MatchMeta) => `The highest score at ${endOfMatch(meta)} wins.`,
+    scoreSentence: null,
     report: (type, data) => genericReport(type, data, rawLabel),
   };
 }

@@ -180,12 +180,17 @@ export function windowOf<T>(
 export function mergeEntries(
   older: readonly FeedEntry[],
   local: readonly FeedEntry[],
+  /** The frame's cursor: older pages never show what lies after the playhead. */
+  cursor: number = Number.POSITIVE_INFINITY,
 ): readonly FeedEntry[] {
   if (older.length === 0) return local;
   const firstLocal = local[0];
   const seen = new Set(local.map((e) => e.item.id));
   const before = older.filter(
-    (e) => !seen.has(e.item.id) && (firstLocal === undefined || e.seq <= firstLocal.seq),
+    (e) =>
+      !seen.has(e.item.id) &&
+      e.seq <= cursor &&
+      (firstLocal === undefined || e.seq <= firstLocal.seq),
   );
   return before.length === 0 ? local : [...before, ...local];
 }
@@ -194,6 +199,16 @@ export function mergeEntries(
 
 /** `seat:turn` of a turn item. */
 export const turnKeyOf = (seat: string, turn: number): string => `${seat}:${turn}`;
+
+/**
+ * The turn whose thought a message card shows (phase-3 design §4.1): its sender's, of the turn it
+ * was sent in (that turn's item closes it, after the message). Null for a message outside a turn.
+ */
+export function sameTurnOf(
+  item: FeedItemOf<"message">,
+): { readonly seat: PlayerId; readonly turn: number } | null {
+  return item.turn === null ? null : { seat: item.from, turn: item.turn };
+}
 
 /** Every turn item of a feed by `seat:turn`. */
 export function turnIndex(feed: readonly FeedEntry[]): ReadonlyMap<string, FeedEntry> {
@@ -234,8 +249,66 @@ export function findEntry(feed: readonly FeedEntry[], seq: number, id: string): 
   return null;
 }
 
+/**
+ * The battle a betrayal was: the betrayer's attack on the city, at the same time and just before it
+ * in the log (the outcome the betrayal card tells: did the city hold?). Null when not held.
+ */
+export function betrayalBattle(
+  feed: readonly FeedEntry[],
+  seq: number,
+  b: FeedItemOf<"betrayal">,
+): FeedItemOf<"battle"> | null {
+  let lo = 0;
+  let hi = feed.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if ((feed[mid]?.seq ?? Number.MAX_SAFE_INTEGER) <= seq) lo = mid + 1;
+    else hi = mid;
+  }
+  for (let i = lo - 1; i >= 0; i -= 1) {
+    const it = feed[i]?.item;
+    if (it === undefined || it.t < b.t) break;
+    if (it.k === "battle" && it.t === b.t && it.city === b.city && it.attacker === b.by) return it;
+  }
+  return null;
+}
+
 /** Who saw a message: everyone, or its sender and recipients (a private message). */
 export function seenBy(item: FeedItemOf<"message">): readonly string[] | "all" {
   if (item.to === "all") return "all";
   return [item.from, ...item.to.filter((p) => p !== item.from)];
+}
+
+// Alliances' history ------------------------------------------------------------------------------
+
+export interface AllianceInfo {
+  readonly name: string | null;
+  /** Its members when it was formed, and those who joined later. */
+  readonly members: readonly string[];
+}
+
+const ALLIANCES = new WeakMap<readonly FeedEntry[], ReadonlyMap<string, AllianceInfo>>();
+
+/**
+ * Every alliance the feed has seen formed, by id, with its name and members: an alliance that has
+ * dissolved is gone from the frame but still named in the cards (two may share a name: the id and
+ * the members tell them apart). Cached per feed array.
+ */
+export function allianceNamesOf(feed: readonly FeedEntry[]): ReadonlyMap<string, AllianceInfo> {
+  const hit = ALLIANCES.get(feed);
+  if (hit !== undefined) return hit;
+  const out = new Map<string, AllianceInfo>();
+  for (const e of feed) {
+    const it = e.item;
+    if (it.k !== "diplomacy" || it.alliance === null) continue;
+    const cur = out.get(it.alliance);
+    if (it.event === "alliance_formed") {
+      out.set(it.alliance, { name: it.name ?? cur?.name ?? null, members: [...it.players] });
+    } else if (it.event === "alliance_joined" && cur !== undefined) {
+      const add = it.players.filter((p) => !cur.members.includes(p));
+      out.set(it.alliance, { name: it.name ?? cur.name, members: [...cur.members, ...add] });
+    }
+  }
+  ALLIANCES.set(feed, out);
+  return out;
 }

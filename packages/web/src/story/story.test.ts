@@ -241,14 +241,37 @@ describe("story strip", () => {
     expect(storyText(s, label)).toEndWith("Latest: The match ended (time): p1 wins, 1 h ago");
   });
 
-  test("an ended match names its winners and how they won, without the bloc sentence", () => {
-    const s = buildStory(input({ result: { reason: "domination", winners: ["p1", "p4"] } }));
-    expect(s.map((x) => x.key)).toEqual(["clock", "leader"]);
-    expect(storyText(s, label)).toBe(
-      "Day 5, 14:20 · The match is over: Odysseus · p1 and Agamemnon · p4 win by domination",
+  test("an ended match names its winners, how they won and by how much", () => {
+    const end = dom({
+      blocs: [
+        { key: "a1", members: ["p1", "p4"], cities: 16, taken: 2 },
+        { key: "a3", members: ["p2", "p3"], cities: 16, taken: 1 },
+        { key: "p5", members: ["p5"], cities: 5, taken: 0 },
+      ],
+    });
+    const s = buildStory(
+      input({ result: { reason: "domination", winners: ["p1", "p4"] }, domination: end }),
     );
-    const one = buildStory(input({ result: { reason: "time", winners: ["p2"] } }));
-    expect(storyText(one, label)).toContain("Achilles · p2 wins on points at the end");
+    expect(s.map((x) => x.key)).toEqual(["clock", "leader", "bloc"]);
+    expect(storyText(s, label)).toBe(
+      "Day 5, 14:20 · The match is over: Odysseus · p1 and Agamemnon · p4 win by domination · War p1 (p1, p4) held 16 of the 16 cities a win needs, 2 of 2 taken, for 24 h; next: the bloc of Achilles · p2 and Penelope · p3 with 16, 1 taken",
+    );
+    // The winners in another order are the same bloc; winners that are no bloc: no bloc sentence.
+    const swapped = buildStory(
+      input({ result: { reason: "domination", winners: ["p4", "p1"] }, domination: end }),
+    );
+    expect(swapped.map((x) => x.key)).toEqual(["clock", "leader", "bloc"]);
+    const odd = buildStory(input({ result: { reason: "domination", winners: ["p2"] } }));
+    expect(odd.map((x) => x.key)).toEqual(["clock", "leader"]);
+    const one = buildStory(
+      input({
+        result: { reason: "time", winners: ["p2"] },
+        standings: [standing("p2", 1, 1312), standing("p1", 2, 1260)],
+      }),
+    );
+    expect(storyText(one, label)).toContain(
+      "Achilles · p2 wins on points at the end, 52 ahead of Odysseus · p1",
+    );
   });
 
   test("tied blocs: no bloc is named; a match too short for domination: no bloc sentence", () => {

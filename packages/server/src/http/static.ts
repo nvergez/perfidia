@@ -20,7 +20,8 @@ import { SECURITY_HEADERS, HSTS, cacheControl } from "./headers.ts";
 // response of this server: a takedown is not undone by a shared cache), `index.html` and unhashed
 // files are revalidated (`no-cache`). Every path outside `/api` that is not a file gets `index.html`
 // (the app routes it), for GET and HEAD only; `/api` paths never do. The page's CSP allows the
-// same-origin WebSocket explicitly (`ws:`/`wss:` of the request's host, which the gate checked).
+// same-origin WebSocket explicitly (`wss:` of the request's host, which the gate checked, and `ws:`
+// too without TLS) and requires Trusted Types.
 
 const MAX_FILES = 2_000;
 const MAX_BYTES = 64 * 1024 * 1024;
@@ -191,12 +192,19 @@ export class StaticSite {
   }
 }
 
-/** The page's CSP: the API's, with the same-origin WebSocket of `host` named in `connect-src`. */
-export function pageCsp(host: string | null): string {
-  const base = SECURITY_HEADERS["content-security-policy"] ?? "";
+/**
+ * The page's CSP: the API's, with the same-origin WebSocket of `host` named in `connect-src`
+ * (`wss:` only behind TLS, `ws:` and `wss:` otherwise), and Trusted Types required with no policy
+ * allowed, so no HTML or script sink accepts a string even if a future change reached for one.
+ */
+export function pageCsp(host: string | null, tls = false): string {
+  const base = `${SECURITY_HEADERS["content-security-policy"] ?? ""}; ${TRUSTED_TYPES}`;
   if (host === null || !/^[A-Za-z0-9.:[\]-]+$/.test(host)) return base;
-  return base.replace("connect-src 'self'", `connect-src 'self' ws://${host} wss://${host}`);
+  const sockets = tls ? `wss://${host}` : `ws://${host} wss://${host}`;
+  return base.replace("connect-src 'self'", `connect-src 'self' ${sockets}`);
 }
+
+const TRUSTED_TYPES = "require-trusted-types-for 'script'; trusted-types 'none'";
 
 /** The response for a non-API path: a file of the index, or `index.html`. */
 export function serveStatic(
@@ -207,25 +215,32 @@ export function serveStatic(
 ): Response | null {
   const f = site.resolve(pathname);
   if (f === null) return null;
+  // Each encoding is its own representation, with its own ETag (a shared one would let a strict
+  // cache answer a gzip request with the identity body's validator, or the other way round).
+  const gzip = f.gzip !== null && /\bgzip\b/.test(req.headers.get("accept-encoding") ?? "");
+  const body = gzip && f.gzip !== null ? f.gzip : f.body;
+  const etag = gzip ? `${f.etag.slice(0, -1)}-gz"` : f.etag;
   const headers: Record<string, string> = {
     ...SECURITY_HEADERS,
     ...(hsts ? { "strict-transport-security": HSTS } : {}),
     "content-type": f.type,
     "cache-control": f.immutable ? cacheControl({ kind: "immutable" }) : "no-cache",
-    etag: f.etag,
+    etag,
   };
   if (f.type.startsWith("text/html")) {
-    headers["content-security-policy"] = pageCsp(req.headers.get("host"));
+    headers["content-security-policy"] = pageCsp(req.headers.get("host"), hsts);
   }
   if (f.gzip !== null) headers["vary"] = "accept-encoding";
-  if (req.headers.get("if-none-match") === f.etag) {
+  if (req.headers.get("if-none-match") === etag) {
     return new Response(null, { status: 304, headers });
   }
-  let body: Uint8Array<ArrayBuffer> = f.body;
-  if (f.gzip !== null && /\bgzip\b/.test(req.headers.get("accept-encoding") ?? "")) {
-    body = f.gzip;
-    headers["content-encoding"] = "gzip";
+  if (gzip) headers["content-encoding"] = "gzip";
+  // HEAD: the length GET would send.
+  if (req.method === "HEAD") {
+    return new Response(null, {
+      status: 200,
+      headers: { ...headers, "content-length": String(body.length) },
+    });
   }
-  if (req.method === "HEAD") return new Response(null, { status: 200, headers });
   return new Response(body, { status: 200, headers });
 }

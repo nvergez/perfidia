@@ -60,8 +60,11 @@ export interface MatchState {
   readonly moments: readonly Moment[];
   /** What the client holds: from the first frame's time to the last step's time. */
   readonly loaded: { readonly fromT: number; readonly toT: number; readonly complete: boolean };
+  /** The live socket: none (a finished match), connecting, open, or closed (waiting to retry). */
   readonly connection: "none" | "connecting" | "open" | "closed";
-  /** Client time (`performance.now()`) of the last live steps message, for "waiting for the model". */
+  /** Client time (`performance.now()`) of the next reconnection attempt while `closed`. */
+  readonly retryAt: number | null;
+  /** Client time (`performance.now()`) of the last live steps message ("last news … ago"). */
   readonly lastLiveAt: number | null;
   readonly annotations: Readonly<Record<string, Loadable<TurnAnnotation>>>;
   /** Live `annot` messages by `seat:turn`, in arrival order (Pass C shows them round by round). */
@@ -89,6 +92,7 @@ export const INITIAL_MATCH_STATE: MatchState = Object.freeze({
   moments: [],
   loaded: { fromT: 0, toT: 0, complete: false },
   connection: "none",
+  retryAt: null,
   lastLiveAt: null,
   annotations: {},
   liveAnnots: {},

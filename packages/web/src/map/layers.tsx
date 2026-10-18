@@ -85,8 +85,16 @@ export interface CityMarkProps {
   /** Where the city's id is written (outward from its island), or nowhere (a small map). */
   readonly label: "below" | "left" | "right" | null;
   readonly title: string;
+  /** The map's one tab stop among the cities (a roving tab index: arrows move between them). */
+  readonly tabStop: boolean;
+  /** City id labels' font size, in map units. */
+  readonly labelSize: number;
   readonly onSelect: (id: string) => void;
+  /** An arrow, Home or End key on this city: the map moves the focus. */
+  readonly onMove: (id: string, key: string) => void;
 }
+
+const MOVE_KEYS = new Set(["ArrowRight", "ArrowDown", "ArrowLeft", "ArrowUp", "Home", "End"]);
 
 export const CityMark = memo(function CityMark(p: CityMarkProps) {
   // Clear of the capital's star.
@@ -95,13 +103,16 @@ export const CityMark = memo(function CityMark(p: CityMarkProps) {
     if (e.key === "Enter" || e.key === " ") {
       e.preventDefault();
       p.onSelect(p.id);
+    } else if (MOVE_KEYS.has(e.key) && !e.altKey && !e.ctrlKey && !e.metaKey) {
+      e.preventDefault();
+      p.onMove(p.id, e.key);
     }
   };
   return (
     <g
       data-city={p.id}
       role="button"
-      tabIndex={0}
+      tabIndex={p.tabStop ? 0 : -1}
       aria-label={p.title}
       className="cursor-pointer outline-none [&:focus-visible>.focus-ring]:opacity-100"
       opacity={p.dim ? 0.22 : 1}
@@ -177,9 +188,9 @@ export const CityMark = memo(function CityMark(p: CityMarkProps) {
       {p.label === null ? null : (
         <text
           x={p.label === "left" ? p.x - labelGap : p.label === "right" ? p.x + labelGap : p.x}
-          y={p.label === "below" ? p.y + labelGap + 11 : p.y + 2.8}
+          y={p.label === "below" ? p.y + labelGap + p.labelSize * 1.35 : p.y + p.labelSize * 0.35}
           textAnchor={p.label === "left" ? "end" : p.label === "right" ? "start" : "middle"}
-          fontSize={8}
+          fontSize={p.labelSize}
           fill="var(--foreground)"
           fillOpacity={0.8}
           className="pointer-events-none font-mono select-none"

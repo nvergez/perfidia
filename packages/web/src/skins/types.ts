@@ -134,6 +134,8 @@ export interface Skin {
   domination(meta: MatchMeta, frame: Frame): DominationView | null;
   /** The win rule in one sentence, its numbers from the match's config and state. */
   ruleSentence(meta: MatchMeta, frame: Frame): string;
+  /** How the score is made, in one sentence (null: the ruleset's skin does not say). */
+  readonly scoreSentence: string | null;
   /** A report's data (`ReportDetail.data`) as rows. */
   report(type: string, data: Readonly<Record<string, unknown>>): ReportView;
 }

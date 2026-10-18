@@ -155,3 +155,25 @@ export function citiesOfItem(
   }
   return [];
 }
+
+// Keyboard -----------------------------------------------------------------------------------------
+
+/** `c2` before `c10`. */
+export function byCityNumber(a: string, b: string): number {
+  const na = Number(a.replace(/^\D+/, ""));
+  const nb = Number(b.replace(/^\D+/, ""));
+  if (Number.isFinite(na) && Number.isFinite(nb) && na !== nb) return na - nb;
+  return a < b ? -1 : a > b ? 1 : 0;
+}
+
+/** The city the focus moves to from `id` on `key` (arrows step, Home and End jump); null: stay. */
+export function moveFocus(order: readonly string[], id: string, key: string): string | null {
+  const i = order.indexOf(id);
+  if (i < 0 || order.length === 0) return null;
+  const n = order.length;
+  if (key === "Home") return order[0] ?? null;
+  if (key === "End") return order[n - 1] ?? null;
+  if (key === "ArrowRight" || key === "ArrowDown") return order[(i + 1) % n] ?? null;
+  if (key === "ArrowLeft" || key === "ArrowUp") return order[(i - 1 + n) % n] ?? null;
+  return null;
+}

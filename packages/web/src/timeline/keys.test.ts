@@ -44,15 +44,22 @@ describe("playback shortcuts", () => {
     expect(keyCommand(key("+"), "arrows")).toBe("faster");
   });
 
+  test("on the timeline's slider: Space plays or pauses, the arrows stay the slider's", () => {
+    expect(keyCommand(key(" "), "slider")).toBe("toggle");
+    expect(keyCommand(key("ArrowLeft"), "slider")).toBeNull();
+    expect(keyCommand(key("ArrowRight"), "slider")).toBeNull();
+    expect(keyCommand(key("-"), "slider")).toBe("slower");
+  });
+
   test("what has the focus", () => {
     expect(focusKind(null)).toBe("none");
     expect(focusKind(el("BODY"))).toBe("none");
     expect(focusKind(el("INPUT"))).toBe("text");
-    expect(focusKind(el("INPUT", { type: "range" }))).toBe("arrows");
+    expect(focusKind(el("INPUT", { type: "range" }))).toBe("slider");
     expect(focusKind(el("INPUT", { type: "checkbox" }))).toBe("control");
     expect(focusKind(el("SELECT"))).toBe("text");
     expect(focusKind(el("BUTTON"))).toBe("control");
-    expect(focusKind(el("DIV", { role: "slider" }))).toBe("arrows");
+    expect(focusKind(el("DIV", { role: "slider" }))).toBe("slider");
     expect(focusKind(el("BUTTON", { role: "tab" }))).toBe("arrows");
     expect(focusKind(el("g", { role: "button" }))).toBe("control");
     expect(focusKind(el("BUTTON", {}, ['[role="dialog"]']))).toBe("dialog");

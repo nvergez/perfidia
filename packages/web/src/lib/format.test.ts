@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { PLAYER_COLORS, PLAYER_SHAPES, playerColor, playerShape } from "./colors.ts";
 import { fmtInt, fmtUsd, plural } from "./format.ts";
+import { prettyJson } from "./json.ts";
 import { stockNow } from "./stock.ts";
 
 describe("numbers, colours, stock", () => {
@@ -41,5 +42,15 @@ describe("numbers, colours, stock", () => {
     expect(stockNow(city, 3_600)).toEqual({ wood: 100, stone: 900, gold: 0 });
     expect(stockNow(city, 7_200)).toEqual({ wood: 160, stone: 900, gold: 0 });
     expect(stockNow(city, 3_600 * 100)).toEqual({ wood: 500, stone: 900, gold: 0 });
+  });
+});
+
+describe("notebooks", () => {
+  test("a JSON object or array is indented; any other text is left alone", () => {
+    expect(prettyJson('{"a":1,"b":[2]}')).toBe('{\n  "a": 1,\n  "b": [\n    2\n  ]\n}');
+    expect(prettyJson(" [1] ")).toBe("[\n  1\n]");
+    expect(prettyJson("{not json")).toBeNull();
+    expect(prettyJson("Trust p3. Watch p2.")).toBeNull();
+    expect(prettyJson('"a string"')).toBeNull();
   });
 });

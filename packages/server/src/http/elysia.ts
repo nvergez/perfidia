@@ -9,7 +9,9 @@ import {
   allowedHosts,
   clientIp,
   gate,
+  malformed,
   notFoundRoute,
+  requestUrl,
   upgradeRefusal,
   upgradeRequired,
 } from "./gate.ts";
@@ -79,8 +81,9 @@ export function buildElysiaApp(ctx: HttpContext) {
   app
     .request(({ request, server, set }) => {
       Object.assign(set.headers, headers);
-      const url = new URL(request.url);
       const ip = clientIp(request, server?.requestIP(request)?.address ?? null, config);
+      const url = requestUrl(request);
+      if (url === null) return respond(request, malformed(ip, limiter, now()), o);
       const hosts = hostsFor(server?.port ?? config.port);
       const refused = gate(request, url.pathname, ip, hosts, limiter, now());
       if (refused !== null) return respond(request, refused, o);

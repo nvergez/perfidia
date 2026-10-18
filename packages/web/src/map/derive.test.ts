@@ -1,7 +1,14 @@
 import { describe, expect, test } from "bun:test";
 import type { FeedItem, ReportDetail } from "@perfidia/protocol/spectator";
 import type { FeedEntry } from "../playback/timeline.ts";
-import { citiesOfItem, createFeedFacts, fullestCopy, recentBattles } from "./derive.ts";
+import {
+  byCityNumber,
+  citiesOfItem,
+  createFeedFacts,
+  fullestCopy,
+  moveFocus,
+  recentBattles,
+} from "./derive.ts";
 
 const HOUR = 3_600;
 
@@ -164,5 +171,21 @@ describe("the cities of a selected feed item", () => {
     expect(citiesOfItem(feed, "9:0", 20 - HOUR - 1)).toEqual([]);
     expect(citiesOfItem(feed, "9:0", 20 + 6 * HOUR)).toEqual(["c7"]);
     expect(citiesOfItem(feed, "9:0", 20 + 6 * HOUR + 1)).toEqual([]);
+  });
+});
+
+describe("the cities' keyboard order", () => {
+  test("by number; arrows step and wrap, Home and End jump", () => {
+    const order = ["c10", "c2", "c1", "c33"].toSorted(byCityNumber);
+    expect(order).toEqual(["c1", "c2", "c10", "c33"]);
+    expect(moveFocus(order, "c2", "ArrowRight")).toBe("c10");
+    expect(moveFocus(order, "c2", "ArrowDown")).toBe("c10");
+    expect(moveFocus(order, "c2", "ArrowLeft")).toBe("c1");
+    expect(moveFocus(order, "c1", "ArrowUp")).toBe("c33");
+    expect(moveFocus(order, "c33", "ArrowRight")).toBe("c1");
+    expect(moveFocus(order, "c10", "Home")).toBe("c1");
+    expect(moveFocus(order, "c10", "End")).toBe("c33");
+    expect(moveFocus(order, "c10", "x")).toBeNull();
+    expect(moveFocus(order, "c99", "ArrowRight")).toBeNull();
   });
 });

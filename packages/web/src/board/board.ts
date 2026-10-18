@@ -66,3 +66,57 @@ export function cityShare(cities: number, need: number | null): number {
   if (need === null || need <= 0) return 0;
   return Math.min(1, cities / need);
 }
+
+/** Where a bloc stands against the domination rule, in the words of its row. */
+export type BlocStanding =
+  /** It won the match (its members are the winners). */
+  | { readonly kind: "won" }
+  /** Its countdown runs (the row shows it). */
+  | { readonly kind: "countdown" }
+  /** It holds the cities but not enough of them taken by conquest: no countdown can start. */
+  | { readonly kind: "needs-taken"; readonly missing: number }
+  /** It needs more cities. */
+  | { readonly kind: "needs-cities"; readonly missing: number }
+  | { readonly kind: "none" };
+
+export function blocStanding(
+  bloc: DominationBloc,
+  d: DominationView,
+  winners: readonly string[] | null,
+): BlocStanding {
+  if (
+    winners !== null &&
+    winners.length > 0 &&
+    bloc.members.length === winners.length &&
+    bloc.members.every((m) => winners.includes(m))
+  ) {
+    return { kind: "won" };
+  }
+  if (countdownOf(d, bloc.key) !== null) return { kind: "countdown" };
+  if (d.need === null) return { kind: "none" };
+  if (bloc.cities < d.need) return { kind: "needs-cities", missing: d.need - bloc.cities };
+  if (d.needTaken !== null && bloc.taken < d.needTaken) {
+    return { kind: "needs-taken", missing: d.needTaken - bloc.taken };
+  }
+  return { kind: "none" };
+}
+
+/**
+ * The blocs shown as full rows (an alliance, or a lone player with a countdown, a win or the cities
+ * a win needs) and the lone players listed on one line, each in `sortBlocs` order.
+ */
+export function splitBlocs(
+  blocs: readonly DominationBloc[],
+  d: DominationView,
+  winners: readonly string[] | null,
+): { readonly rows: DominationBloc[]; readonly alone: DominationBloc[] } {
+  const rows: DominationBloc[] = [];
+  const alone: DominationBloc[] = [];
+  for (const b of sortBlocs(blocs)) {
+    const st = blocStanding(b, d, winners);
+    const full = b.members.length > 1 || st.kind === "won" || st.kind === "countdown";
+    const enough = d.need !== null && b.cities >= d.need;
+    (full || enough ? rows : alone).push(b);
+  }
+  return { rows, alone };
+}

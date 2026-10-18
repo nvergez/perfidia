@@ -25,15 +25,19 @@ type Lookup =
   | { readonly status: "ok"; readonly item: TurnItem | null }
   | { readonly status: "error" };
 
+/**
+ * Turn items fetched from the feed route, by `timeline|match|seat|turn`. Only a found item is kept:
+ * "not ended yet" and failures are asked again next time (the turn may have ended since).
+ */
 const remote = new Map<string, Promise<TurnItem | null>>();
 
 function fetchTurn(
+  key: string,
   match: string,
   seat: PlayerId,
   turn: number,
   after: number,
 ): Promise<TurnItem | null> {
-  const key = `${match}|${seat}|${turn}`;
   let p = remote.get(key);
   if (p === undefined) {
     p = api.feed(match, { after, kinds: ["turn"], players: [seat], limit: 20 }).then((page) => {
@@ -42,7 +46,12 @@ function fetchTurn(
       }
       return null;
     });
-    p.catch(() => remote.delete(key));
+    p.then(
+      (item) => {
+        if (item === null) remote.delete(key);
+      },
+      () => remote.delete(key),
+    );
     remote.set(key, p);
   }
   return p;
@@ -56,7 +65,8 @@ function useTurnThought(
 ): Lookup | null {
   const local = useContext(TurnIndex).get(turnKeyOf(seat, turn));
   const match = useMatch((s) => s.id);
-  const key = `${match ?? ""}|${seat}|${turn}`;
+  const timeline = useMatch((s) => s.meta?.timeline ?? "");
+  const key = `${timeline}|${match ?? ""}|${seat}|${turn}`;
   // A remote answer, kept with the turn it answers (a stale one reads as loading).
   const [found, setFound] = useState<{ readonly key: string; readonly lookup: Lookup } | null>(
     null,
@@ -65,7 +75,7 @@ function useTurnThought(
   useEffect(() => {
     let live = true;
     if (enabled && localItem === null && match !== null) {
-      fetchTurn(match, seat, turn, after).then(
+      fetchTurn(key, match, seat, turn, after).then(
         (item) => {
           if (live) setFound({ key, lookup: { status: "ok", item } });
         },

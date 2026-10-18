@@ -125,10 +125,22 @@ describe("live", () => {
     pb.tick(65_000);
     expect(pb.playhead).toBe(1_100);
     expect(pb.view(65_000).waiting).toBe(true);
-    // Steps beyond the anchor move the head.
+    // Steps beyond the anchor move the head, and the clock is not waiting any more: they are shown.
     pb.addSteps(10, 11, [scoreStep(11, 1_500, 3)]);
     pb.tick(66_000);
     expect([pb.playhead, score(pb)]).toEqual([1_500, 3]);
+    expect(pb.view(66_000).waiting).toBe(false);
+  });
+
+  test("real time: a step exactly at the cap ends the wait; one before it does not", () => {
+    const pb = new Playback({ realtime: true, running: true });
+    pb.addFrame(frame(10, 1_000));
+    pb.goLive(0);
+    pb.setClock({ t: 1_000, speed: [600, 1], cap: 1_100, at: 0 });
+    pb.addSteps(10, 11, [scoreStep(11, 1_099, 1)]);
+    expect(pb.view(10_000).waiting).toBe(true);
+    pb.addSteps(11, 12, [scoreStep(12, 1_100, 2)]);
+    expect(pb.view(10_000).waiting).toBe(false);
   });
 
   test("pause switches to replay over the steps held; a replay reaching the head goes live", () => {

@@ -1,4 +1,4 @@
-import { Eye, Lock, Map as MapIcon, Trophy } from "lucide-react";
+import { Bot, Clock, Eye, Lock, Map as MapIcon, Trophy } from "lucide-react";
 import { ModelBadge } from "../common/model-badge.tsx";
 import { PlayerGlyph } from "../common/player-glyph.tsx";
 import { seatLabel } from "../lib/seats.ts";
@@ -44,6 +44,7 @@ export function HowToWatch() {
   const seats = useSeats();
   const rule = useRuleSentence();
   const setting = useMatch((s) => s.skin?.setting ?? "islands");
+  const score = useMatch((s) => s.skin?.scoreSentence ?? null);
   const llm = seats.filter((s) => s.kind === "llm").length;
   const who =
     llm === 0
@@ -72,11 +73,23 @@ export function HowToWatch() {
               armies.
             </span>
           </li>
+          {llm === 0 ? (
+            <li className="flex gap-3">
+              <Bot className="text-gold mt-0.5 size-4 shrink-0" aria-hidden="true" />
+              <span>
+                <strong>This is a test match:</strong> every player is a scripted bot, not a
+                language model, so its “thoughts” are terse command lists and its messages canned
+                signals. Matches between AI agents read like conversations.
+              </span>
+            </li>
+          ) : null}
           <li className="flex gap-3">
             <Trophy className="text-gold mt-0.5 size-4 shrink-0" aria-hidden="true" />
             <span>
-              <strong>Who is winning:</strong> the leaderboard ranks the players by score; the blocs
-              show how close each alliance is to winning outright.
+              <strong>Who is winning:</strong> the leaderboard ranks the players by score (hover a
+              score bar for its parts); once the match ends, the winners come first. The blocs show
+              how close each alliance is to winning outright.
+              {score === null ? null : <span className="text-muted-foreground"> {score}</span>}
             </span>
           </li>
           <li className="flex gap-3">
@@ -90,9 +103,17 @@ export function HowToWatch() {
           <li className="flex gap-3">
             <MapIcon className="text-primary mt-0.5 size-4 shrink-0" aria-hidden="true" />
             <span>
-              <strong>Where the fighting is:</strong> the map shows armies at sea and battles; the
-              timeline plays the match (space), jumps between key moments (← and →), and “Watch the
-              key moments” replays the turning points in a minute or two.
+              <strong>Where the fighting is:</strong> the map shows armies at sea and battles (its
+              “Map key” explains the symbols); the timeline plays the match (space), jumps between
+              key moments (← and →), and “Watch the key moments” replays the turning points in a
+              minute or two.
+            </span>
+          </li>
+          <li className="flex gap-3">
+            <Clock className="text-primary mt-0.5 size-4 shrink-0" aria-hidden="true" />
+            <span>
+              <strong>Game time:</strong> “D4 12:50” is day 4 of the match at 12:50; the speed “1
+              h/s” plays one game hour per second.
             </span>
           </li>
         </ul>

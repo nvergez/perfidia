@@ -1,6 +1,6 @@
 import type { Frame, PlayerEnt, SeatEnt, SeatInfo, Standing } from "@perfidia/protocol/spectator";
 import { Bot, Brain, Crown, Eye, Flag, Handshake, Landmark, Skull } from "lucide-react";
-import { memo, useMemo } from "react";
+import { memo, useId, useMemo } from "react";
 import { ModelBadge } from "../common/model-badge.tsx";
 import { PlainText } from "../common/plain-text.tsx";
 import { PlayerGlyph } from "../common/player-glyph.tsx";
@@ -121,6 +121,20 @@ const Row = memo(function Row({
       : unitsText(army.units, (u) => skin.unit(u), skin.unitOrder);
   const pacts = (player?.relations ?? []).filter((r) => r.kind === "pact");
   const highlight = (): void => uiActions.setHighlight([id]);
+  // The row's figures for a keyboard or screen reader user: the name button is the row's one tab
+  // stop and is described by them (the figures' own tips are off the tab order).
+  const describedBy = useId();
+  const summary = [
+    `rank ${standing.rank}`,
+    `score ${fmtInt(standing.score)}${partsText === "" ? "" : ` (${partsText})`}`,
+    plural(standing.cities, "city", "cities"),
+    taken === null ? null : `${plural(taken, "city", "cities")} taken by conquest`,
+    army === null ? null : `army population ${fmtInt(army.pop)}, hidden from the players`,
+    allianceName === null ? null : `alliance ${allianceName}`,
+    winner ? "winner" : null,
+  ]
+    .filter((x) => x !== null)
+    .join("; ");
   return (
     // oxlint-disable-next-line jsx-a11y/no-noninteractive-element-interactions -- hover and focus within the row highlight the player on the map; its buttons are the controls
     <li
@@ -130,7 +144,7 @@ const Row = memo(function Row({
       onFocus={highlight}
       onBlur={clearHighlight}
       className={cn(
-        "hover:bg-accent/40 flex flex-col gap-1 rounded-lg px-1.5 py-1.5",
+        "hover:bg-accent/40 flex flex-col gap-0.5 rounded-lg px-1.5 py-1",
         !standing.alive && "opacity-60",
       )}
     >
@@ -141,6 +155,7 @@ const Row = memo(function Row({
         <PlayerCard player={id}>
           <button
             type="button"
+            aria-describedby={describedBy}
             onClick={() => uiActions.openPlayer(id)}
             className="flex min-w-0 items-center gap-1.5 text-left hover:underline"
           >
@@ -154,6 +169,9 @@ const Row = memo(function Row({
         {seat === undefined ? null : <ModelBadge seat={seat} className="shrink-0 px-1.5" />}
         <span className="ml-auto shrink-0 font-mono font-semibold tabular-nums">
           {fmtInt(standing.score)}
+        </span>
+        <span id={describedBy} className="sr-only">
+          {summary}
         </span>
       </div>
       <div className="flex items-center gap-2 pl-5.5">
@@ -170,6 +188,7 @@ const Row = memo(function Row({
             </span>
           }
           className="bg-muted h-2 min-w-0 flex-1 overflow-hidden rounded-full"
+          focusable={false}
         >
           {segments.map((s, i) => (
             <span
@@ -183,6 +202,7 @@ const Row = memo(function Row({
           label={plural(standing.cities, "city", "cities")}
           tip={plural(standing.cities, "city", "cities")}
           className="text-muted-foreground text-xs"
+          focusable={false}
         >
           <Landmark className="size-3" aria-hidden="true" />
           {standing.cities}
@@ -192,6 +212,7 @@ const Row = memo(function Row({
             label={`${plural(taken, "city", "cities")} taken by conquest`}
             tip={`${plural(taken, "city", "cities")} taken by conquest and held`}
             className="text-muted-foreground text-xs"
+            focusable={false}
           >
             <Flag className="size-3" aria-hidden="true" />
             {taken}
@@ -210,6 +231,7 @@ const Row = memo(function Row({
               </span>
             }
             className="text-muted-foreground text-xs"
+            focusable={false}
           >
             <Eye className="size-3" aria-hidden="true" />
             {fmtInt(army.pop)}
@@ -257,10 +279,30 @@ export function Leaderboard() {
       data-testid="leaderboard"
       className="bg-card rounded-xl border p-3"
     >
-      <h2 className="text-muted-foreground mb-1.5 flex items-center text-xs font-semibold tracking-wider uppercase">
-        Leaderboard
+      <h2 className="text-muted-foreground flex items-center gap-1 text-xs font-semibold tracking-wider uppercase">
+        {result === null ? "Leaderboard" : "Final ranking"}
+        {result === null ? null : (
+          <span className="font-normal tracking-normal normal-case">· the winners first</span>
+        )}
         <span className="ml-auto font-normal tracking-normal normal-case">score</span>
       </h2>
+      <p
+        className="text-muted-foreground mb-1 flex flex-wrap items-center gap-x-2 text-[0.7rem] leading-snug"
+        data-testid="leaderboard-key"
+      >
+        <span className="inline-flex items-center gap-0.5">
+          <Landmark className="size-3" aria-hidden="true" /> cities
+        </span>
+        <span className="inline-flex items-center gap-0.5">
+          <Flag className="size-3" aria-hidden="true" /> conquered
+        </span>
+        <span
+          className="inline-flex items-center gap-0.5"
+          title="Army population: only spectators see it, never the players"
+        >
+          <Eye className="size-3" aria-hidden="true" /> army (hidden from players)
+        </span>
+      </p>
       <ol className="flex flex-col gap-0.5">
         {standings.map((st) => {
           const player = players[st.player];

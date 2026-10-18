@@ -4,11 +4,11 @@ import { GameTime } from "../common/game-time.tsx";
 import { PlainText } from "../common/plain-text.tsx";
 import type { FeedEntry } from "../playback/timeline.ts";
 import { isPlayerId } from "../lib/ids.ts";
-import { useMatch, useSkin } from "../store/hooks.ts";
+import { useFeed, useMatch, useSkin } from "../store/hooks.ts";
 import { controls } from "../store/session.ts";
 import { uiActions } from "../store/ui.ts";
 import { CityRef, TimeLeft, Who, unitsText } from "./bits.tsx";
-import { seqOfItem } from "./filter.ts";
+import { betrayalBattle, seqOfItem } from "./filter.ts";
 import { Shell } from "./shell.tsx";
 
 // The large red card of a betrayal, and of an attack launched against an ally or a pact partner
@@ -105,6 +105,33 @@ function PairButton({ a, b }: { readonly a: string; readonly b: string }) {
 
 const rel = (r: "ally" | "pact"): string => (r === "ally" ? "its ally" : "its pact partner");
 
+/** How the betrayal's attack went: the city held, fell, or is besieged. */
+function Outcome({ entry }: { readonly entry: FeedEntry }) {
+  const feed = useFeed();
+  const item = entry.item;
+  if (item.k !== "betrayal") return null;
+  const battle = betrayalBattle(feed, entry.seq, item);
+  if (battle === null) return null;
+  return (
+    <p className="mt-1 text-sm" data-testid="betrayal-outcome">
+      {battle.winner === "defender" ? (
+        <>
+          The attack failed: <Who id={item.against} /> held <CityRef id={item.city} />.
+        </>
+      ) : battle.fell ? (
+        <>
+          The attack succeeded: <CityRef id={item.city} /> fell to <Who id={item.by} />.
+        </>
+      ) : (
+        <>
+          <Who id={item.by} /> won the battle at <CityRef id={item.city} />
+          {battle.siege === "started" ? ": a siege begins." : "."}
+        </>
+      )}
+    </p>
+  );
+}
+
 export function BetrayalCard({
   entry,
   selected,
@@ -130,6 +157,7 @@ export function BetrayalCard({
           {item.relation === "ally" ? `${rel("ally")} ` : null}
           <Who id={item.against} /> at <CityRef id={item.city} />
         </p>
+        <Outcome entry={entry} />
         <Context context={item.context} victim={item.against} relation={item.relation} />
         <PairButton a={item.by} b={item.against} />
       </Shell>

@@ -8,10 +8,14 @@ import {
   filterFeed,
   findEntry,
   inCategory,
+  allianceNamesOf,
+  betrayalBattle,
   mergeEntries,
+  sameTurnOf,
   seenBy,
   seqOfItem,
   turnIndex,
+  turnKeyOf,
   turnsOf,
   visible,
   windowOf,
@@ -92,6 +96,26 @@ const turn = (id: string, seat: PlayerId, n: number, llm: boolean) =>
     messages: [],
     thought: `thought ${seat} ${n}`,
   }) satisfies FeedItem;
+
+/** A diplomacy entry of an alliance. */
+const dip = (
+  seq: number,
+  event: "alliance_formed" | "alliance_joined" | "alliance_dissolved",
+  alliance: `a${number}`,
+  players: PlayerId[],
+  name: string | null,
+): FeedEntry => ({
+  seq,
+  item: {
+    k: "diplomacy",
+    ...base(`${seq}:0`, players),
+    event,
+    alliance,
+    name,
+    cause: null,
+    expiresAt: null,
+  },
+});
 
 const ITEMS = {
   publicMsg: message("1:0", "p1", "all"),
@@ -301,9 +325,24 @@ describe("lookups", () => {
     expect(mergeEntries([], local)).toBe(local);
   });
 
+  test("older pages never show what lies after the playhead (a seek back, an empty local feed)", () => {
+    const older = ALL.slice(0, 7);
+    const cursor = older[2]?.seq ?? 0;
+    expect(ids(mergeEntries(older, [], cursor))).toEqual(ids(ALL.slice(0, 3)));
+    expect(ids(mergeEntries(older, ALL.slice(1, 2), cursor))).toEqual(ids(ALL.slice(0, 2)));
+  });
+
   test("a message's same-turn thought by seat and turn; a seat's turns in order", () => {
     const index = turnIndex(ALL);
     expect(index.get("p2:3")?.item).toBe(ITEMS.llmTurn);
+    // The sender's turn the message was sent in: not the turn before, not a recipient's.
+    const at = sameTurnOf(ITEMS.privateMsg);
+    expect(at).toEqual({ seat: "p2", turn: 3 });
+    expect(at === null ? undefined : index.get(turnKeyOf(at.seat, at.turn))?.item).toBe(
+      ITEMS.llmTurn,
+    );
+    expect(sameTurnOf(message("40:0", "p3", ["p2"], 7))).toEqual({ seat: "p3", turn: 7 });
+    expect(sameTurnOf(message("41:0", "p3", ["p2"], null))).toBeNull();
     expect(index.get("p2:4")).toBeUndefined();
     expect(turnsOf(ALL, "p5").map((t) => t.turn)).toEqual([9]);
   });
@@ -327,5 +366,57 @@ describe("lookups", () => {
     expect(seenBy(ITEMS.privateMsg)).toEqual(["p2", "p3"]);
     expect(seenBy(ITEMS.groupMsg)).toEqual(["p4", "p2", "p3"]);
     expect(seenBy(ITEMS.publicMsg)).toBe("all");
+  });
+
+  test("alliances by id from the feed's history: a dissolved one keeps its name and members", () => {
+    const feed = [
+      dip(1, "alliance_formed", "a2", ["p2", "p3"], "League p2"),
+      dip(2, "alliance_dissolved", "a2", ["p3"], null),
+      dip(3, "alliance_formed", "a3", ["p2", "p5"], "League p2"),
+      dip(4, "alliance_joined", "a3", ["p6"], null),
+    ];
+    const names = allianceNamesOf(feed);
+    expect(names.get("a2")).toEqual({ name: "League p2", members: ["p2", "p3"] });
+    expect(names.get("a3")).toEqual({ name: "League p2", members: ["p2", "p5", "p6"] });
+    expect(allianceNamesOf(feed)).toBe(names);
+  });
+
+  test("a betrayal's battle: the betrayer's attack on the city at that time, before it", () => {
+    const at = 305_433;
+    const battle = (seq: number, attacker: PlayerId, city: `c${number}`, t = at): FeedEntry => ({
+      seq,
+      item: {
+        k: "battle",
+        ...base(`${seq}:0`, [attacker, "p3"]),
+        t,
+        city,
+        attacker,
+        defender: "p3",
+        kind: "city",
+        winner: "defender",
+        reports: [],
+        siege: null,
+        fell: false,
+      },
+    });
+    const betrayal = {
+      k: "betrayal",
+      ...base("7048:0", ["p2", "p3"], 3),
+      t: at,
+      by: "p2",
+      against: "p3",
+      relation: "ally",
+      city: "c18",
+      context: { messages: [], thoughts: [], since: null },
+    } satisfies FeedItem;
+    const feed: FeedEntry[] = [
+      battle(7000, "p2", "c18", at - 60),
+      battle(7044, "p4", "c18"),
+      battle(7045, "p2", "c18"),
+      { seq: 7048, item: betrayal },
+      battle(7050, "p2", "c18"),
+    ];
+    expect(betrayalBattle(feed, 7048, betrayal)?.id).toBe("7045:0");
+    expect(betrayalBattle(feed.slice(0, 2), 7048, betrayal)).toBeNull();
   });
 });

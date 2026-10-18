@@ -340,6 +340,51 @@ describe("limits", () => {
   );
 });
 
+/** The status line of a raw HTTP/1.1 request with `host` (fetch would not send a malformed one). */
+async function rawStatus(port: number, host: string): Promise<number> {
+  const text = await new Promise<string>((resolve, reject) => {
+    let got = "";
+    void Bun.connect({
+      hostname: "127.0.0.1",
+      port,
+      socket: {
+        open(sock) {
+          sock.write(`GET /api/health HTTP/1.1\r\nHost: ${host}\r\nConnection: close\r\n\r\n`);
+        },
+        data(_sock, chunk) {
+          got += new TextDecoder().decode(chunk);
+        },
+        close() {
+          resolve(got);
+        },
+        error(_sock, e) {
+          reject(e);
+        },
+      },
+    });
+  });
+  return Number(/^HTTP\/1\.1 (\d{3})/.exec(text)?.[1] ?? "0");
+}
+
+describe("a malformed Host header", () => {
+  for (const adapter of ["elysia", "raw"] as const) {
+    test(`gets 400 without a log line and still spends the rate limit (${adapter})`, async () => {
+      const srv = serve(
+        testConfig({
+          runs: root,
+          adapter,
+          limits: { ...DEFAULT_LIMITS, httpPerMinute: 60, httpBurst: 4 },
+        }),
+      );
+      const statuses: number[] = [];
+      for (let i = 0; i < 6; i += 1) statuses.push(await rawStatus(srv.port, "a b"));
+      expect(statuses).toEqual([400, 400, 400, 400, 429, 429]);
+      expect(await rawStatus(srv.port, `127.0.0.1:${srv.port}`)).toBe(429);
+      expect(srv.warnings).toEqual([]);
+    });
+  }
+});
+
 describe("bodies and pages", () => {
   test(
     "two run directories with the same log never serve each other's bodies",

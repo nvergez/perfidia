@@ -254,6 +254,7 @@ export function perfidiaSkin(ruleset: string): Skin {
     player: (p: PlayerEnt) => genericPlayer(p),
     domination: readDomination,
     ruleSentence,
+    scoreSentence: `Score: each city is worth 100 points plus its building levels (${names.prizeName} 100 more), plus battle points (at most a quarter of the city points).`,
     report: (type, data) => report(names, type, data),
   };
 }

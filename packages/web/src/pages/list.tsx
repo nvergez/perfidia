@@ -95,12 +95,29 @@ function MatchCard({ item }: { readonly item: MatchListItem }) {
         <div className="flex flex-wrap items-center gap-2">
           <StatusBadge status={item.status} />
           {fake ? <FakeBadge /> : null}
+          {fake || item.seats.some((s) => s.kind === "llm") ? null : (
+            <Badge
+              variant="outline"
+              title="Every player is a scripted bot, not a language model: a test match"
+            >
+              Bots only
+            </Badge>
+          )}
           {item.featured ? (
-            <Badge variant="outline" className="border-gold/60 text-gold">
+            <Badge
+              variant="outline"
+              className="border-gold/60 text-gold"
+              title="Picked by the site to watch first"
+            >
               Featured
             </Badge>
           ) : null}
-          <span className="text-muted-foreground ml-auto font-mono text-xs">{item.ruleset}</span>
+          <span
+            className="text-muted-foreground ml-auto font-mono text-xs"
+            title="The rules this match is played under (a published, versioned ruleset)"
+          >
+            rules {item.ruleset}
+          </span>
         </div>
         <CardTitle className="mt-1 font-serif text-xl leading-tight">
           <bdi>{item.title}</bdi>

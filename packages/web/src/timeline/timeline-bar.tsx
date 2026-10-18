@@ -64,7 +64,21 @@ function Clock() {
 function LiveButton() {
   const mode = useMatch((s) => s.mode);
   const running = useMatch((s) => isRunningStatus(s.status));
+  const lost = useMatch((s) => s.connection === "closed");
   if (!running) return null;
+  if (lost) {
+    return (
+      <Button
+        size="sm"
+        variant="outline"
+        className="h-8 text-xs"
+        onClick={() => controls.reconnect()}
+        title="The connection to the server was lost: reconnect now"
+      >
+        Reconnecting…
+      </Button>
+    );
+  }
   if (mode === "live") {
     return (
       <span

@@ -4,7 +4,9 @@ import {
   allowedHosts,
   clientIp,
   gate,
+  malformed,
   notFoundRoute,
+  requestUrl,
   upgradeRefusal,
   upgradeRequired,
 } from "./gate.ts";
@@ -73,8 +75,9 @@ export function serveRaw(ctx: HttpContext): RunningHttp {
     hostname: config.host,
     port: config.port,
     fetch(req, srv) {
-      const url = new URL(req.url);
       const ip = clientIp(req, srv.requestIP(req)?.address ?? null, config);
+      const url = requestUrl(req);
+      if (url === null) return respond(req, malformed(ip, limiter, now()), o);
       hosts ??= allowedHosts(config, srv.port ?? config.port);
       const refused = gate(req, url.pathname, ip, hosts, limiter, now());
       if (refused !== null) return respond(req, refused, o);

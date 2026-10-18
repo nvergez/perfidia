@@ -148,10 +148,12 @@ export class Api {
     what: string,
     schema: Parser<T>,
     signal?: AbortSignal,
+    cache?: RequestCache,
   ): Promise<T> {
     const res = await this.fetchFn(`${this.base}${path}`, {
       headers: { accept: "application/json" },
       ...(signal === undefined ? {} : { signal }),
+      ...(cache === undefined ? {} : { cache }),
     });
     let body: unknown = null;
     try {
@@ -184,8 +186,13 @@ export class Api {
     return this.get("/api/matches", "match list", MatchListSchema, signal);
   }
 
-  meta(id: string, signal?: AbortSignal): Promise<MatchMeta> {
-    return this.get(`/api/matches/${seg(id)}`, "match meta", MatchMetaSchema, signal);
+  /**
+   * The match's meta. It names the timeline every other route is read from, so a copy a cache kept
+   * from before the log or the fold changed would mix two matches: by default the browser
+   * revalidates it (`no-cache`, a cheap 304 by ETag); a re-sync asks past every cache (`reload`).
+   */
+  meta(id: string, signal?: AbortSignal, cache: RequestCache = "no-cache"): Promise<MatchMeta> {
+    return this.get(`/api/matches/${seg(id)}`, "match meta", MatchMetaSchema, signal, cache);
   }
 
   latest(id: string, signal?: AbortSignal): Promise<Frame> {

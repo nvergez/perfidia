@@ -400,7 +400,15 @@ export function CityPopover({
       document.removeEventListener("keydown", onKey, true);
       document.removeEventListener("pointerdown", onOutside, true);
       document.removeEventListener("focusin", onOutside, true);
-      if (el.contains(document.activeElement) && before instanceof HTMLElement) {
+      // Back to the city (an SVG group) or whatever opened it, unless the viewer moved the focus
+      // elsewhere themselves (a click on nothing focusable leaves it on the body).
+      const active = document.activeElement;
+      const lost = active === null || active === document.body || el.contains(active);
+      if (
+        lost &&
+        (before instanceof HTMLElement || before instanceof SVGElement) &&
+        before.isConnected
+      ) {
         before.focus({ preventScroll: true });
       }
     };

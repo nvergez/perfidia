@@ -131,6 +131,38 @@ export function gate(
   return null;
 }
 
+/** The request's URL, or null when it cannot be parsed (a malformed `Host` header: `Host: a b`). */
+export function requestUrl(req: Request): URL | null {
+  try {
+    return new URL(req.url);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The answer to a request whose URL cannot be parsed: 400, after a token of the client's rate limit
+ * (429 once it is spent), and no log line, so such requests neither skip the limit nor flood the log.
+ */
+export function malformed(ip: string, limiter: RateLimiter, now: number): ApiResult {
+  const wait = limiter.take(ip, now);
+  if (wait > 0) {
+    return apiError(
+      429,
+      "RATE_LIMITED",
+      "too many requests from your address",
+      `retry in ${wait} s`,
+      { "retry-after": String(wait) },
+    );
+  }
+  return apiError(
+    400,
+    "BAD_REQUEST",
+    "the request's URL or Host header is malformed",
+    "send a valid Host header (the site's own address)",
+  );
+}
+
 /** Whether a WebSocket upgrade's `Origin` is acceptable (never derived from the request). */
 export function originAllowed(
   req: Request,

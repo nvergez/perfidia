@@ -44,3 +44,18 @@ export function timeOf(v: unknown): number | null {
   if (Array.isArray(v)) return numOf(v[0]);
   return numOf(v);
 }
+
+/**
+ * A notebook that is a JSON object or array (a scripted bot's memory), indented for reading; null
+ * for any other text (an agent's notes stay as written).
+ */
+export function prettyJson(text: string): string | null {
+  const t = text.trim();
+  if (!t.startsWith("{") && !t.startsWith("[")) return null;
+  try {
+    const v: unknown = JSON.parse(t);
+    return v !== null && typeof v === "object" ? JSON.stringify(v, null, 2) : null;
+  } catch {
+    return null;
+  }
+}

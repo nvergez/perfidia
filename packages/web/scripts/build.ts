@@ -1,13 +1,46 @@
-import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync } from "node:fs";
-import { dirname, join, relative } from "node:path";
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 
 // `bun run web:build` (phase-3 design §5.4): the Tailwind CLI builds `src/app.css` into
 // `src/generated/app.css` (git-ignored, linked from `index.html`), then `Bun.build` bundles
 // `src/index.html` into `dist/` (minified, split, hashed asset names, linked source maps). It prints
 // each file's raw and gzipped size and fails when the initial load is over budget (§6.3: JS at most
 // 200 KB gzipped, CSS at most 25 KB gzipped). Usage: bun scripts/build.ts [--out <dir>]
+//
+// Source maps are public (served beside the chunks) and hold the sources' text, which is no secret:
+// the same code ships minified. Their `sources` are rewritten relative to the repository root
+// (`packages/web/src/main.tsx`, `node_modules/...`), so a build outside the repository (the e2e
+// test's, a hosting build) never records the builder's absolute path.
 
 export const WEB_DIR = join(import.meta.dir, "..");
+const REPO_DIR = resolve(WEB_DIR, "..", "..");
+
+/**
+ * A source map's `sources` relative to the repository root instead of to the map's directory; a
+ * source outside the repository keeps only its file name (under `external/`).
+ */
+export function repoRelativeSources(
+  sources: readonly string[],
+  mapDir: string,
+  repo: string = REPO_DIR,
+): string[] {
+  return sources.map((s) => {
+    const abs = isAbsolute(s) ? s : resolve(mapDir, s);
+    const rel = relative(repo, abs);
+    if (rel === "" || rel.startsWith("..") || isAbsolute(rel)) return `external/${basename(abs)}`;
+    return rel.split(sep).join("/");
+  });
+}
+
+function rewriteMap(path: string): void {
+  const map: unknown = JSON.parse(readFileSync(path, "utf8"));
+  if (map === null || typeof map !== "object" || !("sources" in map)) return;
+  const sources = map.sources;
+  if (!Array.isArray(sources) || !sources.every((x) => typeof x === "string")) return;
+  const next = { ...map, sources: repoRelativeSources(sources, dirname(path)) };
+  if ("sourceRoot" in next) delete next.sourceRoot;
+  writeFileSync(path, JSON.stringify(next));
+}
 export const JS_BUDGET_GZ = 200 * 1024;
 export const CSS_BUDGET_GZ = 25 * 1024;
 
@@ -87,6 +120,7 @@ export async function buildWeb(
   if (!built.success) {
     throw new Error(`Bun.build failed:\n${built.logs.map((l) => l.message).join("\n")}`);
   }
+  for (const out of built.outputs) if (out.path.endsWith(".map")) rewriteMap(out.path);
   const files: BuiltFile[] = await Promise.all(
     built.outputs
       .filter((out) => !out.path.endsWith(".map"))

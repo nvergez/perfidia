@@ -1,7 +1,13 @@
 // oxlint-disable no-await-in-loop -- steps pages and retries follow each other on purpose (one cursor)
 import type { Frame, MatchMeta, MatchStatus, Moment, Step } from "@perfidia/protocol/spectator";
 import { Api, ApiFailure, SchemaError, api as defaultApi } from "../api/client.ts";
-import { LiveConnection, liveUrl, type LiveEvent } from "../api/live.ts";
+import {
+  LiveConnection,
+  liveUrl,
+  type LiveEvent,
+  type SocketLike,
+  type Timers,
+} from "../api/live.ts";
 import type { PlayerId } from "../lib/ids.ts";
 import { Playback } from "../playback/playback.ts";
 import { skinFor } from "../skins/index.ts";
@@ -14,7 +20,9 @@ import { INITIAL_MATCH_STATE, turnKey, useMatchStore, type MatchState } from "./
 // fill from keyframe 0. An animation-frame loop advances the playhead; the store's `playhead` is
 // updated at most ~10 times a second between frame changes, while `onTick` listeners (the map's
 // moving markers) get every animation frame. Payloads failing the protocol's schemas are dropped,
-// reported and re-synced (the match reloads).
+// reported and re-synced (the match reloads). A re-sync fetches the meta past every cache, and the
+// base frame must belong to the meta's timeline (else the meta is fetched again): a meta a cache
+// kept from before the log or the fold changed never mixes two matches.
 
 /** Statuses of a match whose log may still grow. */
 const RUNNING: ReadonlySet<MatchStatus> = new Set(["live", "paused", "stalled", "loading"]);
@@ -33,12 +41,53 @@ type TickListener = (playhead: number) => void;
 export interface OpenOptions {
   /** Open at the start (`?start=1`) instead of the latest frame. */
   readonly start?: boolean;
+  /** A re-sync: the meta is fetched past every cache. */
+  readonly fresh?: boolean;
+  /** A re-sync of a replay: back to this game time. */
+  readonly at?: number;
 }
 
-const now = (): number => performance.now();
+/** Animation frames (the browser's `requestAnimationFrame`). */
+export interface Frames {
+  request(fn: () => void): number;
+  cancel(handle: number): void;
+}
+
+/** What a session talks to: the browser's by default, fakes in the unit tests. */
+export interface SessionDeps {
+  readonly api: Api;
+  readonly timers: Timers;
+  readonly frames: Frames;
+  /** The live socket's URL. */
+  readonly liveUrl: () => string;
+  /** Opens a socket (the browser's `WebSocket` by default). */
+  readonly connect?: (url: string) => SocketLike;
+  /** Client time in ms (`performance.now()`). */
+  readonly now: () => number;
+}
+
+function browserDeps(api: Api): SessionDeps {
+  return {
+    api,
+    timers: {
+      set: (fn, ms) => window.setTimeout(fn, ms),
+      clear: (h) => window.clearTimeout(h),
+    },
+    frames: {
+      request: (fn) => window.requestAnimationFrame(fn),
+      cancel: (h) => window.cancelAnimationFrame(h),
+    },
+    liveUrl: () => liveUrl(window.location),
+    now: () => performance.now(),
+  };
+}
+
+/** The base frame does not belong to the meta's timeline even past every cache. */
+const TIMELINE_TRIES = 3;
 
 class Session {
   readonly id: string;
+  readonly deps: SessionDeps;
   private readonly api: Api;
   private readonly abort = new AbortController();
   private playback: Playback | null = null;
@@ -54,11 +103,16 @@ class Session {
   private readonly listeners: Set<TickListener>;
   private readonly options: OpenOptions;
 
-  constructor(id: string, apiClient: Api, listeners: Set<TickListener>, options: OpenOptions) {
+  constructor(id: string, deps: SessionDeps, listeners: Set<TickListener>, options: OpenOptions) {
     this.id = id;
-    this.api = apiClient;
+    this.deps = deps;
+    this.api = deps.api;
     this.listeners = listeners;
     this.options = options;
+  }
+
+  private now(): number {
+    return this.deps.now();
   }
 
   private set(patch: Partial<MatchState>): void {
@@ -81,7 +135,10 @@ class Session {
   }
 
   private fail(e: unknown): void {
-    if (e instanceof ApiFailure && e.code === "NOT_FOUND") {
+    if (e instanceof ApiFailure && e.code === "TIMELINE_GONE") {
+      // The log or the fold changed while loading: start again from a fresh meta.
+      this.scheduleReload();
+    } else if (e instanceof ApiFailure && e.code === "NOT_FOUND") {
       this.set({
         phase: "error",
         error: {
@@ -129,16 +186,51 @@ class Session {
 
   private sleep(ms: number): Promise<void> {
     return new Promise((resolve) => {
-      const h = window.setTimeout(resolve, ms);
+      const h = this.deps.timers.set(resolve, ms);
       this.abort.signal.addEventListener("abort", () => {
-        window.clearTimeout(h);
+        this.deps.timers.clear(h);
         resolve();
       });
     });
   }
 
+  private fetchMeta(cache: RequestCache): Promise<MatchMeta> {
+    return this.whileLoading(() => this.api.meta(this.id, this.abort.signal, cache));
+  }
+
+  /** `/latest` and the moments of `meta`'s timeline. */
+  private fetchBase(meta: MatchMeta): Promise<[Frame, Moment[]]> {
+    return Promise.all([
+      this.whileLoading(() => this.api.latest(this.id, this.abort.signal)),
+      this.api.moments(this.id, meta.timeline, this.abort.signal).catch((e: unknown) => {
+        if (e instanceof SchemaError) throw e;
+        if (e instanceof ApiFailure && e.code === "TIMELINE_GONE") return null;
+        return [] as Moment[];
+      }),
+    ]).then(([latest, moments]) => [latest, moments ?? []]);
+  }
+
   private async load(): Promise<void> {
-    const meta = await this.whileLoading(() => this.api.meta(this.id, this.abort.signal));
+    let meta = await this.fetchMeta(this.options.fresh === true ? "reload" : "no-cache");
+    if (this.closed) return;
+    let [latest, moments] = await this.fetchBase(meta);
+    // The base frame belongs to another timeline than the meta (a log replaced, a new fold): the
+    // meta came from a cache. Fetch it again past every cache.
+    for (let tries = 1; latest.timeline !== meta.timeline; tries += 1) {
+      if (this.closed) return;
+      if (tries >= TIMELINE_TRIES) {
+        throw new ApiFailure(
+          409,
+          "TIMELINE_CHANGED",
+          "the match changed while it was loading",
+          "reload the page in a few seconds",
+          null,
+        );
+      }
+      meta = await this.fetchMeta("reload");
+      if (this.closed) return;
+      [latest, moments] = await this.fetchBase(meta);
+    }
     if (this.closed) return;
     this.meta = meta;
     const running = isRunningStatus(meta.status);
@@ -146,22 +238,15 @@ class Session {
     this.playback = pb;
     const skin = skinFor(meta.ruleset);
     this.set({ meta, skin, status: meta.status, reason: meta.reason });
-    const [latest, moments] = await Promise.all([
-      this.whileLoading(() => this.api.latest(this.id, this.abort.signal)),
-      this.api.moments(this.id, meta.timeline, this.abort.signal).catch((e: unknown) => {
-        if (e instanceof SchemaError) throw e;
-        return [] as Moment[];
-      }),
-    ]);
-    if (this.closed) return;
     pb.addFrame(latest);
     if (!running) pb.setEnd(latest.t);
     this.set({ moments, phase: "ready" });
     if (running) {
-      pb.goLive(now());
+      pb.goLive(this.now());
       this.startLive(meta, latest.seq);
     }
     if (this.options.start === true) pb.seek(0);
+    else if (this.options.at !== undefined) pb.seek(this.options.at);
     this.push(true);
     this.startLoop();
     try {
@@ -218,11 +303,14 @@ class Session {
   private startLive(meta: MatchMeta, cursor: number): void {
     this.live?.stop();
     const live = new LiveConnection({
-      url: liveUrl(window.location),
+      url: this.deps.liveUrl(),
       match: this.id,
       timeline: meta.timeline,
       cursor,
       onEvent: (e) => this.onLive(e),
+      timers: this.deps.timers,
+      now: this.deps.now,
+      ...(this.deps.connect === undefined ? {} : { connect: this.deps.connect }),
     });
     this.live = live;
     live.start();
@@ -255,7 +343,10 @@ class Session {
         console.error(`live: ${e.code}: ${e.message}`);
         return;
       case "connection":
-        this.set({ connection: e.state });
+        this.set({
+          connection: e.state,
+          retryAt: e.state === "closed" && e.retryMs !== null ? this.now() + e.retryMs : null,
+        });
         return;
     }
   }
@@ -265,7 +356,7 @@ class Session {
       this.scheduleReload();
       return;
     }
-    this.set({ lastLiveAt: now() });
+    this.set({ lastLiveAt: this.now() });
     if (steps.some((s) => (s.items ?? []).some((i) => i.importance >= 2))) this.refreshMoments();
     this.push(true);
     this.pushLoaded();
@@ -316,7 +407,7 @@ class Session {
 
   private refreshMoments(): void {
     if (this.momentsTimer !== null) return;
-    this.momentsTimer = window.setTimeout(() => {
+    this.momentsTimer = this.deps.timers.set(() => {
       this.momentsTimer = null;
       const meta = this.meta;
       if (meta === null || this.closed) return;
@@ -327,17 +418,27 @@ class Session {
     }, MOMENTS_REFRESH_MS);
   }
 
-  /** Re-sync: reload the match (meta, base, socket) after a backoff. */
+  /**
+   * Re-sync: reload the match after a backoff, the meta past every cache; a replay comes back to
+   * its time, a live viewer to the live head.
+   */
   private scheduleReload(): void {
     if (this.reloadTimer !== null || this.closed) return;
     const ms = Math.min(RELOAD_MAX_MS, RELOAD_MIN_MS * 2 ** this.reloads);
     this.reloads += 1;
     this.live?.stop();
     this.live = null;
-    this.reloadTimer = window.setTimeout(() => {
+    this.reloadTimer = this.deps.timers.set(() => {
       this.reloadTimer = null;
-      reopen(this.id, this.options);
+      const pb = this.playback;
+      const at = pb !== null && pb.mode === "replay" ? pb.playhead : undefined;
+      reopen(this.id, { fresh: true, ...(at === undefined ? {} : { at }) });
     }, ms);
+  }
+
+  /** While the socket waits to reconnect: tries at once. */
+  retryNow(): void {
+    this.live?.retryNow();
   }
 
   // The loop -----------------------------------------------------------------------------------------
@@ -345,16 +446,16 @@ class Session {
   private startLoop(): void {
     const frame = (): void => {
       if (this.closed) return;
-      this.raf = window.requestAnimationFrame(frame);
+      this.raf = this.deps.frames.request(frame);
       this.tick();
     };
-    this.raf = window.requestAnimationFrame(frame);
+    this.raf = this.deps.frames.request(frame);
   }
 
   private tick(): void {
     const pb = this.playback;
     if (pb === null) return;
-    const t = now();
+    const t = this.now();
     const changed = pb.tick(t);
     if (pb.playing || pb.mode === "live") for (const l of this.listeners) l(pb.playhead);
     this.push(changed, t);
@@ -364,7 +465,7 @@ class Session {
    * Writes the playback's view into the store: at once when the frame changed (or `force`), else the
    * playhead at most every 100 ms.
    */
-  push(force: boolean, t: number = now()): void {
+  push(force: boolean, t: number = this.now()): void {
     const pb = this.playback;
     if (pb === null) return;
     const s = useMatchStore.getState();
@@ -492,9 +593,9 @@ class Session {
     this.abort.abort();
     this.live?.stop();
     this.live = null;
-    if (this.raf !== null) window.cancelAnimationFrame(this.raf);
-    if (this.momentsTimer !== null) window.clearTimeout(this.momentsTimer);
-    if (this.reloadTimer !== null) window.clearTimeout(this.reloadTimer);
+    if (this.raf !== null) this.deps.frames.cancel(this.raf);
+    if (this.momentsTimer !== null) this.deps.timers.clear(this.momentsTimer);
+    if (this.reloadTimer !== null) this.deps.timers.clear(this.reloadTimer);
   }
 }
 
@@ -506,8 +607,9 @@ const tickListeners = new Set<TickListener>();
 function reopen(id: string, options: OpenOptions): void {
   if (current?.id !== id) return;
   const keep = useMatchStore.getState();
+  const deps = current.deps;
   current.close();
-  current = new Session(id, defaultApi, tickListeners, options);
+  current = new Session(id, deps, tickListeners, options);
   void current.open().then(() => {
     // A reload keeps the viewer's caches.
     useMatchStore.setState({
@@ -518,15 +620,20 @@ function reopen(id: string, options: OpenOptions): void {
   });
 }
 
-/** Opens match `id` in the store (closing any other). */
+/** Opens match `id` in the store (closing any other); `deps` replace the browser's (tests). */
 export function openMatch(
   id: string,
   options: OpenOptions = {},
-  apiClient: Api = defaultApi,
+  deps: Partial<SessionDeps> = {},
 ): void {
   if (current?.id === id) return;
   current?.close();
-  current = new Session(id, apiClient, tickListeners, options);
+  current = new Session(
+    id,
+    { ...browserDeps(deps.api ?? defaultApi), ...deps },
+    tickListeners,
+    options,
+  );
   void current.open();
 }
 
@@ -537,19 +644,19 @@ export function closeMatch(): void {
   useMatchStore.setState(INITIAL_MATCH_STATE);
 }
 
-function withPlayback(fn: (pb: Playback) => void): void {
+function withPlayback(fn: (pb: Playback, now: number) => void): void {
   const s = current;
   const pb = s?.pb ?? null;
   if (s === null || pb === null) return;
-  fn(pb);
+  fn(pb, s.deps.now());
   s.push(true);
 }
 
 /** Playback controls (stable functions, usable outside React). */
 export const controls = {
-  play: (): void => withPlayback((pb) => pb.play(now())),
+  play: (): void => withPlayback((pb, now) => pb.play(now)),
   pause: (): void => withPlayback((pb) => pb.pause()),
-  toggle: (): void => withPlayback((pb) => pb.toggle(now())),
+  toggle: (): void => withPlayback((pb, now) => pb.toggle(now)),
   /** Moves the playhead to game time `t` (live becomes replay). */
   seek: (t: number): void => withPlayback((pb) => pb.seek(t)),
   /** Moves just after log line `seq` (a feed item's or moment's cursor); falls back to `t`. */
@@ -561,7 +668,9 @@ export const controls = {
     withPlayback((pb) => pb.setSpeed(gameSecondsPerSecond)),
   faster: (): void => withPlayback((pb) => pb.stepSpeed(1)),
   slower: (): void => withPlayback((pb) => pb.stepSpeed(-1)),
-  goLive: (): void => withPlayback((pb) => pb.goLive(now())),
+  goLive: (): void => withPlayback((pb, now) => pb.goLive(now)),
+  /** The live socket is waiting to reconnect: try now. */
+  reconnect: (): void => current?.retryNow(),
   /** The next moment after the frame shown (none: nothing happens). */
   nextMoment(): void {
     const { moments, frame } = useMatchStore.getState();

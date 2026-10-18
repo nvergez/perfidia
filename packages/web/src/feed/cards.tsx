@@ -25,11 +25,11 @@ import { GameTime } from "../common/game-time.tsx";
 import { PlainText } from "../common/plain-text.tsx";
 import { fmtInt, plural } from "../lib/format.ts";
 import type { FeedEntry } from "../playback/timeline.ts";
-import { useMatch, useSeatColor, useSkin } from "../store/hooks.ts";
+import { useFeed, useMatch, useSeatColor, useSkin } from "../store/hooks.ts";
 import { ReasoningToggle } from "../thoughts/reasoning.tsx";
 import { BetrayalCard } from "./betrayal-card.tsx";
 import { CityRef, TimeLeft, Who, WhoList, unitsText } from "./bits.tsx";
-import { seenBy } from "./filter.ts";
+import { allianceNamesOf, sameTurnOf, seenBy } from "./filter.ts";
 import { BattleReport } from "./report.tsx";
 import { LongText, Shell, type Tone } from "./shell.tsx";
 import { SameTurnThought } from "./thought.tsx";
@@ -50,6 +50,7 @@ function MessageCard({
   const color = useSeatColor(item.k === "message" ? item.from : null);
   if (item.k !== "message") return null;
   const seen = seenBy(item);
+  const same = sameTurnOf(item);
   return (
     <Shell
       entry={entry}
@@ -69,22 +70,34 @@ function MessageCard({
         </p>
       )}
       <LongText text={item.text} className="mt-1.5" />
-      {item.turn === null ? null : (
-        <SameTurnThought seat={item.from} turn={item.turn} seq={entry.seq} />
-      )}
+      {same === null ? null : <SameTurnThought seat={same.seat} turn={same.turn} seq={entry.seq} />}
     </Shell>
   );
 }
 
 // Diplomacy ---------------------------------------------------------------------------------------
 
-function AllianceName({ id, name }: { readonly id: string | null; readonly name: string | null }) {
+/**
+ * An alliance: “name” and id, the name from the item, the frame, or the feed's history (a dissolved
+ * alliance is gone from the frame); with `members`, its members too (two alliances may share a name).
+ */
+function AllianceName({
+  id,
+  name,
+  members = false,
+}: {
+  readonly id: string | null;
+  readonly name: string | null;
+  readonly members?: boolean;
+}) {
   const known = useMatch((s) =>
     id === null
       ? null
       : (Object.values(s.frame?.alliances ?? {}).find((a) => a?.id === id)?.name ?? null),
   );
-  const shown = name ?? known;
+  const feed = useFeed();
+  const info = id === null ? null : (allianceNamesOf(feed).get(id) ?? null);
+  const shown = name ?? known ?? info?.name ?? null;
   return (
     <span className="whitespace-nowrap">
       {shown === null ? null : (
@@ -95,6 +108,12 @@ function AllianceName({ id, name }: { readonly id: string | null; readonly name:
       {id === null ? null : (
         <span className="text-muted-foreground font-mono text-[0.92em]">{id}</span>
       )}
+      {members && info !== null && info.members.length > 0 ? (
+        <span className="text-muted-foreground font-mono text-[0.92em]">
+          {" "}
+          ({info.members.join(", ")})
+        </span>
+      ) : null}
     </span>
   );
 }
@@ -163,14 +182,15 @@ function DiplomacyBody({ item }: { readonly item: FeedItemOf<"diplomacy"> }) {
     case "alliance_left":
       return (
         <p className="leading-snug">
-          {pa} left alliance <AllianceName id={item.alliance} name={item.name} />
+          {pa} left alliance <AllianceName id={item.alliance} name={item.name} members />
           {cause}
         </p>
       );
     case "alliance_dissolved":
       return (
         <p className="leading-snug">
-          Alliance <AllianceName id={item.alliance} name={item.name} /> dissolved{cause}
+          Alliance <AllianceName id={item.alliance} name={item.name} members /> dissolved
+          {cause}
         </p>
       );
     case "pact_signed":
@@ -287,8 +307,8 @@ function LaunchBody({ item }: { readonly item: FeedItemOf<"launch"> }) {
         <Who id={item.owner} /> {what}
       </p>
       <p className="text-muted-foreground mt-0.5 text-xs">
-        {units === "" ? null : <>{units} · </>}
-        <Lands at={item.arriveAt} />
+        from <CityRef id={item.from} />
+        {units === "" ? null : <> · {units}</>} · <Lands at={item.arriveAt} />
       </p>
     </>
   );
@@ -354,9 +374,11 @@ function SiegeBody({ item }: { readonly item: FeedItemOf<"siege"> }) {
 }
 
 function BlocName({ k, members }: { readonly k: string; readonly members: readonly string[] }) {
-  const name = useMatch(
+  const current = useMatch(
     (s) => Object.values(s.frame?.alliances ?? {}).find((a) => a?.id === k)?.name ?? null,
   );
+  const feed = useFeed();
+  const name = current ?? allianceNamesOf(feed).get(k)?.name ?? null;
   return (
     <>
       {name === null ? null : (

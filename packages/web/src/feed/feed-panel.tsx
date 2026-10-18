@@ -175,7 +175,7 @@ function Controls() {
           onClick={() => setPicking((p) => !p)}
           className="text-primary hover:text-primary/80 ml-auto flex items-center gap-1 px-1 text-xs font-medium"
         >
-          <ArrowLeftRight className="size-3" aria-hidden="true" /> Between two…
+          <ArrowLeftRight className="size-3" aria-hidden="true" /> Between two players
         </button>
       </fieldset>
       {picking ? <PairPicker onDone={() => setPicking(false)} /> : null}
@@ -215,7 +215,8 @@ function FeedBody({ id }: { readonly id: string | null }) {
   const [older, setOlder] = useState<readonly FeedEntry[]>([]);
   const [olderState, setOlderState] = useState<OlderState>("idle");
 
-  const all = useMemo(() => mergeEntries(older, feed), [older, feed]);
+  const cursor = useMatch((s) => s.frame?.seq ?? -1);
+  const all = useMemo(() => mergeEntries(older, feed, cursor), [older, feed, cursor]);
   const view = useMemo<FeedView>(
     () => ({ filter, players, pair, showBots, botsOnly }),
     [filter, players, pair, showBots, botsOnly],
@@ -359,7 +360,10 @@ function FeedBody({ id }: { readonly id: string | null }) {
       <div
         className={cn(
           "bg-card z-10 flex flex-col gap-1.5 pb-1",
-          layout === "phone" ? null : "sticky -top-3 -mt-3 pt-3",
+          // A header the cards slide under: a rule and a shadow mark its edge.
+          layout === "phone"
+            ? null
+            : "sticky -top-3 -mt-3 border-b pt-3 pb-2 shadow-[0_8px_8px_-8px_rgb(0_0_0/0.7)]",
         )}
       >
         <Controls />

@@ -1,5 +1,6 @@
 import type { Frame } from "@perfidia/protocol/spectator";
-import { Hourglass, Lock } from "lucide-react";
+import { Crown, Hourglass, Lock } from "lucide-react";
+import { Fragment } from "react";
 import { GameTime } from "../common/game-time.tsx";
 import { PlainText } from "../common/plain-text.tsx";
 import { PlayerGlyph } from "../common/player-glyph.tsx";
@@ -11,12 +12,22 @@ import { fmtSpan } from "../lib/time.ts";
 import type { DominationBloc, DominationView } from "../skins/index.ts";
 import { useDomination, useMatch, useRuleSentence, useSeats } from "../store/hooks.ts";
 import { uiActions } from "../store/ui.ts";
-import { cityShare, countdownOf, countdownProgress, sortBlocs, takenPips } from "./board.ts";
+import {
+  blocStanding,
+  cityShare,
+  countdownOf,
+  countdownProgress,
+  splitBlocs,
+  takenPips,
+  type BlocStanding,
+} from "./board.ts";
 
 // Bloc progress (phase-3 design §4.3): the win rule in one sentence (numbers from the match, from
 // the skin), then one row per bloc: its cities against the number a win needs, its cities taken by
 // conquest as pips against the number needed, and a running countdown with its end and the time
-// left. Before the domination window opens the section says when it opens and the rows are dimmed.
+// left. Each row says where the bloc stands: won, counting down, holding the cities but short of
+// conquests (so no countdown), or short of cities. Lone players short of the cities share one line.
+// Before the domination window opens the section says when it opens and the rows are dimmed.
 // Hovering a bloc highlights its members on the map.
 
 const NO_ALLIANCES: Frame["alliances"] = Object.freeze({});
@@ -26,16 +37,58 @@ const clearHighlight = (): void => uiActions.setHighlight([]);
 /** The game minute of the playhead (a coarser subscription than the playhead itself). */
 const useMinute = (): number => useMatch((s) => Math.floor(s.playhead / 60) * 60);
 
+/** The words for a bloc's standing (the countdown has its own line). */
+function StandingNote({
+  st,
+  over,
+  needTaken,
+}: {
+  readonly st: BlocStanding;
+  readonly over: boolean;
+  readonly needTaken: number | null;
+}) {
+  if (st.kind === "won") {
+    return (
+      <span className="text-gold inline-flex items-center gap-1 font-semibold">
+        <Crown className="size-3" aria-hidden="true" /> won the match
+      </span>
+    );
+  }
+  if (st.kind === "needs-taken") {
+    return (
+      <span
+        className="text-foreground/85"
+        title={`The cities are enough, but a countdown also needs ${fmtInt(needTaken ?? 0)} of them taken by conquest`}
+      >
+        {over ? "was" : "is"} {fmtInt(st.missing)} conquest{st.missing === 1 ? "" : "s"} short of a
+        countdown
+      </span>
+    );
+  }
+  if (st.kind === "needs-cities") {
+    return (
+      <span>
+        {fmtInt(st.missing)} {st.missing === 1 ? "city" : "cities"} short
+      </span>
+    );
+  }
+  return null;
+}
+
 function BlocRow({
   bloc,
   d,
   name,
   t,
+  winners,
+  over,
 }: {
   readonly bloc: DominationBloc;
   readonly d: DominationView;
   readonly name: string | null;
   readonly t: number;
+  readonly winners: readonly string[] | null;
+  readonly over: boolean;
 }) {
   const seats = useSeats();
   const first = seats.find((s) => s.seat === bloc.members[0]);
@@ -45,6 +98,9 @@ function BlocRow({
   const countdown = countdownOf(d, bloc.key);
   const progress = countdown === null ? null : countdownProgress(countdown, d.hold, t);
   const enough = d.need !== null && bloc.cities >= d.need;
+  // A match too short for a countdown: no bloc is "short" of anything.
+  const st: BlocStanding = impossible(d) ? { kind: "none" } : blocStanding(bloc, d, winners);
+  const won = st.kind === "won";
   const highlight = (): void => uiActions.setHighlight(bloc.members);
   return (
     // oxlint-disable-next-line jsx-a11y/no-noninteractive-element-interactions -- hovering a bloc only highlights its members on the map; the row names them in text
@@ -53,8 +109,8 @@ function BlocRow({
       onMouseEnter={highlight}
       onMouseLeave={clearHighlight}
       className={cn(
-        "flex flex-col gap-1 rounded-lg px-1.5 py-1.5",
-        countdown !== null && "bg-gold/10 ring-gold/50 ring-1",
+        "flex flex-col gap-1 rounded-lg px-1.5 py-1",
+        (countdown !== null || won) && "bg-gold/10 ring-gold/50 ring-1",
       )}
     >
       <div className="flex min-w-0 items-baseline gap-2 text-sm">
@@ -91,7 +147,7 @@ function BlocRow({
           style={{ width: `${share * 100}%`, backgroundColor: enough ? "var(--gold)" : color }}
         />
       </div>
-      {pips.length === 0 && countdown === null ? null : (
+      {pips.length === 0 && countdown === null && st.kind === "none" ? null : (
         <div className="text-muted-foreground flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
           {pips.length === 0 ? null : (
             <span
@@ -126,6 +182,9 @@ function BlocRow({
                 </>
               )}
             </span>
+          )}
+          {st.kind === "countdown" ? null : (
+            <StandingNote st={st} over={over} needTaken={d.needTaken} />
           )}
         </div>
       )}
@@ -179,12 +238,47 @@ function WindowLine({ d, t }: { readonly d: DominationView; readonly t: number }
   );
 }
 
+/** Lone players short of the cities a win needs, on one line: "Alone: Rusher (bot) · p6 5, …". */
+function AloneLine({
+  blocs,
+  need,
+}: {
+  readonly blocs: readonly DominationBloc[];
+  readonly need: number | null;
+}) {
+  if (blocs.length === 0) return null;
+  return (
+    <li className="text-muted-foreground px-1.5 py-1 text-xs leading-relaxed">
+      Alone:{" "}
+      {blocs.map((b, i) => (
+        <Fragment key={b.key}>
+          {i > 0 ? ", " : null}
+          <span className="whitespace-nowrap">
+            {b.members.map((m) => (
+              <Who key={m} id={m} />
+            ))}{" "}
+            <span
+              className="font-mono tabular-nums"
+              aria-label={`${fmtInt(b.cities)} of ${need === null ? "?" : fmtInt(need)} cities`}
+            >
+              {fmtInt(b.cities)}/{need === null ? "?" : fmtInt(need)}
+            </span>
+          </span>
+        </Fragment>
+      ))}
+    </li>
+  );
+}
+
+const NO_WINNERS: readonly string[] = Object.freeze([]);
+
 export function BlocProgress() {
   const rule = useRuleSentence();
   const d = useDomination();
   const alliances = useMatch((s) => s.frame?.alliances ?? NO_ALLIANCES);
   const t = useMinute();
   const over = useMatch((s) => (s.frame?.result ?? null) !== null);
+  const winners = useMatch((s) => s.frame?.result?.winners ?? NO_WINNERS);
   const nameOf = (key: string): string | null =>
     Object.values(alliances).find((a) => a?.id === key)?.name ?? null;
   return (
@@ -193,20 +287,48 @@ export function BlocProgress() {
         How to win
       </h2>
       {rule === null ? null : (
-        <p className="mb-2 text-sm leading-snug" data-testid="rule">
+        <p className="mb-1.5 text-[0.8rem] leading-snug" data-testid="rule">
           {rule}
         </p>
       )}
       {d === null ? null : (
         <>
           {over ? null : <WindowLine d={d} t={t} />}
-          <ol className={cn("mt-1.5 flex flex-col gap-1", !d.open && "opacity-60")}>
-            {sortBlocs(d.blocs).map((b) => (
-              <BlocRow key={b.key} bloc={b} d={d} name={nameOf(b.key)} t={t} />
-            ))}
-          </ol>
+          <BlocList d={d} nameOf={nameOf} t={t} over={over} winners={over ? winners : null} />
         </>
       )}
     </section>
+  );
+}
+
+function BlocList({
+  d,
+  nameOf,
+  t,
+  over,
+  winners,
+}: {
+  readonly d: DominationView;
+  readonly nameOf: (key: string) => string | null;
+  readonly t: number;
+  readonly over: boolean;
+  readonly winners: readonly string[] | null;
+}) {
+  const { rows, alone } = splitBlocs(d.blocs, d, winners);
+  return (
+    <ol className={cn("mt-1.5 flex flex-col gap-1", !d.open && "opacity-60")}>
+      {rows.map((b) => (
+        <BlocRow
+          key={b.key}
+          bloc={b}
+          d={d}
+          name={nameOf(b.key)}
+          t={t}
+          winners={winners}
+          over={over}
+        />
+      ))}
+      <AloneLine blocs={alone} need={d.need} />
+    </ol>
   );
 }

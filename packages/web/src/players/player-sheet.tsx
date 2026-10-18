@@ -8,6 +8,7 @@ import { PlayerGlyph } from "../common/player-glyph.tsx";
 import { turnsOf } from "../feed/filter.ts";
 import { fmtInt, fmtUsd, plural } from "../lib/format.ts";
 import { isPlayerId, type PlayerId } from "../lib/ids.ts";
+import { prettyJson } from "../lib/json.ts";
 import { isFakeSeat, playedBy } from "../lib/models.ts";
 import { useDossier, useFeed, useMatch, useSeat, useUi } from "../store/hooks.ts";
 import { uiActions } from "../store/ui.ts";
@@ -202,10 +203,18 @@ function Notebook({ dossier }: { readonly dossier: PlayerDossier | null }) {
     );
   }
   if (dossier.notes === "") return <p className="text-muted-foreground text-sm">(empty)</p>;
+  const pretty = prettyJson(dossier.notes);
   return (
-    <div className="bg-muted/50 max-h-64 overflow-y-auto rounded-md border p-2 font-mono text-xs">
-      <PlainText text={dossier.notes} />
-    </div>
+    <>
+      {pretty === null ? null : (
+        <p className="text-muted-foreground mb-1 text-xs">
+          A scripted bot's memory, as data (laid out for reading).
+        </p>
+      )}
+      <div className="bg-muted/50 max-h-64 overflow-y-auto rounded-md border p-2 font-mono text-xs">
+        <PlainText text={pretty ?? dossier.notes} />
+      </div>
+    </>
   );
 }
 

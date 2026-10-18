@@ -1,7 +1,9 @@
 // The playback keyboard shortcuts (phase-3 design §4.3 "Timeline"), pure: Space plays or pauses,
 // ← and → go to the previous and next key moment, + and − change the speed. A key typed into a
 // text field, pressed on a control that uses it itself (Space on a button, arrows on a slider, a
-// tab list or a radio group), inside a dialog, or with Ctrl, Alt or Meta is left alone.
+// tab list or a radio group), inside a dialog, or with Ctrl, Alt or Meta is left alone. Space on
+// the timeline's slider plays or pauses ("click the timeline, then press Space"): sliders do not
+// use Space.
 
 export type KeyCommand = "toggle" | "prev" | "next" | "faster" | "slower";
 
@@ -11,8 +13,10 @@ export type FocusKind =
   | "text"
   /** A control activated by Space or Enter: button, link, checkbox, summary. */
   | "control"
-  /** A control that uses the arrow keys: slider, tab, radio, menu, listbox. */
+  /** A control that uses the arrow keys: tab, radio, menu, listbox. */
   | "arrows"
+  /** A slider: it uses the arrow keys, not Space. */
+  | "slider"
   /** Inside a dialog or another modal layer. */
   | "dialog"
   | "none";
@@ -32,9 +36,9 @@ export function keyCommand(e: KeyLike, focus: FocusKind): KeyCommand | null {
     case "Spacebar":
       return focus === "control" || focus === "arrows" ? null : "toggle";
     case "ArrowLeft":
-      return focus === "arrows" ? null : "prev";
+      return focus === "arrows" || focus === "slider" ? null : "prev";
     case "ArrowRight":
-      return focus === "arrows" ? null : "next";
+      return focus === "arrows" || focus === "slider" ? null : "next";
     case "+":
     case "=":
       return "faster";
@@ -55,7 +59,6 @@ export interface FocusTarget {
 }
 
 const ARROW_ROLES = new Set([
-  "slider",
   "tab",
   "radio",
   "menuitem",
@@ -74,7 +77,7 @@ export function focusKind(el: FocusTarget | null): FocusKind {
   const tag = el.tagName.toLowerCase();
   if (tag === "input") {
     const type = (el.getAttribute("type") ?? "text").toLowerCase();
-    if (type === "range") return "arrows";
+    if (type === "range") return "slider";
     if (type === "checkbox" || type === "radio" || type === "button" || type === "submit") {
       return type === "radio" ? "arrows" : "control";
     }
@@ -82,6 +85,7 @@ export function focusKind(el: FocusTarget | null): FocusKind {
   }
   if (tag === "textarea" || tag === "select" || el.isContentEditable === true) return "text";
   const role = el.getAttribute("role");
+  if (role === "slider") return "slider";
   if (role !== null && ARROW_ROLES.has(role)) return "arrows";
   if (tag === "button" || tag === "a" || tag === "summary") return "control";
   if (role !== null && CONTROL_ROLES.has(role)) return "control";

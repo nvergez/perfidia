@@ -2,12 +2,13 @@ import { INTERNAL, type ApiResult } from "../service/api.ts";
 import { HSTS, SECURITY_HEADERS, cacheControl } from "./headers.ts";
 
 // From a service result to an HTTP response (phase-3 design §3.1): JSON, gzipped above 8 KB when
-// the client accepts it, `Cache-Control` from the route's policy, an ETag on cacheable bodies (304
-// when it matches), and the security headers. Bodies of immutable resources are kept serialised and
-// compressed in a small memo, so a finished match's pages are not serialised again per request. The
-// memo is bounded by entries and by bytes (text and gzip copy), least recently used out first; the
-// service stores only canonical bodies in it (keyframes, aligned step pages, moments, reports), so
-// no request pattern can grow it past its bounds or make it churn on arbitrary cursors.
+// the client accepts it, `Cache-Control` from the route's policy, an ETag per encoding on cacheable
+// bodies (304 when it matches), HEAD with the length GET would send, and the security headers.
+// Bodies of immutable resources are kept serialised and compressed in a small memo, so a finished
+// match's pages are not serialised again per request. The memo is bounded by entries and by bytes
+// (text and gzip copy), least recently used out first; the service stores only canonical bodies in
+// it (keyframes, aligned step pages, moments, reports), so no request pattern can grow it past its
+// bounds or make it churn on arbitrary cursors.
 
 const GZIP_ABOVE = 8 * 1024;
 export const MEMO_ENTRIES = 512;
@@ -118,24 +119,33 @@ export function respond(req: Request, r: ApiResult, o: RespondOptions): Response
     ...r.headers,
   };
   const cacheable = r.cache.kind !== "no-store" && r.status === 200;
+  const big = memo.text.length > GZIP_ABOVE;
+  if (big) headers["vary"] = "accept-encoding";
+  // Each encoding is its own representation, with its own ETag.
+  const gzip = big && /\bgzip\b/.test(req.headers.get("accept-encoding") ?? "");
   if (cacheable) {
-    headers["etag"] = memo.etag;
-    if (req.headers.get("if-none-match") === memo.etag) {
+    const etag = gzip ? `${memo.etag.slice(0, -1)}-gz"` : memo.etag;
+    headers["etag"] = etag;
+    if (req.headers.get("if-none-match") === etag) {
       return new Response(null, { status: 304, headers });
     }
   }
   let body: string | Uint8Array = memo.text;
-  if (memo.text.length > GZIP_ABOVE) {
-    headers["vary"] = "accept-encoding";
-    if (/\bgzip\b/.test(req.headers.get("accept-encoding") ?? "")) {
-      if (memo.gz === null) {
-        memo.gz = Bun.gzipSync(memo.text);
-        if (r.memo !== undefined) o.memo.grew(r.memo, memo, memo.gz.length);
-      }
-      body = memo.gz;
-      headers["content-encoding"] = "gzip";
+  if (gzip) {
+    if (memo.gz === null) {
+      memo.gz = Bun.gzipSync(memo.text);
+      if (r.memo !== undefined) o.memo.grew(r.memo, memo, memo.gz.length);
     }
+    body = memo.gz;
+    headers["content-encoding"] = "gzip";
   }
-  if (req.method === "HEAD") return new Response(null, { status: r.status, headers });
+  if (req.method === "HEAD") {
+    // The length GET would send.
+    const length = typeof body === "string" ? Buffer.byteLength(body) : body.length;
+    return new Response(null, {
+      status: r.status,
+      headers: { ...headers, "content-length": String(length) },
+    });
+  }
   return new Response(body, { status: r.status, headers });
 }

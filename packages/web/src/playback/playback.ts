@@ -99,7 +99,13 @@ export class Playback {
       playing: this.playingV,
       speed: this.speedV,
       known: this.knownV,
-      waiting: this.modeV === "live" && this.clock !== null && clockCapped(this.clock, nowMs),
+      // At its cap the clock waits for the server, unless newer lines have arrived since (they are
+      // shown: the head is past the cap).
+      waiting:
+        this.modeV === "live" &&
+        this.clock !== null &&
+        clockCapped(this.clock, nowMs) &&
+        this.timeline.headT < this.clock.cap,
     };
   }
 

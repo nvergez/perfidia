@@ -1,6 +1,7 @@
 import { Clapperboard, Loader2, Pause, Play, SkipBack, SkipForward, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { PlayerLabel } from "../common/player-label.tsx";
+import { MomentTitle } from "../common/moment-title.tsx";
 import { cn } from "../lib/cn.ts";
 import { fmtClock } from "../lib/time.ts";
 import { useLayout, useMatch, useUi } from "../store/hooks.ts";
@@ -203,7 +204,7 @@ function Reel() {
             {caption.past ? null : <span className="text-muted-foreground">· coming up</span>}
           </p>
           <p className={cn("font-serif text-base leading-snug", !caption.past && "opacity-60")}>
-            {caption.moment.title}
+            <MomentTitle title={caption.moment.title} />
           </p>
           {caption.moment.players.length === 0 ? null : (
             <p className="flex flex-wrap gap-x-3 gap-y-1 text-xs">

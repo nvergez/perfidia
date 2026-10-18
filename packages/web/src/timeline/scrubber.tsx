@@ -9,6 +9,7 @@ import {
   type KeyboardEvent,
   type PointerEvent,
 } from "react";
+import { MomentTitle } from "../common/moment-title.tsx";
 import { cn } from "../lib/cn.ts";
 import { DAY, HOUR, MINUTE, fmtClock } from "../lib/time.ts";
 import { useMatch, useMoments, usePlayhead, useTick } from "../store/hooks.ts";
@@ -217,7 +218,9 @@ export function Scrubber({ className }: { readonly className?: string }) {
               <span className="text-muted-foreground font-mono">
                 {fmtClock(hover.moment.t)} · {momentWord(hover.moment.k)}
               </span>
-              <span className="truncate">{hover.moment.title}</span>
+              <span className="truncate">
+                <MomentTitle title={hover.moment.title} />
+              </span>
             </span>
           )}
         </div>

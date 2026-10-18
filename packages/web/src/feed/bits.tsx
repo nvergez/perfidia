@@ -72,12 +72,15 @@ export function CityRef({ id }: { readonly id: string }) {
 }
 
 /**
- * " (in 3 h 20 min)" while game time `at` is ahead of the playhead, nothing after: subscribed at
- * the game minute, so a card re-renders only while its countdown runs.
+ * " (in 3 h 20 min)" while game time `at` is ahead of the playhead, nothing after (nor once the
+ * match has ended: what was under way then never lands): subscribed at the game minute, so a card
+ * re-renders only while its countdown runs.
  */
 export function TimeLeft({ at, className }: { readonly at: number; readonly className?: string }) {
   const left = useMatch((s) =>
-    s.playhead >= at ? 0 : Math.max(60, Math.floor((at - s.playhead) / 60) * 60),
+    s.playhead >= at || (s.frame?.result ?? null) !== null
+      ? 0
+      : Math.max(60, Math.floor((at - s.playhead) / 60) * 60),
   );
   if (left <= 0) return null;
   return <span className={cn("text-muted-foreground", className)}> (in {fmtSpan(left)})</span>;

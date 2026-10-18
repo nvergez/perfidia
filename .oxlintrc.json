@@ -899,6 +899,7 @@
       "rules": {
         "react/no-danger": "error",
         "react/jsx-no-target-blank": "error",
+        "react/jsx-no-script-url": "error",
         "react/react-in-jsx-scope": "off",
         "import/no-nodejs-modules": "error",
         "no-restricted-imports": [
@@ -996,6 +997,10 @@
               {
                 "group": ["@radix-ui/*"],
                 "message": "Import primitives from the radix-ui package (src/ui/README.md)."
+              },
+              {
+                "group": ["../../*/src/**", "../../../*/src/**", "../../../../*/src/**"],
+                "message": "A relative path into another package is still an import of it: web sources import React, the pinned UI packages, @perfidia/protocol/spectator and @perfidia/spectator/reduce only."
               }
             ]
           }

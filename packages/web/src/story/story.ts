@@ -93,15 +93,20 @@ function leaderSentence(input: StoryInput): StorySentence | null {
     if (result.winners.length === 0) {
       return { key: "leader", tone: "plain", parts: [text(`The match is over ${how}: no winner`)] };
     }
-    return {
-      key: "leader",
-      tone: "plain",
-      parts: [
-        text("The match is over: "),
-        ...joinPlayers(result.winners),
-        text(` ${result.winners.length === 1 ? "wins" : "win"} ${how}`),
-      ],
-    };
+    const parts: StoryPart[] = [
+      text("The match is over: "),
+      ...joinPlayers(result.winners),
+      text(` ${result.winners.length === 1 ? "wins" : "win"} ${how}`),
+    ];
+    // On points: by how much (the best player outside the winners).
+    const win = standings.find((s) => result.winners.includes(s.player));
+    const next = standings.find((s) => !result.winners.includes(s.player));
+    if (result.reason === "time" && win !== undefined && next !== undefined) {
+      const gap = win.score - next.score;
+      if (gap > 0) parts.push(text(`, ${fmtInt(gap)} ahead of `), player(next.player));
+      else if (gap === 0) parts.push(text(", level on points with "), player(next.player));
+    }
+    return { key: "leader", tone: "plain", parts };
   }
   const alive = standings.filter((s) => s.alive);
   const first = alive[0];
@@ -171,9 +176,53 @@ function countdownSentence(
   return { key: "bloc", tone: "plain", parts };
 }
 
+/** Two sets of players are the same. */
+const sameMembers = (a: readonly string[], b: readonly string[]): boolean =>
+  a.length === b.length && a.every((x) => b.includes(x));
+
+/**
+ * A domination win, by how much: what the winning bloc held, and the next bloc's count (holding
+ * the cities without the conquests a countdown needs is the usual near miss).
+ */
+function dominationEndSentence(input: StoryInput): StorySentence | null {
+  const d = input.domination;
+  const r = input.result;
+  if (d === null || r === null || r.reason !== "domination" || d.need === null) return null;
+  const won = d.blocs.find((b) => sameMembers(b.members, r.winners));
+  if (won === undefined) return null;
+  const parts: StoryPart[] = [
+    ...blocParts(won.key, won.members, input.alliances),
+    text(` held ${fmtInt(won.cities)} of the ${fmtInt(d.need)} cities a win needs`),
+  ];
+  if (d.needTaken !== null && d.needTaken > 0) {
+    parts.push(
+      text(`, ${fmtInt(Math.min(won.taken, d.needTaken))} of ${fmtInt(d.needTaken)} taken`),
+    );
+  }
+  if (d.hold !== null) {
+    // "24 h", as the rule sentence says it.
+    parts.push(
+      text(`, for ${d.hold % HOUR === 0 ? `${fmtInt(d.hold / HOUR)} h` : fmtSpan(d.hold)}`),
+    );
+  }
+  const next = leadingBloc({ ...d, blocs: d.blocs.filter((b) => b !== won) });
+  if (next !== null) {
+    parts.push(
+      text("; next: "),
+      ...blocParts(next.key, next.members, input.alliances),
+      text(` with ${fmtInt(next.cities)}`),
+    );
+    if (d.needTaken !== null && d.needTaken > 0) {
+      parts.push(text(`, ${fmtInt(Math.min(next.taken, d.needTaken))} taken`));
+    }
+  }
+  return { key: "bloc", tone: "plain", parts };
+}
+
 function blocSentence(input: StoryInput): StorySentence | null {
   const d = input.domination;
-  if (d === null || input.result !== null) return null;
+  if (input.result !== null) return dominationEndSentence(input);
+  if (d === null) return null;
   // Too short a match for a countdown to finish: domination cannot decide it.
   if (d.opensAt !== null && d.startBy !== null && d.startBy < d.opensAt) return null;
   const running = d.countdowns[0];

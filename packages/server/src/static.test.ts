@@ -65,12 +65,17 @@ describe("the static index", () => {
     expect(files.get("/index.html")?.immutable).toBe(false);
   });
 
-  test("the page's CSP names the same-origin WebSocket; odd hosts get the plain policy", () => {
+  test("the page's CSP names the same-origin WebSocket (wss only behind TLS) and requires Trusted Types", () => {
     expect(pageCsp("127.0.0.1:8080")).toContain(
       "connect-src 'self' ws://127.0.0.1:8080 wss://127.0.0.1:8080;",
     );
+    expect(pageCsp("arena.example", true)).toContain("connect-src 'self' wss://arena.example;");
+    expect(pageCsp("arena.example", true)).not.toContain("ws://");
     expect(pageCsp("evil.example; script-src *")).toContain("connect-src 'self';");
     expect(pageCsp(null)).toContain("connect-src 'self';");
+    for (const csp of [pageCsp("127.0.0.1:8080"), pageCsp(null), pageCsp("a.example", true)]) {
+      expect(csp).toEndWith("; require-trusted-types-for 'script'; trusted-types 'none'");
+    }
   });
 
   test("--web-dist is a flag; a directory without index.html refuses to start", () => {
@@ -112,6 +117,7 @@ for (const adapter of ["elysia", "raw"] as const) {
         expect(csp).toContain(`connect-src 'self' ws://${host} wss://${host};`);
         expect(csp).toContain("script-src 'self';");
         expect(csp).toContain("frame-ancestors 'none'");
+        expect(csp).toContain("require-trusted-types-for 'script'; trusted-types 'none'");
         for (const h of [
           "x-content-type-options",
           "referrer-policy",
@@ -142,14 +148,38 @@ for (const adapter of ["elysia", "raw"] as const) {
       const etag = res.headers.get("etag") ?? "";
       expect(etag).not.toBe("");
       expect(
-        (await fetch(`${s.url}/chunk-abc12345.js`, { headers: { "if-none-match": etag } })).status,
+        (
+          await fetch(`${s.url}/chunk-abc12345.js`, {
+            headers: { "accept-encoding": "identity", "if-none-match": etag },
+          })
+        ).status,
       ).toBe(304);
+      // Each encoding has its own ETag; a validator of the other encoding is not a match.
+      const gzEtag = gz.headers.get("etag") ?? "";
+      expect(gzEtag).toMatch(/-gz"$/);
+      expect(gzEtag).not.toBe(etag);
+      const gzRevalidate = (tag: string): Promise<Response> =>
+        fetch(`${s.url}/chunk-abc12345.js`, {
+          headers: { "accept-encoding": "gzip", "if-none-match": tag },
+          decompress: false,
+        } as RequestInit);
+      expect((await gzRevalidate(gzEtag)).status).toBe(304);
+      expect((await gzRevalidate(etag)).status).toBe(200);
       const head = await fetch(`${s.url}/`, { method: "HEAD" });
       expect([head.status, (await head.text()).length, head.headers.get("content-type")]).toEqual([
         200,
         0,
         "text/html; charset=utf-8",
       ]);
+      // HEAD carries the length GET would send, in either encoding.
+      for (const encoding of ["identity", "gzip"]) {
+        const init = { headers: { "accept-encoding": encoding }, decompress: false };
+        const get = await fetch(`${s.url}/chunk-abc12345.js`, init);
+        const length = (await get.arrayBuffer()).byteLength;
+        const h = await fetch(`${s.url}/chunk-abc12345.js`, { ...init, method: "HEAD" });
+        expect([encoding, h.headers.get("content-length")]).toEqual([encoding, String(length)]);
+        expect(h.headers.get("etag")).toBe(get.headers.get("etag"));
+      }
       expect((await fetch(`${s.url}/favicon.svg`)).headers.get("cache-control")).toBe("no-cache");
       expect(await (await fetch(`${s.url}/sub/dir/deep-aaaabbbb.js`)).text()).toBe("export {};");
       expect((await fetch(`${s.url}/chunk-def67890.css`)).headers.get("content-type")).toBe(

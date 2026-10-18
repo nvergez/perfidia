@@ -25,7 +25,14 @@ import { uiActions } from "../store/ui.ts";
 import { useReelFocus } from "../timeline/reel-focus.ts";
 import { Button } from "../ui/button.tsx";
 import { CityPopover } from "./city-popover.tsx";
-import { BATTLE_FLASH_S, citiesOfItem, createFeedFacts, recentBattles } from "./derive.ts";
+import {
+  BATTLE_FLASH_S,
+  byCityNumber,
+  citiesOfItem,
+  createFeedFacts,
+  moveFocus,
+  recentBattles,
+} from "./derive.ts";
 import {
   cityPoint,
   indexIslands,
@@ -67,6 +74,11 @@ const SIEGE_DEFAULT_S = 6 * 3_600;
 
 /** Routes by movement entity: a movement's route never changes while the entity does not. */
 const routes = new WeakMap<MovementEnt, Route | null>();
+
+/** City id labels: map units at full size, the least on-screen size, and the smallest map scale. */
+const LABEL_SIZE = 8;
+const LABEL_PX = 7;
+const MIN_LABEL_SCALE = 0.62;
 
 function routeOf(islands: IslandIndex, cities: Frame["cities"], m: MovementEnt): Route | null {
   const hit = routes.get(m);
@@ -171,8 +183,11 @@ function MapView({
     return out;
   }, [frame.alliances]);
 
+  // City ids stay readable on a smaller map: their type grows in map units as the map shrinks
+  // (about 7 px on screen at the least), down to a map too small to hold them.
   const pxPerTile = Math.min(size.width / W, size.height / H);
-  const showLabels = zp.zoomed || pxPerTile >= 0.9;
+  const showLabels = zp.zoomed || pxPerTile >= MIN_LABEL_SCALE;
+  const labelSize = zp.zoomed ? LABEL_SIZE : Math.max(LABEL_SIZE, LABEL_PX / pxPerTile);
 
   const wasDrag = zp.wasDrag;
   const onSelect = useCallback(
@@ -181,6 +196,26 @@ function MapView({
       uiActions.selectCity(id);
     },
     [wasDrag],
+  );
+
+  // One tab stop for all the cities (the selected one, else the last one focused, else the first);
+  // the arrows move between them in id order, Home and End to the first and last.
+  const cityOrder = useMemo(() => Object.keys(frame.cities).toSorted(byCityNumber), [frame.cities]);
+  const [tabCity, setTabCity] = useState<string | null>(null);
+  const tabStop =
+    selectedCity !== null && cityOrder.includes(selectedCity)
+      ? selectedCity
+      : tabCity !== null && cityOrder.includes(tabCity)
+        ? tabCity
+        : (cityOrder[0] ?? null);
+  const onMove = useCallback(
+    (id: string, key: string) => {
+      const next = moveFocus(cityOrder, id, key);
+      if (next === null) return;
+      setTabCity(next);
+      svgRef.current?.querySelector<SVGGElement>(`[data-city="${next}"]`)?.focus();
+    },
+    [cityOrder],
   );
 
   // Cities -----------------------------------------------------------------------------------------
@@ -228,8 +263,11 @@ function MapView({
         selected={selectedCity === c.id}
         focus={focusCities.has(c.id)}
         label={showLabels ? labelSide(islands, c) : null}
+        labelSize={labelSize}
         title={parts.join(", ")}
+        tabStop={c.id === tabStop}
         onSelect={onSelect}
+        onMove={onMove}
       />
     );
   });
