@@ -40,6 +40,8 @@ export interface StorySentence {
   /** The irony sentence is a betrayal (red) or an attack on an ally in flight (red, pulsing). */
   readonly tone: "plain" | "betrayal" | "danger";
   readonly parts: readonly StoryPart[];
+  /** The feed item the sentence tells of (the irony sentence): clicking it goes there. */
+  readonly seek?: { readonly seq: number; readonly t: number; readonly item: string };
 }
 
 export interface StoryInput {
@@ -229,6 +231,15 @@ export function lastBetrayal(input: StoryInput): Betrayal | null {
   return null;
 }
 
+/** Where the irony sentence's item is: its moment's line. */
+function seekOf(
+  input: StoryInput,
+  id: string,
+): { readonly seek: { readonly seq: number; readonly t: number; readonly item: string } } | null {
+  const m = input.moments.findLast((x) => x.item === id);
+  return m === undefined ? null : { seek: { seq: m.seq, t: m.t, item: m.item } };
+}
+
 const relationWords = (r: "ally" | "pact"): string =>
   r === "ally" ? "its ally" : "its pact partner";
 
@@ -247,6 +258,7 @@ function ironySentence(input: StoryInput): StorySentence | null {
         { k: "time", t: launch.arriveAt },
         { k: "left", at: launch.arriveAt, from: input.t },
       ],
+      ...seekOf(input, launch.id),
     };
   }
   const b = lastBetrayal(input);
@@ -264,6 +276,7 @@ function ironySentence(input: StoryInput): StorySentence | null {
         ...verb,
         text(` at ${b.city}, ${fmtAgo(input.t - b.t)}`),
       ],
+      ...seekOf(input, b.id),
     };
   }
   const latest = input.moments.findLast((m) => m.importance >= 3) ?? input.moments.at(-1);
@@ -275,6 +288,7 @@ function ironySentence(input: StoryInput): StorySentence | null {
       { k: "strong", text: "Latest: " },
       text(`${latest.title}, ${fmtAgo(input.t - latest.t)}`),
     ],
+    seek: { seq: latest.seq, t: latest.t, item: latest.item },
   };
 }
 

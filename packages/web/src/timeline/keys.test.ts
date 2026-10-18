@@ -56,6 +56,7 @@ describe("playback shortcuts", () => {
     expect(focusKind(el("BUTTON", { role: "tab" }))).toBe("arrows");
     expect(focusKind(el("g", { role: "button" }))).toBe("control");
     expect(focusKind(el("BUTTON", {}, ['[role="dialog"]']))).toBe("dialog");
+    expect(focusKind(el("BUTTON", {}, ["dialog,"]))).toBe("dialog");
     expect(focusKind(el("BUTTON", {}, ['[role="radiogroup"]']))).toBe("control");
     expect(focusKind(el("SPAN", {}, ['[role="tablist"]']))).toBe("arrows");
     expect(focusKind({ ...el("DIV"), isContentEditable: true })).toBe("text");

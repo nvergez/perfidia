@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import type { FeedItem, ReportDetail } from "@perfidia/protocol/spectator";
 import type { FeedEntry } from "../playback/timeline.ts";
-import { createFeedFacts, fullestCopy, recentBattles } from "./derive.ts";
+import { citiesOfItem, createFeedFacts, fullestCopy, recentBattles } from "./derive.ts";
 
 const HOUR = 3_600;
 
@@ -144,5 +144,25 @@ describe("the fullest copy of a report", () => {
     expect(fullestCopy([redacted, full])?.report).toBe("rb");
     expect(fullestCopy([full, copy("rc", { ...full.data })])?.report).toBe("rb");
     expect(fullestCopy([])).toBeNull();
+  });
+});
+
+describe("the cities of a selected feed item", () => {
+  const feed = [battle(3, 10, "c4", "attacker"), launch(5, "m1", "ally"), siege(9, 20, "c7", 99)];
+  test("a battle's or siege's city, a launch's target; nothing for an unknown id", () => {
+    expect(citiesOfItem(feed, "3:0", 10)).toEqual(["c4"]);
+    expect(citiesOfItem(feed, "5:0", 5)).toEqual(["c18"]);
+    expect(citiesOfItem(feed, "9:0", 20)).toEqual(["c7"]);
+    expect(citiesOfItem(feed, "9:1", 20)).toEqual([]);
+    expect(citiesOfItem(feed, "4:0", 20)).toEqual([]);
+    expect(citiesOfItem(feed, "x", 20)).toEqual([]);
+    expect(citiesOfItem(feed, null, 20)).toEqual([]);
+  });
+
+  test("only from an hour before the item to six hours after it", () => {
+    expect(citiesOfItem(feed, "9:0", 20 - HOUR)).toEqual(["c7"]);
+    expect(citiesOfItem(feed, "9:0", 20 - HOUR - 1)).toEqual([]);
+    expect(citiesOfItem(feed, "9:0", 20 + 6 * HOUR)).toEqual(["c7"]);
+    expect(citiesOfItem(feed, "9:0", 20 + 6 * HOUR + 1)).toEqual([]);
   });
 });

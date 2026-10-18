@@ -70,7 +70,7 @@ const CONTROL_ROLES = new Set(["button", "link", "checkbox", "switch", "menuitem
 
 export function focusKind(el: FocusTarget | null): FocusKind {
   if (el === null) return "none";
-  if (el.closest('[role="dialog"],[role="alertdialog"]') !== null) return "dialog";
+  if (el.closest('dialog,[role="dialog"],[role="alertdialog"]') !== null) return "dialog";
   const tag = el.tagName.toLowerCase();
   if (tag === "input") {
     const type = (el.getAttribute("type") ?? "text").toLowerCase();

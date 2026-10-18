@@ -6,6 +6,8 @@ import { PlayerGlyph } from "../common/player-glyph.tsx";
 import { TimeLeft, Who } from "../feed/bits.tsx";
 import { cn } from "../lib/cn.ts";
 import { useDomination, useFeed, useMatch, useMomentsSoFar, useStandings } from "../store/hooks.ts";
+import { controls } from "../store/session.ts";
+import { uiActions } from "../store/ui.ts";
 import { buildStory, type StoryPart, type StorySentence } from "./story.ts";
 
 // The story strip (phase-3 design §4.3): one line on top of the match view, filled by templates
@@ -52,14 +54,12 @@ function keyedParts(s: StorySentence): { readonly key: string; readonly part: St
 }
 
 function Sentence({ s }: { readonly s: StorySentence }) {
-  return (
-    <span
-      data-story={s.key}
-      className={cn(
-        s.tone === "betrayal" && "text-betrayal",
-        s.tone === "danger" && "text-betrayal font-medium",
-      )}
-    >
+  const className = cn(
+    s.tone === "betrayal" && "text-betrayal",
+    s.tone === "danger" && "text-betrayal font-medium",
+  );
+  const body = (
+    <>
       {s.tone === "danger" ? (
         <span
           aria-hidden="true"
@@ -69,7 +69,33 @@ function Sentence({ s }: { readonly s: StorySentence }) {
       {keyedParts(s).map((p) => (
         <Part key={p.key} part={p.part} />
       ))}
-    </span>
+    </>
+  );
+  const seek = s.seek;
+  if (seek === undefined) {
+    return (
+      <span data-story={s.key} className={className}>
+        {body}
+      </span>
+    );
+  }
+  // The irony sentence goes to what it tells of (the playhead to its line, the card selected).
+  return (
+    <button
+      type="button"
+      data-story={s.key}
+      title="Go to this moment"
+      onClick={() => {
+        uiActions.selectItem(seek.item);
+        controls.seekSeq(seek.seq, seek.t);
+      }}
+      className={cn(
+        "inline cursor-pointer rounded-sm text-left underline-offset-4 hover:underline focus-visible:ring-2 focus-visible:outline-none",
+        className,
+      )}
+    >
+      {body}
+    </button>
   );
 }
 

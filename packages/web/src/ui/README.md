@@ -1,8 +1,10 @@
 # `src/ui`: shadcn/ui components, copied by hand
 
 These are the [shadcn/ui](https://ui.shadcn.com) "new-york" (v4, Tailwind 4) components the
-spectator needs: button, badge, card, tabs, tooltip, hover-card, sheet, dialog, scroll-area, slider,
-toggle and toggle-group, separator, skeleton. They are copied by hand rather than with the `shadcn`
+spectator uses: button, badge, card, tabs, sheet, dialog, skeleton. (Tooltip, hover-card and
+popover are not used: `players/hover-panel.tsx` and `map/city-popover.tsx` position their own
+panels, since Radix's positioning library, floating-ui, costs about 10 KB gzipped of the 200 KB
+budget. Unused copies were removed.) They are copied by hand rather than with the `shadcn`
 CLI, which would pull a second TypeScript compiler (through `ts-morph`) and Zod 3 (phase-3 design
 §1.3, §5.4). Changes from upstream: primitives are imported from the `radix-ui` package, `cn()` from
 `../lib/cn.ts` with relative `.ts`/`.tsx` imports, and the few props passed as `undefined` are

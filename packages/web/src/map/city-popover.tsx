@@ -1,7 +1,7 @@
 import type { CityEnt, Frame, QueueEnt, SpectatorIsland } from "@perfidia/protocol/spectator";
 import { Eye, Hourglass, Landmark, ScrollText, Swords, X } from "lucide-react";
-import { Popover } from "radix-ui";
 import { useEffect, useLayoutEffect, useMemo, useRef, type ReactNode, type RefObject } from "react";
+import { createPortal } from "react-dom";
 import { GameTime } from "../common/game-time.tsx";
 import { PlayerLabel } from "../common/player-label.tsx";
 import { SkinIconView } from "../common/skin-icon.tsx";
@@ -283,6 +283,44 @@ function CityDetails({
   );
 }
 
+const GAP = 10;
+const MARGIN = 8;
+
+/** Where the panel goes: right of the city on desktop (left of it when there is no room), else
+ * below it (above when there is no room), always inside the viewport. */
+function place(
+  a: DOMRect,
+  p: { readonly width: number; readonly height: number },
+  side: "right" | "bottom",
+  vh: number,
+): { readonly left: number; readonly top: number } {
+  const vw = window.innerWidth;
+  let left: number;
+  let top: number;
+  if (side === "right") {
+    left = a.right + GAP;
+    if (left + p.width > vw - MARGIN && a.left - GAP - p.width >= MARGIN) {
+      left = a.left - GAP - p.width;
+    }
+    top = a.top + a.height / 2 - p.height / 2;
+  } else {
+    top = a.bottom + GAP;
+    if (top + p.height > vh - MARGIN && a.top - GAP - p.height >= MARGIN) {
+      top = a.top - GAP - p.height;
+    }
+    left = a.left + a.width / 2 - p.width / 2;
+  }
+  return {
+    left: Math.max(MARGIN, Math.min(left, vw - p.width - MARGIN)),
+    top: Math.max(MARGIN, Math.min(top, vh - p.height - MARGIN)),
+  };
+}
+
+// A light popover rather than Radix's: its positioning library (floating-ui) would cost about
+// 10 KB gzipped of the 200 KB budget. It is portalled to the body at fixed coordinates under the
+// dialogs' layer (z-40 < z-50), follows the city through zoom, pan and scrolling (one
+// animation-frame read while open), and closes on Escape, on a press or the focus outside it and
+// the cities, and with its close button.
 export function CityPopover({
   svgRef,
   islands,
@@ -295,19 +333,9 @@ export function CityPopover({
   const skin = useSkin();
   const reduced = usePrefersReducedMotion();
   const desktop = useLayout() === "desktop";
+  const panel = useRef<HTMLDialogElement>(null);
   const city = selected === null || frame === null ? undefined : frame.cities[selected];
-  const anchor = useRef({
-    getBoundingClientRect: (): DOMRect => {
-      const id = selectedRef.current;
-      if (id === null) return ZERO;
-      const el = svgRef.current?.querySelector(`[data-city="${id}"] [data-shape]`);
-      return el?.getBoundingClientRect() ?? svgRef.current?.getBoundingClientRect() ?? ZERO;
-    },
-  });
-  const selectedRef = useRef<string | null>(selected);
-  useLayoutEffect(() => {
-    selectedRef.current = selected;
-  }, [selected]);
+  const open = city !== undefined && skin !== null && frame !== null;
 
   // Selected from elsewhere (the feed) while the map is scrolled away: bring it into view.
   useEffect(() => {
@@ -320,34 +348,85 @@ export function CityPopover({
     }
   }, [selected, svgRef, reduced]);
 
-  const open = city !== undefined && skin !== null && frame !== null;
-  return (
-    <Popover.Root
-      open={open}
-      onOpenChange={(o) => {
-        if (!o) uiActions.selectCity(null);
-      }}
+  useLayoutEffect(() => {
+    const el = panel.current;
+    if (!open || el === null || selected === null) return undefined;
+    const side = desktop ? "right" : "bottom";
+    let raf = 0;
+    let last = "";
+    const follow = (): void => {
+      const shape = svgRef.current?.querySelector(`[data-city="${selected}"] [data-shape]`);
+      const a = shape?.getBoundingClientRect() ?? svgRef.current?.getBoundingClientRect() ?? ZERO;
+      // Above the timeline docked at the bottom of a phone's screen.
+      const dock = document.querySelector("[data-dock]")?.getBoundingClientRect().top;
+      const vh = Math.min(window.innerHeight, dock ?? window.innerHeight);
+      const maxH = Math.max(160, Math.min(544, vh - 2 * MARGIN));
+      const at = place(
+        a,
+        { width: el.offsetWidth, height: Math.min(el.offsetHeight, maxH) },
+        side,
+        vh,
+      );
+      const key = `${Math.round(at.left)},${Math.round(at.top)},${maxH}`;
+      if (key !== last) {
+        last = key;
+        el.style.left = `${Math.round(at.left)}px`;
+        el.style.top = `${Math.round(at.top)}px`;
+        el.style.maxHeight = `${Math.round(maxH)}px`;
+        el.style.visibility = "visible";
+      }
+      raf = window.requestAnimationFrame(follow);
+    };
+    follow();
+    const before = document.activeElement;
+    el.focus({ preventScroll: true });
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.key !== "Escape") return;
+      e.stopPropagation();
+      uiActions.selectCity(null);
+    };
+    // A press or the focus outside it and the cities closes it (a dialog opened from it, too).
+    const onOutside = (e: Event): void => {
+      const t = e.target;
+      if (!(t instanceof Element)) return;
+      if (el.contains(t) || t.closest("[data-city]") !== null) return;
+      uiActions.selectCity(null);
+    };
+    document.addEventListener("keydown", onKey, true);
+    document.addEventListener("pointerdown", onOutside, true);
+    document.addEventListener("focusin", onOutside, true);
+    return () => {
+      window.cancelAnimationFrame(raf);
+      document.removeEventListener("keydown", onKey, true);
+      document.removeEventListener("pointerdown", onOutside, true);
+      document.removeEventListener("focusin", onOutside, true);
+      if (el.contains(document.activeElement) && before instanceof HTMLElement) {
+        before.focus({ preventScroll: true });
+      }
+    };
+  }, [open, selected, desktop, svgRef]);
+
+  if (!open) return null;
+  return createPortal(
+    <dialog
+      ref={panel}
+      open
+      aria-label={`City ${city.id}`}
+      tabIndex={-1}
+      data-testid="city-popover"
+      style={{ position: "fixed", left: 0, top: 0, visibility: "hidden" }}
+      className="bg-popover text-popover-foreground motion-safe:animate-in motion-safe:fade-in-0 inset-auto z-40 m-0 w-[min(22rem,calc(100vw-1rem))] overflow-y-auto rounded-lg border p-3 shadow-lg outline-hidden [scrollbar-width:thin]"
     >
-      <Popover.Anchor virtualRef={anchor} />
-      <Popover.Portal>
-        <Popover.Content
-          side={desktop ? "right" : "bottom"}
-          align="center"
-          sideOffset={10}
-          collisionPadding={8}
-          updatePositionStrategy="always"
-          aria-label={selected === null ? "City" : `City ${selected}`}
-          className="bg-popover text-popover-foreground data-[state=open]:animate-in data-[state=open]:fade-in-0 z-50 max-h-[min(34rem,var(--radix-popover-content-available-height))] w-[min(22rem,calc(100vw-1rem))] overflow-y-auto rounded-lg border p-3 shadow-lg outline-hidden [scrollbar-width:thin]"
-        >
-          {open ? <CityDetails city={city} frame={frame} skin={skin} islands={islands} /> : null}
-          <Popover.Close
-            aria-label="Close"
-            className="hover:bg-accent absolute top-2 right-2 rounded p-1 opacity-70 hover:opacity-100"
-          >
-            <X className="size-4" />
-          </Popover.Close>
-        </Popover.Content>
-      </Popover.Portal>
-    </Popover.Root>
+      <CityDetails city={city} frame={frame} skin={skin} islands={islands} />
+      <button
+        type="button"
+        aria-label="Close"
+        onClick={() => uiActions.selectCity(null)}
+        className="hover:bg-accent absolute top-2 right-2 rounded p-1 opacity-70 hover:opacity-100"
+      >
+        <X className="size-4" />
+      </button>
+    </dialog>,
+    document.body,
   );
 }

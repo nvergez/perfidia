@@ -2,14 +2,13 @@ import { useRoute } from "./lib/router.ts";
 import { ListPage } from "./pages/list.tsx";
 import { MatchPage } from "./pages/match.tsx";
 import { NotFoundPage } from "./pages/not-found.tsx";
-import { TooltipProvider } from "./ui/tooltip.tsx";
 
 // The app: one route at a time (`lib/router.ts`).
 
 export function App() {
   const route = useRoute();
   return (
-    <TooltipProvider delayDuration={300}>
+    <>
       {route.page === "list" ? (
         <ListPage />
       ) : route.page === "match" ? (
@@ -23,6 +22,6 @@ export function App() {
       ) : (
         <NotFoundPage path={route.path} />
       )}
-    </TooltipProvider>
+    </>
   );
 }

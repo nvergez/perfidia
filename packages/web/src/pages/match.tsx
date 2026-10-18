@@ -195,7 +195,10 @@ function PhoneLayout() {
           <PlayersPanel />
         </TabsContent>
       </Tabs>
-      <div className="bg-background/90 fixed inset-x-0 bottom-0 z-30 border-t p-2 pb-[max(0.5rem,env(safe-area-inset-bottom))] backdrop-blur-sm">
+      <div
+        data-dock=""
+        className="bg-background/90 fixed inset-x-0 bottom-0 z-30 border-t p-2 pb-[max(0.5rem,env(safe-area-inset-bottom))] backdrop-blur-sm"
+      >
         <TimelineBar />
       </div>
     </div>

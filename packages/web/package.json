@@ -22,6 +22,8 @@
   },
   "devDependencies": {
     "@perfidia/engine": "workspace:*",
+    "@perfidia/orchestrator": "workspace:*",
+    "@perfidia/server": "workspace:*",
     "@tailwindcss/cli": "4.3.3",
     "@types/bun": "catalog:",
     "@types/react": "19.3.0",

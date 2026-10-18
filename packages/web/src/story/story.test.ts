@@ -176,6 +176,13 @@ describe("story strip", () => {
     );
   });
 
+  test("the irony sentence goes to its item's line; the other sentences go nowhere", () => {
+    const feed: FeedEntry[] = [{ seq: 7048, item: BETRAYAL }];
+    const s = buildStory(input({ t: 4 * D, moments: [momentOf(7048, BETRAYAL)], feed }));
+    expect(s.at(-1)?.seek).toEqual({ seq: 7048, t: BETRAYAL.t, item: BETRAYAL.id });
+    expect(s.slice(0, -1).every((x) => x.seek === undefined)).toBe(true);
+  });
+
   test("an attack on an ally in flight wins over the last betrayal, until it lands", () => {
     const feed: FeedEntry[] = [
       { seq: 6618, item: LAUNCH },

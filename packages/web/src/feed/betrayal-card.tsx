@@ -1,10 +1,12 @@
 import type { MomentContext } from "@perfidia/protocol/spectator";
-import { Brain, MessageSquareQuote, Skull, Swords } from "lucide-react";
+import { ArrowLeftRight, Brain, MessageSquareQuote, Skull, Swords } from "lucide-react";
 import { GameTime } from "../common/game-time.tsx";
 import { PlainText } from "../common/plain-text.tsx";
 import type { FeedEntry } from "../playback/timeline.ts";
-import { useSkin } from "../store/hooks.ts";
+import { isPlayerId } from "../lib/ids.ts";
+import { useMatch, useSkin } from "../store/hooks.ts";
 import { controls } from "../store/session.ts";
+import { uiActions } from "../store/ui.ts";
 import { CityRef, TimeLeft, Who, unitsText } from "./bits.tsx";
 import { seqOfItem } from "./filter.ts";
 import { Shell } from "./shell.tsx";
@@ -85,6 +87,22 @@ function Context({
   );
 }
 
+/** "Everything between p2 and p3": the feed's pair mode for the two players of the card. */
+function PairButton({ a, b }: { readonly a: string; readonly b: string }) {
+  const id = useMatch((s) => s.id);
+  if (id === null || a === b || !isPlayerId(a) || !isPlayerId(b)) return null;
+  return (
+    <button
+      type="button"
+      onClick={() => uiActions.setPair(id, [a, b])}
+      className="text-primary hover:text-primary/80 mt-2 inline-flex items-center gap-1 text-xs font-medium"
+    >
+      <ArrowLeftRight className="size-3" aria-hidden="true" /> Everything between{" "}
+      <span className="font-mono">{a}</span> and <span className="font-mono">{b}</span>
+    </button>
+  );
+}
+
 const rel = (r: "ally" | "pact"): string => (r === "ally" ? "its ally" : "its pact partner");
 
 export function BetrayalCard({
@@ -113,6 +131,7 @@ export function BetrayalCard({
           <Who id={item.against} /> at <CityRef id={item.city} />
         </p>
         <Context context={item.context} victim={item.against} relation={item.relation} />
+        <PairButton a={item.by} b={item.against} />
       </Shell>
     );
   }
@@ -154,6 +173,7 @@ export function BetrayalCard({
       {item.context === null || foe === null ? null : (
         <Context context={item.context} victim={foe} relation={item.againstAlly} />
       )}
+      {foe === null ? null : <PairButton a={item.owner} b={foe} />}
     </Shell>
   );
 }

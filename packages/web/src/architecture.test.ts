@@ -43,6 +43,7 @@ function specifiers(source: string): string[] {
 
 const ALLOWED = new Set([
   "react",
+  "react-dom",
   "react-dom/client",
   "zustand",
   "radix-ui",

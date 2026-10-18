@@ -92,7 +92,7 @@ export function HowToWatch() {
             <span>
               <strong>Where the fighting is:</strong> the map shows armies at sea and battles; the
               timeline plays the match (space), jumps between key moments (← and →), and “Watch the
-              key moments” replays the turning points in about two minutes.
+              key moments” replays the turning points in a minute or two.
             </span>
           </li>
         </ul>

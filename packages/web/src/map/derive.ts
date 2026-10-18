@@ -113,3 +113,45 @@ export function fullestCopy(copies: readonly ReportDetail[]): ReportDetail | nul
   for (const c of copies) if (best === null || fullness(c) > fullness(best)) best = c;
   return best;
 }
+
+/** The id of a feed item, `"<seq>:<i>"`: its line's cursor, or null. */
+function seqOfId(id: string): number | null {
+  const n = Number(id.slice(0, id.indexOf(":")));
+  return Number.isSafeInteger(n) && n >= 0 ? n : null;
+}
+
+/** How long after its time a selected feed item still rings its cities: 6 game hours. */
+export const SELECTED_RING_S = 6 * 3_600;
+
+/**
+ * The cities a selected feed item is about (ringed on the map, like the reel's moment) while the
+ * playhead `t` is within an hour before it and `SELECTED_RING_S` after: a battle's, siege's,
+ * conquest's, founding's or spy's city, a betrayal's city, a launch's target.
+ */
+export function citiesOfItem(
+  feed: readonly FeedEntry[],
+  id: string | null,
+  t: number,
+): readonly string[] {
+  if (id === null) return [];
+  const seq = seqOfId(id);
+  if (seq === null) return [];
+  let lo = 0;
+  let hi = feed.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if ((feed[mid]?.seq ?? Number.MAX_SAFE_INTEGER) < seq) lo = mid + 1;
+    else hi = mid;
+  }
+  for (let i = lo; i < feed.length; i += 1) {
+    const e = feed[i];
+    if (e === undefined || e.seq !== seq) break;
+    if (e.item.id !== id) continue;
+    const item = e.item;
+    if (t < item.t - 3_600 || t > item.t + SELECTED_RING_S) return [];
+    if ("city" in item && typeof item.city === "string") return [item.city];
+    if (item.k === "launch" && item.to !== null) return [item.to];
+    return [];
+  }
+  return [];
+}

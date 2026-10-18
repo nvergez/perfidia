@@ -1,4 +1,4 @@
-# Phase 3: the spectator view (Pass A as built)
+# Phase 3: the spectator view (Passes A and B as built)
 
 > **Status.** Roadmap step 3 of `docs/brief.md`, "Spectator view": a live map, a diplomatic feed
 > and a leaderboard. Exit criterion: an outsider understands the match within a few minutes.
@@ -6,9 +6,11 @@
 > - **Pass A (data and server, no UI) is built**, in two steps: the pure data layer (the engine's
 >   incremental replayer, the gateway's incremental fold, the `@perfidia/spectator` projection,
 >   the protocol's spectator schemas, `replies.jsonl` and per-line flushing) and the read-only
->   server (`@perfidia/server`). Pass B (the web app) is in progress: its first step, the web
->   scaffold (`packages/web`, `--web-dist`), is built (§14); the views and the end-to-end smoke
->   test follow. Pass C (extras) is not built yet (§12).
+>   server (`@perfidia/server`).
+> - **Pass B (the exit-critical web app) is built**: the scaffold and `--web-dist` (§14), then the
+>   views, the end-to-end smoke test and an outsider screenshot set (§15). What Pass B still
+>   needs is owner work: the $0 pilot with people on the war golden and the exit test on a real
+>   match of at least 4 game days (design §6.2). Pass C (extras) is not built yet (§12).
 > - This document describes what was built. The reviewed phase-3 design (with its `[critic]`
 >   corrections) is the source of the decisions; "design §x" below and in code comments refers to
 >   it. Where this document and the code disagree, the code wins; fix this document.
@@ -29,6 +31,9 @@
 10. Tests and measurements
 11. Dependencies and the supply chain
 12. Deviations, open issues, and what Pass B adds
+13. Review fixes
+14. Pass B, step B1: the web scaffold
+15. Pass B: the web app as built
 
 ---
 
@@ -48,7 +53,7 @@ The design's "done when" (§1.2), as measured on this container (4 vCPU, Bun 1.4
 ```
 protocol ← engine ← gateway ← bots ← sim ← orchestrator          (unchanged)
                      gateway ← spectator ← server                 (new: server = protocol, engine, spectator)
-protocol/spectator ← spectator/reduce ← (web, Pass B)
+protocol/spectator ← spectator/reduce ← web                     (Pass B; web dev-depends on server, orchestrator)
 orchestrator ┄┄ dev dependency ┄┄ spectator, server               (tests generate fake arena runs)
 ```
 
@@ -394,6 +399,10 @@ least 14 days old): `elysia@2.0.0-beta.21` (2026-10-02), `@elysia/openapi@2.0.0-
 
 ## 12. Deviations, open issues, and what Pass B adds
 
+13. Review fixes
+14. Pass B, step B1: the web scaffold
+15. Pass B: the web app as built
+
 **Deviations from the design:**
 
 - **The frame** has no `standings` field: `standingsOf(frame)` derives them (players by rank).
@@ -453,9 +462,9 @@ least 14 days old): `elysia@2.0.0-beta.21` (2026-10-02), `@elysia/openapi@2.0.0-
 
 **Pass B adds** the web app (`packages/web`, React SPA on the `./reduce` and
 `@perfidia/protocol/spectator` sub-paths), static serving from the server (`--web-dist`, the SPA
-fallback for non-`/api` paths only), `bun run dev` and `web:build`, the Playwright smoke test, the
-how-to-watch overlay and the outsider-test pilot on the war golden (design §4, §6.2, §7). Pass C
-adds the turn detail, dossier extras and live per-round reasoning.
+fallback for non-`/api` paths only), `bun run dev` and `web:build`, the Playwright smoke test and
+the how-to-watch overlay (design §4, §6.2, §7): built, see §14 and §15. Pass C adds the turn
+detail, dossier extras and live per-round reasoning.
 
 ## 13. Review fixes
 
@@ -504,7 +513,7 @@ bun run web:build                      # Tailwind, then Bun.build of src/index.h
 bun run serve -- --runs runs --cache .cache/spectator --all-runs --web-dist packages/web/dist
 bun run dev -- --runs runs             # build, then Tailwind --watch, bun build --watch and the server (--web-dist, --dev)
 bun packages/web/scripts/shot.ts --url http://127.0.0.1:8080/m/war --out /tmp/war   # screenshots (1440x900, 390x844) and console errors
-bun run test:e2e                       # PERFIDIA_E2E=1 bun test packages/web/e2e (the smoke test of a later step)
+bun run test:e2e                       # PERFIDIA_E2E=1 bun test packages/web/e2e (the smoke test, §15)
 ```
 
 - **Layout.** `src/lib/` (ids, time as the engine prints it, model names with "Fake" for fake seats,
@@ -518,7 +527,7 @@ bun run test:e2e                       # PERFIDIA_E2E=1 bun test packages/web/e2
   hooks), `src/skins/` (perfidia-1 1.1.0 and 1.0.0 labels, blocs, sieges, the win rule from the
   config and `ext.domination`; a default skin), `src/pages/` (the match list and the match layout),
   `src/onboarding/` ("How to watch"). The view components (`src/map`, `timeline`, `board`, `story`,
-  `feed`, `thoughts`, `players`) are stubs that the next steps replace.
+  `feed`, `thoughts`, `players`) were stubs that the next steps replaced (§15).
 - **Served by the server** with `--web-dist <dir>` on both adapters: an index of the directory made
   at startup (no path built from a request; links, dotfiles and special files skipped), hashed
   assets `private, max-age=31536000, immutable`, `index.html` and other files `no-cache`, gzip and
@@ -541,9 +550,251 @@ bun run test:e2e                       # PERFIDIA_E2E=1 bun test packages/web/e2
   (GHSA-vfj7-8cjw-p6xm, stack exhaustion on deeply nested patterns), reached only through the
   Tailwind CLI's file watcher (`@tailwindcss/cli` → `@parcel/watcher` → `micromatch`), a build-time
   tool fed our own glob patterns; no fixed version exists (3.0.3 is the latest).
-- **Sizes** (`bun run web:build`): JS about 159 KB gzipped (510 KB minified; React DOM 202 KB and Zod
-  100 KB of it), CSS about 8 KB gzipped; budgets 200 KB and 25 KB. `src/architecture.test.ts` also
+- **Sizes** at step B1 (`bun run web:build`): JS about 159 KB gzipped (510 KB minified; React DOM
+  202 KB and Zod 100 KB of it), CSS about 8 KB gzipped; budgets 200 KB and 25 KB (§15 for Pass B). `src/architecture.test.ts` also
   builds the bundle in process and fails above 200 KB.
-- **Tests**: `bun test packages/web` runs 58 unit tests in about 0.4 s (no DOM).
+- **Tests** at step B1: `bun test packages/web` ran 58 unit tests in about 0.4 s (no DOM).
 - **CI**: the GitHub App cannot change workflow files; the proposed `web` job (`bun run web:build`)
   is delivered with the phase-3 pull request as `ci-web-build.patch`, for the owner to apply.
+
+## 15. Pass B: the web app as built
+
+Steps B2a (map, timeline, key moments reel), B2b (board, story strip, feed, thoughts, players) and
+B3 (integration, the end-to-end smoke test, these docs) replace the scaffold's stubs. Everything is
+in `packages/web/src`; the design's §4 is the reference, and the deviations are listed in §15.7.
+
+### 15.1 Running it
+
+```sh
+# Material: the war golden and a fake arena run (a few seconds; it has fake reasoning).
+mkdir -p /tmp/runs/war && cp packages/sim/fixtures/golden/perfidia-1@1.1.0/lockstep-6p-6d-war.jsonl.gz /tmp/runs/war/match.jsonl.gz
+bun run arena -- run --fake --days 1 --out /tmp/runs/fake1
+
+bun run web:build                 # Tailwind CLI, then Bun.build into packages/web/dist; fails over budget
+bun run serve -- --runs /tmp/runs --cache /tmp/spectator-cache --all-runs --web-dist packages/web/dist
+# open http://127.0.0.1:8080/  (a match: /m/war; the reel: /m/war?reel=1; from the start: /m/war?start=1;
+# the pair mode: /m/war?pair=p2,p3)
+
+bun run dev -- --runs /tmp/runs   # build once, then Tailwind --watch, bun build --watch and the server
+                                  # (--web-dist packages/web/dist --dev, port 8080); reload to see a change
+bun run test:e2e                  # the browser smoke test (§15.5)
+```
+
+`web:build` now empties `dist/` instead of removing it, so a server started with `--dev` keeps
+watching the same directory and re-indexes after each build.
+
+### 15.2 What an outsider sees
+
+- **Match list (`/`).** Live matches first, then finished ones: status, a FAKE badge on fake runs
+  (and "Fake" on each fake seat, never a model name), the winners and how they won, the lineup
+  with ids and model badges, "Watch the key moments" (`?reel=1`) and "Open".
+- **Match view (`/m/:id`).** A finished match opens at its end (`?start=1`: at the first second),
+  a running one live. "How to watch" opens by itself on a first visit (four bullets, the win rule
+  with this match's numbers, the players with their colours and shapes); the flag is kept in
+  `localStorage` through `lib/storage.ts`.
+  - Desktop (≥ 1280 px): the story strip on top; leaderboard and blocs | map and timeline | tabs
+    Feed, Thoughts, Players. Tablet: map and timeline beside the board, the tabs below. Phone: the
+    story strip, the map, tabs Board, Feed, Thoughts, Players, and the timeline docked at the
+    bottom.
+  - **Story strip** (`story/`): the day and time, the leader and the margin, the bloc closest to a
+    domination win (or its running countdown), and the irony sentence: the attack on an ally now
+    at sea (red, pulsing), else the last betrayal, else the latest key moment; once the match ends,
+    who won and how. The irony sentence is a button that seeks to what it tells of.
+  - **Leaderboard and blocs** (`board/`): rank, glyph, "Name · id", model badge, a score bar split
+    into its parts, cities, cities taken, army population (with the eye: hidden from players),
+    alliance and pact chips, status (winner, eliminated, handed to a bot, "thinking… round N").
+    The rule sentence from the skin, then per bloc its cities against the number needed, taken
+    pips, and a running countdown; before the window opens: "opens in …", rows dimmed.
+  - **Map** (`map/`): one SVG; islands by kind (Olympus gold), cities by owner colour and shape
+    around their island (capital star, taken dot), sieges with a countdown arc, alliance outline
+    rings, curved movement routes with markers moved on every animation frame through refs
+    (attacks on an ally red and pulsing, supports dashed, returns faded), battle flashes for 2 game
+    hours; zoom and pan (wheel, pinch, drag, buttons), a map key. A city opens its popover: owner,
+    island, buildings and queues through the skin, garrison by owner ("hidden from players"),
+    siege, former owners, the stock extrapolated with "≈", the last battle there. A battle report
+    opens as a dialog with the fullest copy, rendered by the skin.
+  - **Timeline** (`timeline/`): previous and next key moment, play/pause, the game clock, a
+    scrubber (ARIA slider: day ticks, moment glyphs by kind, ←/→ 15 min, Shift 1 min, Page Up/Down
+    6 h, Home, End), speeds 5 min/s to 6 h/s, LIVE or "Go live" while the match runs; keys Space,
+    ←/→, +/−.
+  - **Key moments reel**: importance-3 moments (plus importance 2 when there are fewer than 8), at
+    most 16; each clip from t − 2 h to t + 30 min at 1 h/s with a caption card; the map rings the
+    moment's cities and dims the other players.
+  - **Feed** (`feed/`): cards in time order up to the playhead, following the bottom unless the
+    viewer scrolls up ("N new"); chips All, Diplomacy, Military, Thoughts, Private only, a player
+    filter, and the pair mode (`?pair=pA,pB`). Message cards show the lock and "Seen only by …",
+    and "What pN was thinking when it wrote this" (the sender's thought of the same turn). Betrayal
+    cards and "attack on an ally launched" cards are large and red, with "What they said before",
+    "What they were thinking" and "Everything between pA and pB" (the pair mode). The last 300
+    cards are rendered; "Older" pages from the feed route.
+  - **Thoughts** (`thoughts/`): per agent the latest public thought, its status, a "Reasoning"
+    expander (annotations: rounds, tools, cost), and the history of one thought per turn with
+    wake-reason icons; bots behind "Show bots" (shown at once in a bots-only match).
+  - **Players** (`players/`): a row per player, a hover card, and the dossier sheet: profile, who
+    plays it (model, Bot, or Fake, explained), hand-off, spend against the cap, counts, the current
+    notebook, and the thoughts with their reasoning.
+- **One selection model** (`store/ui.ts`, `timeline/reel-focus.ts`): hovering or focusing a
+  leaderboard row, a bloc or a player dims everyone else on the map; clicking a feed card, a moment
+  glyph, a reel caption, the story strip's irony sentence or a "said before" message moves the
+  playhead to that log line and selects the card; the selected card's city is ringed on the map
+  from an hour before it to 6 game hours after; a city's owner opens the dossier; "Last battle
+  here" opens the report.
+
+### 15.3 Rules the code holds (architecture test, lint, review)
+
+- Web sources import only React and `react-dom`, the pinned UI packages,
+  `@perfidia/protocol/spectator` and `@perfidia/spectator/reduce`; no `Bun` or `process`
+  (`src/architecture.test.ts`, the lint override). Ruleset building, unit, queue and event ids
+  appear in `src/skins/**` only; island tints and moment colours are assigned by order of
+  appearance and by feed kind, not by id.
+- Player-authored text (messages, thoughts, notebooks, reasoning, names) goes through
+  `PlainText`: React escaping, `white-space: pre-wrap`, `<bdi>`, no links made from URLs; no
+  `dangerouslySetInnerHTML` (`react/no-danger`, the architecture test, and the smoke test's DOM
+  check). `index.html` has no inline script (the server's CSP: `script-src 'self'`).
+- Every HTTP and WebSocket payload is parsed with the protocol's schemas; a failure is dropped,
+  reported in the console and re-synced (`src/api/`). `localStorage` is touched by
+  `lib/storage.ts` only, inside `try`/`catch`.
+- `prefers-reduced-motion`: map markers jump once per game hour while playing and sit exactly
+  when paused, nothing pulses, nothing scrolls smoothly. An `aria-live` region announces
+  importance-3 moments as the playhead passes them (at most one every 5 s).
+- Ids always next to names ("Odysseus · p1"); a fake seat reads "Fake", never a model name
+  (`lib/models.ts`).
+- The bundle: one JS chunk, 621 KB minified, **193.2 KB gzipped** (budget 200 KB), CSS 52.9 KB,
+  9.5 KB gzipped (budget 25 KB). To fit, the city popover, the hover card and the tooltips
+  position their own panels instead of Radix Popover, HoverCard and Tooltip (floating-ui and
+  popper cost about 10 KB gzipped); the unused shadcn copies were removed (`src/ui/README.md`).
+
+### 15.4 Unit tests
+
+`bun test packages/web/src`: 130 tests in 21 files, about 0.46 s, all pure (no DOM): map geometry
+(slot positions, curves, interpolation, the turn-back point), zoom, what the map reads from the
+feed (battle flashes, launches against allies, siege starts, the fullest report copy, the cities of
+a selected card), playback keys and the reel's plan and state machine, the story strip's
+templates and its seek target, feed filters and windows, the board's helpers, wake reasons, plus
+B1's suites (time format equal to the engine's `fmtTime`, models with "Fake", the router, the
+API clients, playback, skins, selectors) and the architecture test (imports, ruleset ids, no HTML
+from strings, storage, the in-process bundle under 200 KB).
+
+### 15.5 The end-to-end smoke test
+
+`packages/web/e2e/smoke.test.ts`, run by `bun run test:e2e` (`PERFIDIA_E2E=1`); without the
+variable, or without Chromium at `chromium.executablePath()`, it is skipped with a printed reason
+(so the default `bun test` stays browser-free). It builds the app into a temporary directory
+(in-process `buildWeb`), starts the server in process (`startServer` from `@perfidia/server`, with
+`--web-dist` on that build), copies the war golden in, generates a 1-day fake arena run
+(`planArena`/`runArena` from `@perfidia/orchestrator`, both dev dependencies of the web package),
+waits for both to be folded and ended, and drives headless Chromium (playwright-core 1.56.1,
+Chromium 1194) through:
+
+| Check (design §6.1)                                      | How                                                                                                                                               |
+| -------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+| The list shows both matches, the fake one with FAKE      | `[data-match=war]`, `[data-match=fake1]`; the FAKE badge on the fake card only                                                                    |
+| 31 islands and 42 city markers at the end                | the match opens at `D6 18:33`; `[data-map] [data-island]` = 31, `[data-map] [data-city]` = 42                                                     |
+| 6 leaderboard rows; blocs read 16 / 2                    | 6 rows; the rule reads "16 of the 43 city slots, 2 of them taken by conquest"; a bloc at 16/16 and 2/2                                            |
+| The end: p1 and p4 by domination                         | the end card reads "… p1 and … p4 win by domination", and so does the story strip                                                                 |
+| D4 12:51: a betrayal card with its context               | keyboard seek on the scrubber; the betrayal card names p2, p3 and c18, with "said before" and "thinking"                                          |
+| A message card expands to its sender's same-turn thought | the toggle of the last message card; the thought panel shows "Turn N, ended …"                                                                    |
+| "Next key moment" moves the clock                        | the clock text changes                                                                                                                            |
+| A thought expands its reasoning (fake run)               | Thoughts tab, "Reasoning": "Fake reasoning: …" appears                                                                                            |
+| No console errors; no `dangerouslySetInnerHTML`          | console errors and page errors collected on every page; in the DOM: no `on*` attributes, no inline script, no frame, every link a path of the app |
+| A 390 × 844 phone screenshot                             | written to `$PERFIDIA_E2E_SHOTS`, else a new temporary directory (kept, path printed)                                                             |
+
+Measured on this container: 5 tests pass in **9.2–9.7 s** in all (budget 20 s): build about
+0.6 s, fake run about 1.4 s, folds ready 3.2–3.6 s later, the browser checks the rest. A mutant
+that changes the same-turn thought's text fails the test. The e2e project has its own
+`tsconfig.e2e.json` without the DOM library (it type-checks the server's Bun-typed sources, which
+do not compile against DOM's `BodyInit`), so the in-page scripts are strings.
+
+**CI.** The GitHub App cannot change workflow files, so the job is proposed as
+`ci-e2e-job.patch`, delivered with the phase-3 pull request beside `ci-web-build.patch` (both
+apply to `ci.yml` in either order): an `e2e` job that runs `bun install --frozen-lockfile`, restores
+`.cache/ms-playwright` from `actions/cache` keyed on the pinned version
+(`playwright-core-1.56.1-chromium-<os>`), runs `bunx playwright-core install --with-deps chromium`
+in `packages/web` (the locked playwright-core, hence Chromium 1194) with `PLAYWRIGHT_BROWSERS_PATH`
+pointing at that cache, then `bun run test:e2e` and fails if the smoke printed that it was skipped.
+Nothing is installed by this step; bump the cache key with the pin.
+
+### 15.6 Measurements
+
+Frame rate of a replay at 1 h/s for 8–10 s in headless Chromium 1194 on this container (4 vCPU),
+war golden, 1440 × 900 unless stated:
+
+| Window, side tab                | DOM nodes   | fps       | fps with 4× CPU throttling                       |
+| ------------------------------- | ----------- | --------- | ------------------------------------------------ |
+| D2, Feed                        | 1,400–1,650 | 59.8–60.0 | 48.1                                             |
+| D4, Feed                        | 3,656       | 59.9      | –                                                |
+| D6, Feed (300 cards rendered)   | 8,000       | 59.2–59.8 | 15.4–18.1                                        |
+| D6, Thoughts                    | 1,931       | 60.1      | 22.5 (16.3 before memoising the thought history) |
+| D6, Players                     | 1,161       | 59.6      | 22.0–26.4                                        |
+| D6, phone 390 × 844 (Board tab) | 942         | –         | 42.3                                             |
+
+The design's budget (60 fps on desktop, ≥ 30 fps on a mid-range phone) holds; a throttled desktop
+does not reach 30 fps late in the match. A trace (D6, Players tab, 3 s) shows main-thread paint
+2.6 ms, layout 1.3 ms, layerize 1 ms and script about 3.8 ms per frame, plus 9 ms of raster per
+frame: the whole map SVG repaints as its markers move. First map on screen: 0.30–0.36 s after
+navigation to the finished war golden (loopback, a new browser context, the server's cache warm;
+the design's budget is 1.5 s on desktop broadband), the clock at the end 0.35–0.48 s.
+
+### 15.7 Deviations from the design
+
+- **Arrival** on a finished match is at its end (who won is the first answer), not at seq 0;
+  `?start=1` opens at the first second.
+- **The end** reads "The match is over: … p1 and … p4 win by domination" (strip and end card), not
+  "Domination: p1, p4"; the smoke test checks that sentence.
+- **Popovers.** The city popover is a light panel portalled to the body (under the dialogs' layer,
+  following the city through zoom, pan and scrolling, kept above the docked timeline on phones);
+  the hover card and tooltips use the HTML popover API (`players/hover-panel.tsx`). Radix
+  Popover, HoverCard and Tooltip were dropped for the bundle budget. The battle report is a modal
+  dialog (the feed opens it while the map may be off-screen on a phone).
+- **The reel** lasts about 68 s on the war golden (6 clips for 8 key moments, captions held 4–9 s),
+  not "about 2 minutes"; "How to watch" says "a minute or two".
+- **"thinking… round N"** has no "of M": the meta does not carry the round cap.
+- **A fake seat** shows a "Fake" badge (with an explanation on hover and in the dossier) rather than
+  "Odysseus · p1 · fake model (bot)"; its spend is labelled "(simulated prices)".
+- **Additions:** the story strip's irony sentence seeks; betrayal cards lead into the pair mode;
+  the selected card's city is ringed on the map.
+- **The pilot** (B3p) has not been run with people: a screenshot set reached through the UI only
+  (§15.8) is the proxy prepared for it.
+- **Dependencies:** none added; `@perfidia/server` and `@perfidia/orchestrator` became dev
+  dependencies of the web package for the smoke test (`bun.lock`: two lines in the web workspace's
+  entry, no new package).
+
+### 15.8 The outsider screenshot set (a proxy for the design §6.2 pilot)
+
+Sixteen PNGs taken through the UI only on the war golden published as "Six bots at war" (with
+`--publish`), with a manifest that names only the action taken to reach each one, for people who
+have never seen the project. They are delivered with the integration report, not committed:
+
+1. the match list; 2. the first visit's "How to watch" overlay; 3. the default view of the
+   finished match after "Start watching" (the end: winners in the strip, the board, the map, the
+   feed);
+   4–9. the key moments reel at each of its 6 captions (the attack on an ally launched, the
+   betrayal, the conquests and the countdown, the end), the map ringing each moment's cities;
+2. the view after the reel closed itself;
+3. after clicking the strip's red sentence: the feed at the betrayal card with "What they said
+   before" and "What they were thinking";
+   12–13. after "Everything between …" on that card: the pair mode banner, then the feed scrolled
+   up to the launch card and the private messages;
+4. a dossier opened from the leaderboard (a scripted bot: profile, notebook, thoughts);
+5. the end of the match after End on the timeline; 16. the phone view (390 × 844).
+
+What they suggest for the pilot: bot thoughts are terse command summaries (question 4 cannot be
+tested on bots, as the design says), bot notebooks are raw JSON, and the reel's captions use ids
+("p2 betrayed its ally p3 at c18") while the names appear under them.
+
+### 15.9 Open issues
+
+1. Throttled desktops fall under 30 fps late in a long match (§15.6). Options: draw the moving
+   markers in a second SVG layer over a static one (only that layer re-rasters), render fewer feed
+   cards while playing.
+2. The JS bundle is at 193.2 of 200 KB gzipped: little headroom for Pass C.
+3. Not exercised in a browser: "Older…" paging from the feed route while the client lacks the
+   start of the match; fetching a same-turn thought whose turn ends after the playhead; handoff and
+   elimination cards and statuses (no fixture has them); a real-time match followed live at wall
+   speed (a 3600× `sim run --clock realtime` showed LIVE, and sometimes "Waiting for the server…"
+   when the extrapolated clock reached its cap).
+4. Bot notebooks are raw JSON memory, shown as monospace text.
+5. The pilot with people and the exit test on a real match of at least 4 days are owner steps
+   (design §6.2, §9 Q10); Pass A's open issues (§12) stand.
+6. The CI jobs `web` and `e2e` wait for the owner to apply `ci-web-build.patch` and
+   `ci-e2e-job.patch`.

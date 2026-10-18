@@ -1,4 +1,4 @@
-import { mkdirSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
 
 // `bun run web:build` (phase-3 design §5.4): the Tailwind CLI builds `src/app.css` into
@@ -66,7 +66,13 @@ export async function buildWeb(
       `tailwindcss failed (${css.exitCode}): ${css.stderr.toString().slice(0, 2000)}`,
     );
   }
-  rmSync(outdir, { recursive: true, force: true });
+  // Empty the directory rather than remove it: a server started with `--web-dist <dir> --dev`
+  // watches this directory, and a new one would leave it watching the old inode.
+  if (existsSync(outdir)) {
+    for (const entry of readdirSync(outdir)) {
+      rmSync(join(outdir, entry), { recursive: true, force: true });
+    }
+  }
   const built = await Bun.build({
     entrypoints: [join(WEB_DIR, "src", "index.html")],
     outdir,

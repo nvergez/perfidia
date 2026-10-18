@@ -25,7 +25,7 @@ import { uiActions } from "../store/ui.ts";
 import { useReelFocus } from "../timeline/reel-focus.ts";
 import { Button } from "../ui/button.tsx";
 import { CityPopover } from "./city-popover.tsx";
-import { BATTLE_FLASH_S, createFeedFacts, recentBattles } from "./derive.ts";
+import { BATTLE_FLASH_S, citiesOfItem, createFeedFacts, recentBattles } from "./derive.ts";
 import {
   cityPoint,
   indexIslands,
@@ -152,7 +152,12 @@ function MapView({
     const ids = highlight.length > 0 ? highlight : focus.players;
     return ids.length === 0 ? null : new Set<string>(ids);
   }, [highlight, focus.players]);
-  const focusCities = useMemo(() => new Set(focus.cities), [focus.cities]);
+  // The reel's moment, else the feed card last clicked, rings its cities.
+  const selectedItem = useUi((s) => s.selectedItem);
+  const ringed = (
+    focus.cities.length > 0 ? focus.cities : citiesOfItem(feed, selectedItem, playhead)
+  ).join(",");
+  const focusCities = useMemo(() => new Set(ringed === "" ? [] : ringed.split(",")), [ringed]);
   const dimOf = (owner: string | null): boolean =>
     lit !== null && (owner === null || !lit.has(owner));
 

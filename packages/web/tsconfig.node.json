@@ -6,5 +6,5 @@
     "jsx": "react-jsx",
     "jsxImportSource": "react"
   },
-  "include": ["scripts/**/*.ts", "e2e/**/*.ts", "src/**/*.test.ts"]
+  "include": ["scripts/**/*.ts", "src/**/*.test.ts"]
 }

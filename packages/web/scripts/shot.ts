@@ -6,7 +6,7 @@ import { chromium, type Page } from "playwright-core";
 // a selector, clicks, presses keys, and writes a PNG per viewport. Every console error and page
 // error is printed, and the exit code is 1 when there was one.
 //   bun packages/web/scripts/shot.ts --url http://127.0.0.1:8201/m/war --out /tmp/war \
-//     [--size 1440x900 --size 390x844] [--wait '[data-stub=map]'] [--click 'text=Start watching']
+//     [--size 1440x900 --size 390x844] [--wait '[data-map]'] [--click 'text=Start watching']
 //     [--press Space] [--after-ms 1500] [--full]
 // Writes <out>-1440x900.png, <out>-390x844.png.
 

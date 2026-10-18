@@ -66,7 +66,14 @@ function WakeIcons({ reasons }: { readonly reasons: readonly string[] }) {
   );
 }
 
-function HistoryItem({ item, llm }: { readonly item: TurnItem; readonly llm: boolean }) {
+// Memoised: a turn never changes, and its block re-renders as the feed grows.
+const HistoryItem = memo(function HistoryItem({
+  item,
+  llm,
+}: {
+  readonly item: TurnItem;
+  readonly llm: boolean;
+}) {
   const [open, setOpen] = useState(false);
   const id = useId();
   return (
@@ -118,7 +125,7 @@ function HistoryItem({ item, llm }: { readonly item: TurnItem; readonly llm: boo
       ) : null}
     </li>
   );
-}
+});
 
 function SeatStatus({ seat }: { readonly seat: PlayerId }) {
   const ent = useMatch((s) => s.frame?.seats[seat] ?? null);
@@ -148,6 +155,19 @@ function SeatStatus({ seat }: { readonly seat: PlayerId }) {
   return null;
 }
 
+/** "3 h ago", re-rendered once a game minute (not its whole block). */
+function Ago({ t }: { readonly t: number }) {
+  const minute = useMatch((s) => Math.floor(s.playhead / 60) * 60);
+  return <>{fmtAgo(minute - t)}</>;
+}
+
+/** Same seat and the same turns (they only grow at the end, or shrink after a seek back). */
+const sameTurns = (
+  a: { readonly seat: SeatInfo; readonly turns: readonly TurnItem[] },
+  b: { readonly seat: SeatInfo; readonly turns: readonly TurnItem[] },
+): boolean =>
+  a.seat === b.seat && a.turns.length === b.turns.length && a.turns.at(-1) === b.turns.at(-1);
+
 const SeatBlock = memo(function SeatBlock({
   seat,
   turns,
@@ -157,7 +177,6 @@ const SeatBlock = memo(function SeatBlock({
 }) {
   const id = seat.seat;
   const last = useMatch((s) => s.frame?.seats[id]?.lastThought ?? null);
-  const minute = useMatch((s) => Math.floor(s.playhead / 60) * 60);
   const [all, setAll] = useState(false);
   const llm = seat.kind === "llm";
   const history = useMemo(() => {
@@ -194,7 +213,7 @@ const SeatBlock = memo(function SeatBlock({
         <div className="mt-2">
           <PlainText text={last.text} className="block text-[0.95rem] leading-snug" />
           <p className="text-muted-foreground mt-1 text-[0.7rem]">
-            turn {last.turn} · <GameTime t={last.t} /> · {fmtAgo(minute - last.t)}
+            turn {last.turn} · <GameTime t={last.t} /> · <Ago t={last.t} />
           </p>
           {llm ? <ReasoningToggle seat={id} turn={last.turn} className="mt-1" /> : null}
         </div>
@@ -222,7 +241,7 @@ const SeatBlock = memo(function SeatBlock({
       )}
     </article>
   );
-});
+}, sameTurns);
 
 const NO_TURNS: readonly TurnItem[] = Object.freeze([]);
 
