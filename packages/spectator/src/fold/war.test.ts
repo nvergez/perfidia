@@ -159,13 +159,52 @@ describe("the war golden through the spectator fold", () => {
     expect(onP3?.context?.messages.map((m) => m.text)).toContain("we remain friends");
     const moment = fold.moments.find((m) => m.item === onP3?.id);
     expect(moment?.title).toBe("p2 launched an attack on its ally p3 at c18, landing D4 12:50:33");
-    // p2 later struck its next ally, p5, twice: pinned as the fold derives them from the state.
-    expect(launches.map((l) => [l.owner, l.target, fmtTime(l.t)])).toEqual([
+    // The only attack on an ally: p2's later attacks at its ally p5's c17 fought p6, the besieger
+    // (reliefs), and are told as such.
+    expect(launches.map((l) => [l.owner, l.foe, fmtTime(l.t)])).toEqual([
       ["p2", "p3", "D4 08:56:32"],
-      ["p2", "p5", "D5 09:17:59"],
-      ["p2", "p5", "D6 14:05:58"],
-      ["p2", "p5", "D6 14:05:58"],
     ]);
+    const reliefs = itemsOf("launch").filter(
+      (l) => l.owner === "p2" && l.to === "c17" && l.foe !== l.target,
+    );
+    expect(
+      reliefs.map((l) => [l.target, l.foe, l.importance, l.againstAlly, fmtTime(l.t)]),
+    ).toEqual([
+      ["p5", "p6", 2, null, "D5 09:17:59"],
+      ["p5", "p6", 2, null, "D6 14:05:58"],
+      ["p5", "p6", 2, null, "D6 14:05:58"],
+    ]);
+    const relief = fold.moments.find((m) => m.item === reliefs[0]?.id);
+    expect(relief?.title).toBe(
+      "p2 launched a relief of c17 (p5), besieged by p6, landing D5 14:58:50",
+    );
+    expect(relief?.context).toBeUndefined();
+    // Every attack told as against an ally fights an ally or pact partner of the attacker at launch
+    // (the frame of its step), and every attack's foe is the target's owner or a besieger.
+    let frame = fold.keyframes[0]?.frame;
+    if (frame === undefined) throw new Error("no keyframe 0");
+    let checked = 0;
+    for (const step of fold.steps) {
+      frame = applySteps(frame, [step]);
+      for (const item of step.items ?? []) {
+        if (item.k !== "launch" || item.kind !== "attack") continue;
+        const city = item.to === null ? undefined : frame.cities[item.to];
+        const siege = city?.ext["siege"];
+        const besieger =
+          siege !== null && typeof siege === "object" && !Array.isArray(siege)
+            ? (siege["by"] ?? null)
+            : null;
+        expect([item.id, item.foe === item.target || item.foe === besieger]).toEqual([
+          item.id,
+          true,
+        ]);
+        if (item.againstAlly === null) continue;
+        const rel = frame.players[item.owner]?.relations.find((x) => x.player === item.foe);
+        expect([item.id, rel?.kind]).toEqual([item.id, item.againstAlly]);
+        checked += 1;
+      }
+    }
+    expect(checked).toBe(1);
   });
 
   test("sieges, conquests, a1's countdown and its win; moment kinds match the events", () => {
@@ -198,7 +237,10 @@ describe("the war golden through the spectator fold", () => {
     expect(kinds("countdown")).toBe(count("domination_started") + count("domination_cancelled"));
     expect(kinds("end")).toBe(1);
     // A battle is a moment when a siege started or broke there, the city fell, or it was the first.
+    // Waves landing in the same second at one city: only the battle that caused it is flagged.
     const battles = itemsOf("battle");
+    expect(battles.filter((b) => b.siege === "started")).toHaveLength(count("siege_started"));
+    expect(battles.filter((b) => b.siege === "broken")).toHaveLength(count("siege_broken"));
     expect(battles[0]?.importance).toBe(2);
     expect(kinds("battle")).toBe(
       battles.filter((b, i) => i === 0 || b.siege !== null || b.fell).length,

@@ -1,4 +1,4 @@
-import { lstatSync, readFileSync } from "node:fs";
+import { lstatSync } from "node:fs";
 import { join } from "node:path";
 import {
   ArenaStatusSchema,
@@ -11,6 +11,7 @@ import {
   type SeatsFile,
 } from "@perfidia/protocol";
 import { z } from "zod";
+import { readRegular } from "./tail.ts";
 
 // The side files of a run directory (phase-3 design §2.3, §2.4), read leniently: they carry no
 // format version (`arena.json` aside) and will change after calibration, so a file that fails its
@@ -57,9 +58,10 @@ export function fileStamp(path: string): string | null {
 }
 
 function readJson(path: string): unknown {
+  const bytes = readRegular(path, 16 * 1024 * 1024);
+  if (bytes === null) return undefined;
   try {
-    if (!lstatSync(path).isFile()) return undefined;
-    return JSON.parse(readFileSync(path, "utf8")) as unknown;
+    return JSON.parse(new TextDecoder().decode(bytes)) as unknown;
   } catch {
     return undefined;
   }

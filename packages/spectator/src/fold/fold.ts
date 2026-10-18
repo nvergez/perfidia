@@ -85,6 +85,11 @@ export interface SpectatorFoldOptions {
   /** The header's ruleset; default the registry (`findRuleset`). */
   readonly resolve?: (ref: string) => AnyRuleset | undefined;
   readonly keyframeEvery?: number;
+  /**
+   * The timeline id the frames carry; default `timelineIdOf(logId)`. A server gives another one to
+   * a log that replaced a different log with the same header, so the two never share immutable URLs.
+   */
+  readonly timeline?: TimelineId;
 }
 
 export interface Keyframe {
@@ -113,6 +118,11 @@ export interface SpectatorFold {
   readonly moments: readonly Moment[];
   /** Folds the next line of the log; returns its step, if it has one. */
   push(line: LogLine): Step | null;
+  /**
+   * Counts the next line of the log as one that is not a valid log line (bad JSON or schema): the
+   * match is unverifiable from here, and that line's step says so.
+   */
+  invalid(): Step | null;
   /** The frame after the last step (a fresh object; entities are shared with the steps: never mutate). */
   frame(): Frame;
   verified(): Verified;
@@ -192,7 +202,7 @@ class Fold implements SpectatorFold {
     this.match = o.match;
     this.header = header;
     this.logId = logIdOf(header);
-    this.timeline = timelineIdOf(this.logId);
+    this.timeline = o.timeline ?? timelineIdOf(this.logId);
     this.keyframeEvery = o.keyframeEvery ?? KEYFRAME_STEPS;
     const events = rulesetEvents(header.setup.ruleset);
     this.feed = new FeedState(events);
@@ -358,6 +368,16 @@ class Fold implements SpectatorFold {
       if (step !== null) this.keyframe();
     }
     return step;
+  }
+
+  invalid(): Step | null {
+    this.lastSeq += 1;
+    const seq = this.lastSeq;
+    if (this.halted) return null;
+    this.halted = true;
+    this.status = "unverifiable";
+    this.divergence = `line ${seq} is not a valid log line`;
+    return this.emit(seq, this.lastT, { status: "unverifiable" }, [], false);
   }
 
   frame(): Frame {
@@ -546,22 +566,30 @@ class Fold implements SpectatorFold {
     if (ext !== undefined) patch.ext = ext;
   }
 
+  /**
+   * The launch item of a new movement. An attack fights the foe the engine recorded at launch
+   * (`party`): the besieger when the target is besieged, so an attack sent to free a besieged
+   * city is a relief (importance 2), and it is "against an ally" only when that foe is the
+   * attacker's ally or pact partner.
+   */
   private launch(r: ReadCtx, m: MovementEnt, t: GameTime): FeedDraft {
     const target =
       m.to === null || !Object.hasOwn(r.state.cities, m.to)
         ? null
         : (r.state.cities[m.to]?.owner ?? null);
-    const rel =
-      m.kind === "attack" && target !== null && target !== m.owner
-        ? relation(r, m.owner, target)
-        : "none";
+    const foe = m.kind === "attack" ? m.party : null;
+    const rel = foe !== null && foe !== m.owner ? relation(r, m.owner, foe) : "none";
     const againstAlly = rel === "ally" || rel === "pact" ? rel : null;
+    const relief = foe !== null && foe !== target;
     const settlers = (m.units[r.rules.roles.settler] ?? 0) > 0;
-    const importance = againstAlly !== null ? 3 : m.kind === "attack" ? (settlers ? 2 : 1) : 0;
+    const importance =
+      againstAlly !== null ? 3 : m.kind === "attack" ? (settlers || relief ? 2 : 1) : 0;
+    const players = [m.owner];
+    for (const p of [target, foe]) if (p !== null && !players.includes(p)) players.push(p);
     return {
       k: "launch",
       t,
-      players: target === null || target === m.owner ? [m.owner] : [m.owner, target],
+      players,
       importance,
       movement: m.id,
       kind: m.kind,
@@ -575,11 +603,12 @@ class Fold implements SpectatorFold {
       units: m.units,
       pop: unitsPop(r.rules, m.units),
       settlers,
+      foe,
       againstAlly,
       context:
-        againstAlly === null || target === null
+        againstAlly === null || foe === null
           ? null
-          : this.feed.context(m.owner, target, againstAlly, t),
+          : this.feed.context(m.owner, foe, againstAlly, t),
     };
   }
 

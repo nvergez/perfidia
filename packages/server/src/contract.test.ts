@@ -1,8 +1,11 @@
 // The API contract (phase-3 design §3.1, §3.3, §6.1), against both HTTP adapters (Elysia 2 and
 // the raw `Bun.serve` fallback): every route on the war golden and on a 1-day fake arena run, each
 // body parsed with the protocol's Zod schemas; the OpenAPI document's paths pinned; errors as data
-// (`{ok: false, code, message, hint}`) with 404, 405, 422; cache headers, ETags and gzip; HEAD; one
-// Eden `treaty` smoke test on the Elysia app's typed route.
+// (`{ok: false, code, message, hint}`) with 404, 405, 421, 422; exact paths only (a trailing slash
+// is not a route, so `/api/live/` cannot skip the WebSocket checks), the same answers from both
+// adapters on edge inputs, the Host checked (DNS rebinding) and the WebSocket origin derived from
+// the server's own host names; cache headers (`private`), ETags and gzip; HEAD; one Eden `treaty`
+// smoke test on the Elysia app's typed route.
 
 // oxlint-disable no-await-in-loop -- the requests, pages and chunks follow each other on purpose (one cursor, one writer)
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
@@ -218,11 +221,60 @@ for (const adapter of ["elysia", "raw"] as const) {
       await expectError(`${s.url}/api/live`, 426, "UPGRADE_REQUIRED");
     });
 
+    test("exact paths only, the same answers from both adapters; the Host and origins checked", async () => {
+      const base = `${s.url}/api/matches/war`;
+      for (const path of [
+        "/api/matches/war/",
+        "/api/matches/war/latest/",
+        "/api/matches/",
+        "/api/openapi/",
+        "/api/openapi/json/",
+        "/api/health/",
+        "/api//matches",
+      ]) {
+        await expectError(`${s.url}${path}`, 404, "NO_ROUTE");
+      }
+      await expectError(`${s.url}/api/health?x=1`, 422, "BAD_REQUEST");
+      await expectError(`${s.url}/api/matches/%`, 422, "BAD_REQUEST");
+      // Another Host (a DNS-rebinding page): refused everywhere but the health check.
+      const port = new URL(s.url).port;
+      const rebind = { headers: { host: `rebind.attacker.example:${port}` } };
+      await expectError(`${s.url}/api/matches`, 421, "WRONG_HOST", rebind);
+      await expectError(base, 421, "WRONG_HOST", rebind);
+      expect((await fetch(`${s.url}/api/health`, rebind)).status).toBe(200);
+      expect(
+        (await fetch(`${s.url}/api/matches`, { headers: { host: `localhost:${port}` } })).status,
+      ).toBe(200);
+      // WebSocket upgrades: a foreign origin is refused on every spelling of the path, a trailing
+      // slash is no route, and the origin is never taken from the request's own Host.
+      const ws = s.url.replace("http", "ws");
+      const open = (path: string, headers: Record<string, string>): Promise<boolean> =>
+        new Promise((resolve) => {
+          const sock = new WebSocket(`${ws}${path}`, { headers });
+          sock.addEventListener("open", () => {
+            sock.close();
+            resolve(true);
+          });
+          sock.addEventListener("error", () => resolve(false));
+        });
+      const before = s.hub.count;
+      for (const path of ["/api/live", "/api/live/", "/api/live/?x", "/api/live?x"]) {
+        expect([path, await open(path, { origin: "https://evil.example" })]).toEqual([path, false]);
+      }
+      expect(await open("/api/live/", { origin: s.url })).toBe(false);
+      const evil = `rebind.attacker.example:${port}`;
+      expect(await open("/api/live", { host: evil, origin: `http://${evil}` })).toBe(false);
+      expect(s.hub.count).toBe(before);
+      expect(await open("/api/live?x", { origin: s.url })).toBe(true);
+      expect(await open("/api/live", { origin: `http://localhost:${port}` })).toBe(true);
+    });
+
     test("cache headers, ETags, gzip and HEAD", async () => {
       const base = `${s.url}/api/matches/war`;
       const t = `${base}/t/${war.timeline}`;
       const k = await fetch(`${t}/keyframes/0`);
-      expect(k.headers.get("cache-control")).toBe("public, max-age=31536000, immutable");
+      // `private`: browsers keep immutable bodies, shared caches do not (takedowns).
+      expect(k.headers.get("cache-control")).toBe("private, max-age=31536000, immutable");
       const etag = k.headers.get("etag");
       expect(etag).not.toBeNull();
       const again = await fetch(`${t}/keyframes/0`, { headers: { "if-none-match": etag ?? "" } });
@@ -236,7 +288,7 @@ for (const adapter of ["elysia", "raw"] as const) {
       const raw = new Uint8Array(await steps.arrayBuffer());
       StepsPageSchema.parse(JSON.parse(new TextDecoder().decode(Bun.gunzipSync(raw))));
       expect((await fetch(`${base}/latest`)).headers.get("cache-control")).toBe("no-store");
-      expect((await fetch(base)).headers.get("cache-control")).toBe("public, max-age=3600");
+      expect((await fetch(base)).headers.get("cache-control")).toBe("private, max-age=3600");
       expect((await fetch(`${s.url}/api/health`)).headers.get("cache-control")).toBe("no-store");
       const head = await fetch(`${s.url}/api/matches`, { method: "HEAD" });
       expect([head.status, (await head.text()).length]).toEqual([200, 0]);

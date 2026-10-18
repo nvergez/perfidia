@@ -257,8 +257,9 @@ describe("annotations of a fake run's LLM turns", () => {
       const log = rows(run.text);
       const replies = rows(await Bun.file(join(run.dir, "replies.jsonl")).text());
       const calls = rows(await Bun.file(join(run.dir, "llm_calls.jsonl")).text());
-      // The whole log, the side files empty at first.
-      writeFileSync(join(dir, "match.jsonl"), `${log.join("\n")}\n`);
+      // The log of a running match (all but its end line), the side files empty at first. (A
+      // finished match reads its side files when a route asks for its annotations.)
+      writeFileSync(join(dir, "match.jsonl"), `${log.slice(0, -1).join("\n")}\n`);
       writeFileSync(join(dir, "llm_calls.jsonl"), "");
       writeFileSync(join(dir, "replies.jsonl"), "");
       const s = serve(testConfig({ runs: root }));

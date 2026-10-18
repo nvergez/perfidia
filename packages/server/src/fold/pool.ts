@@ -1,5 +1,5 @@
 import { Worker } from "node:worker_threads";
-import type { MatchId } from "@perfidia/protocol/spectator";
+import type { MatchId, TimelineId } from "@perfidia/protocol/spectator";
 import type { FoldBatch, FromWorker, ToWorker } from "./messages.ts";
 
 // The fold workers (phase-3 design §2.5): at most `size` worker threads, each holding the folds of
@@ -70,14 +70,14 @@ export class FoldPool {
     this.size = Math.max(1, size);
   }
 
-  /** Opens a fold of a match's log; batches and failures go to `sink`. */
-  open(match: MatchId, sink: FoldSink): FoldHandle {
+  /** Opens a fold of a match's log, under `timeline`; batches and failures go to `sink`. */
+  open(match: MatchId, timeline: TimelineId, sink: FoldSink): FoldHandle {
     const slot = this.pick();
     const key = this.nextKey;
     this.nextKey += 1;
     const handle = new Handle(this, slot, key, sink);
     slot.sinks.set(key, handle);
-    this.post(slot, { type: "open", key, match });
+    this.post(slot, { type: "open", key, match, timeline });
     return handle;
   }
 

@@ -200,6 +200,7 @@ export function testConfig(o: Partial<ServeConfig> & { readonly runs: string }):
     publish: null,
     host: "127.0.0.1",
     port: 0,
+    hosts: [],
     dev: false,
     adapter: "elysia",
     trustProxy: null,

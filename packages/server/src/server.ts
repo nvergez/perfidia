@@ -55,13 +55,14 @@ export function startServer(config: ServeConfig, o: StartOptions = {}): RunningS
     },
   );
   hub = new LiveHub(registry, config.limits, now);
-  const service = new SpectatorService(registry);
+  const memo = new BodyMemo();
+  const service = new SpectatorService(registry, memo);
   const ctx = {
     config,
     service,
     hub,
     limiter: new RateLimiter(config.limits),
-    memo: new BodyMemo(),
+    memo,
     now,
     warn,
   };

@@ -17,6 +17,7 @@ import {
 } from "@perfidia/protocol/spectator";
 import { z } from "zod";
 import { apiError, type ApiResult, type SpectatorService } from "../service/api.ts";
+import { STEPS_PAGE } from "../timeline/timeline.ts";
 
 // The REST routes (phase-3 design §3.1): GET (and HEAD) only, each with its path parameters,
 // query and response declared as Zod schemas. The table is framework-free: both HTTP adapters
@@ -24,8 +25,8 @@ import { apiError, type ApiResult, type SpectatorService } from "../service/api.
 // bad request gets the same 422 body from either adapter; immutable resources live under
 // `/t/:timeline/`, so a replaced log or a new fold version gets new URLs.
 
-/** Steps per page, at most (§3.1). */
-export const MAX_STEPS_LIMIT = 2_000;
+/** Steps per page, at most (§3.1); pages are aligned on multiples of it (`Timeline.pageOf`). */
+export const MAX_STEPS_LIMIT = STEPS_PAGE;
 export const MAX_FEED_LIMIT = 200;
 const MAX_KINDS = 20;
 const MAX_PLAYERS = 12;
@@ -187,7 +188,8 @@ export const ROUTES: readonly Route[] = [
   route({
     operationId: "steps",
     path: "/api/matches/:id/t/:timeline/steps",
-    summary: "Steps after a cursor: {from, to, steps, lastSeq, more}",
+    summary:
+      "Steps after a cursor: {from, to, steps, lastSeq, more}; pages end at multiples of 2,000 steps (follow `more`)",
     params: TimelineParams,
     query: z.strictObject({
       after: CursorParam.optional(),

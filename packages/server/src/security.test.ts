@@ -5,18 +5,23 @@
 // - only GET/HEAD; encoded traversal, symbolic links and unknown ids get 404/422; `transcripts/`
 //   and `prompts/` are unreachable; the security headers are on every response; a burst gets 429
 //   with `Retry-After`; a WebSocket from a foreign origin is refused; per-IP socket caps, the
-//   message rate and the payload size are enforced;
-// - the configuration binds 127.0.0.1 by default and refuses a public host without `publish.json`.
+//   message rate and the payload size are enforced, on every spelling of the WebSocket path and on
+//   both adapters; the OpenAPI UI page exists in development only;
+// - two run directories holding the same log never serve each other's bodies;
+// - the configuration binds 127.0.0.1 by default, lists every run only with `--all-runs`, and
+//   refuses a public host without `publish.json` and its host names, and a trusted proxy without
+//   `publish.json`.
 
 // oxlint-disable no-await-in-loop -- the requests, pages and chunks follow each other on purpose (one cursor, one writer)
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { cpSync, mkdirSync, readFileSync, readdirSync, symlinkSync } from "node:fs";
+import { copyFileSync, cpSync, mkdirSync, readFileSync, readdirSync, symlinkSync } from "node:fs";
 import { join } from "node:path";
 import { idKeyFromSeed } from "@perfidia/engine/core";
 import { LlmLogLineSchema } from "@perfidia/protocol";
 import {
   ApiErrorSchema,
   FeedPageSchema,
+  FrameSchema,
   MatchListItemSchema,
   ServerMsgSchema,
   StepsPageSchema,
@@ -27,11 +32,14 @@ import { ConfigError, DEFAULT_LIMITS, parseServeArgs, readEnv } from "./config.t
 import {
   Follower,
   PLANTED,
+  WAR_GOLDEN,
   expectNoSecrets,
   fakeRun,
+  getJson,
   metaOf,
   rows,
   serve,
+  sharedWarCache,
   tempDir,
   testConfig,
   type FakeRun,
@@ -274,14 +282,19 @@ describe("limits", () => {
         }),
       );
       const url = `${limited.url.replace("http", "ws")}/api/live`;
-      const connect = (): Promise<WebSocket | null> =>
+      const connect = (path = url): Promise<WebSocket | null> =>
         new Promise((resolve) => {
-          const ws = new WebSocket(url);
+          const ws = new WebSocket(path);
           ws.addEventListener("open", () => resolve(ws));
           ws.addEventListener("error", () => resolve(null));
         });
+      // Other spellings of the path open nothing.
+      for (const other of [`${url}/`, `${url}/?x`, `${url}//`]) {
+        expect([other, await connect(other)]).toEqual([other, null]);
+      }
+      expect(limited.hub.count).toBe(0);
       const a = await connect();
-      const b = await connect();
+      const b = await connect(`${url}?x`);
       const c = await connect();
       expect([a !== null, b !== null, c === null]).toEqual([true, true, true]);
       if (a === null || b === null) throw new Error("no socket");
@@ -305,31 +318,123 @@ describe("limits", () => {
       b.send("x".repeat(DEFAULT_LIMITS.maxPayloadBytes * 4));
       // Bun drops the connection (1006 at the client) or sends 1009.
       expect([1006, 1009]).toContain(await bigClosed);
+
+      // The raw adapter: the same caps on every spelling of the path.
+      const raw = serve(
+        testConfig({
+          runs: root,
+          adapter: "raw",
+          limits: { ...DEFAULT_LIMITS, httpBurst: 1_000, socketsPerIp: 1 },
+        }),
+      );
+      const rawUrl = `${raw.url.replace("http", "ws")}/api/live`;
+      for (const other of [`${rawUrl}/`, `${rawUrl}/?x`]) {
+        expect([other, await connect(other)]).toEqual([other, null]);
+      }
+      const one = await connect(rawUrl);
+      const two = await connect(`${rawUrl}?x`);
+      expect([one !== null, two === null, raw.hub.count]).toEqual([true, true, 1]);
+      one?.close();
     },
     LONG,
   );
 });
 
+describe("bodies and pages", () => {
+  test(
+    "two run directories with the same log never serve each other's bodies",
+    async () => {
+      const twins = tempDir("twins");
+      for (const id of ["w3", "w4"]) {
+        mkdirSync(join(twins, id));
+        copyFileSync(WAR_GOLDEN, join(twins, id, "match.jsonl.gz"));
+      }
+      const t = serve(testConfig({ runs: twins, cache: sharedWarCache() }));
+      const m3 = await metaOf(t, "w3", { settled: true });
+      const m4 = await metaOf(t, "w4", { settled: true });
+      expect(m3.timeline).toBe(m4.timeline);
+      for (const id of ["w3", "w4", "w3"]) {
+        const k = await getJson(
+          `${t.url}/api/matches/${id}/t/${m3.timeline}/keyframes/0`,
+          FrameSchema,
+        );
+        expect(k.match).toBe(id);
+      }
+    },
+    LONG,
+  );
+
+  test("the OpenAPI UI page is served in development only", async () => {
+    const dev = serve(testConfig({ runs: root, dev: true }));
+    const ui = await fetch(`${dev.url}/api/openapi`);
+    expect([ui.status, ui.headers.get("content-type")?.startsWith("text/html")]).toEqual([
+      200,
+      true,
+    ]);
+    await ui.arrayBuffer();
+    expect((await fetch(`${dev.url}/api/openapi/`)).status).toBe(404);
+    expect((await fetch(`${dev.url}/api/openapi/json`)).status).toBe(200);
+    expect((await fetch(`${s.url}/api/openapi`)).status).toBe(404);
+  });
+});
+
 describe("configuration", () => {
   test("binds 127.0.0.1 by default; a public host needs publish.json; two environment variables only", () => {
     const env = { port: null, trustProxy: null } as const;
-    const c = parseServeArgs(["--runs", "r"], env);
-    expect([c.host, c.port, c.publish, c.adapter, c.policy]).toEqual([
+    // Listing every run is an explicit choice, on a loopback bind only.
+    expect(() => parseServeArgs(["--runs", "r"], env)).toThrow(ConfigError);
+    const c = parseServeArgs(["--runs", "r", "--all-runs"], env);
+    expect([c.host, c.port, c.publish, c.hosts, c.adapter, c.policy]).toEqual([
       "127.0.0.1",
       8080,
       null,
+      [],
       "elysia",
       { costs: true, reasoning: true },
     ]);
-    expect(() => parseServeArgs(["--runs", "r", "--host", "0.0.0.0"], env)).toThrow(ConfigError);
-    expect(
-      parseServeArgs(["--runs", "r", "--host", "0.0.0.0", "--publish", "p.json"], env).host,
-    ).toBe("0.0.0.0");
-    expect(() => parseServeArgs(["--runs", "r", "--bogus"], env)).toThrow(ConfigError);
+    expect(parseServeArgs(["--runs", "r", "--publish", "p.json"], env).publish).toBe("p.json");
+    expect(() => parseServeArgs(["--runs", "r", "--all-runs", "--publish", "p.json"], env)).toThrow(
+      ConfigError,
+    );
+    expect(() => parseServeArgs(["--runs", "r", "--host", "0.0.0.0", "--all-runs"], env)).toThrow(
+      ConfigError,
+    );
+    // A public host needs publish.json and the host names it answers to.
+    expect(() =>
+      parseServeArgs(["--runs", "r", "--host", "0.0.0.0", "--publish", "p.json"], env),
+    ).toThrow(ConfigError);
+    const pub = parseServeArgs(
+      [
+        "--runs",
+        "r",
+        "--host",
+        "0.0.0.0",
+        "--publish",
+        "p.json",
+        "--public-host",
+        "Perfidia.Example",
+        "--public-host",
+        "192.0.2.7:8080",
+      ],
+      env,
+    );
+    expect([pub.host, pub.hosts]).toEqual(["0.0.0.0", ["perfidia.example", "192.0.2.7:8080"]]);
+    expect(() =>
+      parseServeArgs(["--runs", "r", "--publish", "p", "--public-host", "evil/x"], env),
+    ).toThrow(ConfigError);
+    // Behind a trusted proxy the server is public: publish.json is required.
+    const fly = { port: null, trustProxy: "fly" } as const;
+    expect(() => parseServeArgs(["--runs", "r", "--all-runs"], fly)).toThrow(ConfigError);
+    expect(parseServeArgs(["--runs", "r", "--publish", "p.json"], fly).trustProxy).toBe("fly");
+    expect(() => parseServeArgs(["--runs", "r", "--all-runs", "--bogus"], env)).toThrow(
+      ConfigError,
+    );
     expect(() => parseServeArgs([], env)).toThrow(ConfigError);
-    expect(() => parseServeArgs(["--runs", "r", "--origin", "evil"], env)).toThrow(ConfigError);
+    expect(() => parseServeArgs(["--runs", "r", "--all-runs", "--origin", "evil"], env)).toThrow(
+      ConfigError,
+    );
     const hidden = parseServeArgs(
-      ["--runs", "r", "--no-costs", "--no-reasoning", "--adapter", "raw"],
+      ["--runs", "r", "--all-runs", "--no-costs", "--no-reasoning", "--adapter", "raw"],
       env,
     );
     expect([hidden.policy, hidden.adapter]).toEqual([{ costs: false, reasoning: false }, "raw"]);

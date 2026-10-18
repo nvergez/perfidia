@@ -1,5 +1,6 @@
-import { lstatSync, watch, type FSWatcher } from "node:fs";
-import { join } from "node:path";
+import { existsSync, lstatSync, watch, type FSWatcher } from "node:fs";
+import { basename, dirname, join } from "node:path";
+import { fnv1a64 } from "@perfidia/engine/core";
 import {
   LlmLogLineSchema,
   ReplyLineSchema,
@@ -48,24 +49,47 @@ import {
   type SummaryInfo,
 } from "../store/rundir.ts";
 import { isFinal, matchStatus, type StatusOut } from "../store/status.ts";
-import { LineTail, readFirstLine, readGzLines, readLastLine } from "../store/tail.ts";
-import type { TimelineCache } from "../timeline/cache.ts";
+import {
+  LineTail,
+  fileIdentity,
+  fingerprint,
+  fingerprintMatches,
+  readFirstLine,
+  readGzLines,
+  readLastLine,
+} from "../store/tail.ts";
+import type { CacheLoad, TimelineCache } from "../timeline/cache.ts";
 import { Lru } from "../timeline/lru.ts";
-import { Timeline, type Appended } from "../timeline/timeline.ts";
+import {
+  Timeline,
+  summaryOf,
+  type Appended,
+  type LogSource,
+  type TimelineSummary,
+} from "../timeline/timeline.ts";
 import { seatInfos } from "./seats.ts";
 
 // The matches the server knows (phase-3 design §2.4, §2.5): one entry per run directory found under
-// the runs root, followed from discovery to its last line. An entry reads its header itself (to name
-// the log and its timeline), then its timeline comes from the cache or from a fold in a worker, fed
-// with the log's complete lines as they are appended; side files feed the annotations and the
-// status. Every visible match is folded (or loaded from the cache) in the background at startup, at
-// most `workers` from scratch at a time, so a request never starts a fold. Finished timelines stay
-// in memory in an LRU of 8 in front of the disk cache; running ones always stay in memory.
+// the runs root. A run that `publish.json` does not list is only named: nothing of it is read. A
+// listed run is followed from discovery to its last line: its entry reads its header (to name the
+// log and its timeline), then its timeline comes from the cache or from a fold in a worker, fed
+// with the log's complete lines as they are appended; side files feed the status and the
+// annotations. Every listed match is folded (or loaded from the cache) in the background at
+// startup, at most `workers` from scratch at a time, so a request never starts a fold. Finished
+// timelines stay in memory in an LRU of 8 in front of the disk cache, with their annotations; an
+// evicted one leaves a summary (meta, tail frame, notebooks) and is read back on demand. Running
+// ones always stay in memory.
 //
-// Visibility: a match is visible when `publish.json` lists it (or no file is given), when it is
-// verifiable (unless no file is given: local development lists everything), and, for an
-// `after_end` match, once its log has an end line. A match that stops being visible is hidden from
+// Visibility: a match is visible when `publish.json` lists it (or no file is given), and, for an
+// `after_end` match, once its log has an end line. With a file, it must also be verified: its
+// first fold has reached the tail (or a verified cached prefix is loaded) and nothing diverged, so
+// a tampered log is never served while it loads. A match that stops being visible is hidden from
 // every route and its sockets are told.
+//
+// A log replaced by another with the same header (hence the same log id) gets another timeline id
+// (the default one salted with the file's identity), so the two never share immutable URLs: the
+// old log's cache file stays as a marker, and a cached timeline is trusted only when the log file
+// still holds the prefix it was folded from (`LogSource`).
 
 export interface RegistryHooks {
   /** A fold batch added lines (and maybe steps) to a timeline. */
@@ -99,6 +123,13 @@ const MAX_FOLD_FAILURES = 3;
 const ANNOTATION_SETTLE_MS = 10 * 60_000;
 /** Polls between two reads of a finished match's side files. */
 const FINISHED_POLL_EVERY = 20;
+/** A `publish.json` that fails to read is retried this often, for this long, before failing closed. */
+const PUBLISH_RETRY_MS = 250;
+const PUBLISH_SETTLE_MS = 500;
+/** The source of a timeline whose log was replaced before it was cached (never matches a file). */
+const REPLACED: LogSource = { bytes: 0, tail: "replaced" };
+/** Timeline id generations tried for one log id (each an earlier log with the same header). */
+const MAX_SALTS = 16;
 
 export class MatchEntry {
   readonly id: MatchId;
@@ -109,8 +140,19 @@ export class MatchEntry {
   /** Why the run cannot be served (no valid header), if it cannot. */
   broken: string | null = null;
   timeline: Timeline | null = null;
+  /** What remains in memory of a finished timeline evicted from the LRU. */
+  resident: TimelineSummary | null = null;
   /** A final timeline of this log is in the cache (the memory copy may be evicted). */
   onDisk = false;
+  /**
+   * The timeline id's generation: 0 is the log's own id; another log with the same header here
+   * before (seen in this process, or cached) makes it 1, 2, … (salted with the file's identity).
+   */
+  saltGen = 0;
+  /** A verified cached prefix is loaded while the log is refolded (it may be served). */
+  prefixVerified = false;
+  /** The log prefix last cached (or folded to the end), to notice a replaced file. */
+  source: LogSource | null = null;
   fold: FoldHandle | null = null;
   foldFailures = 0;
   logTail: LineTail | null = null;
@@ -119,7 +161,11 @@ export class MatchEntry {
   gzRead = false;
   calls: LineTail;
   replies: LineTail;
-  annotations: AnnotationFold;
+  /** Built when needed (always for a running match), dropped with an evicted timeline. */
+  annotations: AnnotationFold | null = null;
+  readonly policy: AnnotationPolicy;
+  /** The side files were read once (later reads take what changed). */
+  sideRead = false;
   seatsFile: SeatsFile | null = null;
   arena: ArenaInfo | null = null;
   summary: SummaryInfo | null = null;
@@ -152,7 +198,7 @@ export class MatchEntry {
     this.ref = ref;
     this.calls = new LineTail(join(ref.dir, CALLS_FILE));
     this.replies = new LineTail(join(ref.dir, REPLIES_FILE));
-    this.annotations = createAnnotationFold(policy);
+    this.policy = policy;
     // The log's modification time, so a match that went silent before a restart still stalls.
     let mtime = now;
     try {
@@ -181,6 +227,16 @@ export class MatchEntry {
   hasEnd(): boolean {
     return this.endLine !== null || this.timeline?.status === "ended" || this.known.ended;
   }
+
+  /** The log cannot grow any more (an end line, a final fold, or a final cached timeline). */
+  finished(): boolean {
+    return this.hasEnd() || this.onDisk || this.timelineView()?.final === true;
+  }
+
+  /** The timeline in memory, or what remains of it. */
+  timelineView(): TimelineSummary | null {
+    return this.timeline ?? this.resident;
+  }
 }
 
 export class Registry {
@@ -188,6 +244,8 @@ export class Registry {
   private readonly hooks: RegistryHooks;
   readonly entries = new Map<MatchId, MatchEntry>();
   private readonly lru = new Lru<MatchId>(LRU_SIZE);
+  /** Finished matches whose annotations are in memory (built on demand). */
+  private readonly annotationLru = new Lru<MatchId>(LRU_SIZE);
   private readonly waiting: MatchEntry[] = [];
   private readonly backfilling = new Set<MatchEntry>();
   private readonly timers: ReturnType<typeof setInterval>[] = [];
@@ -195,6 +253,9 @@ export class Registry {
   private publishWatcher: FSWatcher | null = null;
   private stopped = false;
   private readonly started: number;
+  /** When `publish.json` started failing to read (null: it reads). */
+  private publishFailingSince: number | null = null;
+  private publishRetry: ReturnType<typeof setTimeout> | null = null;
 
   constructor(deps: RegistryDeps, hooks: RegistryHooks) {
     this.deps = deps;
@@ -223,8 +284,11 @@ export class Registry {
     }
     const path = this.deps.publish.path;
     if (path !== null) {
+      // The directory, not the file: an editor or a rename replaces the file's inode.
       try {
-        this.publishWatcher = watch(path, () => this.reloadPublish());
+        this.publishWatcher = watch(dirname(path), (_event, name) => {
+          if (name === null || name === basename(path)) this.reloadPublish();
+        });
       } catch {
         this.publishWatcher = null;
       }
@@ -237,10 +301,11 @@ export class Registry {
     for (const t of this.timers.splice(0)) clearInterval(t);
     this.rootWatcher?.close();
     this.publishWatcher?.close();
+    if (this.publishRetry !== null) clearTimeout(this.publishRetry);
     for (const e of this.entries.values()) {
       e.watcher?.close();
       if (e.fold !== null && e.timeline !== null && e.timeline.lastSeq > 0 && !e.loading) {
-        this.save(e.timeline);
+        this.save(e);
       }
       e.fold?.close();
     }
@@ -251,12 +316,32 @@ export class Registry {
     return this.deps.pool.folding();
   }
 
-  /** Re-reads `publish.json`; hides and shows matches accordingly (the kill switch). */
+  /**
+   * Re-reads `publish.json`; hides and shows matches accordingly (the kill switch). A read that
+   * fails is retried for `PUBLISH_SETTLE_MS` (a file being rewritten in place is empty or partial
+   * for a moment) before the list fails closed.
+   */
   reloadPublish(): void {
     if (this.stopped) return;
-    const changed = this.deps.publish.load();
-    if (this.deps.publish.error !== null) this.deps.warn(this.deps.publish.error);
-    if (changed) for (const e of this.entries.values()) this.refresh(e);
+    const publish = this.deps.publish;
+    const r = publish.tryLoad();
+    if (r.ok) {
+      this.publishFailingSince = null;
+      if (r.changed) for (const e of this.entries.values()) this.refresh(e);
+      return;
+    }
+    const now = this.deps.now();
+    this.publishFailingSince ??= now;
+    if (now - this.publishFailingSince < PUBLISH_SETTLE_MS) {
+      this.publishRetry ??= setTimeout(() => {
+        this.publishRetry = null;
+        this.reloadPublish();
+      }, PUBLISH_RETRY_MS);
+      return;
+    }
+    this.publishFailingSince = null;
+    this.deps.warn(r.error);
+    if (publish.failClosed(r.error)) for (const e of this.entries.values()) this.refresh(e);
   }
 
   /** Finds new run directories (and drops vanished ones). */
@@ -296,20 +381,50 @@ export class Registry {
     }
     if (!e.onDisk || this.deps.cache === null || e.logId === null || e.timelineId === null)
       return null;
-    const t = this.deps.cache.load(e.id, e.logId, e.timelineId);
-    if (t === null) {
+    // The file was checked against the log when it was first loaded; a replaced log is noticed by
+    // the poll (`finishedLogChanged`).
+    const r = this.deps.cache.load(e.id, e.logId, e.timelineId);
+    if (r.kind !== "hit") {
       e.onDisk = false;
+      e.resident = null;
       this.load(e);
       return e.timeline;
     }
-    e.timeline = t;
+    e.timeline = r.timeline;
     this.touch(e);
-    return t;
+    return r.timeline;
+  }
+
+  /** What the routes read of a match's timeline besides its steps (never read from the cache). */
+  summaryOf(e: MatchEntry): TimelineSummary | null {
+    return e.timelineView() ?? this.timelineOf(e);
+  }
+
+  /**
+   * A match's annotations, read from its side files when they are not in memory. A finished
+   * match's stay in memory for the last `LRU_SIZE` finished matches asked for; a running match's
+   * always do.
+   */
+  annotationsOf(e: MatchEntry): AnnotationFold {
+    const a = e.annotations ?? createAnnotationFold(e.policy);
+    if (e.annotations === null) {
+      e.annotations = a;
+      e.calls = new LineTail(join(e.ref.dir, CALLS_FILE));
+      e.replies = new LineTail(join(e.ref.dir, REPLIES_FILE));
+      this.tailAnnotations(e, false);
+    }
+    if (e.fold === null && e.finished()) {
+      for (const id of this.annotationLru.touch(e.id)) {
+        const old = this.entries.get(id);
+        if (old !== undefined && old.fold === null) old.annotations = null;
+      }
+    }
+    return a;
   }
 
   /** The list item of a visible match (never starts a fold). */
   listItem(e: MatchEntry): MatchListItem {
-    const t = e.timeline;
+    const t = e.timelineView();
     const tail = t?.tail() ?? null;
     const standings = tail === null ? [] : standingsOf(tail);
     const lastT = t?.lastT ?? e.endLine?.t ?? e.known.lastT;
@@ -338,7 +453,7 @@ export class Registry {
   }
 
   /** The meta of a visible match whose timeline has its header folded, else null. */
-  meta(e: MatchEntry, t: Timeline): MatchMeta | null {
+  meta(e: MatchEntry, t: TimelineSummary): MatchMeta | null {
     const h = e.header;
     if (h === null || t.map === null || e.logId === null) return null;
     const p = this.deps.publish.entry(e.id);
@@ -363,7 +478,7 @@ export class Registry {
       lastT: t.lastT,
       logId: e.logId,
       timeline: t.timeline,
-      keyframes: t.keyframes.map((k) => k.seq),
+      keyframes: t.keyframeSeqs(),
       verified: t.verified,
     };
   }
@@ -398,14 +513,28 @@ export class Registry {
       this.deps.now(),
     );
     this.entries.set(ref.id, e);
-    this.readHead(e);
-    this.readSide(e, true);
-    try {
-      e.watcher = watch(ref.dir, () => this.pollEntry(e));
-    } catch {
-      e.watcher = null;
-    }
     this.refresh(e);
+  }
+
+  /** Starts (or goes on) following a listed run: header, watcher, side files. False: no header. */
+  private follow(e: MatchEntry): boolean {
+    if (e.header === null) this.readHead(e);
+    if (e.header === null) return false;
+    if (e.watcher === null) {
+      try {
+        e.watcher = watch(e.ref.dir, () => this.pollEntry(e));
+      } catch {
+        e.watcher = null;
+      }
+    }
+    if (!e.sideRead) this.readSide(e, true);
+    return true;
+  }
+
+  /** Whether a listed match's side files are read: once it may be shown. */
+  private sideEligible(e: MatchEntry): boolean {
+    const p = this.deps.publish.entry(e.id);
+    return p !== null && (p.visibility === "live" || e.hasEnd());
   }
 
   private remove(e: MatchEntry): void {
@@ -414,6 +543,7 @@ export class Registry {
     e.fold = null;
     this.entries.delete(e.id);
     this.lru.delete(e.id);
+    this.annotationLru.delete(e.id);
     this.backfilling.delete(e);
     const i = this.waiting.indexOf(e);
     if (i >= 0) this.waiting.splice(i, 1);
@@ -458,8 +588,14 @@ export class Registry {
     }
   }
 
-  /** Re-reads the side files that changed; tails `llm_calls.jsonl` and `replies.jsonl`. */
+  /**
+   * Re-reads the side files that changed and tails `llm_calls.jsonl` and `replies.jsonl` into the
+   * annotations: a running match builds them at once (live `annot` messages); a finished one when
+   * a route asks (`annotationsOf`).
+   */
   private readSide(e: MatchEntry, first: boolean): void {
+    if (!this.sideEligible(e)) return;
+    e.sideRead = true;
     const dir = e.ref.dir;
     const changed = (name: string): boolean => {
       const stamp = fileStamp(join(dir, name));
@@ -484,21 +620,41 @@ export class Registry {
       const r = readSummaryFile(dir);
       e.summary = r.ok ? r.value : e.summary;
     }
-    for (const raw of e.calls.read().lines) {
-      const parsed = safeJson(raw, (v) => LlmLogLineSchema.safeParse(v));
-      if (parsed !== null) e.annotations.call(parsed);
-    }
-    for (const raw of e.replies.read().lines) {
-      const parsed = safeJson(raw, (v) => ReplyLineSchema.safeParse(v));
-      if (parsed === null) continue;
-      e.annotations.reply(parsed);
-      if (!first) this.hooks.reply(e, parsed);
+    if (e.annotations === null && !e.finished()) {
+      this.annotationsOf(e);
+    } else if (e.annotations !== null) {
+      this.tailAnnotations(e, !first);
     }
   }
 
-  /** Recomputes visibility and status; starts loading a newly visible match. */
+  /** Folds what the call and reply logs gained into the annotations; `hooks`: push the replies. */
+  private tailAnnotations(e: MatchEntry, hooks: boolean): void {
+    const a = e.annotations;
+    if (a === null) return;
+    for (const tail of [e.calls, e.replies]) {
+      for (let i = 0; i < 64; i += 1) {
+        const r = tail.read();
+        for (const raw of r.lines) {
+          if (tail === e.calls) {
+            const parsed = safeJson(raw, (v) => LlmLogLineSchema.safeParse(v));
+            if (parsed !== null) a.call(parsed);
+            continue;
+          }
+          const parsed = safeJson(raw, (v) => ReplyLineSchema.safeParse(v));
+          if (parsed === null) continue;
+          a.reply(parsed);
+          if (hooks) this.hooks.reply(e, parsed);
+        }
+        if (!r.more) break;
+      }
+    }
+  }
+
+  /** Recomputes visibility and status; starts loading a newly listed match. */
   private refresh(e: MatchEntry): void {
-    if (e.broken !== null && e.header === null) {
+    const p = this.deps.publish.entry(e.id);
+    if (p === null || !this.follow(e)) {
+      // Not listed (nothing of it is read), or no complete header yet.
       if (e.visible) {
         e.visible = false;
         this.hooks.hidden(e.id);
@@ -521,29 +677,29 @@ export class Registry {
       clock: e.header?.clock ?? null,
       idleMs: this.deps.now() - e.lastGrowth,
     });
-    const p = this.deps.publish.entry(e.id);
-    const visible =
-      p !== null &&
-      (this.deps.publish.open || !unverifiable) &&
-      (p.visibility === "live" || e.hasEnd());
+    const open = this.deps.publish.open;
+    const verified = !unverifiable && (!e.loading || e.prefixVerified);
+    const visible = (open || verified) && (p.visibility === "live" || e.hasEnd());
     const wasVisible = e.visible;
     const statusChanged = status.status !== e.status.status || status.reason !== e.status.reason;
     e.status = status;
     e.visible = visible;
     if (wasVisible && !visible) this.hooks.hidden(e.id);
     else if (visible && statusChanged) this.hooks.status(e);
-    if (p !== null && e.timeline === null && !e.onDisk && e.fold === null) this.load(e);
+    if (visible && !wasVisible && !e.sideRead) this.readSide(e, true);
+    if (e.timeline === null && !e.onDisk && e.fold === null) this.load(e);
   }
 
   /** Starts a match's timeline: from the cache, else from a fold (queued behind other backfills). */
   private load(e: MatchEntry): void {
     if (e.header === null || e.logId === null || e.timelineId === null) return;
-    if (e.timeline === null && this.deps.cache !== null) {
-      const cached = this.deps.cache.load(e.id, e.logId, e.timelineId);
-      if (cached !== null) {
-        e.timeline = cached;
+    if (e.timeline === null) {
+      const cached = this.loadCached(e, e.logId);
+      if (cached.kind === "hit") {
+        e.timeline = cached.timeline;
+        e.source = cached.source;
         this.noteKnown(e);
-        if (cached.final) {
+        if (cached.timeline.final) {
           e.onDisk = true;
           e.loading = false;
           e.logStamp = fileStamp(e.ref.log);
@@ -552,14 +708,41 @@ export class Registry {
           this.hooks.ready(e);
           return;
         }
-        // A live match's cached prefix is served at once; the refold skips what it holds.
+        // A live match's cached (verified) prefix is served at once; the refold skips what it holds.
+        e.prefixVerified = cached.timeline.verified.ok;
+        this.refresh(e);
         this.hooks.ready(e);
       }
     }
+    if (e.timelineId === null) return;
     e.timeline ??= new Timeline(e.id, e.logId, e.timelineId);
     if (!this.waiting.includes(e) && !this.backfilling.has(e) && e.fold === null) {
       this.waiting.push(e);
       this.startWaiting();
+    }
+  }
+
+  /**
+   * The cached timeline of a log, under its timeline id: the log's own id, unless other logs with
+   * the same header were cached (or seen in this process) here first, then the first generation
+   * whose cache file is not another log's (salted with the file's identity). Sets the entry's
+   * timeline id.
+   */
+  private loadCached(e: MatchEntry, logId: Sha256): CacheLoad {
+    const base = timelineIdOf(logId);
+    const identity = fileIdentity(e.ref.log) ?? "unknown";
+    const idOf = (g: number): TimelineId => (g === 0 ? base : fnv1a64(`${base}:${identity}:${g}`));
+    const cache = this.deps.cache;
+    const check = (src: LogSource, final: boolean): boolean =>
+      fingerprintMatches(e.ref.log, src, final || e.ref.gz);
+    for (let g = e.saltGen; ; g += 1) {
+      e.saltGen = g;
+      e.timelineId = idOf(g);
+      if (cache === null) return { kind: "miss" };
+      const r = cache.load(e.id, logId, e.timelineId, check);
+      if (r.kind !== "stale") return r;
+      if (g >= MAX_SALTS) return { kind: "miss" };
+      this.deps.warn(`${e.id}: another log with the same header was here before; new timeline`);
     }
   }
 
@@ -576,7 +759,9 @@ export class Registry {
   private openFold(e: MatchEntry): void {
     e.logTail = e.ref.gz ? null : new LineTail(e.ref.log);
     e.gzRead = false;
-    const handle = this.deps.pool.open(e.id, {
+    const timeline = e.timelineId ?? e.timeline?.timeline;
+    if (timeline === undefined) return;
+    const handle = this.deps.pool.open(e.id, timeline, {
       batch: (b) => this.onBatch(e, handle, b),
       failed: (reason) => this.onFailed(e, handle, reason),
     });
@@ -614,7 +799,7 @@ export class Registry {
       const now = this.deps.now();
       if (now - e.lastCacheWrite >= this.deps.config.timing.liveCacheMs && t.lastSeq > 0) {
         e.lastCacheWrite = now;
-        this.save(t);
+        this.save(e);
       }
     }
   }
@@ -644,33 +829,59 @@ export class Registry {
   private finish(e: MatchEntry): void {
     const t = e.timeline;
     if (t === null) return;
+    const source = this.sourceOf(e);
     e.fold?.close();
     e.fold = null;
     e.logTail = null;
     e.logStamp = fileStamp(e.ref.log);
-    if (this.deps.cache !== null) {
-      this.save(t);
+    e.source = source;
+    if (this.deps.cache !== null && source !== null && this.write(t, source)) {
       e.onDisk = true;
       this.touch(e);
     }
   }
 
-  private save(t: Timeline): void {
+  /**
+   * The log prefix folded so far, once the fold has caught up with every complete line read (a
+   * `.gz` log: the whole file); null while it has not.
+   */
+  private sourceOf(e: MatchEntry): LogSource | null {
+    if (e.ref.gz) return fingerprint(e.ref.log);
+    const tail = e.logTail;
+    if (tail === null || e.fold === null || e.fold.pending() > 0 || e.tailMore) return null;
+    return fingerprint(e.ref.log, tail.bytes - tail.pending);
+  }
+
+  /** Writes a running or finished match's timeline to the cache, when it has caught up. */
+  private save(e: MatchEntry): void {
+    const t = e.timeline;
+    const source = this.sourceOf(e);
+    if (t === null || source === null) return;
+    if (this.write(t, source)) e.source = source;
+  }
+
+  private write(t: Timeline, source: LogSource): boolean {
     const cache = this.deps.cache;
-    if (cache === null) return;
+    if (cache === null) return false;
     try {
-      cache.save(t);
+      cache.save(t, source);
+      return true;
     } catch (err) {
       this.deps.warn(
         `${t.match}: cannot write the timeline cache (${err instanceof Error ? err.name : "error"})`,
       );
+      return false;
     }
   }
 
+  /** Marks a match used; evicted finished timelines leave a summary and drop their annotations. */
   private touch(e: MatchEntry): void {
     for (const id of this.lru.touch(e.id)) {
       const old = this.entries.get(id);
-      if (old !== undefined && old.onDisk && old.fold === null) old.timeline = null;
+      if (old === undefined || !old.onDisk || old.fold !== null || old.timeline === null) continue;
+      old.resident = summaryOf(old.timeline);
+      old.timeline = null;
+      old.annotations = null;
     }
   }
 
@@ -693,13 +904,13 @@ export class Registry {
     for (const e of this.entries.values()) this.pollEntry(e);
   }
 
-  /** Reads what a match's files gained; recomputes its status. */
+  /** Reads what a listed match's files gained; recomputes its status. */
   private pollEntry(e: MatchEntry): void {
-    if (this.stopped) return;
+    if (this.stopped || this.deps.publish.entry(e.id) === null) return;
     e.pollTick += 1;
     if (e.header === null) {
       // The run directory appeared before its header was flushed.
-      this.readHead(e);
+      this.refresh(e);
       if (e.header === null) return;
     }
     if (e.fold !== null) this.readLog(e);
@@ -742,18 +953,11 @@ export class Registry {
     }
   }
 
-  /** Whether a finished log's file was replaced (a new header, or other bytes than were folded). */
+  /** Whether a finished log's file was replaced (other bytes than were folded). */
   private finishedLogChanged(e: MatchEntry): boolean {
     const stamp = fileStamp(e.ref.log);
     if (stamp === null || stamp === e.logStamp) return false;
-    const header = parseHeader(
-      e.ref.gz ? (readGzLines(e.ref.log)[0] ?? null) : readFirstLine(e.ref.log),
-    );
-    if (
-      header !== null &&
-      logIdOf(header) === e.logId &&
-      stampSize(stamp) === stampSize(e.logStamp)
-    ) {
+    if (e.source !== null ? fingerprintMatches(e.ref.log, e.source, true) : sameHead(e, stamp)) {
       e.logStamp = stamp;
       return false;
     }
@@ -763,21 +967,35 @@ export class Registry {
   /** The log file was replaced: drop everything derived from the old one and start over. */
   private replaced(e: MatchEntry): void {
     this.deps.warn(`${e.id}: the log was replaced; its timeline starts over`);
+    const old = { logId: e.logId, timeline: e.timeline };
+    // The old timeline's cache file marks its id as taken (see `loadCached`).
+    const cache = this.deps.cache;
+    if (
+      cache !== null &&
+      old.logId !== null &&
+      old.timeline !== null &&
+      old.timeline.lastSeq > 0 &&
+      !existsSync(cache.path(e.id, old.logId, old.timeline.timeline))
+    ) {
+      this.write(old.timeline, REPLACED);
+    }
     e.fold?.close();
     e.fold = null;
     this.lru.delete(e.id);
     e.timeline = null;
+    e.resident = null;
     e.onDisk = false;
     e.loading = true;
+    e.prefixVerified = false;
+    e.source = null;
     e.endLine = null;
     e.known = { ended: false, unverifiable: false, lastT: 0, leader: null };
     e.turnSeen.clear();
     e.calls = new LineTail(join(e.ref.dir, CALLS_FILE));
     e.replies = new LineTail(join(e.ref.dir, REPLIES_FILE));
-    e.annotations = createAnnotationFold({
-      costs: this.deps.config.policy.costs,
-      reasoning: this.deps.config.policy.reasoning,
-    });
+    e.annotations = null;
+    e.sideRead = false;
+    e.stamps.clear();
     e.logStamp = null;
     e.logTail = null;
     this.hooks.reset(e);
@@ -788,9 +1006,25 @@ export class Registry {
     e.logId = null;
     e.timelineId = null;
     this.readHead(e);
+    // The same header again: the new log must not reuse the old one's timeline id.
+    e.saltGen = e.logId !== null && e.logId === old.logId ? e.saltGen + 1 : 0;
     e.lastGrowth = this.deps.now();
     this.refresh(e);
   }
+}
+
+/** Without a recorded source: the file still starts with the same header and has the same size. */
+function sameHead(e: MatchEntry, stamp: string): boolean {
+  let first: string | null;
+  try {
+    first = e.ref.gz ? (readGzLines(e.ref.log)[0] ?? null) : readFirstLine(e.ref.log);
+  } catch {
+    first = null;
+  }
+  const header = parseHeader(first);
+  return (
+    header !== null && logIdOf(header) === e.logId && stampSize(stamp) === stampSize(e.logStamp)
+  );
 }
 
 /** The size part of a `fileStamp`. */

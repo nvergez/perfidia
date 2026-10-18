@@ -6,6 +6,7 @@ import type {
   Seq,
   SpectatorMap,
   Step,
+  TimelineId,
   Verified,
 } from "@perfidia/protocol/spectator";
 import type { Keyframe, SeatCounts } from "@perfidia/spectator";
@@ -16,7 +17,13 @@ import type { Keyframe, SeatCounts } from "@perfidia/spectator";
 // replaced). Steps depend on the log prefix only, so a refold of the same log sends the same steps.
 
 export type ToWorker =
-  | { readonly type: "open"; readonly key: number; readonly match: MatchId }
+  | {
+      readonly type: "open";
+      readonly key: number;
+      readonly match: MatchId;
+      /** The timeline id the frames carry (the log's own, unless the server salted it). */
+      readonly timeline: TimelineId;
+    }
   | { readonly type: "lines"; readonly key: number; readonly lines: readonly string[] }
   | { readonly type: "close"; readonly key: number };
 

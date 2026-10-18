@@ -4,8 +4,12 @@ import { parseArgs } from "node:util";
 // two environment variables the server reads, `PORT` and `PERFIDIA_SERVE_TRUST_PROXY`. This is the
 // only module that reads the environment; it never reads an API key (the server has none to read).
 //
-// Defaults are conservative: the server binds 127.0.0.1, and binding any other host requires a
-// `--publish` file (fail closed: without one every discovered run would be public).
+// Defaults are conservative: the server binds 127.0.0.1 and serves nothing without either a
+// `--publish` file or an explicit `--all-runs` (local development: every run directory is listed).
+// Binding any other host, or trusting a proxy, requires `--publish` (fail closed) and, for another
+// host, the public host names it answers to (`--public-host`): a request for any other `Host` is
+// refused, so a DNS-rebinding page cannot read the server, and the WebSocket `Origin`s allowed are
+// derived from these names, never from the request.
 
 /** Limits against abusive spectators (§3.4). */
 export interface Limits {
@@ -22,6 +26,12 @@ export interface Limits {
   readonly backpressureBytes: number;
   readonly maxPayloadBytes: number;
   readonly idleTimeoutS: number;
+  /** Steps a WebSocket catches up at most; further behind, it gets `resync {behind}` (REST pages). */
+  readonly catchUpSteps: number;
+  /** Bytes of catch-up messages waiting in all sockets' send buffers; above, new catch-ups resync. */
+  readonly catchUpBudgetBytes: number;
+  /** A catch-up waiting this long for its socket to drain closes the socket (it resumes later). */
+  readonly drainTimeoutMs: number;
 }
 
 export const DEFAULT_LIMITS: Limits = Object.freeze({
@@ -35,6 +45,9 @@ export const DEFAULT_LIMITS: Limits = Object.freeze({
   backpressureBytes: 1024 * 1024,
   maxPayloadBytes: 4 * 1024,
   idleTimeoutS: 120,
+  catchUpSteps: 2_000,
+  catchUpBudgetBytes: 32 * 1024 * 1024,
+  drainTimeoutMs: 10_000,
 });
 
 /** Wall-clock periods of the server's loops, in milliseconds. */
@@ -68,6 +81,11 @@ export interface ServeConfig {
   readonly publish: string | null;
   readonly host: string;
   readonly port: number;
+  /**
+   * The `Host` names (`name[:port]`, lower case) the server answers to besides, on a loopback bind,
+   * `127.0.0.1`, `localhost` and `[::1]` with its port. `/api/health` answers any host.
+   */
+  readonly hosts: readonly string[];
   /** Development mode: the OpenAPI UI page is served. */
   readonly dev: boolean;
   /** HTTP framework: Elysia (default) or the raw `Bun.serve` fallback (§5.4). */
@@ -109,9 +127,13 @@ export const USAGE = [
   "",
   "  --runs <dir>        root of the run directories (required)",
   "  --cache <dir>       the server's timeline cache (recommended: folds survive restarts)",
-  "  --publish <file>    publish.json: the public matches (required to bind a non-loopback host)",
+  "  --publish <file>    publish.json: the public matches (required to bind a non-loopback host",
+  "                      or behind a trusted proxy)",
+  "  --all-runs          list every run directory instead (local development, loopback only)",
   "  --host <host>       default 127.0.0.1",
   "  --port <n>          default $PORT, else 8080",
+  "  --public-host <h>   a Host name[:port] the server answers to (repeatable; required to bind a",
+  "                      non-loopback host); its origins may open the WebSocket",
   "  --origin <url>      another browser origin allowed to open the WebSocket (repeatable)",
   "  --no-costs          leave costs, tokens and spend out of the annotations",
   "  --no-reasoning      leave reasoning summaries and reply text out of the annotations",
@@ -135,7 +157,9 @@ export function parseServeArgs(argv: readonly string[], env: EnvConfig = readEnv
         runs: { type: "string" },
         cache: { type: "string" },
         publish: { type: "string" },
+        "all-runs": { type: "boolean" },
         host: { type: "string" },
+        "public-host": { type: "string", multiple: true },
         port: { type: "string" },
         origin: { type: "string", multiple: true },
         "no-costs": { type: "boolean" },
@@ -151,10 +175,38 @@ export function parseServeArgs(argv: readonly string[], env: EnvConfig = readEnv
   if (values.help === true) throw new ConfigError(USAGE);
   if (values.runs === undefined) throw new ConfigError("--runs <dir> is required");
   const host = values.host ?? "127.0.0.1";
-  const loopback = host === "127.0.0.1" || host === "localhost" || host === "::1";
+  const loopback = isLoopback(host);
+  const allRuns = values["all-runs"] === true;
+  if (values.publish === undefined && !allRuns) {
+    throw new ConfigError(
+      "pass --publish <file> listing the public matches, or --all-runs to list every run directory (local development)",
+    );
+  }
+  if (values.publish !== undefined && allRuns) {
+    throw new ConfigError("--publish and --all-runs exclude each other");
+  }
   if (!loopback && values.publish === undefined) {
     throw new ConfigError(
-      `--host ${host} is not a loopback address: pass --publish <file> listing the public matches (without it every run would be public)`,
+      `--host ${host} is not a loopback address: pass --publish <file> listing the public matches (--all-runs is for a loopback bind only)`,
+    );
+  }
+  if (env.trustProxy !== null && values.publish === undefined) {
+    throw new ConfigError(
+      "PERFIDIA_SERVE_TRUST_PROXY is set (a public server behind a proxy): pass --publish <file> listing the public matches",
+    );
+  }
+  const hosts: string[] = [];
+  for (const h of values["public-host"] ?? []) {
+    if (!HOST_RE.test(h)) {
+      throw new ConfigError(
+        `--public-host ${h}: expected name[:port], e.g. perfidia.example or 192.0.2.7:8080`,
+      );
+    }
+    hosts.push(h.toLowerCase());
+  }
+  if (!loopback && hosts.length === 0) {
+    throw new ConfigError(
+      `--host ${host} is not a loopback address: pass --public-host <name[:port]> for each host name clients use (other Host headers are refused)`,
     );
   }
   const portText = values.port;
@@ -183,6 +235,7 @@ export function parseServeArgs(argv: readonly string[], env: EnvConfig = readEnv
     publish: values.publish ?? null,
     host,
     port,
+    hosts,
     dev: values.dev === true,
     adapter,
     trustProxy: env.trustProxy,
@@ -192,4 +245,12 @@ export function parseServeArgs(argv: readonly string[], env: EnvConfig = readEnv
     limits: DEFAULT_LIMITS,
     timing: DEFAULT_TIMING,
   };
+}
+
+const HOST_RE =
+  /^([a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*|\[[0-9a-f:.]+\])(:[0-9]{1,5})?$/i;
+
+/** A loopback bind address. */
+export function isLoopback(host: string): boolean {
+  return host === "127.0.0.1" || host === "localhost" || host === "::1";
 }

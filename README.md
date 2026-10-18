@@ -21,7 +21,7 @@ Run from the repo root with Bun 1.4.3 (the only package manager and runtime).
 | `bun run check`            | typecheck, lint, format:check, test; stops at the first error   |
 | `bun run sim -- <cmd>`     | bot matches, replay verification, batches (`--help`)            |
 | `bun run arena -- <cmd>`   | LLM matches (`run`, `cost`, `personalities`, `smoke`; `--help`) |
-| `bun run serve -- <flags>` | the read-only spectator server (`--runs <dir> --cache <dir>`)   |
+| `bun run serve -- <flags>` | the read-only spectator server (`--runs <dir> --all-runs`)      |
 | `bun run test:exit`        | the exit suites (7-day matches, both phases)                    |
 | `bun run test:live`        | opt-in: calls the Claude API (needs the key; spends < $0.20)    |
 

@@ -4,10 +4,14 @@ import { HSTS, SECURITY_HEADERS, cacheControl } from "./headers.ts";
 // From a service result to an HTTP response (phase-3 design §3.1): JSON, gzipped above 8 KB when
 // the client accepts it, `Cache-Control` from the route's policy, an ETag on cacheable bodies (304
 // when it matches), and the security headers. Bodies of immutable resources are kept serialised and
-// compressed in a small memo, so a finished match's pages are not serialised again per request.
+// compressed in a small memo, so a finished match's pages are not serialised again per request. The
+// memo is bounded by entries and by bytes (text and gzip copy), least recently used out first; the
+// service stores only canonical bodies in it (keyframes, aligned step pages, moments, reports), so
+// no request pattern can grow it past its bounds or make it churn on arbitrary cursors.
 
 const GZIP_ABOVE = 8 * 1024;
-const MEMO_ENTRIES = 256;
+export const MEMO_ENTRIES = 512;
+export const MEMO_BYTES = 32 * 1024 * 1024;
 
 interface Memo {
   readonly text: string;
@@ -15,8 +19,31 @@ interface Memo {
   readonly etag: string;
 }
 
+const sizeOf = (m: Memo): number => m.text.length + (m.gz?.length ?? 0);
+
 export class BodyMemo {
   private readonly entries = new Map<string, Memo>();
+  private readonly maxEntries: number;
+  private readonly maxBytes: number;
+  private total = 0;
+
+  constructor(o: { readonly entries?: number; readonly bytes?: number } = {}) {
+    this.maxEntries = o.entries ?? MEMO_ENTRIES;
+    this.maxBytes = o.bytes ?? MEMO_BYTES;
+  }
+
+  /** Bytes held (texts and gzip copies). */
+  get bytes(): number {
+    return this.total;
+  }
+
+  get size(): number {
+    return this.entries.size;
+  }
+
+  has(key: string): boolean {
+    return this.entries.has(key);
+  }
 
   get(key: string): Memo | undefined {
     const m = this.entries.get(key);
@@ -28,11 +55,30 @@ export class BodyMemo {
   }
 
   set(key: string, m: Memo): void {
+    const old = this.entries.get(key);
+    if (old !== undefined) {
+      this.total -= sizeOf(old);
+      this.entries.delete(key);
+    }
+    if (sizeOf(m) > this.maxBytes / 4) return;
     this.entries.set(key, m);
-    while (this.entries.size > MEMO_ENTRIES) {
-      const oldest = this.entries.keys().next();
+    this.total += sizeOf(m);
+    this.trim();
+  }
+
+  /** A body's gzip copy was made: count it, and trim. */
+  grew(key: string, m: Memo, by: number): void {
+    if (this.entries.get(key) !== m) return;
+    this.total += by;
+    this.trim();
+  }
+
+  private trim(): void {
+    while (this.entries.size > this.maxEntries || this.total > this.maxBytes) {
+      const oldest = this.entries.entries().next();
       if (oldest.done === true) break;
-      this.entries.delete(oldest.value);
+      this.entries.delete(oldest.value[0]);
+      this.total -= sizeOf(oldest.value[1]);
     }
   }
 }
@@ -82,7 +128,10 @@ export function respond(req: Request, r: ApiResult, o: RespondOptions): Response
   if (memo.text.length > GZIP_ABOVE) {
     headers["vary"] = "accept-encoding";
     if (/\bgzip\b/.test(req.headers.get("accept-encoding") ?? "")) {
-      memo.gz ??= Bun.gzipSync(memo.text);
+      if (memo.gz === null) {
+        memo.gz = Bun.gzipSync(memo.text);
+        if (r.memo !== undefined) o.memo.grew(r.memo, memo, memo.gz.length);
+      }
       body = memo.gz;
       headers["content-encoding"] = "gzip";
     }

@@ -10,7 +10,7 @@ import {
   type TurnAnnotation,
 } from "@perfidia/protocol/spectator";
 import { TIMELINE_VERSION } from "@perfidia/spectator";
-import type { Timeline, FeedQuery } from "../timeline/timeline.ts";
+import type { FeedQuery, Timeline, TimelineSummary } from "../timeline/timeline.ts";
 import type { MatchEntry, Registry } from "./matches.ts";
 
 // The spectator service (phase-3 design §3.1): plain typed functions behind the HTTP routes, free of
@@ -19,6 +19,12 @@ import type { MatchEntry, Registry } from "./matches.ts";
 // and a cache policy. Errors are data (`{ok: false, code, message, hint}`), with numbers and the
 // next step to take. Only visible matches exist here: an unpublished or hidden match is a 404 like
 // an unknown one.
+//
+// A finished timeline evicted from memory costs a cache read to bring back, so routes avoid it:
+// immutable bodies (keyframes, aligned step pages, a finished match's moments, reports) are keyed
+// by match, timeline and parameters, and a key the HTTP layer still holds is answered from there
+// before the timeline is looked up; meta, `/latest` and dossiers read the timeline's summary, which
+// stays in memory. Only the feed and bodies not held bring a timeline back.
 
 export type CachePolicy =
   | { readonly kind: "no-store" }
@@ -65,11 +71,18 @@ const ok = (body: unknown, cache: CachePolicy, memo?: string): ApiResult => ({
   ...(memo === undefined ? {} : { memo }),
 });
 
+/** Which serialised bodies the HTTP layer holds (`BodyMemo`). */
+export interface MemoProbe {
+  has(key: string): boolean;
+}
+
 export class SpectatorService {
   private readonly registry: Registry;
+  private readonly memo: MemoProbe;
 
-  constructor(registry: Registry) {
+  constructor(registry: Registry, memo: MemoProbe = { has: () => false }) {
     this.registry = registry;
+    this.memo = memo;
   }
 
   health(): ApiResult {
@@ -91,14 +104,17 @@ export class SpectatorService {
   }
 
   meta(id: MatchId): ApiResult {
-    const r = this.timeline(id);
+    const r = this.summary(id);
     if ("status" in r) return r;
-    const meta = this.registry.meta(r.entry, r.timeline);
+    const meta = this.registry.meta(r.entry, r.summary);
     if (meta === null) return loading(id);
-    return ok(meta, r.timeline.final ? maxAge(3600) : maxAge(5));
+    return ok(meta, r.summary.final ? maxAge(3600) : maxAge(5));
   }
 
   keyframe(id: MatchId, timeline: TimelineId, seq: number): ApiResult {
+    const key = `${id}:${timeline}:kf:${seq}`;
+    const held = this.held(id, timeline, key);
+    if (held !== null) return held;
     const r = this.timeline(id, timeline);
     if ("status" in r) return r;
     const frame = r.timeline.keyframe(seq);
@@ -110,38 +126,36 @@ export class SpectatorService {
         `the keyframes are listed in GET /api/matches/${id} (keyframes: ${r.timeline.keyframes.length} so far)`,
       );
     }
-    return ok(frame, IMMUTABLE, `kf:${timeline}:${seq}`);
+    return ok(frame, IMMUTABLE, key);
   }
 
   latest(id: MatchId): ApiResult {
-    const r = this.timeline(id);
+    const r = this.summary(id);
     if ("status" in r) return r;
-    const frame = r.timeline.tail();
+    const frame = r.summary.tail();
     if (frame === null) return loading(id);
     return ok(frame, NO_STORE);
   }
 
   steps(id: MatchId, timeline: TimelineId, after: number, limit: number): ApiResult {
+    const key = `${id}:${timeline}:steps:${after}:${limit}`;
+    const held = this.held(id, timeline, key);
+    if (held !== null) return held;
     const r = this.timeline(id, timeline);
     if ("status" in r) return r;
-    const page = r.timeline.page(after, limit);
+    const { page, canonical } = r.timeline.pageOf(after, limit);
     const fixed = r.timeline.final || page.more;
-    return ok(
-      page,
-      fixed ? IMMUTABLE : NO_STORE,
-      fixed ? `steps:${timeline}:${after}:${limit}` : undefined,
-    );
+    return ok(page, fixed ? IMMUTABLE : NO_STORE, fixed && canonical ? key : undefined);
   }
 
   moments(id: MatchId, timeline: TimelineId): ApiResult {
+    const key = `${id}:${timeline}:moments`;
+    const held = this.held(id, timeline, key);
+    if (held !== null) return held;
     const r = this.timeline(id, timeline);
     if ("status" in r) return r;
     const final = r.timeline.final;
-    return ok(
-      r.timeline.moments,
-      final ? IMMUTABLE : maxAge(5),
-      final ? `moments:${timeline}` : undefined,
-    );
+    return ok(r.timeline.moments, final ? IMMUTABLE : maxAge(5), final ? key : undefined);
   }
 
   feed(id: MatchId, q: FeedQuery): ApiResult {
@@ -155,7 +169,7 @@ export class SpectatorService {
     if (e === null) return notFound(id);
     if (!seatOf(e, seat)) return noSeat(id, seat, e);
     const final = this.registry.annotationFinal(e, seat, turn);
-    const a: TurnAnnotation | null = e.annotations.turn(seat, turn, { final });
+    const a: TurnAnnotation | null = this.registry.annotationsOf(e).turn(seat, turn, { final });
     if (a === null) {
       return apiError(
         404,
@@ -168,13 +182,13 @@ export class SpectatorService {
   }
 
   dossier(id: MatchId, seat: PlayerId): ApiResult {
-    const r = this.timeline(id);
+    const r = this.summary(id);
     if ("status" in r) return r;
     const info = r.entry.seats().find((s) => s.seat === seat);
     if (info === undefined) return noSeat(id, seat, r.entry);
-    const aux = r.timeline.seats.get(seat);
-    const spend = r.entry.annotations.spend(seat);
-    const handoff = r.timeline.tail()?.seats[seat]?.handoff ?? null;
+    const aux = r.summary.seats.get(seat);
+    const spend = this.registry.annotationsOf(r.entry).spend(seat);
+    const handoff = r.summary.tail()?.seats[seat]?.handoff ?? null;
     const body: PlayerDossier = {
       seat: info,
       notes: aux?.notes ?? "",
@@ -187,6 +201,10 @@ export class SpectatorService {
   }
 
   report(id: MatchId, report: string): ApiResult {
+    const current = this.registry.get(id)?.timelineId ?? null;
+    const key = current === null ? null : `${id}:${current}:report:${report}`;
+    const held = current === null || key === null ? null : this.held(id, current, key);
+    if (held !== null) return held;
     const r = this.timeline(id);
     if ("status" in r) return r;
     const detail = r.timeline.reports.get(report);
@@ -198,7 +216,23 @@ export class SpectatorService {
         "report ids are listed in the feed's battle and spy items",
       );
     }
-    return ok(detail, IMMUTABLE, `report:${r.timeline.timeline}:${report}`);
+    return ok(detail, IMMUTABLE, `${id}:${r.timeline.timeline}:report:${report}`);
+  }
+
+  /** The body under `key`, when the HTTP layer holds it for the match's current timeline. */
+  private held(id: MatchId, timeline: TimelineId, key: string): ApiResult | null {
+    const e = this.registry.get(id);
+    if (e === null || e.timelineId !== timeline || !this.memo.has(key)) return null;
+    return ok(null, IMMUTABLE, key);
+  }
+
+  /** A visible match's timeline summary (never read back from the cache), or the error to send. */
+  private summary(id: MatchId): { entry: MatchEntry; summary: TimelineSummary } | ApiResult {
+    const e = this.registry.get(id);
+    if (e === null) return notFound(id);
+    const t = this.registry.summaryOf(e);
+    if (t === null || t.lastSeq < 0) return loading(id);
+    return { entry: e, summary: t };
   }
 
   /** A visible match's timeline (the current one when `timeline` is given), or the error to send. */
@@ -208,18 +242,25 @@ export class SpectatorService {
   ): { entry: MatchEntry; timeline: Timeline } | ApiResult {
     const e = this.registry.get(id);
     if (e === null) return notFound(id);
+    if (timeline !== undefined && e.timelineId !== null && e.timelineId !== timeline) {
+      return timelineGone(id, timeline, e.timelineId);
+    }
     const t = this.registry.timelineOf(e);
     if (t === null || t.lastSeq < 0) return loading(id);
     if (timeline !== undefined && t.timeline !== timeline) {
-      return apiError(
-        404,
-        "TIMELINE_GONE",
-        `timeline ${timeline} is not the current timeline of match ${id} (now ${t.timeline})`,
-        `the log or the fold changed: fetch GET /api/matches/${id} again and use its timeline`,
-      );
+      return timelineGone(id, timeline, t.timeline);
     }
     return { entry: e, timeline: t };
   }
+}
+
+function timelineGone(id: MatchId, timeline: TimelineId, now: TimelineId): ApiResult {
+  return apiError(
+    404,
+    "TIMELINE_GONE",
+    `timeline ${timeline} is not the current timeline of match ${id} (now ${now})`,
+    `the log or the fold changed: fetch GET /api/matches/${id} again and use its timeline`,
+  );
 }
 
 function notFound(id: MatchId): ApiResult {

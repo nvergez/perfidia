@@ -7,8 +7,10 @@ import { z } from "zod";
 // happens) or `after_end` (the match appears, with everything, only once its log has an end line;
 // computed from the log, so it survives restarts). The file is re-read when it changes: removing an
 // id unpublishes that match from every route at once (the kill switch). A file that fails to parse
-// publishes nothing until it is fixed (fail closed). Without a file, every discovered run is listed
-// (local development).
+// at startup stops the server; later, a read that fails is retried (an editor may be halfway
+// through writing it) and, if it still fails, publishes nothing until it is fixed (fail closed).
+// Replace the file atomically (write a temporary file, then rename it) to avoid the retries. Without
+// a file, every discovered run is listed (local development, `--all-runs`).
 
 export const PUBLISH_FORMAT = "perfidia-publish/1";
 
@@ -53,32 +55,46 @@ export class PublishList {
 
   /**
    * Re-reads the file; returns whether the public list changed. Throws on the first read when the
-   * file is missing or invalid (the server must not start publishing nothing by mistake).
+   * file is missing or invalid (the server must not start publishing nothing by mistake). Later, a
+   * failed read publishes nothing (fail closed); `tryLoad` reads without that.
    */
   load(o: { readonly first?: boolean } = {}): boolean {
-    if (this.path === null) return false;
+    const r = this.tryLoad();
+    if (r.ok) return r.changed;
+    if (o.first === true) throw new Error(r.error);
+    return this.failClosed(r.error);
+  }
+
+  /** Re-reads the file; on a failure, keeps the current list and says why. */
+  tryLoad():
+    | { readonly ok: true; readonly changed: boolean }
+    | { readonly ok: false; readonly error: string } {
+    if (this.path === null) return { ok: true, changed: false };
     let text: string;
     try {
       text = readFileSync(this.path, "utf8");
     } catch (e) {
-      return this.fail(
-        `cannot read ${this.path}: ${e instanceof Error ? e.message : String(e)}`,
-        o,
-      );
+      return {
+        ok: false,
+        error: `cannot read ${this.path}: ${e instanceof Error ? e.message : String(e)}`,
+      };
     }
-    if (text === this.text && this.error === null) return false;
+    if (text === this.text && this.error === null) return { ok: true, changed: false };
     let parsed;
     try {
       parsed = PublishFileSchema.safeParse(JSON.parse(text));
     } catch (e) {
-      return this.fail(`${this.path}: not JSON (${e instanceof Error ? e.message : String(e)})`, o);
+      return {
+        ok: false,
+        error: `${this.path}: not JSON (${e instanceof Error ? e.message : String(e)})`,
+      };
     }
     if (!parsed.success) {
       const issue = parsed.error.issues[0];
-      return this.fail(
-        `${this.path}: ${issue === undefined ? "invalid" : `${issue.path.join(".")}: ${issue.message}`}`,
-        o,
-      );
+      return {
+        ok: false,
+        error: `${this.path}: ${issue === undefined ? "invalid" : `${issue.path.join(".")}: ${issue.message}`}`,
+      };
     }
     const next = new Map<MatchId, PublishEntry>();
     for (const m of parsed.data.matches) {
@@ -94,7 +110,7 @@ export class PublishList {
     this.entries = next;
     this.text = text;
     this.error = null;
-    return changed;
+    return { ok: true, changed };
   }
 
   /** The entry of a match, or null when it is not public. */
@@ -105,8 +121,8 @@ export class PublishList {
     return this.entries.get(id) ?? null;
   }
 
-  private fail(message: string, o: { readonly first?: boolean }): boolean {
-    if (o.first === true) throw new Error(message);
+  /** Publishes nothing until the file reads again; returns whether the list changed. */
+  failClosed(message: string): boolean {
     const changed = this.entries.size > 0;
     this.entries = new Map();
     this.text = null;

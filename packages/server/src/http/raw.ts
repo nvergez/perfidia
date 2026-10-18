@@ -1,14 +1,22 @@
 import type { Server, ServerWebSocket } from "bun";
 import { INTERNAL } from "../service/api.ts";
-import { clientIp, gate, notFoundRoute, upgradeRefusal, upgradeRequired } from "./gate.ts";
+import {
+  allowedHosts,
+  clientIp,
+  gate,
+  notFoundRoute,
+  upgradeRefusal,
+  upgradeRequired,
+} from "./gate.ts";
 import type { HttpContext, RunningHttp } from "./context.ts";
 import { openApiDocument } from "./openapi.ts";
 import { respond } from "./respond.ts";
 import { LIVE_PATH, OPENAPI_JSON_PATH, ROUTES, type Route } from "./routes.ts";
 
 // The raw `Bun.serve` adapter (phase-3 design §5.4): the fallback if Elysia's betas break the thin
-// HTTP layer. It serves the same route table, the same OpenAPI document and the same WebSocket hub
-// as the Elysia adapter, and the contract tests run against both.
+// HTTP layer. It serves the same route table (exact paths only), the same OpenAPI document and the
+// same WebSocket hub as the Elysia adapter, behind the same gate, and the contract tests run
+// against both. It never serves the OpenAPI UI page.
 
 interface Compiled {
   readonly route: Route;
@@ -27,7 +35,10 @@ function compile(r: Route): Compiled {
 
 const COMPILED = ROUTES.map(compile);
 
-/** The route of a path and its decoded parameters; null when none matches. */
+/**
+ * The route of a path and its decoded parameters; null when none matches. A parameter that does
+ * not decode is passed as it is, so it fails its schema (422) as it does in the Elysia adapter.
+ */
 function match(path: string): { route: Route; params: Record<string, string> } | null {
   for (const c of COMPILED) {
     const m = c.re.exec(path);
@@ -40,7 +51,7 @@ function match(path: string): { route: Route; params: Record<string, string> } |
       try {
         params[name] = decodeURIComponent(raw);
       } catch {
-        return null;
+        params[name] = raw;
       }
     }
     return { route: c.route, params };
@@ -55,16 +66,18 @@ interface SocketData {
 export function serveRaw(ctx: HttpContext): RunningHttp {
   const { config, service, hub, limiter, memo, now } = ctx;
   const o = { memo, hsts: config.trustProxy !== null };
+  let hosts: ReadonlySet<string> | null = null;
   const server: Server<SocketData> = Bun.serve<SocketData>({
     hostname: config.host,
     port: config.port,
     fetch(req, srv) {
       const url = new URL(req.url);
       const ip = clientIp(req, srv.requestIP(req)?.address ?? null, config);
-      const refused = gate(req, ip, limiter, now());
+      hosts ??= allowedHosts(config, srv.port ?? config.port);
+      const refused = gate(req, url.pathname, ip, hosts, limiter, now());
       if (refused !== null) return respond(req, refused, o);
       if (url.pathname === LIVE_PATH) {
-        const no = upgradeRefusal(req, ip, config, hub);
+        const no = upgradeRefusal(req, ip, config, hosts, hub);
         if (no !== null) return respond(req, no, o);
         if (srv.upgrade(req, { data: { ip } })) return undefined;
         return respond(req, upgradeRequired(), o);

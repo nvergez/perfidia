@@ -22,8 +22,8 @@ import type { RulesetEvents } from "./rulesets.ts";
 // (messages, proposals, diplomacy, betrayals, battles, sieges, conquests, foundings, spying,
 // eliminations, countdowns, other rulesets' public events), with the players it involves and an
 // importance from 0 to 3. Battle reports are gathered into their battle's item (every copy), and a
-// battle knows from the engine's events of the same second whether a siege started or broke or the
-// city fell there. A betrayal carries its context: the betrayer's last private messages to the
+// battle knows from the engine's events of the same second, up to the next battle at the same city,
+// whether it started or broke a siege or the city fell. A betrayal carries its context: the betrayer's last private messages to the
 // victim and its last public thoughts naming the victim within 48 game hours, and when the broken
 // relation began. Everything reads the past only, so the steps stay append-only.
 
@@ -355,10 +355,15 @@ export class FeedState {
             this.reports.set(r, { ...detail, copies: reports.filter((x) => x !== r) });
           }
         }
+        // What this battle caused: the siege and conquest events of its city that follow it in the
+        // same second, up to the next battle there (several waves can land in one second).
         let besieged: "started" | "broken" | null = null;
         let fell = false;
         for (const next of ahead) {
           if (next.t !== t) continue;
+          if (next.type === "battle" && data(STANDARD_EVENT_DATA.battle, next)?.city === d.city) {
+            break;
+          }
           const s = this.events.siege(next);
           if (s !== null && s.city === d.city) besieged = s.event;
           if (next.type === "city_conquered" && next.data["city"] === d.city) fell = true;

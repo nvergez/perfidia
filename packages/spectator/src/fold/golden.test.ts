@@ -89,6 +89,32 @@ describe("steps depend on the log only", () => {
   });
 });
 
+describe("a line that is not a valid log line", () => {
+  test("makes the match unverifiable at that cursor, with a status step; later lines are counted", () => {
+    const lines = golden("perfidia-1@1.1.0/rt-virtual-6p-1d.jsonl");
+    const fold = createSpectatorFold(headerOf(lines), { match: "golden" });
+    for (const line of lines.slice(1, 300)) fold.push(line);
+    const t = fold.lastT;
+    const step = fold.invalid();
+    expect(step).toEqual({ seq: 300, t, patch: { status: "unverifiable" } });
+    expect([fold.status, fold.verified()]).toEqual([
+      "unverifiable",
+      { ok: false, divergence: "line 300 is not a valid log line" },
+    ]);
+    expect(fold.frame().status).toBe("unverifiable");
+    expect(fold.push(lines[300] ?? lines[1] ?? headerOf(lines))).toBeNull();
+    expect([fold.lastSeq, fold.invalid(), fold.lastSeq]).toEqual([301, null, 302]);
+    const timeline = createSpectatorFold(headerOf(lines), {
+      match: "golden",
+      timeline: "00000000000000aa",
+    });
+    expect([timeline.timeline, timeline.frame().timeline]).toEqual([
+      "00000000000000aa",
+      "00000000000000aa",
+    ]);
+  });
+});
+
 describe("publicCity does not depend on the viewer", () => {
   const byRef = new Map<string, string>();
   for (const name of goldenNames()) {

@@ -484,7 +484,13 @@ const LaunchItemSchema = z.strictObject({
   units: UnitCountsSchema,
   pop: Int,
   settlers: z.boolean(),
-  /** An attack on the attacker's ally or pact partner at launch. */
+  /**
+   * The player an attack fights, as the engine records it at launch (`Movement.party`): the
+   * besieger when the target is besieged (a relief), else the target's owner; `null` for a neutral
+   * target and for every other kind.
+   */
+  foe: PlayerIdSchema.nullable(),
+  /** An attack whose foe is the attacker's ally or pact partner at launch. */
   againstAlly: z.enum(["ally", "pact"]).nullable(),
   context: MomentContextSchema.nullable(),
 });
@@ -743,6 +749,10 @@ export const StepsPageSchema = z.strictObject({
   from: z.int().min(-1),
   to: z.int().min(-1),
   steps: z.array(StepSchema),
+  /**
+   * The timeline's last cursor; in a `more: true` page of a running match (an immutable page),
+   * the page's own `to`: a lower bound.
+   */
   lastSeq: SeqSchema,
   more: z.boolean(),
 });
@@ -854,7 +864,11 @@ export const ServerMsgSchema = z.discriminatedUnion("type", [
   z.strictObject({
     type: z.literal("resync"),
     match: MatchIdSchema,
-    reason: z.enum(["gap", "log_replaced", "timeline", "backpressure"]),
+    /**
+     * `behind`: the cursor is further behind than a socket catches up; fetch the steps pages (or
+     * `/latest`) over REST, then subscribe again from the new cursor.
+     */
+    reason: z.enum(["gap", "log_replaced", "timeline", "backpressure", "behind"]),
   }),
   z.strictObject({ type: z.literal("error"), code: z.string(), message: z.string() }),
   z.strictObject({ type: z.literal("pong"), n: Int }),

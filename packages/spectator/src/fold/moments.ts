@@ -4,7 +4,8 @@ import type { CityId, FeedItem, Moment, Seq } from "@perfidia/protocol";
 // Key moments (phase-3 design §2.7): the feed items of importance 2 or more, each with a short
 // English title from a template, its players and cities, for the timeline, the reel and the story
 // strip. Titles name players and cities by id (the web puts names next to ids); a betrayal and an
-// attack launched against an ally carry their context.
+// attack launched against an ally carry their context. An attack fights the foe recorded at launch,
+// so an attack sent to free a besieged city reads as a relief, never as an attack on its owner.
 
 const list = (players: readonly string[]): string => players.join(", ");
 
@@ -28,9 +29,16 @@ export function titleOf(item: FeedItem): string {
     case "launch": {
       const target = item.target === null ? "" : ` (${item.target})`;
       const lands = `, landing ${fmtTime(item.arriveAt)}`;
+      const relief = item.foe !== null && item.foe !== item.target;
+      const of =
+        item.target === null ? "" : item.target === item.owner ? " (its own)" : ` (${item.target})`;
       if (item.againstAlly !== null) {
         const rel = item.againstAlly === "ally" ? "its ally" : "its pact partner";
-        return `${item.owner} launched an attack on ${rel} ${item.target ?? "?"} at ${item.to ?? "?"}${lands}`;
+        const at = relief ? `, besieging ${item.to ?? "?"}${of}` : ` at ${item.to ?? "?"}`;
+        return `${item.owner} launched an attack on ${rel} ${item.foe ?? "?"}${at}${lands}`;
+      }
+      if (relief) {
+        return `${item.owner} launched a relief of ${item.to ?? "?"}${of}, besieged by ${item.foe ?? "?"}${lands}`;
       }
       if (item.kind === "found")
         return `${item.owner} sent settlers to found a city on ${item.toIsland}`;

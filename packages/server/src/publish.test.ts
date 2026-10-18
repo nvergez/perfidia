@@ -1,14 +1,17 @@
 // What is public (phase-3 design §2.4, §6.1): `publish.json` lists the public matches, re-read when
 // it changes (the kill switch: a removed id disappears from every route and its sockets are told);
-// a file that does not parse publishes nothing; a match published `after_end` is absent until its
-// log has an end line, also after a restart; an unverifiable run is never public, and is listed as
-// such in development (no file); `arena.json` saying `degraded` shows as `degraded`.
+// a file rewritten in place (empty for a moment) unpublishes nothing; a file that still does not
+// parse half a second later publishes nothing; a match published `after_end` is absent until its
+// log has an end line, also after a restart; an unverifiable run is never public, not even while
+// its first fold has not reached the tampered line, and is listed as such in development (no
+// file); `arena.json` saying `degraded` shows as `degraded`.
 
+// oxlint-disable no-await-in-loop -- the polls follow each other on purpose
 import { afterAll, describe, expect, test } from "bun:test";
 import { appendFileSync, cpSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { canonicalJson } from "@perfidia/engine/core";
-import { MatchListItemSchema } from "@perfidia/protocol/spectator";
+import { FrameSchema, MatchListItemSchema } from "@perfidia/protocol/spectator";
 import { z } from "zod";
 import { startServer } from "./server.ts";
 import {
@@ -62,13 +65,25 @@ describe("publish.json", () => {
       await waitFor(() => f.statuses.includes("unpublished"), 10_000, "status unpublished");
       expect((await fetch(`${s.url}/api/matches/pub`)).status).toBe(404);
       expect(await ids(s.url)).toEqual([]);
-      // Back, then an invalid file: nothing is published until it is fixed.
+      // Back; the follower subscribes again.
       publishFile(file, [{ id: "pub", title: "Back" }]);
       s.reloadPublish();
       expect(await ids(s.url)).toEqual(["pub"]);
+      const unpublished = f.statuses.filter((x) => x === "unpublished").length;
+      f.subscribe();
+      await waitFor(() => f.statuses.length > unpublished + 1, 10_000, "subscribed again");
+      // Rewritten in place (truncated, then written 100 ms later): nothing is unpublished.
+      writeFileSync(file, "");
+      s.reloadPublish();
+      await Bun.sleep(100);
+      publishFile(file, [{ id: "pub", title: "Renamed" }]);
+      await Bun.sleep(700);
+      expect(await ids(s.url)).toEqual(["pub"]);
+      expect(f.statuses.filter((x) => x === "unpublished")).toHaveLength(unpublished);
+      // An invalid file: nothing is published until it is fixed (after the retries).
       writeFileSync(file, "{ not json");
       s.reloadPublish();
-      expect(await ids(s.url)).toEqual([]);
+      await waitFor(async () => (await ids(s.url)).length === 0, 5_000, "fail closed");
       expect(s.warnings.some((w) => w.includes("not JSON"))).toBe(true);
       await f.disconnect();
 
@@ -148,6 +163,21 @@ describe("status from the log and the side files", () => {
         JSON.stringify({ ...arena, status: "degraded" }),
       );
 
+      // A tampered log (one event's time changed near its end): with a publish file, it is never
+      // served, not even while its first fold has not reached that line yet.
+      const tampered = join(root, "tampered");
+      mkdirSync(tampered);
+      const at = lines.findLastIndex((l) => l.includes('"k":"ev"'));
+      const edited = lines.map((l, i) => (i === at ? l.replace(/"t":([0-9]+)/, '"t":$1999') : l));
+      expect(edited[at]).not.toBe(lines[at]);
+      writeFileSync(join(tampered, "match.jsonl"), `${edited.join("\n")}\n`);
+      // A line that is not a log line: unverifiable from there, in the meta and in the frames.
+      mkdirSync(join(root, "bogus"));
+      writeFileSync(
+        join(root, "bogus", "match.jsonl"),
+        `${[...lines.slice(0, 300), '{"k":"bogus"}'].join("\n")}\n`,
+      );
+
       const dev = serve(testConfig({ runs: root }));
       const staleMeta = await metaOf(dev, "stale", { settled: true });
       expect([staleMeta.status, staleMeta.reason, staleMeta.verified.ok]).toEqual([
@@ -158,17 +188,42 @@ describe("status from the log and the side files", () => {
       expect(staleMeta.verified.divergence).not.toContain(run.header.setup.idKey);
       const degraded = await metaOf(dev, "degraded", { settled: true });
       expect([degraded.status, degraded.reason]).toEqual(["degraded", "model_errors"]);
+      const tamperedMeta = await metaOf(dev, "tampered", { settled: true });
+      expect([tamperedMeta.status, tamperedMeta.verified.ok]).toEqual(["unverifiable", false]);
+      const bogus = await metaOf(dev, "bogus", { settled: true });
+      expect([bogus.status, bogus.verified, bogus.lastSeq]).toEqual([
+        "unverifiable",
+        { ok: false, divergence: "line 300 is not a valid log line" },
+        300,
+      ]);
+      const bogusTail = await getJson(`${dev.url}/api/matches/bogus/latest`, FrameSchema);
+      expect([bogusTail.status, bogusTail.seq]).toEqual(["unverifiable", 300]);
       expect((await ids(dev.url)).toSorted((a, b) => (a < b ? -1 : 1))).toEqual([
+        "bogus",
         "degraded",
         "stale",
+        "tampered",
       ]);
 
       const file = join(tempDir("status-file"), "publish.json");
       publishFile(file, [
         { id: "stale", title: "Stale" },
         { id: "degraded", title: "Degraded" },
+        { id: "tampered", title: "Tampered" },
       ]);
       const pub = serve(testConfig({ runs: root, publish: file }));
+      // Polled while the folds run: the tampered run is never listed nor served.
+      let seen = false;
+      for (;;) {
+        const listed = await ids(pub.url);
+        const meta = await fetch(`${pub.url}/api/matches/tampered`);
+        await meta.arrayBuffer();
+        if (listed.includes("tampered") || meta.status !== 404) seen = true;
+        const e = pub.registry.entries.get("tampered");
+        if (e?.timeline?.verified.ok === false && !e.loading) break;
+        await Bun.sleep(5);
+      }
+      expect(seen).toBe(false);
       await metaOf(pub, "degraded", { settled: true });
       await waitFor(
         () => pub.registry.entries.get("stale")?.timeline?.verified.ok === false,
@@ -177,6 +232,7 @@ describe("status from the log and the side files", () => {
       );
       expect(await ids(pub.url)).toEqual(["degraded"]);
       expect((await fetch(`${pub.url}/api/matches/stale`)).status).toBe(404);
+      expect((await fetch(`${pub.url}/api/matches/tampered`)).status).toBe(404);
       // The same steps whichever server folded them.
       const a = await getJson(`${dev.url}/api/matches/degraded/latest`, z.unknown());
       const b = await getJson(`${pub.url}/api/matches/degraded/latest`, z.unknown());

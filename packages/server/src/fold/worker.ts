@@ -1,6 +1,12 @@
 import { parentPort } from "node:worker_threads";
 import { LogLineSchema, type HeaderLine } from "@perfidia/protocol";
-import type { MatchId, ReportDetail, Step, Verified } from "@perfidia/protocol/spectator";
+import type {
+  MatchId,
+  ReportDetail,
+  Step,
+  TimelineId,
+  Verified,
+} from "@perfidia/protocol/spectator";
 import { createSpectatorFold, type SpectatorFold } from "@perfidia/spectator";
 import type { FoldBatch, FromWorker, SeatAux, ToWorker } from "./messages.ts";
 
@@ -9,12 +15,14 @@ import type { FoldBatch, FromWorker, SeatAux, ToWorker } from "./messages.ts";
 // the main thread's sockets and health check. One worker holds several folds, one per open log.
 // Each `lines` message is folded line by line; a batch of what the lines added goes back after at
 // most `SLICE_MS` of work and at the end of the message. A line that is not valid JSON or fails its
-// schema makes the match unverifiable: later lines are counted, never folded.
+// schema makes the match unverifiable, with a status step at that line (as a replay divergence
+// does): later lines are counted, never folded.
 
 const SLICE_MS = 50;
 
 interface Slot {
   readonly match: MatchId;
+  readonly timeline: TimelineId;
   fold: SpectatorFold | null;
   /** Lines received (the header is line 0): the next line's cursor. */
   lines: number;
@@ -121,11 +129,15 @@ function foldLines(key: number, slot: Slot, lines: readonly string[]): void {
       const parsed = parseLine(raw);
       if (parsed === null || !parsed.success) {
         slot.bad = { ok: false, divergence: `line ${seq} is not a valid log line` };
+        slot.fold?.invalid();
       } else if (slot.fold === null) {
         if (parsed.data.k !== "header") {
           slot.bad = { ok: false, divergence: "the log does not start with a header line" };
         } else {
-          slot.fold = createSpectatorFold(parsed.data satisfies HeaderLine, { match: slot.match });
+          slot.fold = createSpectatorFold(parsed.data satisfies HeaderLine, {
+            match: slot.match,
+            timeline: slot.timeline,
+          });
         }
       } else {
         if (parsed.data.k !== "header") slot.lastT = Math.max(slot.lastT, parsed.data.t);
@@ -145,6 +157,7 @@ function handle(msg: ToWorker): void {
     case "open":
       slots.set(msg.key, {
         match: msg.match,
+        timeline: msg.timeline,
         fold: null,
         lines: 0,
         lastT: 0,

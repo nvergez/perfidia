@@ -10,6 +10,7 @@
 > - This document describes what was built. The reviewed phase-3 design (with its `[critic]`
 >   corrections) is the source of the decisions; "design §x" below and in code comments refers to
 >   it. Where this document and the code disagree, the code wins; fix this document.
+> - A security and correctness review of Pass A was fixed afterwards (§13 lists what changed).
 > - Everything is local: nothing is hosted, no secret is read or served.
 
 **Contents:**
@@ -63,7 +64,8 @@ orchestrator ┄┄ dev dependency ┄┄ spectator, server               (tests
   - `src/service/`: the framework-free service (REST functions, the registry of matches, the live
     hub of the WebSocket);
   - `src/http/`: the route table (Zod schemas), the OpenAPI document, the two adapters (Elysia 2,
-    and the raw `Bun.serve` fallback), the gate (methods, rate limit, origin), headers, gzip.
+    and the raw `Bun.serve` fallback), the gate (methods, exact paths, the `Host`, rate limit,
+    origin), headers, gzip.
 
 ```
 run dir ──tail (complete lines)──► worker: createReplay + gateway fold + projection
@@ -82,23 +84,26 @@ finished file give the same steps; costs, reasoning and replies are annotations,
 ## 3. Running the server
 
 ```sh
-bun run serve -- --runs runs --cache .cache/spectator
+bun run serve -- --runs runs --cache .cache/spectator --all-runs
 # then: http://127.0.0.1:8080/api/matches, /api/openapi/json, ws://127.0.0.1:8080/api/live
 ```
 
-| Flag                           | Meaning                                                                                                                                      |
-| ------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------- |
-| `--runs <dir>`                 | Root whose subdirectories are run directories (`sim run --out`, `arena run --out`). Required.                                                |
-| `--cache <dir>`                | The server's own timeline cache. Without it, every restart refolds every match.                                                              |
-| `--publish <file>`             | `publish.json`: the public matches (§4). Without it every discovered run is listed (development). Required to bind a non-loopback host.      |
-| `--host`, `--port`             | Default `127.0.0.1` and `$PORT`, else 8080.                                                                                                  |
-| `--origin <url>`               | Another browser origin allowed to open the WebSocket (repeatable).                                                                           |
-| `--no-costs`, `--no-reasoning` | Leave costs, tokens and spend, or reasoning summaries and reply text, out of the annotations (design §9 Q2, Q4; both are served by default). |
-| `--adapter raw`                | Serve with the raw `Bun.serve` adapter instead of Elysia.                                                                                    |
-| `--dev`                        | Serve the OpenAPI UI page (`/api/openapi`).                                                                                                  |
+| Flag                           | Meaning                                                                                                                                                        |
+| ------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `--runs <dir>`                 | Root whose subdirectories are run directories (`sim run --out`, `arena run --out`). Required.                                                                  |
+| `--cache <dir>`                | The server's own timeline cache. Without it, every restart refolds every match.                                                                                |
+| `--publish <file>`             | `publish.json`: the public matches (§4). Required to bind a non-loopback host, and behind a trusted proxy.                                                     |
+| `--all-runs`                   | List every discovered run instead (local development, loopback bind only). One of `--publish` and `--all-runs` is required.                                    |
+| `--host`, `--port`             | Default `127.0.0.1` and `$PORT`, else 8080.                                                                                                                    |
+| `--public-host <name[:port]>`  | A `Host` the server answers to (repeatable; required to bind a non-loopback host). A loopback bind answers to `127.0.0.1`, `localhost`, `[::1]` with its port. |
+| `--origin <url>`               | Another browser origin allowed to open the WebSocket (repeatable).                                                                                             |
+| `--no-costs`, `--no-reasoning` | Leave costs, tokens and spend, or reasoning summaries and reply text, out of the annotations (design §9 Q2, Q4; both are served by default).                   |
+| `--adapter raw`                | Serve with the raw `Bun.serve` adapter instead of Elysia.                                                                                                      |
+| `--dev`                        | Serve the OpenAPI UI page (`/api/openapi`).                                                                                                                    |
 
 Environment: `PORT`, and `PERFIDIA_SERVE_TRUST_PROXY=fly` (read the client IP from
-`Fly-Client-IP`, send HSTS). Nothing else is read; the server holds no API key. `SIGHUP` re-reads
+`Fly-Client-IP`, send HSTS; it requires `--publish`). Nothing else is read; the server holds no
+API key. `SIGHUP` re-reads
 `publish.json`; `SIGINT`/`SIGTERM` stop it (running matches' timelines are written to the cache
 first). Exit code 3 on a configuration error.
 
@@ -107,14 +112,14 @@ Examples:
 ```sh
 # The war golden, as a finished match.
 mkdir -p /tmp/runs/war && cp packages/sim/fixtures/golden/perfidia-1@1.1.0/lockstep-6p-6d-war.jsonl.gz /tmp/runs/war/match.jsonl.gz
-bun run serve -- --runs /tmp/runs --cache /tmp/spectator-cache
+bun run serve -- --runs /tmp/runs --cache /tmp/spectator-cache --all-runs
 # A fake arena match, followed live while it is written (arena flushes match.jsonl per line).
 bun run arena -- run --fake --days 2 --out /tmp/runs/fake2
 # A bot match at real-time speed (a game day in 2.4 wall minutes), flushed per line.
 bun run sim -- run --clock realtime --time system --speed 600 --days 1 --live-flush --out /tmp/runs/bots
 ```
 
-`publish.json`:
+`publish.json` (replace it atomically: write a temporary file, then rename it over the old one):
 
 ```json
 {
@@ -135,16 +140,25 @@ bun run sim -- run --clock realtime --time system --speed 600 --days 1 --live-fl
 
 - **Discovery.** The subdirectories of `--runs` that hold a regular `match.jsonl` or
   `match.jsonl.gz`, named by a valid match id (`^[A-Za-z0-9][A-Za-z0-9._@-]{0,127}$`). Symbolic
-  links are never followed. The root is rescanned every 10 s and on `fs.watch` events; a vanished
-  directory is dropped. Ids are index keys, never paths built from requests.
-- **Publication.** Without `--publish`, every run is listed (local development). With it, only
-  the listed ids exist for clients; each has a title, a description, `featured`, and a
-  `visibility`: `live` (default) or `after_end` (absent from every route until the log has an end
-  line, computed from the log, so it survives restarts). The file is re-read on change, every 2 s
-  and on `SIGHUP`: removing an id unpublishes the match from every route at once, and its sockets
-  get `status: unpublished`. A file that fails to parse at startup stops the server; later, it
-  publishes nothing until fixed (fail closed). An unverifiable run is never public when a file is
-  given (it is listed, as `unverifiable`, in development).
+  links are never followed: discovery uses `lstat`, and every run file is opened with
+  `O_NOFOLLOW` and checked on the open descriptor. The root is rescanned every 10 s and on
+  `fs.watch` events; a vanished directory is dropped. Ids are index keys, never paths built from
+  requests.
+- **Publication.** With `--all-runs`, every run is listed (local development). With `--publish`,
+  only the listed ids exist for clients, and nothing of an unlisted run is read (no header, no side
+  file, no poll, no watcher); each has a title, a description, `featured`, and a `visibility`:
+  `live` (default) or `after_end` (absent from every route until the log has an end line,
+  computed from the log, so it survives restarts). The file's directory is watched, and the file
+  is re-read every 2 s and on `SIGHUP`: removing an id unpublishes the match from every route at
+  once, and its sockets get `status: unpublished` (a client polls the meta to learn when it is
+  back). A file that fails to parse at startup stops the server; later, a failed read is retried
+  every 250 ms, and only if it still fails 500 ms later does it publish nothing until fixed (fail
+  closed): an editor rewriting the file in place unpublishes nothing.
+- **Verified before public.** With `--publish`, a match is visible only once its first fold has
+  reached the log's tail without a divergence (or a verified cached prefix is loaded, for a
+  running match after a restart): a tampered or stale run is never served, not even while its fold
+  has not reached the bad line yet. In development (`--all-runs`) every run is listed, unverifiable
+  and loading ones included.
 - **Status**, in order of precedence (`store/status.ts`): `loading` (the first fold has not
   reached the tail), `unverifiable` (Level E diverged, a line failed its schema, or the ruleset is
   unknown), `ended` (end line; `degraded` when `arena.json` says so), then `fatal` (a `fatal`
@@ -157,12 +171,21 @@ bun run sim -- run --clock realtime --time system --speed 600 --days 1 --live-fl
 - **Tailing** (`store/tail.ts`). A byte offset per file; complete lines only, the partial
   remainder kept (lines are cut on the byte 0x0A, so UTF-8 can be cut anywhere). A changed inode,
   a smaller size or a different first line means the log was replaced: the match starts over
-  under a new timeline and its clients get `resync {log_replaced}`. A finished log is no longer
-  tailed, but its file is checked every few seconds, so a run deleted and rerun under the same
-  name is noticed. Polled every 250 ms and on `fs.watch` events. `.gz` logs are read whole.
+  and its clients get `resync {log_replaced}`. A finished log is no longer tailed, but its file is
+  checked every few seconds against the fingerprint of what was folded (§5), so a run deleted and
+  rerun under the same name is noticed. Polled every 250 ms and on `fs.watch` events. `.gz` logs
+  are read whole.
+- **A replaced log with the same header** (a lockstep rerun with the same seed and id key has the
+  same header, hence the same log id) never reuses the old log's timeline id: in the same process,
+  and after a restart (the old log's cache file no longer matches the file), the new log gets the
+  next generation of its id, salted with the file's identity (inode and birth time). Without
+  `--cache` a restart cannot remember an earlier log, so use a cache in production.
 - **Side files** are read leniently: a `seats.json`, `arena.json` or `summary.json` that fails its
-  schema is ignored with a warning and never makes a match unverifiable. `llm_calls.jsonl` and
-  `replies.jsonl` are tailed into the annotations fold.
+  schema is ignored with a warning and never makes a match unverifiable. They are read once a
+  listed match may be shown (an `after_end` match: at its end line). `llm_calls.jsonl` and
+  `replies.jsonl` are tailed into the annotations fold at once for a running match (live `annot`
+  messages); a finished one builds its annotations when a route first asks for them, and drops
+  them with its timeline when the LRU evicts it.
 
 ## 5. Folding: workers, timelines, the cache
 
@@ -184,17 +207,25 @@ bun run sim -- run --clock realtime --time system --speed 600 --days 1 --live-fl
   snapshot yet).
 - **The cache** (`timeline/cache.ts`). One gzipped JSON file per (timeline id, match id, log id),
   written through a temporary file and a rename when a fold reaches the end of a log that cannot
-  grow, every minute for a running match, and at shutdown. The timeline id changes with the log,
-  `TIMELINE_VERSION` and `ENGINE_VERSION`, so a new fold version refolds. A file that does not
-  parse is deleted and the log refolded. 544 KB for the 7-day fake run.
-- **LRU.** Finished timelines stay in memory in an LRU of 8; an evicted one is read back from the
-  cache on the next request (never refolded). Running matches always stay in memory.
+  grow, every minute for a running match, and at shutdown (each time only once the fold has caught
+  up with every complete line read). The timeline id changes with the log, `TIMELINE_VERSION` and
+  `ENGINE_VERSION`, so a new fold version refolds. Each file records the log prefix it was folded
+  from (its length and a hash of its last 64 KB; a `.gz` log: the compressed file's); a cached
+  timeline is used only while the log file still holds that prefix (exactly that, for a finished
+  log), else the log gets a new timeline (§4). A file that does not parse is deleted and the log
+  refolded. 544 KB for the 7-day fake run.
+- **LRU.** Finished timelines stay in memory in an LRU of 8, with their annotations. An evicted
+  one leaves a summary in memory (meta fields, the tail frame, notebooks and counts), which
+  answers the meta, `/latest`, the dossier and the listing; immutable bodies the HTTP layer still
+  holds are answered without it too (§6). Other routes read it back from the cache (never a
+  refold). Running matches always stay in memory.
 
 ## 6. The REST API
 
-GET and HEAD only. Bodies are JSON validated by the protocol's Zod schemas in the contract tests;
-errors are data, `{ok: false, code, message, hint}`. The OpenAPI 3.1 document is generated from
-the route table (`GET /api/openapi/json`).
+GET and HEAD only, exact paths only (a trailing slash or an empty segment is no route, on both
+adapters). Bodies are JSON validated by the protocol's Zod schemas in the contract tests; errors
+are data, `{ok: false, code, message, hint}`. The OpenAPI 3.1 document is generated from the route
+table (`GET /api/openapi/json`).
 
 | Route                                                                  | Response                                                                                         | Cache                                            |
 | ---------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------ | ------------------------------------------------ |
@@ -203,7 +234,7 @@ the route table (`GET /api/openapi/json`).
 | `/api/matches/:id`                                                     | `MatchMeta`: seats, map, config, clock, status, cursor, timeline, keyframe cursors, verification | 5 s live, 1 h finished, ETag                     |
 | `/api/matches/:id/latest`                                              | `Frame` at the tail (its `seq` is the cursor to subscribe from)                                  | `no-store`                                       |
 | `/api/matches/:id/t/:timeline/keyframes/:seq`                          | `Frame` (cursors listed in the meta only)                                                        | immutable                                        |
-| `/api/matches/:id/t/:timeline/steps?after&limit`                       | `{from, to, steps, lastSeq, more}`, `limit` ≤ 2,000                                              | immutable when finished or full, else `no-store` |
+| `/api/matches/:id/t/:timeline/steps?after&limit`                       | `{from, to, steps, lastSeq, more}`, `limit` ≤ 2,000; pages end at multiples of 2,000 steps       | immutable when finished or full, else `no-store` |
 | `/api/matches/:id/t/:timeline/moments`                                 | `Moment[]`                                                                                       | immutable when finished, else 5 s                |
 | `/api/matches/:id/feed?after\|before&kinds&players&pair&private&limit` | `{items: [{seq, item}], more}`, `limit` ≤ 200                                                    | `no-store` live, 1 h finished                    |
 | `/api/matches/:id/annotations/:seat/:turn`                             | `TurnAnnotation` (side files)                                                                    | `no-store` until complete, then 1 h              |
@@ -212,10 +243,22 @@ the route table (`GET /api/openapi/json`).
 
 Codes: `NOT_FOUND` (unknown or unpublished match), `TIMELINE_GONE` (refetch the meta),
 `NO_KEYFRAME`, `NO_SEAT`, `NO_ANNOTATION`, `NO_REPORT`, `NO_ROUTE`, `BAD_REQUEST` (422),
-`METHOD_NOT_ALLOWED` (405), `RATE_LIMITED` (429 with `Retry-After`), `LOADING` (503 with
-`Retry-After` while a match's header is not folded yet), `UPGRADE_REQUIRED` (426), `INTERNAL`
-(500, a fixed body). Bodies over 8 KB are gzipped when accepted; immutable bodies are kept
-serialised and compressed in a small memo.
+`METHOD_NOT_ALLOWED` (405), `WRONG_HOST` (421: a `Host` the server does not answer to),
+`RATE_LIMITED` (429 with `Retry-After`), `LOADING` (503 with `Retry-After` while a match's header
+is not folded yet), `UPGRADE_REQUIRED` (426), `INTERNAL` (500, a fixed body).
+
+- **Steps pages are aligned.** A page never crosses a multiple of 2,000 steps, so a client paging
+  from any cursor (a keyframe's, say) reaches the aligned pages after its first one; follow
+  `more`, a page may hold fewer than `limit` steps. In a `more: true` page of a running match (an
+  immutable page), `lastSeq` is the page's own `to`, a lower bound of the tail.
+- **The body memo.** Immutable bodies are kept serialised and gzipped, keyed by match, timeline
+  and parameters, bounded by 512 entries and 32 MB. Only canonical bodies are kept: keyframes, a
+  finished match's moments, reports, and aligned whole step pages asked for from the cursor that
+  ends the page before them, so arbitrary cursors cannot grow or churn it. A held body is answered
+  before the match's timeline is looked up (an evicted timeline is not read back for it).
+- **`Cache-Control` is `private`**: browsers may keep bodies (immutable ones for a year), shared
+  caches may not, so a takedown is not undone by a proxy. A CDN in front of the server (a later
+  hosting step) must be configured for this and purged on a takedown.
 
 ## 7. The WebSocket (`/api/live`, one match per socket)
 
@@ -224,16 +267,20 @@ Messages are the protocol's `ClientMsg` and `ServerMsg` (`@perfidia/protocol/spe
 1. The client loads the meta (timeline), a base frame (keyframe 0, or `/latest`) and sends
    `{type: "subscribe", match, timeline, after}`, `after` being the cursor of its base.
 2. The server answers `status`, `clock` (real-time matches), the `annot` messages of the turns
-   open now, then the missing steps in messages of at most 500 steps, each
+   open now, then the missing steps in messages of at most 200 steps, each
    `{type: "steps", from, to, steps}` with every step `from < seq ≤ to`; it waits for the socket
-   to drain whenever a send reports backpressure.
+   to drain whenever a send reports backpressure. Catch-up is bounded: a cursor more than 2,000
+   steps behind gets `resync {behind}` (catch up over the gzipped REST pages, or from `/latest`,
+   then subscribe again); a socket that does not drain within 10 s is closed (code 1013; it
+   resumes from its cursor); and when the catch-up messages waiting in all sockets' buffers reach
+   32 MB, a new catch-up gets `resync {backpressure}`.
 3. When the cursor reaches the tail, the socket joins the match's topic, in the same synchronous
    step as the check, so no range is missed or sent twice; every later batch is published once
    as a `steps` range whose `from` is the previous tail.
 4. A client that sees `from` differ from its cursor subscribes again with its cursor (a gap). A
    client that reconnects subscribes with its cursor and gets exactly the missing range, also after
    a server restart (same timeline). A cursor ahead of a restarted server's tail waits until the
-   refold passes it.
+   refold passes it; a cursor beyond the tail of a finished match gets `resync {gap}`.
 5. `resync {timeline}` when the client's timeline is not the current one (a new log or fold
    version: refetch the meta and a base); `resync {log_replaced}` when the log is replaced;
    `status {unpublished}` when the match is unpublished. While a match loads, `subscribe` is
@@ -254,8 +301,9 @@ Never served: the header's `idKey` and `seed` (for `--id-key seed` runs the seed
 `transcripts/` and `prompts/`; request ids, error messages and refusal explanations from
 `llm_calls.jsonl` (only error kinds and refusal categories); `gw` and `turn` error text;
 divergence texts (a fixed wording); file and cache paths; stack traces; API keys (none is read).
-Player-authored text is cleaned (newlines kept, other control characters replaced, bidi controls
-removed) and sent as typed fields.
+Player-authored text is cleaned (newlines kept, other control characters replaced; bidi controls,
+bidi marks, zero-width spaces, word joiners, U+FEFF and tag characters removed; the zero-width
+joiner and non-joiner kept for scripts and emoji) and sent as typed fields.
 
 ## 9. Limits and hardening
 
@@ -265,30 +313,45 @@ removed) and sent as typed fields.
 | Sockets      | 32 per IP, 5,000 in all (429 at upgrade); 60 subscribes per IP per minute                                                                       |
 | Per socket   | One match; 20 messages per 10 s (closed with 1008); 4 KiB per message; idle 120 s with pings                                                    |
 | Backpressure | 1 MiB queued on a subscribed socket closes it (Bun's `closeOnBackpressureLimit`); the client resumes from its cursor. Catch-up waits for drain. |
-| Paging       | `limit` capped on every paged route; filter lists capped (20 kinds, 12 players)                                                                 |
+| Catch-up     | At most 2,000 steps behind (`resync {behind}`), 200 steps per message, closed after 10 s without draining, 32 MB queued in all                  |
+| Paging       | `limit` capped on every paged route; filter lists capped (20 kinds, 12 players); step pages aligned on 2,000 steps                              |
+
+"Per IP" means per client key: an IPv4 address, an IPv6 address's /64 (one subscriber's
+network), an IPv4-mapped IPv6 address as its IPv4 address. Memory under abuse is bounded by the
+catch-up budget: an idle subscribed socket costs about 8 KB (300 at the tail: +2.4 MB RSS).
 
 Every response carries `Content-Security-Policy` (`default-src 'self'`, `frame-ancestors
 'none'`, …), `X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer`,
 `Permissions-Policy`, `Cross-Origin-Opener-Policy` and `Cross-Origin-Resource-Policy`; HSTS behind
-Fly. No CORS, no cookies. A WebSocket upgrade must come from the server's own origin, a
-`--origin`, or no origin (non-browser clients). The server binds 127.0.0.1 unless given a
-`publish.json`. The cache directory is the server's own and outside every route.
+Fly. No CORS, no cookies.
+
+- **Host.** A request whose `Host` is not one the server answers to gets 421 (`/api/health`
+  aside, for platform health checks): a DNS-rebinding page cannot read a loopback server.
+- **WebSocket origin.** An upgrade must come from an origin of the server's own host names
+  (`http(s)://<host>`), a `--origin`, or no origin (non-browser clients); never from an origin
+  derived from the request's `Host`. The origin and the socket caps are checked on the WebSocket
+  route itself, and only `/api/live` is that route (Elysia runs with `strictPath`), so no other
+  spelling of the path skips them.
+- **The OpenAPI UI page** (`/api/openapi`, which loads a third-party script) is registered only
+  with `--dev`; production serves the JSON document only.
+- The server binds 127.0.0.1 unless given a `publish.json` and its public host names. The cache
+  directory is the server's own and outside every route.
 
 ## 10. Tests and measurements
 
-Server tests (`packages/server/src/*.test.ts`, in the default `bun test`; 39 tests, about 37 s run
+Server tests (`packages/server/src/*.test.ts`, in the default `bun test`; 53 tests, about 46 s run
 alone):
 
-| File                                    | What it checks                                                                                                                                                                                                                                                                                                         |
-| --------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `war.test.ts`                           | The war golden through the API (§1), keyframes, moments, feed filters, restart from the cache                                                                                                                                                                                                                          |
-| `live.test.ts`                          | Following `arena run --fake` live; chunks cut anywhere with a resumed and a restarted client; a stale timeline gets `resync`; a replaced log gets `resync`; a crash-truncated log stays live then stalls; annotations and `annot` messages; `clock` messages of a running real-time match (`sim run --clock realtime`) |
-| `contract.test.ts`                      | Every route on the war golden and a 1-day fake run, parsed with the protocol's schemas, on both adapters; pinned OpenAPI paths; error codes; cache headers, ETag/304, gzip, HEAD; one Eden `treaty` test                                                                                                               |
-| `security.test.ts`                      | No secret in any response, WebSocket message, OpenAPI document, error body or cache file (planted refusal explanation, error message, request ids, API key in the environment, the shared prompt); methods, traversal, links; headers; foreign origin; rate, socket, message and payload limits; configuration         |
-| `publish.test.ts`                       | Listing, the kill switch, an invalid file, `after_end` across a restart, unverifiable runs, `degraded`                                                                                                                                                                                                                 |
-| `many.test.ts`                          | 100 WebSocket clients of one live match end with the whole fold's frame; health p99 under 100 ms while two war-golden folds run                                                                                                                                                                                        |
-| `cache.test.ts`                         | LRU eviction and reload from the cache; a corrupt cache file is refolded                                                                                                                                                                                                                                               |
-| `units.test.ts`, `architecture.test.ts` | Line tail, statuses and stall thresholds, the token bucket, steps and feed pages, the hub's catch-up under backpressure; env reads, SDK and orchestrator bans, the fold in the worker only, a framework-free service                                                                                                   |
+| File                                    | What it checks                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| --------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `war.test.ts`                           | The war golden through the API (§1), keyframes, moments, feed filters, restart from the cache                                                                                                                                                                                                                                                                                                                                                                                                         |
+| `live.test.ts`                          | Following `arena run --fake` live; chunks cut anywhere with a resumed and a restarted client; a stale timeline gets `resync`; a replaced log gets `resync`; a crash-truncated log stays live then stalls; annotations and `annot` messages of a running match; `clock` messages of a running real-time match (`sim run --clock realtime`)                                                                                                                                                             |
+| `contract.test.ts`                      | Every route on the war golden and a 1-day fake run, parsed with the protocol's schemas, on both adapters; pinned OpenAPI paths; error codes; exact paths only and the same answers from both adapters on edge inputs (trailing slashes, `%`, unknown query); the `Host` (421) and WebSocket origins on every spelling of `/api/live`; `private` cache headers, ETag/304, gzip, HEAD; one Eden `treaty` test                                                                                           |
+| `security.test.ts`                      | No secret in any response, WebSocket message, OpenAPI document, error body or cache file (planted refusal explanation, error message, request ids, API key in the environment, the shared prompt); methods, traversal, links; headers; foreign origin; rate, socket, message and payload limits, on both adapters and every spelling of the WebSocket path; two run directories with the same log; the OpenAPI UI in development only; configuration (`--all-runs`, `--public-host`, a trusted proxy) |
+| `publish.test.ts`                       | Listing, the kill switch, re-subscribing after it, a file rewritten in place (nothing unpublished), an invalid file (fail closed after the retries), `after_end` across a restart, unverifiable runs (a tampered log never listed nor served while it folds), an invalid line (unverifiable in meta and frames), `degraded`                                                                                                                                                                           |
+| `many.test.ts`                          | 100 WebSocket clients of one live match end with the whole fold's frame; health p99 under 100 ms while two war-golden folds run                                                                                                                                                                                                                                                                                                                                                                       |
+| `cache.test.ts`                         | LRU eviction: meta and `/latest` from the summary, held bodies without a cache read, other routes read back from the cache; a corrupt cache file is refolded; a log replaced by others with the same header (renamed over, then rewritten in place) gets a new timeline each time, also after a restart                                                                                                                                                                                               |
+| `units.test.ts`, `architecture.test.ts` | Line tail (links refused), fingerprints, statuses and stall thresholds, the token bucket, client keys (IPv6 /64), the gate (paths, Host), the memo's bounds, `publish.json` retries, aligned and canonical pages, a refold batch straddling the cursor held, feed pages; the hub's catch-up under backpressure, too far behind, past a finished tail, a socket that never drains, the budget; env reads, SDK and orchestrator bans, the fold in the worker only, a framework-free service             |
 
 Measured on this container:
 
@@ -332,9 +395,11 @@ least 14 days old): `elysia@2.0.0-beta.21` (2026-10-02), `@elysia/openapi@2.0.0-
 - **The frame** has no `standings` field: `standingsOf(frame)` derives them (players by rank).
   Patches carry field-level updates (`cityFields`, `queueFields`, `playerFields`, `seatFields`),
   and build and recruit queues are a separate `queues` collection keyed `c3#7`. Moment and feed
-  contexts are richer than the abridged design §3.3. Launch importance: 3 against an ally, 2 an
-  attack with settlers, 1 an attack, 0 otherwise. The map's width is `maxX + max(0, minX)`.
-  `SeatEnt.next.kind` also allows `start`.
+  contexts are richer than the abridged design §3.3. A launch item carries the attack's recorded
+  `foe` (the besieger when the target is besieged: a relief), and `againstAlly` compares the
+  attacker with that foe, not with the city's owner. Launch importance: 3 against an ally, 2 a
+  relief or an attack with settlers, 1 an attack, 0 otherwise. The map's width is
+  `maxX + max(0, minX)`. `SeatEnt.next.kind` also allows `start`.
 - **Restart of a running match** refolds its log from the first line in a worker (its cached
   prefix is served meanwhile; the refold skips what the timeline holds) instead of resuming the
   replay from a cached engine snapshot and gateway state: the spectator fold has no snapshot and
@@ -346,8 +411,15 @@ least 14 days old): `elysia@2.0.0-beta.21` (2026-10-02), `@elysia/openapi@2.0.0-
   the same document. Eden is typed for `/api/health` only (the table's routes are registered in a
   loop).
 - **Feed caching**: a finished match's feed is cached 1 h with an ETag rather than immutable (the
-  feed route carries no timeline). Step pages that are full are immutable even while live.
-- **Fail closed** is "a non-loopback host needs `--publish`"; `publish.json` has a format field.
+  feed route carries no timeline). Step pages that are full are immutable even while live; pages
+  are aligned on 2,000 steps; caching is `private`, not public.
+- **Fail closed** is stricter than the design: listing every run needs `--all-runs` (loopback
+  only); a non-loopback host needs `--publish` and `--public-host`; a trusted proxy needs
+  `--publish`. `publish.json` has a format field.
+- **WebSocket**: catch-up messages hold at most 200 steps (the design's "at most 500"), and
+  catch-up is bounded (§7) with a new `resync` reason, `behind`.
+- **Text hygiene** also removes bidi marks, zero-width spaces, word joiners, U+FEFF and tag
+  characters (an amendment to design §2.6's list).
 - **Annotations**: `annot` messages follow `replies.jsonl` as it grows and are not re-sent when a
   turn completes; the 10-minute completeness rule counts from when the server saw the `turn` item.
 - **Fake reasoning** text includes the bot's label ("Fake reasoning: …"), in fake runs only.
@@ -359,13 +431,19 @@ least 14 days old): `elysia@2.0.0-beta.21` (2026-10-02), `@elysia/openapi@2.0.0-
 2. The spectator fold cannot be saved and restored (see the restart deviation): a running match
    costs one fold per restart.
 3. Memory after a cold fold is 206 MB RSS (two worker heaps); the per-match budget is unmeasured
-   in isolation.
-4. `clock` messages are tested on a real-time log written by `sim run` under virtual time; no
+   in isolation. With 13 matches (ten copies of the war golden, two fake runs) the server holds
+   about 330–440 MB RSS, cold or restarted from the cache (8 finished timelines in the LRU).
+4. A request line or headers over Bun's limit get Bun's own 431, without the security headers
+   (it never reaches the handler).
+5. Symbolic links: run files are opened with `O_NOFOLLOW`, but a run directory swapped for a
+   link between discovery and an open is followed (only the last path component is checked).
+6. `clock` messages are tested on a real-time log written by `sim run` under virtual time; no
    real-time match at wall speed has been served yet.
-5. The default `bun test` on this container took 348 s before phase 3 (2,945 tests), 395 s after
-   step 1 (3,077 tests) and 422 s now (3,116 tests): far over the 90 s target of architecture
-   §13.8, which the suite had already left before phase 3.
-6. Open questions for the owner (design §9) still stand: visibility for external harnesses, full
+7. The default `bun test` on this container took 348 s before phase 3 (2,945 tests), 395 s after
+   step 1 (3,077 tests), 422 s after step 2 (3,116 tests) and 432 s after the review fixes
+   (3,134 tests, 18 skipped): far over the 90 s target of architecture §13.8, which the suite had
+   already left before phase 3.
+8. Open questions for the owner (design §9) still stand: visibility for external harnesses, full
    reasoning, prompts, public costs, what is public, content policy, hosting, the exit-test
    material.
 
@@ -374,3 +452,37 @@ least 14 days old): `elysia@2.0.0-beta.21` (2026-10-02), `@elysia/openapi@2.0.0-
 fallback for non-`/api` paths only), `bun run dev` and `web:build`, the Playwright smoke test, the
 how-to-watch overlay and the outsider-test pilot on the war golden (design §4, §6.2, §7). Pass C
 adds the turn detail, dossier extras and live per-round reasoning.
+
+## 13. Review fixes
+
+A security and correctness review of Pass A found 25 issues; the fixes, and the measurements that
+show them (probes run against `bun run serve` on this container):
+
+| Issue                                                                               | Fix                                                                                              | Measured after                                                                                             |
+| ----------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------- |
+| `/api/live/` (Elysia's loose router) skipped the origin check and the socket caps   | `strictPath`; canonical paths in the gate; origin and caps checked on the WebSocket route itself | contract and security tests: no spelling of the path opens a socket from a foreign origin or past a cap    |
+| No `Host` check: DNS rebinding read every run; origins trusted the request's `Host` | 421 for another `Host` (health aside); origins from the configured host names                    | contract test on both adapters                                                                             |
+| Sockets that stop reading held about 330 KB each; IPv6 /64s unlimited               | catch-up bound, 200 steps per message, 10 s drain timeout, 32 MB budget; limits keyed by /64     | 300 stuck sockets 1,990 steps behind: RSS back under its starting value within 4 s, all closed at 10 s     |
+| LRU thrash: each request for an evicted match read its cache file (25–40 ms)        | summaries for meta, `/latest`, dossiers; held immutable bodies answered first                    | 30 meta requests over 10 evicted matches: p50 0.7 ms, max 4.8 ms (was 25.1 ms and 40.1 ms)                 |
+| The body memo was bounded by entries only; any cursor made an entry                 | 32 MB and 512 entries; canonical bodies only; keys with the match id                             | 256 distinct pages: RSS 328 MB after against 437 MB before the run (no growth)                             |
+| Every run directory was parsed into memory, listed or not                           | unlisted runs are not read; finished matches' annotations built on demand, dropped with the LRU  | 50 unlisted 7-day runs: first health 338–407 ms (was 3,511 ms), idle RSS from the cache 74 MB (was 280 MB) |
+| A tampered run was public (and `verified: ok`) while it loaded                      | with `publish.json`, visible only once verified                                                  | publish test polls during the fold: never listed nor served                                                |
+| A non-atomic edit of `publish.json` unpublished everything                          | 250 ms retries for 500 ms before failing closed; the directory is watched                        | publish test: a truncate-then-write unpublishes nothing                                                    |
+| WebSocket catch-up from cursor 0 was a 27,000× amplifier                            | catch-up bounded to 2,000 steps (`resync {behind}`)                                              | unit test                                                                                                  |
+| `/api/openapi/` served the Scalar UI in production                                  | the UI is registered with `--dev` only                                                           | security test                                                                                              |
+| A loopback bind behind a proxy listed every run                                     | `--all-runs` is explicit; a trusted proxy needs `--publish`                                      | configuration test                                                                                         |
+| Memo keys omitted the match id                                                      | keys are match, timeline, parameters                                                             | security test with two copies of the war golden                                                            |
+| `public` caching kept taken-down content in shared caches                           | `private`                                                                                        | contract test                                                                                              |
+| A cursor beyond a finished tail hung                                                | `resync {gap}`                                                                                   | unit test                                                                                                  |
+| The adapters disagreed on edge inputs                                               | exact paths, health through the route table, undecodable parameters fail their schema            | contract test on both adapters (Bun's 431 aside, §12)                                                      |
+| `lstat` then open by path followed a swapped link                                   | `O_NOFOLLOW` and `fstat` on the descriptor                                                       | unit test                                                                                                  |
+| Invisible marks and tag characters kept by the text cleaner                         | removed (zero-width joiner and non-joiner kept)                                                  | unit and property tests                                                                                    |
+| A relief of a besieged ally's city was told as an attack on that ally               | launches use the recorded foe (`foe`); reliefs are importance 2                                  | war golden: one attack on an ally (p2 on p3), three reliefs by p2 at c17 against p6                        |
+| A log replaced by one with the same header served the stale cache                   | cache files record their source; a replaced log gets a new timeline id generation                | cache test: a renamed-over log, a restart, then a log rewritten in place: three timelines                  |
+| Every battle of a second at a besieged city was "a siege begins"                    | the read-ahead stops at the next battle of that city                                             | war golden: 8 battles flagged for 8 `siege_started` (was 12)                                               |
+| Projection freshness, the silent timer and `Timeline.apply`'s filter were untested  | `fold/fresh.test.ts` (a fresh projection after every line), a straddling-batch unit test         | each of the three mutants now fails a test                                                                 |
+| After an invalid line the frames still said `live`                                  | the fold steps the line as `unverifiable`                                                        | publish test                                                                                               |
+| A running match's full pages carried a stale `lastSeq`                              | `lastSeq` is the page's `to` in a `more: true` page of a running match                           | unit test                                                                                                  |
+
+`TIMELINE_VERSION` is 2 (the fold's output changed: `foe`, reliefs, battle flags, text hygiene), so
+caches made before are refolded once.

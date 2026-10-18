@@ -25,8 +25,38 @@ import type { FoldBatch, SeatAux } from "../fold/messages.ts";
 // idempotently by cursor: a refold of the same log (after a restart from a cached prefix, or after a
 // worker crash) sends steps the timeline already holds, and they are skipped. The timeline holds
 // spectator data only (never the header, its seed or id key), so it can be cached as is.
+//
+// Steps pages are aligned: a page never crosses a multiple of `STEPS_PAGE` steps, so a client
+// paging from any cursor reaches the aligned pages after its first one, and only those (the same
+// for every client) are kept serialised by the server.
 
-export const CACHE_FORMAT = "perfidia-timeline-cache/1";
+export const CACHE_FORMAT = "perfidia-timeline-cache/2";
+
+/** Steps per aligned page (and the most a page holds). */
+export const STEPS_PAGE = 2_000;
+
+/** What the cache checks a log file against before it trusts a cached timeline of it. */
+export interface LogSource {
+  /** Bytes of the log folded (a `.gz` log: the compressed file's size). */
+  readonly bytes: number;
+  /** A hash of the last bytes of that prefix (at most `SOURCE_TAIL_BYTES`). */
+  readonly tail: string;
+}
+
+/** What a match's routes read of its timeline besides steps, keyframes and the feed. */
+export interface TimelineSummary {
+  readonly match: MatchId;
+  readonly timeline: TimelineId;
+  readonly map: SpectatorMap | null;
+  readonly lastSeq: number;
+  readonly lastT: number;
+  readonly status: MatchStatus;
+  readonly verified: Verified;
+  readonly final: boolean;
+  keyframeSeqs(): Seq[];
+  tail(): Frame | null;
+  readonly seats: ReadonlyMap<string, { readonly notes: string; readonly counts: SeatCounts }>;
+}
 
 export interface FeedEntry {
   readonly seq: Seq;
@@ -67,6 +97,8 @@ export interface TimelineData {
   readonly moments: readonly Moment[];
   readonly reports: readonly ReportDetail[];
   readonly seats: readonly SeatAux[];
+  /** The log prefix this timeline was folded from (checked when the cache is read back). */
+  readonly source: LogSource;
 }
 
 /** The index of the first element of `xs` whose `seq` is above `after` (binary search). */
@@ -81,7 +113,7 @@ function firstAfter(xs: readonly { readonly seq: number }[], after: number): num
   return lo;
 }
 
-export class Timeline {
+export class Timeline implements TimelineSummary {
   readonly match: MatchId;
   readonly logId: Sha256;
   readonly timeline: TimelineId;
@@ -102,11 +134,14 @@ export class Timeline {
   private tailFrame: Frame | null = null;
   /** Bumped by every change (for response caches). */
   version = 0;
+  /** Steps per aligned page (`STEPS_PAGE`; smaller in tests). */
+  readonly pageSize: number;
 
-  constructor(match: MatchId, logId: Sha256, timeline: TimelineId) {
+  constructor(match: MatchId, logId: Sha256, timeline: TimelineId, pageSize = STEPS_PAGE) {
     this.match = match;
     this.logId = logId;
     this.timeline = timeline;
+    this.pageSize = pageSize;
   }
 
   /** The fold reached a line after which the log cannot grow. */
@@ -117,6 +152,15 @@ export class Timeline {
   /** The frame after the last step (null before the header was folded). */
   tail(): Frame | null {
     return this.tailFrame;
+  }
+
+  keyframeSeqs(): Seq[] {
+    return this.keyframes.map((k) => k.seq);
+  }
+
+  /** Steps with a cursor above `after`. */
+  stepsAfter(after: number): number {
+    return this.steps.length - firstAfter(this.steps, after);
   }
 
   /** Applies a fold batch; returns the range it added, or null when it added nothing. */
@@ -148,14 +192,32 @@ export class Timeline {
     return { from: Math.max(0, from), to: this.lastSeq, steps };
   }
 
-  /** Steps with `seq > after`, at most `limit`: `to` is the last line the page covers. */
-  page(after: number, limit: number): StepsPage {
+  /**
+   * Steps with `seq > after`, at most `limit`, never across a multiple of `STEPS_PAGE` steps: `to`
+   * is the last line the page covers. A page with more after it is immutable, so its `lastSeq` is
+   * its own `to` unless the timeline is final. `canonical`: an aligned whole page asked for from
+   * the cursor that ends the page before it (the same bytes for every client that pages along).
+   */
+  pageOf(after: number, limit: number): { page: StepsPage; canonical: boolean } {
     const i = firstAfter(this.steps, after);
-    const steps = this.steps.slice(i, i + limit);
-    const more = i + limit < this.steps.length;
+    const size = this.pageSize;
+    const end = Math.min(i + limit, (Math.floor(i / size) + 1) * size);
+    const steps = this.steps.slice(i, end);
+    const more = end < this.steps.length;
     const last = steps.at(-1);
     const to = more && last !== undefined ? last.seq : Math.max(after, this.lastSeq);
-    return { from: after, to, steps, lastSeq: Math.max(0, this.lastSeq), more };
+    const lastSeq = more && !this.final ? to : Math.max(0, this.lastSeq);
+    return {
+      page: { from: after, to, steps, lastSeq, more },
+      canonical:
+        i % size === 0 &&
+        limit >= size &&
+        after === (i === 0 ? -1 : (this.steps[i - 1]?.seq ?? Number.NaN)),
+    };
+  }
+
+  page(after: number, limit: number): StepsPage {
+    return this.pageOf(after, limit).page;
   }
 
   keyframe(seq: number): Frame | null {
@@ -217,8 +279,9 @@ export class Timeline {
     return { items: out, more };
   }
 
-  toData(): TimelineData {
+  toData(source: LogSource): TimelineData {
     return {
+      source,
       format: CACHE_FORMAT,
       match: this.match,
       logId: this.logId,
@@ -255,4 +318,24 @@ export class Timeline {
     });
     return t;
   }
+}
+
+/** A timeline's summary, kept in memory when the timeline itself is evicted (`Lru`). */
+export function summaryOf(t: Timeline): TimelineSummary {
+  const keyframes = t.keyframeSeqs();
+  const tail = t.tail();
+  const seats = new Map(t.seats);
+  return {
+    match: t.match,
+    timeline: t.timeline,
+    map: t.map,
+    lastSeq: t.lastSeq,
+    lastT: t.lastT,
+    status: t.status,
+    verified: t.verified,
+    final: t.final,
+    keyframeSeqs: () => [...keyframes],
+    tail: () => tail,
+    seats,
+  };
 }
