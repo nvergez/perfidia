@@ -5,7 +5,8 @@ import type { RateLimiter } from "./limits.ts";
 import { LIVE_PATH } from "./routes.ts";
 
 // What both adapters check before routing (phase-3 design §3.4, §6.4): GET/HEAD only; a canonical
-// path (no trailing slash, no empty segment: both adapters route exact paths only); a `Host` the
+// API path (no trailing slash, no empty segment: both adapters route exact paths only; paths outside
+// `/api` are the web app's, which routes them itself); a `Host` the
 // server answers to (DNS rebinding: a page on another name that resolves to this server is refused;
 // `/api/health` answers any host, for platform health checks); the HTTP rate limit per client; and,
 // for the WebSocket upgrade, the `Origin` (one derived from the server's own host names, a
@@ -103,7 +104,10 @@ export function gate(
       { allow: "GET, HEAD" },
     );
   }
-  if ((pathname.length > 1 && pathname.endsWith("/")) || pathname.includes("//")) {
+  if (
+    (pathname === "/api" || pathname.startsWith("/api/")) &&
+    (pathname.endsWith("/") || pathname.includes("//"))
+  ) {
     return notFoundRoute(pathname);
   }
   if (pathname !== HEALTH_PATH && !hosts.has((req.headers.get("host") ?? "").toLowerCase())) {

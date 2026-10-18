@@ -16,6 +16,7 @@ import {
 import { openApiDocument } from "./openapi.ts";
 import { respond, securityHeaders, type RespondOptions } from "./respond.ts";
 import { LIVE_PATH, OPENAPI_JSON_PATH, OPENAPI_PATH, ROUTES, type Route } from "./routes.ts";
+import { isApiPath, serveStatic } from "./static.ts";
 
 // The Elysia 2 (beta) adapter (phase-3 design §1.3, §5.4): a thin layer over the framework-free
 // route table and live hub. Elysia routes the requests (exact paths only: `strictPath`, so
@@ -24,7 +25,8 @@ import { LIVE_PATH, OPENAPI_JSON_PATH, OPENAPI_PATH, ROUTES, type Route } from "
 // adapter serves the same one. Every request first goes through the same gate as the raw adapter
 // (read-only methods, canonical paths, the Host, the rate limit), the WebSocket route checks the
 // origin and the socket caps itself (whatever path reached it), and every response carries the same
-// security headers.
+// security headers. With `--web-dist`, paths outside `/api` are the web app's (`static.ts`), served
+// from the same hook as the gate, before routing.
 
 /** The Elysia app (not listening yet); its type types an Eden client (the health route only). */
 export function buildElysiaApp(ctx: HttpContext) {
@@ -82,6 +84,10 @@ export function buildElysiaApp(ctx: HttpContext) {
       const hosts = hostsFor(server?.port ?? config.port);
       const refused = gate(request, url.pathname, ip, hosts, limiter, now());
       if (refused !== null) return respond(request, refused, o);
+      if (ctx.site !== null && !isApiPath(url.pathname)) {
+        const page = serveStatic(request, url.pathname, ctx.site, o.hsts);
+        if (page !== null) return page;
+      }
       if (
         url.pathname === LIVE_PATH &&
         request.headers.get("upgrade")?.toLowerCase() !== "websocket"

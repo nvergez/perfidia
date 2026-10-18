@@ -878,6 +878,141 @@
       "rules": {
         "no-restricted-imports": "off"
       }
+    },
+    // The web app (phase-3 design §5.4, §6.4): React and accessibility rules, `react/no-danger` as an
+    // error (player text is plain text), on every web file. Its sources import only React, the pinned
+    // UI packages and the spectator sub-paths, and use no host globals; the full ban list sits in the
+    // one override that sets it (an override's rule replaces another's, docs/architecture.md §2.4).
+    {
+      "files": ["packages/web/**"],
+      "plugins": ["react", "jsx-a11y", "import"],
+      "rules": {
+        "react/no-danger": "error",
+        "react/jsx-no-target-blank": "error",
+        "react/react-in-jsx-scope": "off"
+      }
+    },
+    {
+      "files": ["packages/web/src/**"],
+      "excludeFiles": ["**/*.test.ts", "**/*.test.tsx"],
+      "plugins": ["react", "jsx-a11y", "import"],
+      "rules": {
+        "react/no-danger": "error",
+        "react/jsx-no-target-blank": "error",
+        "react/react-in-jsx-scope": "off",
+        "import/no-nodejs-modules": "error",
+        "no-restricted-imports": [
+          "error",
+          {
+            "paths": [
+              {
+                "name": "bun",
+                "message": "The web app runs in browsers: no Bun APIs."
+              },
+              {
+                "name": "elysia",
+                "message": "The web app talks to the server over HTTP and the WebSocket only."
+              },
+              {
+                "name": "zod",
+                "message": "Parse payloads with the schemas of @perfidia/protocol/spectator."
+              },
+              {
+                "name": "@perfidia/protocol",
+                "message": "Import @perfidia/protocol/spectator: the root barrel bundles every protocol schema (124 KB minified, phase-3 design §0.2)."
+              },
+              {
+                "name": "@perfidia/engine",
+                "message": "Web sources import React, the pinned UI packages, @perfidia/protocol/spectator and @perfidia/spectator/reduce only (phase-3 design §2.1, §5.4)."
+              },
+              {
+                "name": "@perfidia/gateway",
+                "message": "Web sources import React, the pinned UI packages, @perfidia/protocol/spectator and @perfidia/spectator/reduce only (phase-3 design §2.1, §5.4)."
+              },
+              {
+                "name": "@perfidia/bots",
+                "message": "Web sources import React, the pinned UI packages, @perfidia/protocol/spectator and @perfidia/spectator/reduce only (phase-3 design §2.1, §5.4)."
+              },
+              {
+                "name": "@perfidia/sim",
+                "message": "Web sources import React, the pinned UI packages, @perfidia/protocol/spectator and @perfidia/spectator/reduce only (phase-3 design §2.1, §5.4)."
+              },
+              {
+                "name": "@perfidia/orchestrator",
+                "message": "Web sources import React, the pinned UI packages, @perfidia/protocol/spectator and @perfidia/spectator/reduce only (phase-3 design §2.1, §5.4)."
+              },
+              {
+                "name": "@perfidia/server",
+                "message": "The web app is typed by the protocol's schemas, not the server's sources (phase-3 design §1.3)."
+              },
+              {
+                "name": "@perfidia/spectator",
+                "message": "Import @perfidia/spectator/reduce: the root is the fold (engine and gateway)."
+              },
+              {
+                "name": "@perfidia/spectator/annotations",
+                "message": "Web sources import React, the pinned UI packages, @perfidia/protocol/spectator and @perfidia/spectator/reduce only (phase-3 design §2.1, §5.4)."
+              },
+              {
+                "name": "@anthropic-ai/sdk",
+                "message": "Web sources import React, the pinned UI packages, @perfidia/protocol/spectator and @perfidia/spectator/reduce only (phase-3 design §2.1, §5.4)."
+              },
+              {
+                "name": "playwright-core",
+                "message": "Playwright is for scripts and the end-to-end test, not the app."
+              },
+              {
+                "name": "tailwindcss",
+                "message": "Tailwind is a build step (scripts/build.ts), not a runtime import."
+              }
+            ],
+            "patterns": [
+              {
+                "group": ["bun:*"],
+                "message": "The web app runs in browsers: no Bun APIs."
+              },
+              {
+                "group": ["node:*"],
+                "message": "The web app runs in browsers: no Node APIs."
+              },
+              {
+                "group": ["@elysiajs/*", "@elysia/*"],
+                "message": "The web app talks to the server over HTTP and the WebSocket only."
+              },
+              {
+                "group": [
+                  "@perfidia/engine/*",
+                  "@perfidia/gateway/*",
+                  "@perfidia/server/*",
+                  "@perfidia/protocol/src/*",
+                  "@perfidia/spectator/src/*"
+                ],
+                "message": "Web sources import React, the pinned UI packages, @perfidia/protocol/spectator and @perfidia/spectator/reduce only (phase-3 design §2.1, §5.4)."
+              },
+              {
+                "group": ["@anthropic-ai/sdk/*"],
+                "message": "Web sources import React, the pinned UI packages, @perfidia/protocol/spectator and @perfidia/spectator/reduce only (phase-3 design §2.1, §5.4)."
+              },
+              {
+                "group": ["@radix-ui/*"],
+                "message": "Import primitives from the radix-ui package (src/ui/README.md)."
+              }
+            ]
+          }
+        ],
+        "no-restricted-globals": [
+          "error",
+          { "name": "Bun", "message": "The web app runs in browsers: no host runtime globals." },
+          {
+            "name": "process",
+            "message": "The web app runs in browsers: no host runtime globals."
+          },
+          {
+            "name": "require",
+            "message": "The web app runs in browsers: no host runtime globals. Use an ESM import."
+          }
+        ]
+      }
     }
   ]
 }

@@ -9,6 +9,7 @@
     { "path": "./packages/orchestrator" },
     { "path": "./packages/spectator" },
     { "path": "./packages/server" },
+    { "path": "./packages/web" },
     { "path": "./scripts" }
   ]
 }

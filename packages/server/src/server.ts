@@ -5,6 +5,7 @@ import { serveElysia } from "./http/elysia.ts";
 import { RateLimiter } from "./http/limits.ts";
 import { serveRaw } from "./http/raw.ts";
 import { BodyMemo } from "./http/respond.ts";
+import { StaticSite } from "./http/static.ts";
 import { SpectatorService } from "./service/api.ts";
 import { LiveHub } from "./service/live.ts";
 import { Registry } from "./service/matches.ts";
@@ -57,24 +58,30 @@ export function startServer(config: ServeConfig, o: StartOptions = {}): RunningS
   hub = new LiveHub(registry, config.limits, now);
   const memo = new BodyMemo();
   const service = new SpectatorService(registry, memo);
-  const ctx = {
-    config,
-    service,
-    hub,
-    limiter: new RateLimiter(config.limits),
-    memo,
-    now,
-    warn,
-  };
+  let site: StaticSite | null = null;
   let http: RunningHttp;
   try {
+    site =
+      config.webDist === null ? null : new StaticSite(config.webDist, { watch: config.dev, warn });
+    const ctx = {
+      config,
+      service,
+      hub,
+      limiter: new RateLimiter(config.limits),
+      memo,
+      site,
+      now,
+      warn,
+    };
     registry.start();
     http = config.adapter === "raw" ? serveRaw(ctx) : serveElysia(ctx);
   } catch (e) {
+    site?.stop();
     registry.stop();
     void pool.stop();
     throw e;
   }
+  const staticSite = site;
   const clock = setInterval(() => hub?.tickClock(), config.timing.clockMs);
   const host = config.host.includes(":") ? `[${config.host}]` : config.host;
   return {
@@ -86,6 +93,7 @@ export function startServer(config: ServeConfig, o: StartOptions = {}): RunningS
     rescan: () => registry.rescan(),
     stop: async () => {
       clearInterval(clock);
+      staticSite?.stop();
       registry.stop();
       await http.stop();
       await pool.stop();

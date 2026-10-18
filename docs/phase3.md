@@ -6,7 +6,9 @@
 > - **Pass A (data and server, no UI) is built**, in two steps: the pure data layer (the engine's
 >   incremental replayer, the gateway's incremental fold, the `@perfidia/spectator` projection,
 >   the protocol's spectator schemas, `replies.jsonl` and per-line flushing) and the read-only
->   server (`@perfidia/server`). Pass B (the web app) and Pass C (extras) are not built yet (§12).
+>   server (`@perfidia/server`). Pass B (the web app) is in progress: its first step, the web
+>   scaffold (`packages/web`, `--web-dist`), is built (§14); the views and the end-to-end smoke
+>   test follow. Pass C (extras) is not built yet (§12).
 > - This document describes what was built. The reviewed phase-3 design (with its `[critic]`
 >   corrections) is the source of the decisions; "design §x" below and in code comments refers to
 >   it. Where this document and the code disagree, the code wins; fix this document.
@@ -99,7 +101,8 @@ bun run serve -- --runs runs --cache .cache/spectator --all-runs
 | `--origin <url>`               | Another browser origin allowed to open the WebSocket (repeatable).                                                                                             |
 | `--no-costs`, `--no-reasoning` | Leave costs, tokens and spend, or reasoning summaries and reply text, out of the annotations (design §9 Q2, Q4; both are served by default).                   |
 | `--adapter raw`                | Serve with the raw `Bun.serve` adapter instead of Elysia.                                                                                                      |
-| `--dev`                        | Serve the OpenAPI UI page (`/api/openapi`).                                                                                                                    |
+| `--web-dist <dir>`             | Serve the built web app (`bun run web:build` → `packages/web/dist`) outside `/api` (§14).                                                                      |
+| `--dev`                        | Serve the OpenAPI UI page (`/api/openapi`); re-read `--web-dist` when it changes.                                                                              |
 
 Environment: `PORT`, and `PERFIDIA_SERVE_TRUST_PROXY=fly` (read the client IP from
 `Fly-Client-IP`, send HSTS; it requires `--publish`). Nothing else is read; the server holds no
@@ -487,3 +490,60 @@ show them (probes run against `bun run serve` on this container):
 
 `TIMELINE_VERSION` is 2 (the fold's output changed: `foe`, reliefs, battle flags, text hygiene), so
 caches made before are refolded once.
+
+## 14. Pass B, step B1: the web scaffold (as built)
+
+`packages/web` (`@perfidia/web`) is the spectator SPA: React 19 with Zustand, shadcn/ui components
+copied by hand onto `radix-ui` (`src/ui/`, MIT notice in `src/ui/README.md`), Tailwind 4 through its
+CLI, bundled by `Bun.build`. It imports only React, the pinned UI packages,
+`@perfidia/protocol/spectator` and `@perfidia/spectator/reduce` (lint override and
+`src/architecture.test.ts`); ruleset ids appear in `src/skins/` only.
+
+```sh
+bun run web:build                      # Tailwind, then Bun.build of src/index.html into packages/web/dist; prints sizes, fails over budget
+bun run serve -- --runs runs --cache .cache/spectator --all-runs --web-dist packages/web/dist
+bun run dev -- --runs runs             # build, then Tailwind --watch, bun build --watch and the server (--web-dist, --dev)
+bun packages/web/scripts/shot.ts --url http://127.0.0.1:8080/m/war --out /tmp/war   # screenshots (1440x900, 390x844) and console errors
+bun run test:e2e                       # PERFIDIA_E2E=1 bun test packages/web/e2e (the smoke test of a later step)
+```
+
+- **Layout.** `src/lib/` (ids, time as the engine prints it, model names with "Fake" for fake seats,
+  12 colour-blind-safe colours paired with shapes, the History API router, wrapped
+  `localStorage`), `src/api/` (the REST client and the WebSocket client: resumable cursor, gap
+  re-subscribe, resync, backoff; every payload parsed with the protocol's schemas, a failure dropped,
+  reported and re-synced), `src/playback/` (the pure playback engine: segments from keyframe 0 and
+  from `/latest` that merge, binary search on `t`, client keyframes every 500 steps, speeds 5 min/s
+  to 6 h/s, live lockstep and real-time clock anchoring with its cap), `src/store/` (the match and UI
+  stores, the session that loads a match and runs the animation-frame loop, shared selectors and
+  hooks), `src/skins/` (perfidia-1 1.1.0 and 1.0.0 labels, blocs, sieges, the win rule from the
+  config and `ext.domination`; a default skin), `src/pages/` (the match list and the match layout),
+  `src/onboarding/` ("How to watch"). The view components (`src/map`, `timeline`, `board`, `story`,
+  `feed`, `thoughts`, `players`) are stubs that the next steps replace.
+- **Served by the server** with `--web-dist <dir>` on both adapters: an index of the directory made
+  at startup (no path built from a request; links, dotfiles and special files skipped), hashed
+  assets `private, max-age=31536000, immutable`, `index.html` and other files `no-cache`, gzip and
+  ETags, and `index.html` for every GET/HEAD path outside `/api` (the app routes it; `/api` paths
+  keep their JSON 404). The page's CSP adds the same-origin WebSocket to `connect-src`
+  (`ws://<host> wss://<host>`, the host the gate checked). `packages/server/src/static.test.ts`.
+  The gate's exact-path rule now applies to `/api` paths only.
+- **Dependencies** (exact pins, publish dates from the registry, all at least 14 days old on
+  2026-10-18): `react` and `react-dom` 19.3.0 (2026-09-09; the npm advisory endpoint reports none for
+  19.3.0, so 19.3.1 is not adopted under the security exception), `zustand` 5.0.15 (2026-08-13),
+  `radix-ui` 1.6.7 (2026-07-24), `class-variance-authority` 0.7.1 (2024-11-26), `clsx` 2.1.1
+  (2024-04-23), `tailwind-merge` 3.7.0 (2026-09-12), `lucide-react` 1.51.0 (2026-10-03),
+  `tw-animate-css` 1.4.0 (2025-09-24); dev: `tailwindcss` and `@tailwindcss/cli` 4.3.3 (2026-07-16),
+  `@types/react` and `@types/react-dom` 19.3.0 (2026-09-09), `playwright-core` 1.56.1 (2025-10-17,
+  matching the pre-installed Chromium 1194), and `@perfidia/engine` for one test (the time format
+  against `fmtTime`). `scripts/check-dep-ages.ts bun.lock --base <the lock before>`: 158 added
+  versions of 157 packages, none younger than 14 days. The lock still holds one TypeScript (7.0.2) and
+  one Zod (4.6.5), no `bun` package and no `ts-morph`; `bun pm untrusted`: no dependency with a
+  lifecycle script runs. `bun audit` reports one high advisory, `braces@3.0.3`
+  (GHSA-vfj7-8cjw-p6xm, stack exhaustion on deeply nested patterns), reached only through the
+  Tailwind CLI's file watcher (`@tailwindcss/cli` → `@parcel/watcher` → `micromatch`), a build-time
+  tool fed our own glob patterns; no fixed version exists (3.0.3 is the latest).
+- **Sizes** (`bun run web:build`): JS about 159 KB gzipped (510 KB minified; React DOM 202 KB and Zod
+  100 KB of it), CSS about 8 KB gzipped; budgets 200 KB and 25 KB. `src/architecture.test.ts` also
+  builds the bundle in process and fails above 200 KB.
+- **Tests**: `bun test packages/web` runs 58 unit tests in about 0.4 s (no DOM).
+- **CI**: the GitHub App cannot change workflow files; the proposed `web` job (`bun run web:build`)
+  is delivered with the phase-3 pull request as `ci-web-build.patch`, for the owner to apply.
