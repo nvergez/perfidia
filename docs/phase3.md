@@ -858,6 +858,17 @@ manifest).
 7. The CI jobs `web` and `e2e` wait for the owner to apply `ci-web-build.patch` and
    `ci-e2e-job.patch` (unchanged by the review fixes: the e2e job runs `bun run test:e2e`, which
    now takes about 15 s).
+8. Seen by the final confirmation, not fixed:
+   - a long model id that does not map to a display name (38 characters in a probe) squeezes the
+     leaderboard row's name button to 0 px, so the name and id disappear and the row overflows;
+     real Claude ids map to short names;
+   - at exactly 1366 × 768 the scrubber is 233 px, the narrowest of the sizes measured (the wide
+     side columns start there);
+   - at 1440 × 900 the "Start watching" button of the first-visit overlay sits below the dialog's
+     fold (the dialog scrolls; ✕ is visible);
+   - the e2e hostile run plants no message or proposal text (checked by hand on a re-hashed copy
+     of the war golden); the popover focus return and the cities' roving tab stop have no
+     automated test.
 
 ### 15.10 Review fixes (Pass B)
 
