@@ -23,8 +23,10 @@ export {
   HostTurn,
   MatchHost,
   type Handoff,
+  type HandoffQueue,
   type HostStats,
   type MatchHostOptions,
+  type QueuedHandoff,
   type WakeCounts,
   type WallSource,
 } from "./host.ts";

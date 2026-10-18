@@ -758,6 +758,34 @@
           }
         ]
       }
+    },
+    {
+      "files": ["packages/orchestrator/src/**"],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "paths": [
+              {
+                "name": "@anthropic-ai/sdk",
+                "message": "The Anthropic SDK is imported only by packages/orchestrator/src/model/anthropic.ts: everything else goes through ModelAdapter (phase-2 design §1.1)."
+              }
+            ],
+            "patterns": [
+              {
+                "group": ["@anthropic-ai/sdk/*"],
+                "message": "The Anthropic SDK is imported only by packages/orchestrator/src/model/anthropic.ts: everything else goes through ModelAdapter (phase-2 design §1.1)."
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "files": ["packages/orchestrator/src/model/anthropic.ts"],
+      "rules": {
+        "no-restricted-imports": "off"
+      }
     }
   ]
 }

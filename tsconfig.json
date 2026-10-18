@@ -5,6 +5,7 @@
     { "path": "./packages/engine" },
     { "path": "./packages/gateway" },
     { "path": "./packages/bots" },
-    { "path": "./packages/sim" }
+    { "path": "./packages/sim" },
+    { "path": "./packages/orchestrator" }
   ]
 }
