@@ -33,7 +33,10 @@ export {
 export { MemorySink, teeSink, type LogSink } from "./sink.ts";
 export { runMatch, type RunMatchOptions, type RunResult, type RunStats } from "./run.ts";
 export {
+  createGatewayFold,
   rebuildGatewayState,
+  type GatewayFold,
+  type GatewayFoldStart,
   type GatewayRebuild,
   type RebuildDrift,
   type RebuildOptions,

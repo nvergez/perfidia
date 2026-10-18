@@ -17,4 +17,6 @@ export * from "./views.ts";
 export * from "./briefing.ts";
 export * from "./tools.ts";
 export * from "./log.ts";
+export * from "./arena.ts";
+export * from "./spectator.ts";
 export type * from "./agent.ts";

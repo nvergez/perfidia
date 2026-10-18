@@ -66,8 +66,11 @@ import {
 // on the bot-backed fake with `--fake`; bots through the sim harness), runs the preflight before
 // anything is written, then runs the match through the gateway's `runMatch` into a run directory:
 //
-//   match.jsonl, snapshots/, summary.json   as `sim run` writes them (Level E checked at the end)
+//   match.jsonl, snapshots/, summary.json   as `sim run` writes them (Level E checked at the end);
+//                                           match.jsonl flushed after every line, so a reader
+//                                           tailing it (the spectator server) sees each line at once
 //   llm_calls.jsonl, transcripts/, prompts/ the LLM logs (§5.1, §4.5)
+//   replies.jsonl                           every reply that arrived: reasoning, text, calls (phase 3)
 //   seats.json                              who played what, with the prompt hashes
 //   feed.txt                                the `--watch` text of the whole match (a fold of match.jsonl)
 //   arena.json                              the report (§6), rewritten at each status change
@@ -92,11 +95,13 @@ export const ARENA_FILE = "arena.json";
 export const SEATS_FILE = "seats.json";
 export const FEED_FILE = "feed.txt";
 export const CALLS_FILE = "llm_calls.jsonl";
+export const REPLIES_FILE = "replies.jsonl";
 
 export interface ArenaPaths {
   readonly dir: string;
   readonly log: string;
   readonly calls: string;
+  readonly replies: string;
   readonly arena: string;
   readonly seats: string;
   readonly feed: string;
@@ -108,6 +113,7 @@ export function arenaPaths(dir: string): ArenaPaths {
     dir,
     log: join(dir, "match.jsonl"),
     calls: join(dir, CALLS_FILE),
+    replies: join(dir, REPLIES_FILE),
     arena: join(dir, ARENA_FILE),
     seats: join(dir, SEATS_FILE),
     feed: join(dir, FEED_FILE),
@@ -277,7 +283,7 @@ export async function runArena(plan: ArenaPlan, o: RunArenaOptions): Promise<Are
   }
 
   // The run directory.
-  const files = new RunDirSink(o.dir);
+  const files = new RunDirSink(o.dir, { flush: "line" });
   const paths = arenaPaths(o.dir);
   const calls = new FileCallLog(o.dir, { transcripts: plan.transcripts });
   const operator = operatorTemplates();
@@ -329,6 +335,9 @@ export async function runArena(plan: ArenaPlan, o: RunArenaOptions): Promise<Are
           `${line.seat} turn ${line.turn}: wake cap reached (${formatUsd(line.wakeSpentNanoUsd)}): the turn ends\n`,
         );
       }
+    },
+    reply(line) {
+      calls.reply(line);
     },
     transcript(record) {
       calls.transcript(record);
@@ -619,6 +628,7 @@ export async function runArena(plan: ArenaPlan, o: RunArenaOptions): Promise<Are
   }
   const elapsedMs = Math.round(performance.now() - t0);
   files.flush();
+  files.close();
 
   const lines = [...readLogLines(paths.log)];
   const summary = summarize(lines, { wallMs: elapsedMs });

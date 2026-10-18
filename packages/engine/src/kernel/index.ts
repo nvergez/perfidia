@@ -20,9 +20,13 @@ export {
   type StepOutput,
 } from "./match.ts";
 export {
+  createReplay,
   verifyLog,
   type DivergenceKind,
+  type FinishOptions,
+  type Replay,
   type ReplayDivergence,
   type ReplayReport,
+  type ReplayStep,
   type VerifyOptions,
 } from "./replay.ts";

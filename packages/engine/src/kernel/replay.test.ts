@@ -9,7 +9,9 @@ import {
   type FixtureConfig,
   type FixtureExt,
 } from "@perfidia/engine/testing";
-import { canonicalJson } from "@perfidia/engine/core";
+import { canonicalJson, idKeyFromSeed } from "@perfidia/engine/core";
+import { domain } from "@perfidia/engine/domain";
+import { findRuleset } from "@perfidia/engine/rulesets";
 import type {
   Action,
   ActLine,
@@ -21,9 +23,15 @@ import type {
 } from "@perfidia/protocol";
 import fc from "fast-check";
 import {
+  EngineMisuse,
+  createMatch,
+  createReplay,
   verifyLog,
+  type ApplyOutput,
+  type Replay,
   type ReplayDivergence,
   type ReplayReport,
+  type ReplayStep,
   type VerifyOptions,
 } from "./index.ts";
 
@@ -31,6 +39,11 @@ import {
 // tampering with an act's `a` (whether or not that changes its verdict) or `r`, the order of act
 // lines, the payloads of two act lines, an `ev` line (a non-integer number included) or a `ckpt`
 // line is reported at the right `n` or hour.
+//
+// The incremental replay (`createReplay`): pushing a log line by line gives `verifyLog`'s report and
+// `onLine` sequence whatever is read in between; a prefix of a log being written holds up with
+// `requireEnd: false`; `changed` flags every line where an act applied or a scheduled event ran, a
+// silent world timer included; a snapshot taken at a ckpt line resumes a later replay.
 
 const resolve = (ref: string): AnyRuleset | undefined =>
   ref === fixtureRuleset.ref ? fixtureRuleset : undefined;
@@ -712,3 +725,185 @@ function pacingBug(): void {
 function foldBug(): void {
   throw new RangeError("fold bug");
 }
+
+/** A state's canonical JSON without its `now`. */
+function withoutNow(state: string): string {
+  return state.replace(/"now":[0-9]+/, "");
+}
+
+function pushAll(replay: Replay, lines: readonly LogLine[]): ReplayStep[] {
+  return lines.slice(1).map((l) => replay.push(l));
+}
+
+describe("createReplay", () => {
+  test("pushing every line gives verifyLog's report and onLine sequence, whatever is read in between", () => {
+    fc.assert(
+      fc.property(runArb, fc.array(fc.nat({ max: 3 }), { maxLength: 400 }), (run, reads) => {
+        const rec = record(run.seed, run.players, run.steps);
+        const seenA: string[] = [];
+        const seenB: string[] = [];
+        const expected = verifyLog(rec.lines, resolve, fakeDomain, {
+          onLine: (l, r, a) => seenA.push(canonicalJson({ l, now: r.now, a: a?.ok ?? null })),
+        });
+        const replay = createReplay(headerOf(rec.lines), resolve, fakeDomain, {
+          onLine: (l, r, a) => seenB.push(canonicalJson({ l, now: r.now, a: a?.ok ?? null })),
+        });
+        for (const [i, line] of rec.lines.slice(1).entries()) {
+          const step = replay.push(line);
+          expect(step.ok).toBe(true);
+          if (line.k === "act") expect(step.applied?.ok).toBe(line.r.ok);
+          else expect(step.applied).toBeUndefined();
+          // Reading in between changes nothing.
+          const what = reads[i] ?? 0;
+          if (what === 1) replay.read();
+          if (what === 2) expect(replay.finish({ requireEnd: false }).ok).toBe(true);
+        }
+        expect(replay.ended).toBe(true);
+        expect(replay.lines).toBe(rec.lines.length);
+        expect(canonicalJson(replay.finish())).toBe(canonicalJson(expected));
+        expect(seenB).toEqual(seenA);
+      }),
+      { numRuns: 40 },
+    );
+  });
+
+  test("every prefix of a log being written holds up without an end line; finish() latches the end divergence", () => {
+    fc.assert(
+      fc.property(runArb, fc.nat(), (run, cut) => {
+        const rec = record(run.seed, run.players, run.steps);
+        const n = 1 + (cut % rec.lines.length);
+        const replay = createReplay(headerOf(rec.lines), resolve, fakeDomain);
+        const steps = pushAll(replay, rec.lines.slice(0, n));
+        expect(steps.every((s) => s.ok)).toBe(true);
+        const live = replay.finish({ requireEnd: false });
+        expect(live.ok).toBe(true);
+        expect(live.divergence).toBeUndefined();
+        if (n < rec.lines.length) {
+          const report = replay.finish();
+          expect(report.ok).toBe(false);
+          expect(report.divergence?.kind).toBe("end");
+          expect(replay.push(rec.lines[n] ?? rec.lines[0]!).ok).toBe(false);
+        }
+      }),
+      { numRuns: 40 },
+    );
+  });
+
+  test("changed: every applied act and every line where scheduled events ran; never a line that only reads", () => {
+    fc.assert(
+      fc.property(runArb, (run) => {
+        const rec = record(run.seed, run.players, run.steps);
+        const replay = createReplay(headerOf(rec.lines), resolve, fakeDomain);
+        let prevT = 0;
+        for (const line of rec.lines.slice(1)) {
+          if (line.k === "header") continue;
+          const before = canonicalJson(replay.read().state);
+          const step = replay.push(line);
+          const after = canonicalJson(replay.read().state);
+          if (step.applied?.ok === true) expect(step.changed).toBe(true);
+          if (step.events.length > 0) expect(step.changed).toBe(true);
+          if (line.k === "obs" || line.k === "gw" || line.k === "note" || line.k === "turn") {
+            if (line.t === prevT) expect(step.changed).toBe(false);
+          }
+          // A line that changed nothing but the time leaves the state as it was, `now` aside.
+          if (!step.changed) expect(withoutNow(after)).toBe(withoutNow(before));
+          prevT = line.t;
+        }
+      }),
+      { numRuns: 30 },
+    );
+  });
+
+  test("the events of a push are those of the ev lines from that line on", () => {
+    const rec = sample();
+    const replay = createReplay(headerOf(rec.lines), resolve, fakeDomain);
+    const queued: string[] = [];
+    for (const line of rec.lines.slice(1)) {
+      const step = replay.push(line);
+      queued.push(...step.events.map((e) => canonicalJson(e)));
+      if (line.k === "ev") expect(canonicalJson(line.e)).toBe(queued.shift() ?? "none");
+    }
+    expect(queued).toEqual([]);
+  });
+
+  test("a snapshot taken right after a ckpt line resumes a later replay of the same log", () => {
+    const rec = sample();
+    const replay = createReplay(headerOf(rec.lines), resolve, fakeDomain);
+    const header = headerOf(rec.lines);
+    expect(canonicalJson(replay.snapshot().state)).toBe(
+      canonicalJson(createReplay(header, resolve, fakeDomain).snapshot().state),
+    );
+    let snap = null;
+    let at = -1;
+    for (const [i, line] of rec.lines.slice(1).entries()) {
+      replay.push(line);
+      if (line.k === "ckpt" && line.hour === 5) {
+        snap = replay.snapshot();
+        at = i + 1;
+      } else if (line.k !== "ckpt") {
+        expect(() => replay.snapshot()).toThrow(EngineMisuse);
+      }
+    }
+    if (snap === null) throw new Error("no ckpt line of hour 5");
+    const seen: LogLine[] = [];
+    const resumed = createReplay(header, resolve, fakeDomain, {
+      from: snap,
+      onLine: (l) => seen.push(l),
+    });
+    pushAll(resumed, rec.lines);
+    expect(seen).toEqual(rec.lines.slice(at + 1));
+    expect(resumed.finish().finalHash).toBe(replay.finish().finalHash);
+  });
+
+  test("a bad header starts the replay diverged: no push replays, read throws, the report names it", () => {
+    const rec = sample();
+    const header = structuredClone(headerOf(rec.lines));
+    header.initialHash = "0123456789abcdef";
+    const replay = createReplay(header, resolve, fakeDomain);
+    expect(replay.divergence?.kind).toBe("initial");
+    expect(replay.push(rec.lines[1] ?? header)).toEqual({ ok: false, changed: false, events: [] });
+    const unknown = createReplay(headerOf(rec.lines), () => undefined, fakeDomain);
+    expect(unknown.divergence?.kind).toBe("header");
+    expect(() => unknown.read()).toThrow(EngineMisuse);
+    expect(unknown.finish().divergence?.kind).toBe("header");
+  });
+});
+
+describe("createReplay on perfidia-1@1.1.0", () => {
+  test("the silent domination_open timer is a change at the line that crosses dominationStart", () => {
+    const ruleset = findRuleset("perfidia-1@1.1.0");
+    if (ruleset === undefined) throw new Error("no perfidia-1@1.1.0");
+    const setup = {
+      ruleset: ruleset.ref,
+      overrides: {},
+      seed: 5,
+      idKey: idKeyFromSeed(5),
+      seats: [1, 2, 3, 4, 5, 6].map((i) => ({ id: `p${i}` as const })),
+    };
+    const rec = new LogRecorder(createMatch(setup, ruleset, domain, { invariants: "off" }));
+    const start = rec.match.rules.time.matchEnd > 259200 ? 259200 : 0;
+    rec.advanceTo(start + 7200);
+    const replay = createReplay(headerOf(rec.lines), () => ruleset, domain, {
+      invariants: "off",
+    });
+    const open = (): boolean => {
+      const ext: unknown = replay.read().ext();
+      const d: unknown =
+        ext !== null && typeof ext === "object" ? Reflect.get(ext, "domination") : null;
+      return d !== null && typeof d === "object" && Reflect.get(d, "open") === true;
+    };
+    let flipped: { line: LogLine; step: ReplayStep } | null = null;
+    for (const line of rec.lines.slice(1)) {
+      const was = open();
+      const step = replay.push(line);
+      expect(step.ok).toBe(true);
+      if (!was && open()) flipped = { line, step };
+      else if (line.k === "ckpt" && step.events.length === 0) expect(step.changed).toBe(false);
+    }
+    expect(flipped?.line).toMatchObject({ k: "ckpt", t: 259200 });
+    expect(flipped?.step.events).toEqual([]);
+    expect(flipped?.step.changed).toBe(true);
+    const applied: ApplyOutput | undefined = flipped?.step.applied;
+    expect(applied).toBeUndefined();
+  });
+});

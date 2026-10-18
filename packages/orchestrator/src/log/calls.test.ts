@@ -2,7 +2,8 @@ import { afterAll, describe, expect, test } from "bun:test";
 import { mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { FileCallLog, MemoryCallLog, writePrompts } from "./calls.ts";
+import type { ChatResult } from "../model/adapter.ts";
+import { FileCallLog, MemoryCallLog, cutParts, replyLine, writePrompts } from "./calls.ts";
 import type { LlmCallLine } from "./schema.ts";
 
 const dirs: string[] = [];
@@ -60,6 +61,26 @@ const line: LlmCallLine = {
   error: null,
 };
 
+/** A reply that arrived with this stop reason. */
+const res = (stop: ChatResult["stop"]): ChatResult => ({
+  reply: {
+    native: [],
+    text: ["Hold the line."],
+    calls: [{ callId: "c1", name: "build", args: { city: "c1", buildings: ["wall"] } }],
+    reasoning: ["Thinking about walls.", "x".repeat(25_000)],
+  },
+  stop,
+  rawStop: stop,
+  refusal: null,
+  servedBy: "claude-opus-5-5",
+  fallback: false,
+  usage: [],
+  requestId: "req_secret",
+  latencyMs: 1,
+  ttftMs: null,
+  raw: null,
+});
+
 describe("call logs", () => {
   test("the file log appends validated lines and per-turn transcripts", () => {
     const dir = tmp();
@@ -104,6 +125,47 @@ describe("call logs", () => {
     );
     expect(() => log.write({ ...line, attempt: 0 })).toThrow("invalid llm_call line: attempt");
     expect(log.lines).toHaveLength(0);
+  });
+
+  test("replies.jsonl: one validated line per kept reply, transcripts off or on", () => {
+    const dir = tmp();
+    const log = new FileCallLog(dir, { transcripts: false });
+    const where = { seat: "p3", turn: 12, round: 2, attempt: 1, kind: "round", t: 223320 } as const;
+    const kept = replyLine(where, res("tool_use"));
+    if (kept === null) throw new Error("no line");
+    log.reply(kept);
+    for (const stop of ["refusal", "max_tokens", "pause", "other"] as const) {
+      expect(replyLine(where, res(stop))).toBeNull();
+    }
+    const rows = readFileSync(join(dir, "replies.jsonl"), "utf8").trim().split("\n");
+    expect(rows).toHaveLength(1);
+    const parsed: unknown = JSON.parse(rows[0] ?? "{}");
+    expect(parsed).toMatchObject({
+      k: "reply",
+      seat: "p3",
+      turn: 12,
+      round: 2,
+      attempt: 1,
+      stop: "tool_use",
+      text: ["Hold the line."],
+      calls: [{ name: "build", args: { city: "c1", buildings: ["wall"] } }],
+    });
+    expect(rows[0]).not.toContain("req_secret");
+    expect(kept.reasoning[0]).toBe("Thinking about walls.");
+    expect(kept.reasoning.join("").length).toBe(20_000);
+    expect(kept.reasoning[1]?.endsWith("…")).toBe(true);
+    expect(() => new MemoryCallLog().reply({ ...kept, attempt: 0 })).toThrow(
+      "invalid reply line: attempt",
+    );
+  });
+
+  test("cutParts keeps whole parts while they fit, cuts the next with an ellipsis, never inside a pair", () => {
+    expect(cutParts(["ab", "cd"], 10)).toEqual(["ab", "cd"]);
+    expect(cutParts(["abcd", "efgh"], 6)).toEqual(["abcd", "e…"]);
+    expect(cutParts(["abcd", "efgh"], 4)).toEqual(["abcd"]);
+    expect(cutParts(["abcd"], 3)).toEqual(["ab…"]);
+    expect(cutParts(["a😀b"], 3)).toEqual(["a…"]);
+    expect(cutParts([], 3)).toEqual([]);
   });
 
   test("prompts/ holds the exact texts", () => {

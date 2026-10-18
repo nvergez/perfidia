@@ -80,6 +80,10 @@ const FLAGS: FlagSpecs = {
     value: "<hours>",
     help: "game hours between snapshots, 0 for the final one only (default 24)",
   },
+  "live-flush": {
+    type: "boolean",
+    help: "write match.jsonl line by line instead of at checkpoints, for a reader following the run (the spectator server); the same bytes",
+  },
   "trace-hashes": {
     type: "boolean",
     help: "write trace.jsonl: the state hash after every action, from a replay of the written log (not the live engine)",
@@ -108,6 +112,7 @@ export function runRequestOf(argv: readonly string[]): {
   readonly out: string | undefined;
   readonly quiet: boolean;
   readonly json: boolean;
+  readonly liveFlush: boolean;
 } {
   const f = parseFlags(argv, FLAGS, RUN_USAGE, { min: 0, max: 0, name: "positional" });
   const speed = f.string("speed");
@@ -130,7 +135,13 @@ export function runRequestOf(argv: readonly string[]): {
     traceHashes: f.bool("trace-hashes"),
     allowTest: f.bool("allow-test"),
   };
-  return { req, out: f.string("out"), quiet: f.bool("quiet"), json: f.bool("json") };
+  return {
+    req,
+    out: f.string("out"),
+    quiet: f.bool("quiet"),
+    json: f.bool("json"),
+    liveFlush: f.bool("live-flush"),
+  };
 }
 
 /** `runs/perfidia-1@1.0.0-s1-6p-1d-lockstep`, the base name of a run's default directory. */
@@ -151,7 +162,7 @@ export function defaultRunDir(plan: RunPlan): string {
 }
 
 export async function runCommand(argv: readonly string[], io: CliIo): Promise<number> {
-  const { req, out, quiet, json } = runRequestOf(argv);
+  const { req, out, quiet, json, liveFlush } = runRequestOf(argv);
   const plan = planRun(req);
   let dir: string;
   if (out === undefined) dir = freeRunDir(defaultRunDir(plan));
@@ -160,7 +171,7 @@ export async function runCommand(argv: readonly string[], io: CliIo): Promise<nu
     dir = out;
   }
   if (!quiet && !json) io.out(`run directory: ${dir}\n`);
-  const outcome = await executeRun(plan, dir);
+  const outcome = await executeRun(plan, dir, { flush: liveFlush ? "line" : "checkpoint" });
   if (outcome.error !== null) io.err(`sim run: ${outcome.error}\n`);
   if (json) io.out(`${JSON.stringify(outcome.summary, null, 2)}\n`);
   else if (!quiet) {

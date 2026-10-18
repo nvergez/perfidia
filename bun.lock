@@ -89,6 +89,20 @@
         "fast-check": "catalog:",
       },
     },
+    "packages/spectator": {
+      "name": "@perfidia/spectator",
+      "version": "0.0.0",
+      "dependencies": {
+        "@perfidia/engine": "workspace:*",
+        "@perfidia/gateway": "workspace:*",
+        "@perfidia/protocol": "workspace:*",
+      },
+      "devDependencies": {
+        "@perfidia/orchestrator": "workspace:*",
+        "@types/bun": "catalog:",
+        "fast-check": "catalog:",
+      },
+    },
   },
   "overrides": {
     "typescript": "7.0.2",
@@ -204,6 +218,8 @@
     "@perfidia/protocol": ["@perfidia/protocol@workspace:packages/protocol"],
 
     "@perfidia/sim": ["@perfidia/sim@workspace:packages/sim"],
+
+    "@perfidia/spectator": ["@perfidia/spectator@workspace:packages/spectator"],
 
     "@stablelib/base64": ["@stablelib/base64@1.0.1", "", {}, "sha512-1bnPQqSxSuc3Ii6MhBysoWCg58j97aUjuCSZrGSmDxNqtytIi0k8utUenAwTZN4V5mXXYGsVUI9zeBqy+jBOSQ=="],
 

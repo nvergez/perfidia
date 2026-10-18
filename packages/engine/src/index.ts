@@ -1,22 +1,25 @@
 // @perfidia/engine: the top barrel (docs/architecture.md §2.2). Nothing inside the engine imports it.
 // It exports the core, the contract types, the kernel, `std`, the default domain module, the
-// ruleset registry (§3.5) and the bound `createMatch`, `loadMatch` and `verifyLog`, which fill in
-// the domain module (§5.3); `verifyLog(lines, opts)` resolves the header's ruleset through the
-// registry, and `verifyLog(lines, resolve, opts)` through a resolver of the caller's.
+// ruleset registry (§3.5) and the bound `createMatch`, `loadMatch`, `verifyLog` and `createReplay`,
+// which fill in the domain module (§5.3); `verifyLog(lines, opts)` resolves the header's ruleset
+// through the registry, and `verifyLog(lines, resolve, opts)` through a resolver of the caller's
+// (`createReplay(header, …)` likewise).
 
 import type { AnyRuleset } from "./contracts/index.ts";
 import { domain } from "./domain/index.ts";
 import {
   createMatch as createKernelMatch,
+  createReplay as createKernelReplay,
   loadMatch as loadKernelMatch,
   verifyLog as verifyKernelLog,
   type Match,
   type MatchOptions,
+  type Replay,
   type ReplayReport,
   type VerifyOptions,
 } from "./kernel/index.ts";
 import { findRuleset } from "./rulesets/index.ts";
-import type { LogLine, MatchSetup, Snapshot } from "@perfidia/protocol";
+import type { HeaderLine, LogLine, MatchSetup, Snapshot } from "@perfidia/protocol";
 
 export * from "./core/index.ts";
 // Every contract type; `Rng` and `Fmt` come from `core`, which declares the same structural types.
@@ -66,11 +69,14 @@ export {
   type ApplyOutput,
   type DivergenceKind,
   type EngineBugKind,
+  type FinishOptions,
   type InvariantLevel,
   type Match,
   type MatchOptions,
+  type Replay,
   type ReplayDivergence,
   type ReplayReport,
+  type ReplayStep,
   type StepOutput,
   type VerifyOptions,
 } from "./kernel/index.ts";
@@ -117,4 +123,23 @@ export function verifyLog(
 ): ReplayReport {
   if (typeof second === "function") return verifyKernelLog(lines, second, domain, third);
   return verifyKernelLog(lines, (ref) => findRuleset(ref), domain, second);
+}
+
+/**
+ * The incremental Level E replay of a log (§10.4) with the default domain module: `push` each line
+ * after the header, in file order. The ruleset is resolved like `verifyLog`'s.
+ */
+export function createReplay(header: HeaderLine, opts?: VerifyOptions): Replay;
+export function createReplay(
+  header: HeaderLine,
+  resolve: (ref: string) => AnyRuleset | undefined,
+  opts?: VerifyOptions,
+): Replay;
+export function createReplay(
+  header: HeaderLine,
+  second?: ((ref: string) => AnyRuleset | undefined) | VerifyOptions,
+  third?: VerifyOptions,
+): Replay {
+  if (typeof second === "function") return createKernelReplay(header, second, domain, third);
+  return createKernelReplay(header, (ref) => findRuleset(ref), domain, second);
 }

@@ -4,7 +4,15 @@
 // JSONL writer, the log reader, the golden check and add-only writers, and the ruleset fingerprint.
 
 export { SystemTime, createVirtualTime, systemWall, yieldMacrotask } from "./time.ts";
-export { JsonlFileSink, jsonlText, parseJsonl, snapshotFileName, writeJsonl } from "./jsonl.ts";
+export {
+  JsonlFileSink,
+  jsonlText,
+  parseJsonl,
+  snapshotFileName,
+  writeJsonl,
+  type FlushMode,
+  type JsonlFileSinkOptions,
+} from "./jsonl.ts";
 export {
   JsonlError,
   LogFileError,

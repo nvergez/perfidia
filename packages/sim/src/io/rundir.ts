@@ -12,7 +12,7 @@ import { canonicalJson } from "@perfidia/engine/core";
 import type { LogSink } from "@perfidia/gateway";
 import { SnapshotSchema, type LogLine, type Snapshot } from "@perfidia/protocol";
 import { UsageError } from "../args.ts";
-import { JsonlFileSink } from "../harness/index.ts";
+import { JsonlFileSink, type FlushMode } from "../harness/index.ts";
 
 // The run directory (docs/architecture.md §10.1): `match.jsonl` (authoritative, append-only),
 // `snapshots/h0024.json` at checkpoint hours plus `snapshots/final.json` after the end line, and
@@ -122,21 +122,23 @@ export function writeFileAtomic(path: string, text: string): void {
 /**
  * The file sink of a run directory (§10.1): lines are serialised at `write`, buffered, and appended
  * to `match.jsonl` at every `flush` (the host flushes after each step that wrote checkpoint lines,
- * after the end line and after a fatal line). Snapshots go to `snapshots/`: a checkpoint snapshot
- * as `h0024.json`, the one taken after the end line as `final.json`. `match.jsonl` is created empty
- * at construction, and a directory that already holds a run is refused (`UsageError`), so a log is
- * never truncated and a run directory never mixes the files of two matches.
+ * after the end line and after a fatal line); with `flush: "line"` each line is written at once
+ * (`JsonlFileSink`), for a reader tailing the log. Snapshots go to `snapshots/`: a checkpoint
+ * snapshot as `h0024.json`, the one taken after the end line as `final.json`. `match.jsonl` is
+ * created empty at construction, and a directory that already holds a run is refused
+ * (`UsageError`), so a log is never truncated and a run directory never mixes the files of two
+ * matches.
  */
 export class RunDirSink implements LogSink {
   readonly paths: RunPaths;
   private readonly file: JsonlFileSink;
   private ended = false;
 
-  constructor(dir: string) {
+  constructor(dir: string, o: { readonly flush?: FlushMode } = {}) {
     assertFreeRunDir(dir);
     this.paths = runPaths(dir);
     mkdirSync(dir, { recursive: true });
-    this.file = new JsonlFileSink(this.paths.log);
+    this.file = new JsonlFileSink(this.paths.log, o.flush === undefined ? {} : { flush: o.flush });
   }
 
   write(line: LogLine): void {
@@ -151,6 +153,11 @@ export class RunDirSink implements LogSink {
 
   flush(): void {
     this.file.flush();
+  }
+
+  /** Flushes and closes the log's kept-open file descriptor (`flush: "line"`), if any. */
+  close(): void {
+    this.file.close();
   }
 }
 

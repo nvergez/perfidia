@@ -1,4 +1,4 @@
-import { appendFileSync, mkdirSync, writeFileSync } from "node:fs";
+import { appendFileSync, closeSync, mkdirSync, openSync, writeFileSync, writeSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { canonicalJson } from "@perfidia/engine/core";
 import type { LogSink } from "@perfidia/gateway";
@@ -35,29 +35,66 @@ export function snapshotFileName(snap: Snapshot): string {
 }
 
 /**
+ * When a file sink writes its lines: at the host's flushes (`checkpoint`, the default), or each line
+ * at once (`line`: a reader tailing the file, the spectator server, sees every line as it is
+ * written). The bytes are the same.
+ */
+export type FlushMode = "checkpoint" | "line";
+
+export interface JsonlFileSinkOptions {
+  readonly snapshotsDir?: string;
+  readonly flush?: FlushMode;
+}
+
+/**
  * A `LogSink` that appends to a `.jsonl` file (§10.1): each line is serialised at `write` and
  * buffered, and the buffer is appended at every `flush`. The host flushes after every engine step
  * that wrote checkpoint lines (so before the snapshot of that hour), after the end line and after
  * a fatal line: a killed run keeps its log up to its last checkpoint, and no snapshot file exists
  * without its `ckpt` line on disk. Snapshots go to `snapshotsDir` when one is given, written at
- * once. The file is created empty at construction.
+ * once. The file is created empty at construction. With `flush: "line"` every line is written at
+ * `write` through a file descriptor kept open (closed after the end or fatal line, or by `close`):
+ * more lines are durable earlier, the order of lines and snapshots is unchanged, and a crash can
+ * still leave a partial last line.
  */
 export class JsonlFileSink implements LogSink {
   readonly path: string;
   private readonly snapshotsDir: string | null;
+  private readonly mode: FlushMode;
   private buffer: string[] = [];
+  private fd: number | null = null;
+  private closed = false;
 
-  constructor(path: string, o: { readonly snapshotsDir?: string } = {}) {
+  constructor(path: string, o: JsonlFileSinkOptions = {}) {
     if (isGzip(path))
       throw new Error("JsonlFileSink appends plain .jsonl; gzip whole files with writeJsonl");
     this.path = path;
     this.snapshotsDir = o.snapshotsDir ?? null;
+    this.mode = o.flush ?? "checkpoint";
     mkdirSync(dirname(path), { recursive: true });
     writeFileSync(path, "");
   }
 
   write(line: LogLine): void {
-    this.buffer.push(`${canonicalJson(line)}\n`);
+    const text = `${canonicalJson(line)}\n`;
+    if (this.mode === "checkpoint") {
+      this.buffer.push(text);
+      return;
+    }
+    if (this.closed) throw new Error(`${this.path}: the sink is closed`);
+    this.fd ??= openSync(this.path, "a");
+    const bytes = new TextEncoder().encode(text);
+    let done = 0;
+    while (done < bytes.length) done += writeSync(this.fd, bytes, done, bytes.length - done);
+    if (line.k === "end" || line.k === "fatal") this.close();
+  }
+
+  /** Writes what is buffered and closes the kept-open file descriptor, if any. */
+  close(): void {
+    this.flush();
+    if (this.fd !== null) closeSync(this.fd);
+    this.fd = null;
+    this.closed = this.mode === "line";
   }
 
   snapshot(snap: Snapshot): void {

@@ -404,4 +404,46 @@ describe("the file sink", () => {
       rmSync(dir, { recursive: true, force: true });
     }
   }, 30000);
+
+  test('with flush "line", every line is on disk once written, the bytes are the same, the file closes after the end line', async () => {
+    const dir = tempDir();
+    try {
+      const run = (path: string, flush: "line" | "checkpoint", check: boolean) => {
+        const file = new JsonlFileSink(path, { flush });
+        let written = 0;
+        const sink: LogSink = {
+          write(line) {
+            file.write(line);
+            written += 1;
+            if (check) expect(readFileSync(path, "utf8").split("\n").length - 1).toBe(written);
+          },
+          flush: () => file.flush(),
+          snapshot: () => undefined,
+        };
+        const prepared = prepareBotRun({
+          ruleset: SANDBOX,
+          seed: 4,
+          players: 3,
+          overrides: { "time.matchEnd": 4 * 3600 },
+          clock: { kind: "lockstep" },
+        });
+        return { file, done: runPrepared(prepared, sink) };
+      };
+      const line = run(join(dir, "line.jsonl"), "line", true);
+      await line.done;
+      const checkpoint = run(join(dir, "checkpoint.jsonl"), "checkpoint", false);
+      await checkpoint.done;
+      const text = readFileSync(join(dir, "line.jsonl"), "utf8");
+      expect(text).toBe(readFileSync(join(dir, "checkpoint.jsonl"), "utf8"));
+      expect(readLog(join(dir, "line.jsonl")).at(-1)?.k).toBe("end");
+      // Closed after the end line: nothing more is written; close() again is harmless.
+      expect(() => line.file.write({ k: "ckpt", t: 3600, hour: 1, h: "0123456789abcdef" })).toThrow(
+        "the sink is closed",
+      );
+      line.file.close();
+      expect(readFileSync(join(dir, "line.jsonl"), "utf8")).toBe(text);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }, 30000);
 });

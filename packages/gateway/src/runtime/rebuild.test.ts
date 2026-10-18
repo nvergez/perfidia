@@ -3,10 +3,11 @@
 // that drives the gateway (notes, accepted and rejected actions, gateway rejections of every layer,
 // the daily message cap included, batch items, INTERNAL, end_turn, deferred turns, messages, public
 // messages); and a log with a line removed or changed is rebuilt to another state or reported as a
-// drift, never a throw.
+// drift, never a throw. The incremental fold (`createGatewayFold`) driven by the incremental replay
+// gives the same state, also when resumed from a JSON copy of its state midway.
 
 import { describe, expect, test } from "bun:test";
-import { createMatch, type AnyRuleset } from "@perfidia/engine";
+import { createMatch, createReplay, type AnyRuleset } from "@perfidia/engine";
 import { canonicalJson } from "@perfidia/engine/core";
 import { VirtualTime } from "@perfidia/gateway/clock";
 import { seatOf, type GatewayState } from "@perfidia/gateway/seat";
@@ -23,9 +24,11 @@ import type {
 } from "@perfidia/protocol";
 import {
   MemorySink,
+  createGatewayFold,
   createToolRegistry,
   rebuildGatewayState,
   runMatch,
+  type GatewayFold,
   type RunMatchOptions,
   type ToolRegistry,
   type ToolSpec,
@@ -283,6 +286,43 @@ describe("the rebuilt gateway state equals the live one", () => {
     // p1's first turn ended with calls it never saw: the note too long, the cancel, the call after end_turn.
     const p1 = linesOf(live.lines, "turn").find((l) => l.seat === "p1");
     expect(p1).toMatchObject({ turn: 1, why: "end_turn", rounds: 2, selfAt: 1800 });
+  }, 30000);
+});
+
+describe("createGatewayFold", () => {
+  test("a loop over createReplay's lines equals rebuildGatewayState; a fold resumed midway from a JSON copy too", async () => {
+    const live = await run(PERFIDIA, "lockstep");
+    const header = live.lines[0];
+    if (header?.k !== "header") throw new Error("no header");
+    const resolve = resolveOf(PERFIDIA);
+    const mid = Math.floor(live.lines.length / 2);
+    const fold = createGatewayFold();
+    const later: { fold: GatewayFold | null } = { fold: null };
+    let index = 0;
+    const replay = createReplay(header, resolve, {
+      onLine: (line, r, applied) => {
+        fold.line(line, r, applied);
+        later.fold?.line(line, r, applied);
+        if (index === mid) {
+          later.fold = createGatewayFold({
+            gw: structuredClone(fold.gw),
+            index,
+          });
+        }
+        index += 1;
+      },
+    });
+    for (const line of live.lines.slice(1)) expect(replay.push(line).ok).toBe(true);
+    expect(fold.drift).toBeNull();
+    expect(text(fold.gw)).toBe(text(rebuildGatewayState(live.lines, resolve).gw));
+    expect(text(fold.gw)).toBe(text(live.gw));
+    const other = later.fold;
+    expect(other).not.toBeNull();
+    expect(other?.drift ?? null).toBeNull();
+    expect(text(other?.gw ?? fold.gw)).toBe(text(live.gw));
+    for (const seat of ["p1", "p2", "p3"] as const) {
+      expect(other?.wake?.peek(seat) ?? null).toEqual(fold.wake?.peek(seat) ?? null);
+    }
   }, 30000);
 });
 

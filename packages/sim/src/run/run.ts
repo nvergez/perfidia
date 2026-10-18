@@ -1,7 +1,7 @@
 import { canonicalJson } from "@perfidia/engine/core";
 import type { RunResult } from "@perfidia/gateway";
 import { EXIT, errorText, type ExitCode } from "../args.ts";
-import { prepareBotRun, runPrepared, systemWall } from "../harness/index.ts";
+import { prepareBotRun, runPrepared, systemWall, type FlushMode } from "../harness/index.ts";
 import { RunDirSink, readLogLines, writeFileAtomic, type RunPaths } from "../io/index.ts";
 import { summarize, type MatchSummary } from "../summary/index.ts";
 import type { RunPlan } from "./plan.ts";
@@ -30,10 +30,15 @@ export interface RunOutcome {
 
 /**
  * Runs `plan` into `dir`, which must not hold a run yet (`freeRunDir`): a directory that does is
- * refused with a `UsageError` before anything is written.
+ * refused with a `UsageError` before anything is written. `flush: "line"` (`--live-flush`) writes
+ * the log line by line, for a reader following the run; the bytes are the same.
  */
-export async function executeRun(plan: RunPlan, dir: string): Promise<RunOutcome> {
-  const sink = new RunDirSink(dir);
+export async function executeRun(
+  plan: RunPlan,
+  dir: string,
+  o: { readonly flush?: FlushMode } = {},
+): Promise<RunOutcome> {
+  const sink = new RunDirSink(dir, o.flush === undefined ? {} : { flush: o.flush });
   const prepared = prepareBotRun({
     ruleset: plan.ruleset,
     seed: plan.setup.seed,
@@ -60,7 +65,7 @@ export async function executeRun(plan: RunPlan, dir: string): Promise<RunOutcome
     error = errorText(e);
   }
   const wallMs = Math.round(performance.now() - t0);
-  sink.flush();
+  sink.close();
 
   const summary = summarize(readLogLines(sink.paths.log), { wallMs });
   writeFileAtomic(sink.paths.summary, `${JSON.stringify(summary, null, 2)}\n`);

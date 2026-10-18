@@ -1,7 +1,7 @@
 import { canonicalJson, sha256Hex } from "@perfidia/engine/core";
 import type { GameTime, PlayerId, RoundInput, RoundOutput, SeatAgent } from "@perfidia/protocol";
 import type { BudgetLedger, Charge } from "../budget/ledger.ts";
-import type { CallLog } from "../log/calls.ts";
+import { replyLine, type CallLog } from "../log/calls.ts";
 import type { LlmCallLine } from "../log/schema.ts";
 import {
   ModelError,
@@ -54,6 +54,10 @@ import { thoughtOf } from "./thought.ts";
 //   (`{calls: []}`).
 // - A turn-closing error is `systemic` (it counts toward the breaker) unless it is a refusal, a
 //   truncation or a deadline abort: those are about one request, not about the API or the harness.
+// - Every reply that arrived and that the conversation keeps (`end_turn` or `tool_use`) gets a
+//   `replies.jsonl` line right after its `llm_call` line (phase 3, for the spectators): its
+//   reasoning summaries, text and calls. A late completion of a round the host has moved on from
+//   is logged too: the reply did arrive.
 
 /** A turn-closing failure; its message is one deterministic line (no wall durations). */
 export class AgentError extends Error {
@@ -434,6 +438,7 @@ export class LlmSeatAgent implements SeatAgent {
         err: null,
         cacheMiss,
       });
+      this.writeReply(w, attempt, res);
       this.o.log.transcript({
         k: "response",
         seat: this.seat,
@@ -524,6 +529,7 @@ export class LlmSeatAgent implements SeatAgent {
         err: null,
         cacheMiss: false,
       });
+      this.writeReply(w, 1, res);
       return res.stop === "refusal" ? undefined : thoughtOf(res.reply.text);
     } catch (e) {
       if (e instanceof ArenaAborted) throw e;
@@ -573,6 +579,22 @@ export class LlmSeatAgent implements SeatAgent {
       maxOutputTokens: req.maxOutputTokens ?? this.o.adapter.spec.maxOutputTokens,
     });
     if (w.kind === "round") s.logged = req.entries.length;
+  }
+
+  /** The `replies.jsonl` line of a reply that arrived, right after its `llm_call` line. */
+  private writeReply(w: Where, attempt: number, res: ChatResult): void {
+    const line = replyLine(
+      {
+        seat: this.seat,
+        turn: w.input.turn,
+        round: w.input.round,
+        attempt,
+        kind: w.kind,
+        t: w.t,
+      },
+      res,
+    );
+    if (line !== null) this.o.log.reply(line);
   }
 
   private writeCall(
