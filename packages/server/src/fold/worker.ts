@@ -87,11 +87,17 @@ function batchOf(slot: Slot, idle: boolean): FoldBatch {
   for (const s of fold.header.setup.seats) {
     const notes = fold.notes(s.id) ?? "";
     const counts = fold.counts(s.id) ?? { turns: 0, messagesSent: 0, messagesReceived: 0 };
-    const countsKey = JSON.stringify(counts);
+    const countsKey = `${JSON.stringify(counts)}:${fold.seriesKey(s.id)}`;
     if (slot.notes.get(s.id) !== notes || slot.counts.get(s.id) !== countsKey) {
       slot.notes.set(s.id, notes);
       slot.counts.set(s.id, countsKey);
-      seats.push({ seat: s.id, notes, counts });
+      seats.push({
+        seat: s.id,
+        notes,
+        counts,
+        hourly: fold.hourly(s.id),
+        notebook: fold.notebook(s.id),
+      });
     }
   }
   const map = slot.mapSent ? null : fold.map();

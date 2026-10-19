@@ -26,13 +26,18 @@ import {
   TurnAnnotationSchema,
   type MatchMeta,
 } from "@perfidia/protocol/spectator";
+import type { LogLine } from "@perfidia/protocol";
+import { notebookTexts } from "@perfidia/spectator/reduce";
 import { z } from "zod";
 import type { SpectatorApp } from "./http/elysia.ts";
 import {
   WAR_GOLDEN,
   fakeRun,
   getJson,
+  headerOf,
   metaOf,
+  parseLog,
+  warText,
   serve,
   sharedWarCache,
   tempDir,
@@ -66,6 +71,9 @@ const PATHS = [
 let root = "";
 let cache = "";
 let fake: FakeRun;
+let warLines: LogLine[] | null = null;
+/** The war golden's lines, parsed once. */
+const warLog = (): LogLine[] => (warLines ??= parseLog(warText()));
 
 beforeAll(async () => {
   fake = await fakeRun({ days: 1, seed: 3 });
@@ -200,6 +208,94 @@ for (const adapter of ["elysia", "raw"] as const) {
         );
         const llmTurn = turns.items.find((e) => e.item.k === "turn" && e.item.llm)?.item;
         expect(llmTurn?.k === "turn" ? (llmTurn.results?.length ?? 0) : 0).toBeGreaterThan(0);
+      },
+      LONG,
+    );
+
+    test(
+      "the dossier: an hourly point per checkpoint and every notebook version, pinned to the logs",
+      async () => {
+        const cases = [
+          { id: "war", lines: warLog() },
+          { id: "fake", lines: fake.lines },
+        ];
+        const pinned: Record<string, unknown> = {};
+        for (const { id, lines } of cases) {
+          const ckpts = lines.flatMap((l) => (l.k === "ckpt" || l.k === "end" ? [l.t] : []));
+          // Every change a note line made to a seat's notebook (gateway semantics: append adds a line).
+          const now = new Map<string, string>();
+          const changes = new Map<string, number>();
+          for (const l of lines) {
+            if (l.k !== "note") continue;
+            const prev = now.get(l.seat) ?? "";
+            const next =
+              l.mode === "replace"
+                ? l.text
+                : l.text === ""
+                  ? prev
+                  : prev === ""
+                    ? l.text
+                    : `${prev}\n${l.text}`;
+            if (next !== prev) changes.set(l.seat, (changes.get(l.seat) ?? 0) + 1);
+            now.set(l.seat, next);
+          }
+          const totals: [string, number, number][] = [];
+          for (const seat of headerOf(lines).setup.seats.map((x) => x.id)) {
+            const url = `${s.url}/api/matches/${id}/players/${seat}`;
+            const d = await getJson(url, PlayerDossierSchema);
+            expect(d.hourly.map((p) => p.t)).toEqual(ckpts);
+            expect(d.notebook.total).toBe(changes.get(seat) ?? 0);
+            expect(d.notebook.versions).toHaveLength(d.notebook.total);
+            expect(notebookTexts(d.notebook)?.at(-1) ?? "").toBe(d.notes);
+            expect(d.notes).toBe(now.get(seat) ?? "");
+            const gz = Bun.gzipSync(JSON.stringify(d)).length;
+            expect(gz).toBeLessThan(64 * 1024);
+            totals.push([seat, d.notebook.total, gz]);
+          }
+          pinned[id] = { ckpts: ckpts.length, notebooks: totals.map(([seat, n]) => [seat, n]) };
+          console.log(
+            `${adapter} ${id} dossiers: ${ckpts.length} hourly points, notebook versions and gzipped bytes ${totals.map(([seat, n, gz]) => `${seat} ${n} (${gz} B)`).join(", ")}`,
+          );
+        }
+        expect(pinned).toEqual({
+          war: {
+            ckpts: 139,
+            notebooks: [
+              ["p1", 80],
+              ["p2", 64],
+              ["p3", 33],
+              ["p4", 87],
+              ["p5", 39],
+              ["p6", 58],
+            ],
+          },
+          fake: {
+            ckpts: 24,
+            notebooks: [
+              ["p1", 5],
+              ["p2", 5],
+              ["p3", 4],
+              ["p4", 5],
+              ["p5", 5],
+              ["p6", 6],
+            ],
+          },
+        });
+        // p2 at the war golden's six-hourly keyframes: the points are the frames' players.
+        const d2 = await getJson(`${s.url}/api/matches/war/players/p2`, PlayerDossierSchema);
+        let checked = 0;
+        for (const seq of war.keyframes.slice(1, 4)) {
+          const k = await getJson(
+            `${s.url}/api/matches/war/t/${war.timeline}/keyframes/${seq}`,
+            FrameSchema,
+          );
+          const p = d2.hourly.find((x) => x.t === k.t);
+          const p2 = k.players.p2;
+          if (p === undefined || p2 === undefined) continue;
+          expect(p).toEqual({ t: k.t, score: p2.score, cities: p2.cities });
+          checked += 1;
+        }
+        expect(checked).toBeGreaterThan(0);
       },
       LONG,
     );

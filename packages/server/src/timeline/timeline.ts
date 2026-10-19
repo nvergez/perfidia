@@ -15,12 +15,13 @@ import {
   type Verified,
 } from "@perfidia/protocol/spectator";
 import type { PlayerId, Sha256 } from "@perfidia/protocol";
-import type { Keyframe, SeatCounts } from "@perfidia/spectator";
+import type { Keyframe } from "@perfidia/spectator";
 import { applySteps } from "@perfidia/spectator/reduce";
 import type { FoldBatch, SeatAux } from "../fold/messages.ts";
 
 // A match's timeline in the server's memory (phase-3 design §2.5, §2.7): everything the fold of its
-// `match.jsonl` produced (steps, keyframes, moments, report copies, the seats' notebooks and counts)
+// `match.jsonl` produced (steps, keyframes, moments, report copies, the seats' notebooks, counts,
+// hourly points and notebook histories)
 // and the frame at the tail, kept up to date by applying each new step. Batches are applied
 // idempotently by cursor: a refold of the same log (after a restart from a cached prefix, or after a
 // worker crash) sends steps the timeline already holds, and they are skipped. The timeline holds
@@ -55,7 +56,14 @@ export interface TimelineSummary {
   readonly final: boolean;
   keyframeSeqs(): Seq[];
   tail(): Frame | null;
-  readonly seats: ReadonlyMap<string, { readonly notes: string; readonly counts: SeatCounts }>;
+  readonly seats: ReadonlyMap<string, SeatData>;
+}
+
+/** A seat's data besides the steps: its notebook, counts, hourly points and notebook history. */
+export type SeatData = Omit<SeatAux, "seat">;
+
+function seatData(s: SeatAux): SeatData {
+  return { notes: s.notes, counts: s.counts, hourly: s.hourly, notebook: s.notebook };
 }
 
 export interface FeedEntry {
@@ -123,7 +131,7 @@ export class Timeline implements TimelineSummary {
   readonly moments: Moment[] = [];
   readonly feed: FeedEntry[] = [];
   readonly reports = new Map<string, ReportDetail>();
-  readonly seats = new Map<string, { readonly notes: string; readonly counts: SeatCounts }>();
+  readonly seats = new Map<string, SeatData>();
   /** The cursor of the last line folded; -1 before the header. */
   lastSeq = -1;
   lastT = 0;
@@ -176,7 +184,7 @@ export class Timeline implements TimelineSummary {
     }
     for (const m of batch.moments) if (m.seq > from) this.moments.push(m);
     for (const r of batch.reports) this.reports.set(r.report, r);
-    for (const s of batch.seats) this.seats.set(s.seat, { notes: s.notes, counts: s.counts });
+    for (const s of batch.seats) this.seats.set(s.seat, seatData(s));
     // The tail: from the latest keyframe when it is ahead of the tail (a keyframe is the fold's frame
     // at its cursor), then the new steps beyond it.
     const keyframe = this.keyframes.at(-1);
@@ -296,7 +304,13 @@ export class Timeline implements TimelineSummary {
       keyframes: this.keyframes,
       moments: this.moments,
       reports: [...this.reports.values()],
-      seats: [...this.seats].map(([seat, s]) => ({ seat, notes: s.notes, counts: s.counts })),
+      seats: [...this.seats].map(([seat, s]) => ({
+        seat,
+        notes: s.notes,
+        counts: s.counts,
+        hourly: s.hourly,
+        notebook: s.notebook,
+      })),
     };
   }
 

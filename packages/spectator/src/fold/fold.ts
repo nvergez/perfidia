@@ -17,6 +17,7 @@ import {
   type FrameResult,
   type GameTime,
   type HeaderLine,
+  type HourPoint,
   type JsonObject,
   type LogLine,
   type MatchId,
@@ -24,6 +25,7 @@ import {
   type MessageId,
   type Moment,
   type MovementEnt,
+  type NotebookHistory,
   type Patch,
   type PlayerEnt,
   type PlayerId,
@@ -57,6 +59,7 @@ import {
   turnedAtOf,
 } from "./project.ts";
 import { rulesetEvents } from "./rulesets.ts";
+import { SeatSeries } from "./series.ts";
 
 // The spectator fold (phase-3 design §2.5–§2.7): `match.jsonl`, line by line, into frames, steps,
 // feed items, moments and keyframes. Each line goes through the engine's incremental Level E
@@ -133,6 +136,12 @@ export interface SpectatorFold {
   /** A seat's notebook now. */
   notes(seat: PlayerId): string | null;
   counts(seat: PlayerId): SeatCounts | null;
+  /** A seat's score and cities at every hourly checkpoint so far (`fold/series.ts`). */
+  hourly(seat: PlayerId): HourPoint[];
+  /** A seat's notebook versions, the newest kept (`fold/series.ts`). */
+  notebook(seat: PlayerId): NotebookHistory;
+  /** Changes whenever a seat's hourly points or notebook history change. */
+  seriesKey(seat: PlayerId): string;
   /** A report copy and the ids of the other copies of the same battle. */
   report(id: string): ReportDetail | null;
   /** Where the gateway fold stopped folding seat lines, if it did (seats freeze there). */
@@ -233,6 +242,7 @@ class Fold implements SpectatorFold {
   private readonly lastAct = new Map<PlayerId, { readonly t: GameTime; readonly turn: number }>();
   private readonly sent = new Map<PlayerId, number>();
   private readonly received = new Map<PlayerId, number>();
+  private readonly series: SeatSeries;
 
   constructor(header: HeaderLine, o: SpectatorFoldOptions) {
     this.match = o.match;
@@ -242,6 +252,7 @@ class Fold implements SpectatorFold {
     this.keyframeEvery = o.keyframeEvery ?? KEYFRAME_STEPS;
     const events = rulesetEvents(header.setup.ruleset);
     this.feed = new FeedState(events);
+    this.series = new SeatSeries(header.setup.seats.map((s) => s.id));
     for (const s of header.setup.seats) {
       const label = header.controllers[s.id] ?? "";
       this.controllers.set(s.id, label);
@@ -348,6 +359,10 @@ class Fold implements SpectatorFold {
         break;
       }
       case "note": {
+        const notes = this.notes(line.seat);
+        if (notes !== null && this.gw.drift === null) {
+          this.series.note(line.seat, line.t, line.turn, line.mode, notes);
+        }
         const acc = this.turns.get(line.seat);
         if (acc !== undefined && acc.turn === line.turn) {
           addResult(acc.results, null, "write_note", undefined, null);
@@ -409,6 +424,9 @@ class Fold implements SpectatorFold {
     if (out.changed || line.k === "end")
       this.projectEngine(r, patch, drafts, line.k === "header" ? 0 : line.t);
     this.projectSeats(patch, seats);
+    if (line.k === "ckpt" || line.k === "end") {
+      this.series.checkpoint(line.t, (p) => this.players.get(p));
+    }
     const step = this.emit(seq, t, patch, drafts, line.k === "ckpt");
     if (
       (line.k === "ckpt" && line.hour % 6 === 0) ||
@@ -471,6 +489,18 @@ class Fold implements SpectatorFold {
       messagesSent: this.sent.get(seat) ?? 0,
       messagesReceived: this.received.get(seat) ?? 0,
     };
+  }
+
+  hourly(seat: PlayerId): HourPoint[] {
+    return this.series.hourly(seat);
+  }
+
+  notebook(seat: PlayerId): NotebookHistory {
+    return this.series.notebook(seat);
+  }
+
+  seriesKey(seat: PlayerId): string {
+    return this.series.key(seat);
   }
 
   report(id: string): ReportDetail | null {

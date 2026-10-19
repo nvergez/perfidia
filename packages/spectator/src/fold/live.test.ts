@@ -12,7 +12,7 @@ import { canonicalJson } from "@perfidia/engine/core";
 import { LogLineSchema, type HeaderLine, type LogLine, type PlayerId } from "@perfidia/protocol";
 import fc from "fast-check";
 import { createAnnotationFold } from "../annotations/index.ts";
-import { applySteps } from "../reduce/index.ts";
+import { applySteps, notebookTexts, seatTally } from "../reduce/index.ts";
 import { PLANTED, expectNoSecrets, fakeRun, rows } from "../testkit.test.ts";
 import { createSpectatorFold, foldLog } from "./fold.ts";
 
@@ -115,6 +115,43 @@ describe("a fold that follows a fake arena run while it is written", () => {
       const bytes = JSON.stringify(fold.steps).length;
       console.log(
         `1-day fake arena run: ${run.lines.length} lines folded in ${ms} ms; ${fold.steps.length} steps (${bytes} bytes, ${Bun.gzipSync(JSON.stringify(fold.steps)).length} gzipped), ${fold.moments.length} moments, frame ${JSON.stringify(fold.frame()).length} bytes`,
+      );
+    },
+    LONG,
+  );
+});
+
+describe("the dossier's series on a fake run", () => {
+  test(
+    "a point per checkpoint, the notebook's versions ending at the notebook now, the record",
+    async () => {
+      const run = await fakeRun({ days: 1, seed: 3 });
+      const fold = foldLog(run.lines, { match: "fake" });
+      const items = fold.steps.flatMap((s) => s.items ?? []);
+      const ckpts = run.lines.flatMap((l) => (l.k === "ckpt" || l.k === "end" ? [l.t] : []));
+      const notes = run.lines.filter((l) => l.k === "note");
+      expect(ckpts.length).toBe(24);
+      expect(notes.length).toBeGreaterThan(0);
+      const header = headerOf(run.lines);
+      for (const { id } of header.setup.seats) {
+        expect(fold.hourly(id).map((p) => p.t)).toEqual(ckpts);
+        const h = fold.notebook(id);
+        expect(h.versions).toHaveLength(h.total);
+        expect(notebookTexts(h)?.at(-1) ?? "").toBe(fold.notes(id) ?? "");
+        const tally = seatTally(items, id);
+        expect(fold.counts(id)).toEqual({
+          turns: tally.turns,
+          messagesSent: tally.messagesSent,
+          messagesReceived: tally.messagesReceived,
+        });
+        expect([tally.betrayalsCommitted, tally.betrayalsSuffered]).toEqual([0, 0]);
+      }
+      const llm = header.setup.seats.filter((s) =>
+        (header.controllers[s.id] ?? "").startsWith("llm:"),
+      );
+      expect(llm.some((s) => fold.notebook(s.id).total > 1)).toBe(true);
+      console.log(
+        `1-day fake arena run dossier series: notebook versions ${header.setup.seats.map((s) => `${s.id} ${fold.notebook(s.id).total}`).join(", ")}`,
       );
     },
     LONG,
