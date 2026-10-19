@@ -47,6 +47,14 @@ export interface UiState {
   readonly onboardingSeen: boolean;
   /** The key moments reel is playing. */
   readonly reelActive: boolean;
+  /** The turn whose detail sheet is open (Pass C, `turns/`). */
+  readonly openTurn: OpenTurn | null;
+}
+
+/** A seat's turn, as the feed's turn items and the annotations number it. */
+export interface OpenTurn {
+  readonly seat: PlayerId;
+  readonly turn: number;
 }
 
 export const useUiStore = create<UiState>()(() => ({
@@ -64,6 +72,7 @@ export const useUiStore = create<UiState>()(() => ({
   howToWatchOpen: false,
   onboardingSeen: readStored(ONBOARDING_KEY) === "1",
   reelActive: false,
+  openTurn: null,
 }));
 
 const set = (patch: Partial<UiState>): void => useUiStore.setState(patch);
@@ -100,6 +109,9 @@ export const uiActions = {
     writeStored(ONBOARDING_KEY, "1");
     set({ howToWatchOpen: false, onboardingSeen: true });
   },
+  /** Opens the turn detail sheet of `seat`'s turn `turn` (Pass C). */
+  openTurn: (seat: PlayerId, turn: number): void => set({ openTurn: { seat, turn } }),
+  closeTurn: (): void => set({ openTurn: null }),
   startReel: (): void => set({ reelActive: true }),
   stopReel: (): void => set({ reelActive: false }),
   /** Back to defaults when another match opens (the onboarding flag stays). */
@@ -114,5 +126,6 @@ export const uiActions = {
       selectedReport: null,
       selectedItem: null,
       reelActive: false,
+      openTurn: null,
     }),
 };

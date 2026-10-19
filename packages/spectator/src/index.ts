@@ -19,6 +19,12 @@ export {
 export { CONTEXT_ITEMS, CONTEXT_WINDOW, type FeedDraft } from "./fold/feed.ts";
 export { citiesOf, momentOf, titleOf } from "./fold/moments.ts";
 export { popUsedByCity } from "./fold/project.ts";
+export {
+  NOTEBOOK_HISTORY_MAX_CHARS,
+  NOTEBOOK_HISTORY_MAX_VERSIONS,
+  NotebookLog,
+  spliceOf,
+} from "./fold/series.ts";
 export { rulesetEvents, type RulesetEvents } from "./fold/rulesets.ts";
 export {
   applyPatch,
@@ -26,7 +32,10 @@ export {
   applySteps,
   fmtGameDuration,
   fmtGameTime,
+  notebookTexts,
+  seatTally,
   standingsOf,
+  type SeatTally,
 } from "./reduce/index.ts";
 export {
   DEFAULT_POLICY,

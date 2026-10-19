@@ -7,6 +7,7 @@ import { PlainText } from "../common/plain-text.tsx";
 import type { PlayerId } from "../lib/ids.ts";
 import type { FeedEntry } from "../playback/timeline.ts";
 import { useMatch, useSeatLabel } from "../store/hooks.ts";
+import { OpenTurnButton } from "../turns/open-turn.tsx";
 import { turnKeyOf } from "./filter.ts";
 
 // "What pN was thinking when it wrote this" (phase-3 design §4.1, the main irony device): under a
@@ -144,13 +145,19 @@ export function SameTurnThought({
               That turn has not ended yet: its thought comes when it does.
             </span>
           ) : r.item.thought === null || r.item.thought === "" ? (
-            <span className="text-muted-foreground text-xs">It left no thought for that turn.</span>
+            <>
+              <span className="text-muted-foreground text-xs">
+                It left no thought for that turn.
+              </span>
+              <OpenTurnButton seat={seat} turn={turn} className="mt-1" />
+            </>
           ) : (
             <>
               <PlainText text={r.item.thought} className="italic" />
               <span className="text-muted-foreground mt-1 block text-[0.7rem]">
                 Turn {r.item.turn}, ended <GameTime t={r.item.t} />
               </span>
+              <OpenTurnButton seat={seat} turn={turn} className="mt-1" />
             </>
           )}
         </div>

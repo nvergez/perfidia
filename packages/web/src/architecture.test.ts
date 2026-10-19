@@ -4,18 +4,25 @@
 // they use no host globals (`Bun`, `process`); ruleset ids (buildings, units, queues, event types,
 // island kinds) appear in `src/skins/**` only; no file under `src` renders HTML from strings;
 // `localStorage` is touched by `lib/storage.ts` only; `index.html` has no inline script; and the
-// bundle (built in process) stays within the initial-load budget and holds none of the banned
-// packages.
+// bundle (built in process, split) holds none of the banned packages and keeps its initial load
+// (the entry chunk and what it imports statically; `import()` chunks are lazy) within budget.
 
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { dirname, join, relative, resolve, sep } from "node:path";
 import { RULESETS } from "@perfidia/engine/rulesets";
+import { initialOutputs } from "../scripts/build.ts";
 import { field, isRecord } from "./lib/json.ts";
 
 const SRC = import.meta.dir;
 const WEB = join(SRC, "..");
-const JS_BUDGET_GZ = 200 * 1024;
+/**
+ * The initial load's JS, gzipped: the design's budget is 200 KB (§6.3); Pass C holds it at 185 KB
+ * (docs/phase3.md §16), so its features stay in chunks loaded on demand. This build splits from
+ * `main.tsx` (no stylesheet needed), so its entry and shared chunks are gzipped apart: a few KB
+ * more than `bun run web:build`, whose page entry holds both.
+ */
+const JS_BUDGET_GZ = 185 * 1024;
 
 const byText = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
 
@@ -49,7 +56,6 @@ const ALLOWED = new Set([
   "radix-ui",
   "class-variance-authority",
   "clsx",
-  "tailwind-merge",
   "lucide-react",
   "@perfidia/protocol/spectator",
   "@perfidia/spectator/reduce",
@@ -234,11 +240,12 @@ describe("plain text only", () => {
 });
 
 describe("the bundle", () => {
-  test("stays within 200 KB gzipped and holds none of the banned packages", async () => {
+  test("keeps its initial load within budget and holds none of the banned packages", async () => {
     const built = await Bun.build({
       entrypoints: [join(SRC, "main.tsx")],
       target: "browser",
       minify: true,
+      splitting: true,
       metafile: true,
       define: { "process.env.NODE_ENV": JSON.stringify("production") },
     });
@@ -250,20 +257,29 @@ describe("the bundle", () => {
       /packages\/server\//,
       /packages\/protocol\/src\/index\.ts$/,
       /packages\/spectator\/src\/(?!reduce\/)/,
-      /node_modules\/.*\/(elysia|@elysia|@anthropic-ai)\//,
+      /node_modules\/.*\/(elysia|@elysia|@anthropic-ai|tailwind-merge)\//,
     ];
     for (const p of inputs) {
       for (const re of banned) expect([p, re.source, re.test(p)]).toEqual([p, re.source, false]);
     }
+    const initial = initialOutputs(built.metafile?.outputs ?? {}, (_, m) =>
+      (m.entryPoint ?? "").endsWith("main.tsx"),
+    );
     const sizes = await Promise.all(
       built.outputs.map(async (out) => {
         const bytes = new Uint8Array(await out.arrayBuffer());
-        return { raw: bytes.length, gzip: Bun.gzipSync(bytes).length };
+        const path = out.path.replace(/^\.\//, "");
+        return { initial: initial.has(path), raw: bytes.length, gzip: Bun.gzipSync(bytes).length };
       }),
     );
-    const raw = sizes.reduce((n, s) => n + s.raw, 0);
-    const gzip = sizes.reduce((n, s) => n + s.gzip, 0);
-    console.log(`web bundle: ${raw} bytes minified, ${gzip} gzipped (budget ${JS_BUDGET_GZ})`);
-    expect(gzip).toBeLessThanOrEqual(JS_BUDGET_GZ);
+    const sum = (init: boolean, k: "raw" | "gzip"): number =>
+      sizes.filter((x) => x.initial === init).reduce((n, x) => n + x[k], 0);
+    const lazyChunks = sizes.filter((x) => !x.initial).length;
+    console.log(
+      `web bundle: initial ${sum(true, "raw")} bytes minified, ${sum(true, "gzip")} gzipped (budget ${JS_BUDGET_GZ}); lazy ${sum(false, "gzip")} gzipped in ${lazyChunks} chunks`,
+    );
+    expect(initial.size).toBeGreaterThan(0);
+    expect(lazyChunks).toBeGreaterThan(5);
+    expect(sum(true, "gzip")).toBeLessThanOrEqual(JS_BUDGET_GZ);
   });
 });

@@ -179,6 +179,12 @@ export const MatchMetaSchema = z.strictObject({
   /** Cursors of the frames the keyframe route serves. */
   keyframes: z.array(SeqSchema),
   verified: VerifiedSchema,
+  /**
+   * What the server publishes of the agents' side files (its `--no-costs` and `--no-reasoning`):
+   * when `costs` is false, annotations carry no cost, tokens, model time, spend or cap (zeros and
+   * nulls); when `reasoning` is false, no reasoning summaries and no reply text (empty lists).
+   */
+  published: z.strictObject({ costs: z.boolean(), reasoning: z.boolean() }),
 });
 export type MatchMeta = z.infer<typeof MatchMetaSchema>;
 
@@ -581,6 +587,22 @@ const EventItemSchema = z.strictObject({
   data: JsonObjectSchema,
 });
 
+/**
+ * One tool call of an agent's turn as `match.jsonl` has it (`act`, `gw`, `obs` and `note` lines):
+ * its round (`rt`; `null` for an accepted `write_note`, whose `note` line carries none), the tool
+ * as the agent named it, how many items it had (a batch has several, one line each) and how many
+ * the engine accepted, and the codes of the rejected ones (gateway and engine), in order, each
+ * once. A read is one accepted item. An accepted `end_turn` writes no line, so it has no entry.
+ */
+export const TurnCallSchema = z.strictObject({
+  rt: Int.nullable(),
+  tool: z.string(),
+  items: z.int().positive(),
+  ok: Int,
+  codes: z.array(z.string()),
+});
+export type TurnCall = z.infer<typeof TurnCallSchema>;
+
 const TurnItemSchema = z.strictObject({
   k: z.literal("turn"),
   ...itemBase,
@@ -600,6 +622,8 @@ const TurnItemSchema = z.strictObject({
   /** Messages sent in the turn. */
   messages: z.array(MessageIdSchema),
   thought: z.string().nullable(),
+  /** An LLM turn's tool calls with their verdicts, in log order (a bot's turn has none). */
+  results: z.array(TurnCallSchema).optional(),
 });
 
 const HandoffItemSchema = z.strictObject({
@@ -764,6 +788,37 @@ export const FeedPageSchema = z.strictObject({
 });
 export type FeedPage = z.infer<typeof FeedPageSchema>;
 
+/** A seat's score and cities at an hourly checkpoint (`ckpt` line) or the `end` line of `match.jsonl`. */
+const HourPointSchema = z.strictObject({
+  t: GameTimeSchema,
+  score: z.int(),
+  cities: Int,
+});
+export type HourPoint = z.infer<typeof HourPointSchema>;
+
+/**
+ * One version of a seat's notebook (cleaned text), written by a `note` line, as an edit of the
+ * version before it: keep its first `head` and last `tail` characters and put `text` between them.
+ * The first version kept has `head` and `tail` 0: `text` is all of it.
+ */
+const NotebookVersionSchema = z.strictObject({
+  t: GameTimeSchema,
+  turn: Int,
+  mode: z.enum(["append", "replace"]),
+  head: Int,
+  tail: Int,
+  text: z.string(),
+});
+export type NotebookVersion = z.infer<typeof NotebookVersionSchema>;
+
+const NotebookHistorySchema = z.strictObject({
+  /** Versions written so far; the oldest `total − versions.length` are not kept. */
+  total: Int,
+  /** The newest versions, oldest first (each differs from the one before). */
+  versions: z.array(NotebookVersionSchema),
+});
+export type NotebookHistory = z.infer<typeof NotebookHistorySchema>;
+
 export const PlayerDossierSchema = z.strictObject({
   seat: SeatInfoSchema,
   /** The seat's notebook now (agent-authored text). */
@@ -776,6 +831,10 @@ export const PlayerDossierSchema = z.strictObject({
   spentNanoUsd: Int.nullable(),
   capNanoUsd: Int.nullable(),
   handoff: z.strictObject({ t: GameTimeSchema, label: z.string() }).nullable(),
+  /** Score and cities at every hourly checkpoint folded so far and at the end, in time order. */
+  hourly: z.array(HourPointSchema),
+  /** How the notebook changed (its last version is `notes`). */
+  notebook: NotebookHistorySchema,
 });
 export type PlayerDossier = z.infer<typeof PlayerDossierSchema>;
 
@@ -856,6 +915,8 @@ export const ServerMsgSchema = z.discriminatedUnion("type", [
     seat: PlayerIdSchema,
     turn: Int,
     round: Int,
+    /** A round of the turn, or its out-of-band thought call (numbered apart). */
+    kind: z.enum(["round", "thought_call"]),
     reasoning: z.array(z.string()),
     text: z.array(z.string()),
     calls: z.array(z.string()),

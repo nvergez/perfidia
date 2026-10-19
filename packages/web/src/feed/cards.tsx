@@ -27,6 +27,7 @@ import { fmtInt, plural } from "../lib/format.ts";
 import type { FeedEntry } from "../playback/timeline.ts";
 import { useFeed, useMatch, useSeatColor, useSkin } from "../store/hooks.ts";
 import { ReasoningToggle } from "../thoughts/reasoning.tsx";
+import { OpenTurnButton } from "../turns/open-turn.tsx";
 import { BetrayalCard } from "./betrayal-card.tsx";
 import { CityRef, TimeLeft, Who, WhoList, unitsText } from "./bits.tsx";
 import { allianceNamesOf, sameTurnOf, seenBy } from "./filter.ts";
@@ -437,7 +438,11 @@ function TurnBody({ item }: { readonly item: FeedItemOf<"turn"> }) {
         {rejected === 0 ? null : ` · ${fmtInt(rejected)} refused`}
         {item.messages.length === 0 ? null : ` · ${plural(item.messages.length, "message")} sent`}
       </p>
-      {item.llm ? <ReasoningToggle seat={item.seat} turn={item.turn} className="mt-1" /> : null}
+      {item.llm ? (
+        <ReasoningToggle seat={item.seat} turn={item.turn} className="mt-1" />
+      ) : (
+        <OpenTurnButton seat={item.seat} turn={item.turn} className="mt-1" />
+      )}
     </>
   );
 }

@@ -1,7 +1,9 @@
 import type {
+  HourPoint,
   MatchId,
   MatchStatus,
   Moment,
+  NotebookHistory,
   ReportDetail,
   Seq,
   SpectatorMap,
@@ -31,6 +33,10 @@ export interface SeatAux {
   readonly seat: string;
   readonly notes: string;
   readonly counts: SeatCounts;
+  /** Score and cities at every hourly checkpoint so far. */
+  readonly hourly: readonly HourPoint[];
+  /** The notebook's newest versions. */
+  readonly notebook: NotebookHistory;
 }
 
 export interface FoldBatch {
@@ -47,7 +53,7 @@ export interface FoldBatch {
   readonly moments: readonly Moment[];
   /** Report copies named by the new steps' items. */
   readonly reports: readonly ReportDetail[];
-  /** Seats whose notebook or counts changed. */
+  /** Seats whose notebook, counts, hourly points or notebook history changed. */
   readonly seats: readonly SeatAux[];
   readonly drift: string | null;
   /** Every line sent so far has been folded. */

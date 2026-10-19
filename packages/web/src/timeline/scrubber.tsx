@@ -45,11 +45,12 @@ export function Scrubber({ className }: { readonly className?: string }) {
   const down = useRef<{ x: number; moved: boolean } | null>(null);
 
   const share = useCallback((t: number) => Math.min(1, Math.max(0, t / span)), [span]);
+  // Transforms, not width and left: moving them every animation frame lays nothing out again.
   const place = useCallback(
     (t: number) => {
-      const p = `${share(t) * 100}%`;
-      if (fill.current !== null) fill.current.style.width = p;
-      if (thumb.current !== null) thumb.current.style.left = p;
+      const s = share(t);
+      if (fill.current !== null) fill.current.style.transform = `scaleX(${s})`;
+      if (thumb.current !== null) thumb.current.style.transform = `translateX(${s * 100}%)`;
     },
     [share],
   );
@@ -157,7 +158,7 @@ export function Scrubber({ className }: { readonly className?: string }) {
               style={{ left: `${playedTo * 100}%` }}
             />
           ) : null}
-          <div ref={fill} className="bg-primary/80 absolute inset-y-0 left-0" />
+          <div ref={fill} className="bg-primary/80 absolute inset-0 origin-left" />
         </div>
         {days.map((d) =>
           d === 0 ? null : (
@@ -185,11 +186,10 @@ export function Scrubber({ className }: { readonly className?: string }) {
             }}
           />
         ))}
-        <div
-          ref={thumb}
-          aria-hidden="true"
-          className="bg-foreground border-primary pointer-events-none absolute top-1/2 size-3.5 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 shadow"
-        />
+        {/* A rail as wide as the track, moved by a share of its own width; the thumb rides on it. */}
+        <div ref={thumb} aria-hidden="true" className="pointer-events-none absolute inset-0">
+          <div className="bg-foreground border-primary absolute top-1/2 left-0 size-3.5 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 shadow" />
+        </div>
       </div>
       <div
         aria-hidden="true"

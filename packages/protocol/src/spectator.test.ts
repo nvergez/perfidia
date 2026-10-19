@@ -139,6 +139,7 @@ describe("spectator schemas", () => {
       timeline: "0123456789abcdef",
       keyframes: [0],
       verified: { ok: true, divergence: null },
+      published: { costs: true, reasoning: true },
     };
     expect(MatchMetaSchema.parse(meta)).toEqual(meta);
     expect(MatchMetaSchema.safeParse({ ...meta, seed: 14 }).success).toBe(false);
@@ -159,7 +160,7 @@ describe("spectator schemas", () => {
 
   test("every schema of the spectator and arena modules converts to JSON Schema", () => {
     const all = [...schemasOf(spectator), ...schemasOf(arena)];
-    expect(all.length).toBe(47);
+    expect(all.length).toBe(48);
     for (const [name, schema] of all) {
       const json = z.toJSONSchema(schema, { io: "output", unrepresentable: "any" });
       expect([name, typeof json]).toEqual([name, "object"]);

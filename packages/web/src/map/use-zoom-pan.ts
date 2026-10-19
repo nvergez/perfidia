@@ -10,10 +10,12 @@ import {
   type View,
 } from "./zoom.ts";
 
-// Zoom and pan of the map's SVG: the wheel (always on the desktop layout, with Ctrl elsewhere so
-// the page still scrolls), a two-finger pinch, a drag once zoomed in, a double click, and buttons.
-// The view is written straight into the content group's `transform`: no React render per pointer
-// move. A drag swallows the click that ends it, so a city under the pointer does not open.
+// Zoom and pan of the map: the wheel (always on the desktop layout, with Ctrl elsewhere so the
+// page still scrolls), a two-finger pinch, a drag once zoomed in, a double click, and buttons.
+// The map is stacked SVG layers with one view box (`match-map.tsx`): the pointer is followed on
+// their common box, view-box units come from the base layer, and the view is written straight into
+// each layer's content group `transform` (no React render per pointer move). A drag swallows the
+// click that ends it, so a city under the pointer does not open.
 
 const DRAG_PX = 4;
 
@@ -33,8 +35,12 @@ export interface ZoomPan {
 }
 
 export function useZoomPan(
+  /** The element the layers fill: pointer and wheel events are followed there. */
+  boxRef: RefObject<HTMLElement | null>,
+  /** A layer, for its screen transform (they all share one). */
   svgRef: RefObject<SVGSVGElement | null>,
-  groupRef: RefObject<SVGGElement | null>,
+  /** Each layer's content group: the view's transform is written into all of them. */
+  groupRefs: readonly RefObject<SVGGElement | null>[],
   width: number,
   height: number,
   wheelAlways: boolean,
@@ -46,10 +52,11 @@ export function useZoomPan(
   const apply = useCallback(
     (v: View) => {
       view.current = v;
-      groupRef.current?.setAttribute("transform", viewTransform(v));
+      const transform = viewTransform(v);
+      for (const g of groupRefs) g.current?.setAttribute("transform", transform);
       setZoomed(!isIdentity(v));
     },
-    [groupRef],
+    [groupRefs],
   );
 
   /** A client point in view-box units. */
@@ -64,8 +71,9 @@ export function useZoomPan(
   );
 
   useEffect(() => {
+    const box = boxRef.current;
     const svg = svgRef.current;
-    if (svg === null) return () => undefined;
+    if (box === null || svg === null) return () => undefined;
     const pointers: Pointer[] = [];
     let start: { x: number; y: number } | null = null;
     let pinch: { d: number; mid: Pt; view: View } | null = null;
@@ -114,7 +122,7 @@ export function useZoomPan(
       if (!moved && Math.hypot(e.clientX - start.x, e.clientY - start.y) < DRAG_PX) return;
       if (!moved) {
         moved = true;
-        svg.setPointerCapture(e.pointerId);
+        box.setPointerCapture(e.pointerId);
       }
       const ctm = svg.getScreenCTM();
       const scale = ctm === null || ctm.a === 0 ? 1 : 1 / ctm.a;
@@ -150,21 +158,21 @@ export function useZoomPan(
       if (at !== null) apply(zoomAt(view.current, e.shiftKey ? 0.5 : 2, at, width, height));
     };
 
-    svg.addEventListener("pointerdown", onDown);
-    svg.addEventListener("pointermove", onMove);
-    svg.addEventListener("pointerup", onUp);
-    svg.addEventListener("pointercancel", onUp);
-    svg.addEventListener("wheel", onWheel, { passive: false });
-    svg.addEventListener("dblclick", onDouble);
+    box.addEventListener("pointerdown", onDown);
+    box.addEventListener("pointermove", onMove);
+    box.addEventListener("pointerup", onUp);
+    box.addEventListener("pointercancel", onUp);
+    box.addEventListener("wheel", onWheel, { passive: false });
+    box.addEventListener("dblclick", onDouble);
     return () => {
-      svg.removeEventListener("pointerdown", onDown);
-      svg.removeEventListener("pointermove", onMove);
-      svg.removeEventListener("pointerup", onUp);
-      svg.removeEventListener("pointercancel", onUp);
-      svg.removeEventListener("wheel", onWheel);
-      svg.removeEventListener("dblclick", onDouble);
+      box.removeEventListener("pointerdown", onDown);
+      box.removeEventListener("pointermove", onMove);
+      box.removeEventListener("pointerup", onUp);
+      box.removeEventListener("pointercancel", onUp);
+      box.removeEventListener("wheel", onWheel);
+      box.removeEventListener("dblclick", onDouble);
     };
-  }, [svgRef, toBox, apply, width, height, wheelAlways]);
+  }, [boxRef, svgRef, toBox, apply, width, height, wheelAlways]);
 
   const zoomBy = useCallback(
     (factor: number) =>

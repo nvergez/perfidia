@@ -5,7 +5,7 @@ import type {
   ReplyLine,
   TurnAnnotation,
 } from "@perfidia/protocol";
-import { cleanText } from "../clean.ts";
+import { LABEL_MAX_CHARS, TOOL_NAME_MAX_CHARS, cleanText, cutText } from "../clean.ts";
 
 // The annotations of LLM turns (phase-3 design §2.7): a pure fold of the side files
 // `llm_calls.jsonl` and `replies.jsonl`, keyed by `(seat, turn)`, never part of the steps (side
@@ -14,10 +14,11 @@ import { cleanText } from "../clean.ts";
 // reasoning summaries, text and tool names, cost, tokens and latency; per turn, the seat's spend
 // after it and its cap. A turn is `complete` once a side line of a later turn of the same seat
 // exists, or the run is over (`final`). What is never kept: request ids, error messages, refusal
-// explanations, wall times. Costs and reasoning can be left out (`AnnotationPolicy`).
+// explanations, wall times. Text is cleaned (`cleanText`), tool names and labels cut to 64
+// characters. Costs and reasoning can be left out (`AnnotationPolicy`).
 
 export interface AnnotationPolicy {
-  /** Cost, tokens, spend and cap (default true: the design serves them, §2.6). */
+  /** Cost, tokens, model time, spend and cap (default true: the design serves them, §2.6). */
   readonly costs: boolean;
   /** Reasoning summaries and reply text (default true). */
   readonly reasoning: boolean;
@@ -75,6 +76,12 @@ interface TurnAcc {
 
 const roundKey = (round: number, kind: string): string => `${kind}:${round}`;
 
+/** A label from the harness's log (a refusal's category, an error's kind), cleaned and cut. */
+function labelOf(label: string | null, none: string): string {
+  const out = cutText(cleanText(label ?? ""), LABEL_MAX_CHARS).trim();
+  return out === "" ? none : out;
+}
+
 class Annotations implements AnnotationFold {
   private readonly policy: AnnotationPolicy;
   private readonly bySeat = new Map<PlayerId, Map<number, TurnAcc>>();
@@ -96,8 +103,9 @@ class Annotations implements AnnotationFold {
     const r = this.roundAcc(turn, line.round, line.kind);
     r.attempts += 1;
     r.stop = line.stop;
-    if (line.stop === "refusal") r.refusal = line.refusal?.category ?? "uncategorised";
-    if (line.error !== null) r.errors.push(line.error.kind);
+    if (line.stop === "refusal")
+      r.refusal = labelOf(line.refusal?.category ?? null, "uncategorised");
+    if (line.error !== null) r.errors.push(labelOf(line.error.kind, "unknown"));
     r.costNanoUsd += line.costNanoUsd;
     for (const u of line.usage) {
       r.tokens.input += u.input;
@@ -116,7 +124,7 @@ class Annotations implements AnnotationFold {
     const r = this.roundAcc(this.turnAcc(line.seat, line.turn), line.round, line.kind);
     r.reasoning = line.reasoning.map(cleanText);
     r.text = line.text.map(cleanText);
-    r.calls = line.calls.map((c) => cleanText(c.name));
+    r.calls = line.calls.map((c) => cutText(cleanText(c.name), TOOL_NAME_MAX_CHARS));
   }
 
   turn(seat: PlayerId, turn: number, o: { readonly final?: boolean } = {}): TurnAnnotation | null {
@@ -140,7 +148,7 @@ class Annotations implements AnnotationFold {
         tokens: costs
           ? { ...r.tokens }
           : { input: 0, cacheWrite5m: 0, cacheWrite1h: 0, cacheRead: 0, output: 0 },
-        latencyMs: r.latencyMs,
+        latencyMs: costs ? r.latencyMs : 0,
       }));
     const later = (this.lastTurn.get(seat) ?? 0) > turn;
     return {

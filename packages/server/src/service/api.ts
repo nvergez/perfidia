@@ -23,8 +23,9 @@ import type { MatchEntry, Registry } from "./matches.ts";
 // A finished timeline evicted from memory costs a cache read to bring back, so routes avoid it:
 // immutable bodies (keyframes, aligned step pages, a finished match's moments, reports) are keyed
 // by match, timeline and parameters, and a key the HTTP layer still holds is answered from there
-// before the timeline is looked up; meta, `/latest` and dossiers read the timeline's summary, which
-// stays in memory. Only the feed and bodies not held bring a timeline back.
+// before the timeline is looked up; meta and `/latest` read the timeline's summary, which stays in
+// memory. The feed, dossiers (the seats' series, not kept in the summary) and bodies not held bring
+// a timeline back.
 
 export type CachePolicy =
   | { readonly kind: "no-store" }
@@ -182,13 +183,14 @@ export class SpectatorService {
   }
 
   dossier(id: MatchId, seat: PlayerId): ApiResult {
-    const r = this.summary(id);
+    // The timeline itself (read back from the cache when evicted): the summary holds no seat data.
+    const r = this.timeline(id);
     if ("status" in r) return r;
     const info = r.entry.seats().find((s) => s.seat === seat);
     if (info === undefined) return noSeat(id, seat, r.entry);
-    const aux = r.summary.seats.get(seat);
+    const aux = r.timeline.seats.get(seat);
     const spend = this.registry.annotationsOf(r.entry).spend(seat);
-    const handoff = r.summary.tail()?.seats[seat]?.handoff ?? null;
+    const handoff = r.timeline.tail()?.seats[seat]?.handoff ?? null;
     const body: PlayerDossier = {
       seat: info,
       notes: aux?.notes ?? "",
@@ -196,6 +198,8 @@ export class SpectatorService {
       spentNanoUsd: spend?.spentNanoUsd ?? null,
       capNanoUsd: spend?.capNanoUsd ?? null,
       handoff,
+      hourly: [...(aux?.hourly ?? [])],
+      notebook: aux?.notebook ?? { total: 0, versions: [] },
     };
     return ok(body, maxAge(10));
   }

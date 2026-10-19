@@ -77,7 +77,7 @@ import { seatInfos } from "./seats.ts";
 // annotations. Every listed match is folded (or loaded from the cache) in the background at
 // startup, at most `workers` from scratch at a time, so a request never starts a fold. Finished
 // timelines stay in memory in an LRU of 8 in front of the disk cache, with their annotations; an
-// evicted one leaves a summary (meta, tail frame, notebooks) and is read back on demand. Running
+// evicted one leaves a summary (meta, tail frame) and is read back on demand. Running
 // ones always stay in memory.
 //
 // Visibility: a match is visible when `publish.json` lists it (or no file is given), and, for an
@@ -480,6 +480,7 @@ export class Registry {
       timeline: t.timeline,
       keyframes: t.keyframeSeqs(),
       verified: t.verified,
+      published: { costs: e.policy.costs, reasoning: e.policy.reasoning },
     };
   }
 

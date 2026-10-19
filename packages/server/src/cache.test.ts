@@ -1,11 +1,11 @@
 // The timeline cache and the LRU (phase-3 design §2.5, §3.4): finished timelines beyond the 8
-// kept in memory are dropped, leaving a summary that answers meta, `/latest` and dossiers without
-// reading the cache, and immutable bodies the server still holds are answered without it too; the
-// rest reads the timeline back from the cache (never refolds). Finished matches' annotations are
-// read when asked for, at most 8 kept. A cache file that does not parse is
-// deleted and its log refolded, with the same steps. A log replaced by another with the same header
-// is refolded under a new timeline id, in the same process and after a restart, and so is a third
-// one written in place over the second.
+// kept in memory are dropped, leaving a summary that answers meta and `/latest` without reading
+// the cache, and immutable bodies the server still holds are answered without it too; the rest (a
+// dossier included) reads the timeline back from the cache (never refolds). Finished matches'
+// annotations are read when asked for, at most 8 kept. A cache file that does not parse is deleted
+// and its log refolded, with the same steps. A log replaced by another with the same header is
+// refolded under a new timeline id, in the same process and after a restart, and so is a third one
+// written in place over the second. Files of other fold versions are deleted at startup.
 
 // oxlint-disable no-await-in-loop -- one match at a time, on purpose
 import { afterAll, describe, expect, test } from "bun:test";

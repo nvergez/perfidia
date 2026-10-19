@@ -17,6 +17,7 @@ import {
   type FrameResult,
   type GameTime,
   type HeaderLine,
+  type HourPoint,
   type JsonObject,
   type LogLine,
   type MatchId,
@@ -24,6 +25,7 @@ import {
   type MessageId,
   type Moment,
   type MovementEnt,
+  type NotebookHistory,
   type Patch,
   type PlayerEnt,
   type PlayerId,
@@ -35,9 +37,10 @@ import {
   type SpectatorMap,
   type Step,
   type TimelineId,
+  type TurnCall,
   type Verified,
 } from "@perfidia/protocol";
-import { cleanText, cutText } from "../clean.ts";
+import { TOOL_NAME_MAX_CHARS, cleanText, cutText } from "../clean.ts";
 import { logIdOf, timelineIdOf } from "../version.ts";
 import { EntityCache, ValueCache } from "./diff.ts";
 import { FeedState, type FeedDraft, type FeedEnv } from "./feed.ts";
@@ -56,6 +59,7 @@ import {
   turnedAtOf,
 } from "./project.ts";
 import { rulesetEvents } from "./rulesets.ts";
+import { SeatSeries } from "./series.ts";
 
 // The spectator fold (phase-3 design §2.5–§2.7): `match.jsonl`, line by line, into frames, steps,
 // feed items, moments and keyframes. Each line goes through the engine's incremental Level E
@@ -130,6 +134,12 @@ export interface SpectatorFold {
   /** A seat's notebook now. */
   notes(seat: PlayerId): string | null;
   counts(seat: PlayerId): SeatCounts | null;
+  /** A seat's score and cities at every hourly checkpoint so far (`fold/series.ts`). */
+  hourly(seat: PlayerId): HourPoint[];
+  /** A seat's notebook versions, the newest kept (`fold/series.ts`). */
+  notebook(seat: PlayerId): NotebookHistory;
+  /** Changes whenever a seat's hourly points or notebook history change. */
+  seriesKey(seat: PlayerId): string;
   /** A report copy and the ids of the other copies of the same battle. */
   report(id: string): ReportDetail | null;
   /** Where the gateway fold stopped folding seat lines, if it did (seats freeze there). */
@@ -153,6 +163,39 @@ interface TurnAcc {
   accepted: number;
   readonly rejected: Map<string, number>;
   readonly messages: MessageId[];
+  /** The turn's calls and their verdicts, in log order (`TurnItem.results`). */
+  readonly results: TurnCall[];
+}
+
+/**
+ * Adds one call line to a turn's results: a line whose batch item index `i` is 0 or absent starts a
+ * call, a later item of the same round and tool joins the call before it (`TurnCallSchema`).
+ */
+export function addResult(
+  results: TurnCall[],
+  rt: number | null,
+  tool: string,
+  i: number | undefined,
+  code: string | null,
+): void {
+  const name = cutText(cleanText(tool), TOOL_NAME_MAX_CHARS);
+  const last = results.at(-1);
+  if (i !== undefined && i > 0 && last !== undefined && last.rt === rt && last.tool === name) {
+    results[results.length - 1] = {
+      ...last,
+      items: last.items + 1,
+      ok: last.ok + (code === null ? 1 : 0),
+      codes: code === null || last.codes.includes(code) ? last.codes : [...last.codes, code],
+    };
+    return;
+  }
+  results.push({
+    rt,
+    tool: name,
+    items: 1,
+    ok: code === null ? 1 : 0,
+    codes: code === null ? [] : [code],
+  });
 }
 
 class Fold implements SpectatorFold {
@@ -197,6 +240,7 @@ class Fold implements SpectatorFold {
   private readonly lastAct = new Map<PlayerId, { readonly t: GameTime; readonly turn: number }>();
   private readonly sent = new Map<PlayerId, number>();
   private readonly received = new Map<PlayerId, number>();
+  private readonly series: SeatSeries;
 
   constructor(header: HeaderLine, o: SpectatorFoldOptions) {
     this.match = o.match;
@@ -206,6 +250,7 @@ class Fold implements SpectatorFold {
     this.keyframeEvery = o.keyframeEvery ?? KEYFRAME_STEPS;
     const events = rulesetEvents(header.setup.ruleset);
     this.feed = new FeedState(events);
+    this.series = new SeatSeries(header.setup.seats.map((s) => s.id));
     for (const s of header.setup.seats) {
       const label = header.controllers[s.id] ?? "";
       this.controllers.set(s.id, label);
@@ -277,6 +322,7 @@ class Fold implements SpectatorFold {
           accepted: 0,
           rejected: new Map(),
           messages: [],
+          results: [],
         });
         seats = [line.seat];
         break;
@@ -288,6 +334,7 @@ class Fold implements SpectatorFold {
         if (acc !== undefined) {
           if (line.r.ok) acc.accepted += 1;
           else acc.rejected.set(line.r.code, (acc.rejected.get(line.r.code) ?? 0) + 1);
+          addResult(acc.results, line.rt, line.tool, line.i, line.r.ok ? null : line.r.code);
         }
         seats = [line.seat];
         break;
@@ -297,15 +344,30 @@ class Fold implements SpectatorFold {
         const acc = this.turns.get(line.seat);
         if (acc !== undefined) {
           acc.rejected.set(line.r.code, (acc.rejected.get(line.r.code) ?? 0) + 1);
+          addResult(acc.results, line.rt, line.tool, line.i, line.r.code);
         }
         seats = [line.seat];
         break;
       }
-      case "obs":
+      case "obs": {
         this.seatLine(line.seat).round = line.rt;
+        const acc = this.turns.get(line.seat);
+        if (acc !== undefined) addResult(acc.results, line.rt, line.tool, undefined, null);
         seats = [line.seat];
         break;
-      case "note":
+      }
+      case "note": {
+        const notes = this.notes(line.seat);
+        if (notes !== null && this.gw.drift === null) {
+          this.series.note(line.seat, line.t, line.turn, line.mode, notes);
+        }
+        const acc = this.turns.get(line.seat);
+        if (acc !== undefined && acc.turn === line.turn) {
+          addResult(acc.results, null, "write_note", undefined, null);
+        }
+        seats = [line.seat];
+        break;
+      }
       case "defer":
         seats = [line.seat];
         break;
@@ -360,6 +422,9 @@ class Fold implements SpectatorFold {
     if (out.changed || line.k === "end")
       this.projectEngine(r, patch, drafts, line.k === "header" ? 0 : line.t);
     this.projectSeats(patch, seats);
+    if (line.k === "ckpt" || line.k === "end") {
+      this.series.checkpoint(line.t, (p) => this.players.get(p));
+    }
     const step = this.emit(seq, t, patch, drafts, line.k === "ckpt");
     if (
       (line.k === "ckpt" && line.hour % 6 === 0) ||
@@ -422,6 +487,18 @@ class Fold implements SpectatorFold {
       messagesSent: this.sent.get(seat) ?? 0,
       messagesReceived: this.received.get(seat) ?? 0,
     };
+  }
+
+  hourly(seat: PlayerId): HourPoint[] {
+    return this.series.hourly(seat);
+  }
+
+  notebook(seat: PlayerId): NotebookHistory {
+    return this.series.notebook(seat);
+  }
+
+  seriesKey(seat: PlayerId): string {
+    return this.series.key(seat);
   }
 
   report(id: string): ReportDetail | null {
@@ -507,6 +584,7 @@ class Fold implements SpectatorFold {
         : [],
       messages: sameTurn ? [...acc.messages] : [],
       thought,
+      ...(llm ? { results: sameTurn ? [...acc.results] : [] } : {}),
     };
   }
 

@@ -12,7 +12,7 @@ import { canonicalJson } from "@perfidia/engine/core";
 import { LogLineSchema, type HeaderLine, type LogLine, type PlayerId } from "@perfidia/protocol";
 import fc from "fast-check";
 import { createAnnotationFold } from "../annotations/index.ts";
-import { applySteps } from "../reduce/index.ts";
+import { applySteps, notebookTexts, seatTally } from "../reduce/index.ts";
 import { PLANTED, expectNoSecrets, fakeRun, rows } from "../testkit.test.ts";
 import { createSpectatorFold, foldLog } from "./fold.ts";
 
@@ -116,6 +116,75 @@ describe("a fold that follows a fake arena run while it is written", () => {
       console.log(
         `1-day fake arena run: ${run.lines.length} lines folded in ${ms} ms; ${fold.steps.length} steps (${bytes} bytes, ${Bun.gzipSync(JSON.stringify(fold.steps)).length} gzipped), ${fold.moments.length} moments, frame ${JSON.stringify(fold.frame()).length} bytes`,
       );
+    },
+    LONG,
+  );
+});
+
+describe("the dossier's series on a fake run", () => {
+  test(
+    "a point per checkpoint, the notebook's versions ending at the notebook now, the record",
+    async () => {
+      const run = await fakeRun({ days: 1, seed: 3 });
+      const fold = foldLog(run.lines, { match: "fake" });
+      const items = fold.steps.flatMap((s) => s.items ?? []);
+      const ckpts = run.lines.flatMap((l) => (l.k === "ckpt" || l.k === "end" ? [l.t] : []));
+      const notes = run.lines.filter((l) => l.k === "note");
+      expect(ckpts.length).toBe(24);
+      expect(notes.length).toBeGreaterThan(0);
+      const header = headerOf(run.lines);
+      for (const { id } of header.setup.seats) {
+        expect(fold.hourly(id).map((p) => p.t)).toEqual(ckpts);
+        const h = fold.notebook(id);
+        expect(h.versions).toHaveLength(h.total);
+        expect(notebookTexts(h)?.at(-1) ?? "").toBe(fold.notes(id) ?? "");
+        const tally = seatTally(items, id);
+        expect(fold.counts(id)).toEqual({
+          turns: tally.turns,
+          messagesSent: tally.messagesSent,
+          messagesReceived: tally.messagesReceived,
+        });
+        expect([tally.betrayalsCommitted, tally.betrayalsSuffered]).toEqual([0, 0]);
+      }
+      const llm = header.setup.seats.filter((s) =>
+        (header.controllers[s.id] ?? "").startsWith("llm:"),
+      );
+      expect(llm.some((s) => fold.notebook(s.id).total > 1)).toBe(true);
+      console.log(
+        `1-day fake arena run dossier series: notebook versions ${header.setup.seats.map((s) => `${s.id} ${fold.notebook(s.id).total}`).join(", ")}`,
+      );
+    },
+    LONG,
+  );
+});
+
+describe("the results of the LLM turns", () => {
+  test(
+    "list the turn's calls in the order of its replies, with the turn's rejections",
+    async () => {
+      const run = await fakeRun({ days: 1, seed: 3 });
+      const fold = foldLog(run.lines, { match: "fake" });
+      const turns = fold.steps
+        .flatMap((s) => s.items ?? [])
+        .flatMap((i) => (i.k === "turn" ? [i] : []));
+      expect(turns.filter((t) => !t.llm).every((t) => t.results === undefined)).toBe(true);
+      const llm = turns.filter((t) => t.llm);
+      expect(llm.length).toBeGreaterThan(20);
+      let calls = 0;
+      for (const t of llm) {
+        const results = t.results ?? [];
+        // The replies' tool calls, round by round; an accepted end_turn writes no line.
+        const replied = run.replies
+          .filter((r) => r.seat === t.seat && r.turn === t.turn && r.kind === "round")
+          .toSorted((a, b) => a.round - b.round)
+          .flatMap((r) => r.calls.map((c) => c.name))
+          .filter((name) => name !== "end_turn");
+        expect([t.seat, t.turn, results.map((r) => r.tool)]).toEqual([t.seat, t.turn, replied]);
+        const rejected = t.rejected.reduce((n, r) => n + r.count, 0);
+        expect(results.reduce((n, r) => n + r.items - r.ok, 0)).toBe(rejected);
+        calls += results.length;
+      }
+      console.log(`1-day fake arena run: ${llm.length} LLM turns, ${calls} calls with verdicts`);
     },
     LONG,
   );

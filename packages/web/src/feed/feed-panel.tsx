@@ -17,6 +17,8 @@ import {
   filterFeed,
   mergeEntries,
   turnIndex,
+  WINDOW,
+  windowLimit,
   windowOf,
   type FeedView,
 } from "./filter.ts";
@@ -25,10 +27,11 @@ import { TurnIndex } from "./thought.tsx";
 // The diplomatic feed (phase-3 design §4.3 "Feed", §4.2.4 pair mode): cards in time order up to the
 // playhead, following it (the list keeps to its bottom unless the viewer scrolled up), filter chips,
 // a player multi-select, and the pair mode (`?pair=pA,pB`: everything between two players). Only
-// the last 300 cards are rendered; "Older" shows 300 more, then pages from the feed route when the
-// client does not hold the start of the match yet. Clicking a card moves the playhead to it.
+// the last 300 cards are rendered (the last 40 while the match plays and the list follows it: a
+// long list re-laid out on every new card costs frames, docs/phase3.md §16.2); "Older" shows 300
+// more, then pages from the feed route when the client does not hold the start of the match yet.
+// Clicking a card moves the playhead to it.
 
-const WINDOW = 300;
 const PAGE = 200;
 const STICK_PX = 48;
 
@@ -223,7 +226,7 @@ function FeedBody({ id }: { readonly id: string | null }) {
   );
   const list = useMemo(() => filterFeed(all, view), [all, view]);
   const index = useMemo(() => turnIndex(all), [all]);
-  const { shown, hidden } = windowOf(list, limit);
+  const playing = useMatch((s) => s.playing);
 
   // Following the playhead: the list keeps to its bottom while the viewer is there; once they
   // scroll up it stays put and counts the cards that arrive below.
@@ -234,6 +237,7 @@ function FeedBody({ id }: { readonly id: string | null }) {
   const [stuck, setStuck] = useState(true);
   const [seen, setSeen] = useState(0);
   const behind = stuck ? 0 : Math.max(0, list.length - seen);
+  const { shown, hidden } = windowOf(list, windowLimit(limit, playing, stuck));
 
   useEffect(() => {
     // The layouts mount their own panels, so the scrolling ancestor is fixed for this mount.

@@ -1,26 +1,40 @@
 import type { FeedItemOf, PlayerDossier, SeatInfo } from "@perfidia/protocol/spectator";
-import { Bot, Brain, Coins, Loader2, NotebookPen, UserRound } from "lucide-react";
-import { useMemo, useState, type ReactNode } from "react";
+import {
+  Bot,
+  Brain,
+  ChartLine,
+  Coins,
+  History,
+  NotebookPen,
+  Swords,
+  UserRound,
+} from "lucide-react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { GameTime } from "../common/game-time.tsx";
 import { ModelBadge } from "../common/model-badge.tsx";
+import { NotPublished } from "../common/not-published.tsx";
 import { PlainText } from "../common/plain-text.tsx";
 import { PlayerGlyph } from "../common/player-glyph.tsx";
 import { turnsOf } from "../feed/filter.ts";
+import { playerColor } from "../lib/colors.ts";
 import { fmtInt, fmtUsd, plural } from "../lib/format.ts";
 import { isPlayerId, type PlayerId } from "../lib/ids.ts";
-import { prettyJson } from "../lib/json.ts";
 import { isFakeSeat, playedBy } from "../lib/models.ts";
-import { useDossier, useFeed, useMatch, useSeat, useUi } from "../store/hooks.ts";
+import { useDossier, useFeed, useMatch, usePublished, useSeat, useUi } from "../store/hooks.ts";
+import { loaders } from "../store/session.ts";
 import { uiActions } from "../store/ui.ts";
+import { HourlyCharts, NotebookAt, NotebookHistory, SeatRecord } from "./dossier-extras.tsx";
 import { ReasoningToggle } from "../thoughts/reasoning.tsx";
 import { wakeWords } from "../thoughts/wake.ts";
+import { OpenTurnButton } from "../turns/open-turn.tsx";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "../ui/sheet.tsx";
 
-// The minimal dossier (phase-3 design §4.2.3, Pass B): who the player is (its profile: goal,
-// temperament, attitude to its word, style), who plays it (model and effort, a bot, or a fake
-// model), whether it was handed to a bot, what it has spent against its cap (when costs are
-// served), its notebook now, and its public thoughts, each with that turn's reasoning behind an
-// expander. Notebook history and sparklines are Pass C.
+// The dossier (phase-3 design §4.2.3, Pass B; §4.2 Pass C): its record at the playhead (turns,
+// messages, betrayals) and its score and cities hour by hour (Pass C, `dossier-extras.tsx`), who
+// plays it (model and effort, a bot, or a fake model), whether it was handed to a bot, what it has
+// spent against its cap (when costs are served), who the player is (its profile: goal,
+// temperament, attitude to its word, style), its notebook at the playhead and the history of its
+// changes (Pass C), and its public thoughts, each with that turn's reasoning behind an expander.
 
 type TurnItem = FeedItemOf<"turn">;
 const THOUGHTS = 30;
@@ -90,6 +104,7 @@ function WhoPlays({
   const id = seat.seat;
   const handoff = useMatch((s) => (isPlayerId(id) ? (s.frame?.seats[id]?.handoff ?? null) : null));
   const fake = isFakeSeat(seat);
+  const published = usePublished();
   const spent = dossier?.spentNanoUsd ?? null;
   const cap = dossier?.capNanoUsd ?? null;
   return (
@@ -118,7 +133,11 @@ function WhoPlays({
           <GameTime t={handoff.t} />.
         </p>
       )}
-      {spent === null ? null : (
+      {spent === null ? (
+        seat.kind === "llm" && !published.costs ? (
+          <NotPublished what="Spending" />
+        ) : null
+      ) : (
         <div className="flex flex-col gap-1" data-testid="spend">
           <p className="flex items-center gap-1.5 text-xs">
             <Coins className="text-gold size-3.5 shrink-0" aria-hidden="true" />
@@ -135,13 +154,6 @@ function WhoPlays({
             </div>
           )}
         </div>
-      )}
-      {dossier === null ? null : (
-        <p className="text-muted-foreground text-xs">
-          {plural(dossier.counts.turns, "turn")} played ·{" "}
-          {plural(dossier.counts.messagesSent, "message")} sent ·{" "}
-          {fmtInt(dossier.counts.messagesReceived)} received
-        </p>
       )}
     </div>
   );
@@ -161,7 +173,11 @@ function Thought({ item, llm }: { readonly item: TurnItem; readonly llm: boolean
       ) : (
         <PlainText text={item.thought} className="block text-sm" />
       )}
-      {llm ? <ReasoningToggle seat={item.seat} turn={item.turn} /> : null}
+      {llm ? (
+        <ReasoningToggle seat={item.seat} turn={item.turn} />
+      ) : (
+        <OpenTurnButton seat={item.seat} turn={item.turn} />
+      )}
     </li>
   );
 }
@@ -194,35 +210,35 @@ function Thoughts({ seat }: { readonly seat: SeatInfo }) {
   );
 }
 
-function Notebook({ dossier }: { readonly dossier: PlayerDossier | null }) {
-  if (dossier === null) {
-    return (
-      <p className="text-muted-foreground flex items-center gap-2 text-xs">
-        <Loader2 className="size-3 motion-safe:animate-spin" aria-hidden="true" /> Loading…
-      </p>
-    );
-  }
-  if (dossier.notes === "") return <p className="text-muted-foreground text-sm">(empty)</p>;
-  const pretty = prettyJson(dossier.notes);
-  return (
-    <>
-      {pretty === null ? null : (
-        <p className="text-muted-foreground mb-1 text-xs">
-          A scripted bot's memory, as data (laid out for reading).
-        </p>
-      )}
-      <div className="bg-muted/50 max-h-64 overflow-y-auto rounded-md border p-2 font-mono text-xs">
-        <PlainText text={pretty ?? dossier.notes} />
-      </div>
-    </>
-  );
+/**
+ * While a live match is followed, the dossier is fetched again when the seat opens a turn or a game
+ * hour passes (its hourly points and notebook grow on the server; the route's 10 s `max-age` bounds
+ * the requests); a replay reads the one it has.
+ */
+function useLiveDossier(id: PlayerId | null): void {
+  const live = useMatch((s) => s.mode === "live");
+  const turn = useMatch((s) => (id === null ? 0 : (s.frame?.seats[id]?.turn ?? 0)));
+  const hour = useMatch((s) => Math.floor((s.frame?.t ?? 0) / 3_600));
+  const last = useRef<string | null>(null);
+  useEffect(() => {
+    const key = `${id ?? ""}:${turn}:${hour}`;
+    if (last.current !== null && last.current !== key && live && id !== null) {
+      loaders.dossier(id);
+    }
+    last.current = key;
+  }, [id, turn, hour, live]);
 }
 
 function Body({ seat }: { readonly seat: SeatInfo }) {
   const id: PlayerId | null = isPlayerId(seat.seat) ? seat.seat : null;
   const d = useDossier(id);
+  useLiveDossier(id);
   const dossier = d?.status === "ok" ? d.value : null;
   const rank = useMatch((s) => (id === null ? null : (s.frame?.players[id] ?? null)));
+  const failed =
+    d?.status === "error" ? (
+      <p className="text-muted-foreground text-xs">The dossier could not be loaded.</p>
+    ) : null;
   return (
     <div className="flex flex-col gap-5 px-4 pb-6">
       {rank === null ? null : (
@@ -232,18 +248,25 @@ function Body({ seat }: { readonly seat: SeatInfo }) {
           {rank.alive ? null : <span className="text-betrayal"> · eliminated</span>}
         </p>
       )}
+      {id === null ? null : (
+        <Section title="Record" icon={Swords}>
+          <SeatRecord seat={id} />
+        </Section>
+      )}
+      <Section title="Hour by hour" icon={ChartLine}>
+        {failed ?? <HourlyCharts dossier={dossier} color={playerColor(seat.color)} />}
+      </Section>
       <Section title="Who plays it" icon={Bot}>
         <WhoPlays seat={seat} dossier={dossier} />
       </Section>
       <Section title="Profile" icon={UserRound}>
         <Profile seat={seat} />
       </Section>
-      <Section title="Notebook now" icon={NotebookPen}>
-        {d?.status === "error" ? (
-          <p className="text-muted-foreground text-xs">The dossier could not be loaded.</p>
-        ) : (
-          <Notebook dossier={dossier} />
-        )}
+      <Section title="Notebook at this time" icon={NotebookPen}>
+        {failed ?? <NotebookAt dossier={dossier} />}
+      </Section>
+      <Section title="Notebook history" icon={History}>
+        {failed ?? <NotebookHistory dossier={dossier} />}
       </Section>
       <Section title="Thoughts, newest first" icon={Brain}>
         <Thoughts seat={seat} />
@@ -255,12 +278,24 @@ function Body({ seat }: { readonly seat: SeatInfo }) {
 export function PlayerSheet() {
   const selected = useUi((s) => s.selectedPlayer);
   const seat = useSeat(selected ?? "");
+  const content = useRef<HTMLDivElement>(null);
+  const shown = seat?.seat ?? null;
+  const last = useRef(shown);
+  // Another player's dossier starts at its top (its body, keyed by seat, starts with its own state).
+  useLayoutEffect(() => {
+    if (last.current !== shown && content.current !== null) content.current.scrollTop = 0;
+    last.current = shown;
+  }, [shown]);
   return (
     <Sheet
       open={selected !== null}
       onOpenChange={(open) => (open ? undefined : uiActions.closePlayer())}
     >
-      <SheetContent data-testid="player-sheet" className="w-full overflow-y-auto sm:max-w-md">
+      <SheetContent
+        ref={content}
+        data-testid="player-sheet"
+        className="w-full overflow-y-auto sm:max-w-md"
+      >
         <SheetHeader>
           <SheetTitle className="flex items-center gap-2 pr-6 text-lg">
             {seat === null ? (
@@ -279,7 +314,7 @@ export function PlayerSheet() {
             {seat === null ? "Dossier" : `Dossier of ${seat.name} (${seat.seat})`}
           </SheetDescription>
         </SheetHeader>
-        {seat === null ? null : <Body seat={seat} />}
+        {seat === null ? null : <Body key={seat.seat} seat={seat} />}
       </SheetContent>
     </Sheet>
   );

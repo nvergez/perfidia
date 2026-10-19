@@ -39,6 +39,16 @@ function applyRecord<T extends object>(
   fields: Readonly<Partial<Record<string, Fields<T>>>> | undefined,
 ): Record<string, T> {
   const out: Record<string, T> = { ...rec };
+  writeRecord(out, whole, fields);
+  return out;
+}
+
+/** `applyRecord` into `out`, a record the caller owns (a copy it made). */
+function writeRecord<T extends object>(
+  out: Record<string, T>,
+  whole: Readonly<Partial<Record<string, T | null>>> | undefined,
+  fields: Readonly<Partial<Record<string, Fields<T>>>> | undefined,
+): void {
   for (const [id, ent] of Object.entries(whole ?? {})) {
     if (ent === null) Reflect.deleteProperty(out, id);
     else if (ent !== undefined) out[id] = ent;
@@ -49,7 +59,6 @@ function applyRecord<T extends object>(
       throw new Error(`patch: fields for ${id}, which the frame does not hold`);
     if (changed !== undefined) out[id] = mergeFields(ent, changed);
   }
-  return out;
 }
 
 /** `frame` with `patch` applied (a new frame; `seq` and `t` unchanged). */
@@ -89,11 +98,60 @@ export function applyStep(frame: Frame, step: Step): Frame {
   return next;
 }
 
-/** `frame` after every step of `steps` beyond its cursor, in order. */
+/**
+ * `frame` after every step of `steps` beyond its cursor, in order: the same frame as applying them
+ * one by one, but each record a step touches is copied once for the whole run (a replay applies
+ * many steps at a time, and a record such as the queues is large).
+ */
 export function applySteps(frame: Frame, steps: Iterable<Step>): Frame {
-  let out = frame;
-  for (const step of steps) if (step.seq > out.seq) out = applyStep(out, step);
-  return out;
+  let out: Frame | null = null;
+  const own = new Set<string>();
+  for (const step of steps) {
+    if (step.seq <= (out ?? frame).seq) continue;
+    out ??= { ...frame };
+    if (step.patch !== undefined) patchInto(out, step.patch, own);
+    out.seq = step.seq;
+    out.t = step.t;
+  }
+  return out ?? frame;
+}
+
+/** `applyPatch` into `next`, a frame the caller owns; `own` names the records it copied already. */
+function patchInto(next: Frame, patch: Patch, own: Set<string>): void {
+  const take = (key: string): boolean => {
+    if (own.has(key)) return false;
+    own.add(key);
+    return true;
+  };
+  if (patch.cities !== undefined || patch.cityFields !== undefined) {
+    if (take("cities")) next.cities = { ...next.cities };
+    writeRecord<CityEnt>(next.cities, patch.cities, patch.cityFields);
+  }
+  if (patch.queues !== undefined || patch.queueFields !== undefined) {
+    if (take("queues")) next.queues = { ...next.queues };
+    writeRecord<QueueEnt>(next.queues, patch.queues, patch.queueFields);
+  }
+  if (patch.movements !== undefined) {
+    if (take("movements")) next.movements = { ...next.movements };
+    writeRecord(next.movements, patch.movements, undefined);
+  }
+  if (patch.players !== undefined || patch.playerFields !== undefined) {
+    if (take("players")) next.players = { ...next.players };
+    writeRecord<PlayerEnt>(next.players, patch.players, patch.playerFields);
+  }
+  if (patch.seats !== undefined || patch.seatFields !== undefined) {
+    if (take("seats")) next.seats = { ...next.seats };
+    writeRecord<SeatEnt>(next.seats, patch.seats, patch.seatFields);
+  }
+  if (patch.alliances !== undefined) {
+    if (take("alliances")) next.alliances = { ...next.alliances };
+    writeRecord(next.alliances, patch.alliances, undefined);
+  }
+  if (patch.pacts !== undefined) next.pacts = patch.pacts;
+  if (patch.proposals !== undefined) next.proposals = patch.proposals;
+  if (patch.ext !== undefined) next.ext = patch.ext;
+  if (patch.status !== undefined) next.status = patch.status;
+  if (patch.result !== undefined) next.result = patch.result;
 }
 
 /** The standings of a frame: its players in rank order, as the ruleset ranks them. */

@@ -105,4 +105,42 @@ export function turnKey(seat: string, turn: number): string {
   return `${seat}:${turn}`;
 }
 
+/** The turns of a seat whose live rounds are kept: the newest ones (an open turn and the last). */
+export const LIVE_TURNS_KEPT = 2;
+
+/** The newest round (0-based) the live socket brought for a turn, null when none. */
+export function liveTopRound(msgs: readonly AnnotMsg[]): number | null {
+  let top: number | null = null;
+  for (const m of msgs) if (m.kind === "round" && (top === null || m.round > top)) top = m.round;
+  return top;
+}
+
+/** The round a seat is in: the newer of the log's (its last call's) and the live socket's. */
+export function roundNow(logged: number | null, live: number | null): number | null {
+  if (logged === null) return live;
+  return live === null ? logged : Math.max(logged, live);
+}
+
+/**
+ * `liveAnnots` with a live `annot` message added: a round already held (the same round and kind,
+ * sent again for a retried attempt) is replaced in place, a new one is appended; per seat only the
+ * newest `LIVE_TURNS_KEPT` turns are kept, so a long live session does not grow without bound.
+ */
+export function addLiveAnnot(
+  cur: Readonly<Record<string, readonly AnnotMsg[]>>,
+  msg: AnnotMsg,
+): Readonly<Record<string, readonly AnnotMsg[]>> {
+  const key = turnKey(msg.seat, msg.turn);
+  const held = cur[key] ?? [];
+  const at = held.findIndex((m) => m.round === msg.round && m.kind === msg.kind);
+  const next = at < 0 ? [...held, msg] : held.map((m, i) => (i === at ? msg : m));
+  const out: Record<string, readonly AnnotMsg[]> = { ...cur, [key]: next };
+  const turns = Object.values(out)
+    .flatMap((ms) => (ms[0]?.seat === msg.seat ? [ms[0].turn] : []))
+    .toSorted((a, b) => b - a);
+  for (const turn of turns.slice(LIVE_TURNS_KEPT))
+    Reflect.deleteProperty(out, turnKey(msg.seat, turn));
+  return out;
+}
+
 export const useMatchStore = create<MatchState>()(() => INITIAL_MATCH_STATE);

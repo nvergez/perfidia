@@ -57,6 +57,8 @@ export class Playback {
   private endAt: number | null = null;
   /** A live match just ended: the last lines may still arrive, and the playhead follows them. */
   private followHead = false;
+  /** A lazy tick moved the playhead but not the frame yet (`settle`). */
+  private unsettled = false;
 
   constructor(o: PlaybackOptions) {
     this.realtime = o.realtime;
@@ -80,10 +82,12 @@ export class Playback {
   }
 
   get frame(): Frame | null {
+    this.settle();
     return this.frameV;
   }
 
   get known(): boolean {
+    this.settle();
     return this.knownV;
   }
 
@@ -92,6 +96,7 @@ export class Playback {
   }
 
   view(nowMs: number): PlaybackView {
+    this.settle();
     return {
       frame: this.frameV,
       playhead: this.playheadV,
@@ -259,7 +264,7 @@ export class Playback {
    * playhead moves by the elapsed time × speed, held at the end of what is loaded; a running match
    * reaching its head goes live; a finished one stops at its end.
    */
-  tick(nowMs: number): boolean {
+  tick(nowMs: number, o: { readonly lazy?: boolean } = {}): boolean {
     const before = this.frameV;
     const prevNow = this.lastNow;
     this.lastNow = nowMs;
@@ -281,6 +286,23 @@ export class Playback {
       this.playingV = false;
     }
     this.playheadV = next;
+    if (o.lazy === true && this.playingV) {
+      // A replay playing: the frame follows when it is read (`settle`), not on every tick.
+      this.unsettled = true;
+      return false;
+    }
+    this.reposition();
+    return this.frameV !== before;
+  }
+
+  /**
+   * Moves the frame to the playhead after lazy ticks (`tick(now, {lazy: true})`); true when the
+   * frame changed. Reading the frame, the feed or the view settles first.
+   */
+  settle(): boolean {
+    if (!this.unsettled) return false;
+    this.unsettled = false;
+    const before = this.frameV;
     this.reposition();
     return this.frameV !== before;
   }
@@ -288,6 +310,7 @@ export class Playback {
   // Frames -----------------------------------------------------------------------------------------
 
   private reposition(): void {
+    this.unsettled = false;
     const found = this.timeline.locate(this.playheadV);
     if (found === null) return;
     this.knownV = found.known;
@@ -316,6 +339,7 @@ export class Playback {
 
   /** Feed entries up to the frame shown. */
   feed(): FeedEntry[] {
+    this.settle();
     return this.frameV === null ? [] : this.timeline.feedUntil(this.frameV.seq);
   }
 }

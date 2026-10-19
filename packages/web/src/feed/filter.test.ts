@@ -18,6 +18,9 @@ import {
   turnKeyOf,
   turnsOf,
   visible,
+  PLAYING_WINDOW,
+  WINDOW,
+  windowLimit,
   windowOf,
   type FeedView,
 } from "./filter.ts";
@@ -313,6 +316,11 @@ describe("pair mode", () => {
 describe("lookups", () => {
   test("the window keeps the last items and counts the hidden ones", () => {
     expect(windowOf([1, 2, 3, 4, 5], 3)).toEqual({ shown: [3, 4, 5], hidden: 2 });
+    // While playing and following the bottom, the default window shrinks; paused, it is back.
+    expect(windowLimit(WINDOW, true, true)).toBe(PLAYING_WINDOW);
+    expect(windowLimit(WINDOW, false, true)).toBe(WINDOW);
+    expect(windowLimit(WINDOW, true, false)).toBe(WINDOW);
+    expect(windowLimit(WINDOW * 2, true, true)).toBe(WINDOW * 2);
     const all = [1, 2];
     expect(windowOf(all, 300).shown).toBe(all);
   });

@@ -16,9 +16,10 @@ import {
 } from "./geometry.ts";
 import { BETRAYAL, PRIZE_EDGE, PRIZE_LAND } from "./style.ts";
 
-// The map's SVG layers (phase-3 design §4.3 "Map"). Each piece is memoised on plain props, so a
+// The map's SVG pieces (phase-3 design §4.3 "Map"). Each piece is memoised on plain props, so a
 // frame that changes one city re-renders that city only; moving markers are positioned by the
-// map's animation loop through refs, never by React.
+// map's animation loop through refs, never by React. The marker and city layers ignore the pointer
+// but for these pieces (`pointer-events-auto`), so it reaches what lies under their empty parts.
 
 /** Islands: circles tinted by kind; the prize island in gold with a temple. Static per match. */
 export const IslandsLayer = memo(function IslandsLayer({
@@ -114,7 +115,7 @@ export const CityMark = memo(function CityMark(p: CityMarkProps) {
       role="button"
       tabIndex={p.tabStop ? 0 : -1}
       aria-label={p.title}
-      className="cursor-pointer outline-none [&:focus-visible>.focus-ring]:opacity-100"
+      className="pointer-events-auto cursor-pointer outline-none [&:focus-visible>.focus-ring]:opacity-100"
       opacity={p.dim ? 0.22 : 1}
       onClick={() => p.onSelect(p.id)}
       onKeyDown={onKey}
@@ -239,7 +240,7 @@ export const BattleFlash = memo(function BattleFlash({
       role="button"
       tabIndex={0}
       aria-label={title}
-      className="cursor-pointer outline-none"
+      className="pointer-events-auto cursor-pointer outline-none"
       opacity={0.35 + 0.65 * fade}
       onClick={onOpen}
       onKeyDown={(e) => {
@@ -357,6 +358,7 @@ export const Marker = memo(
       <g
         ref={(el) => setRef(v.id, el)}
         data-movement={v.id}
+        className="pointer-events-auto"
         opacity={v.dim ? 0.2 : v.kind === "return" ? 0.55 : 1}
       >
         <title>{v.title}</title>

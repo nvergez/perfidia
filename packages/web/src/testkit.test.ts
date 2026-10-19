@@ -85,6 +85,7 @@ export function meta(o: MetaOptions = {}): MatchMeta {
     timeline: TIMELINE,
     keyframes: [0],
     verified: { ok: true, divergence: null },
+    published: { costs: true, reasoning: true },
   });
 }
 

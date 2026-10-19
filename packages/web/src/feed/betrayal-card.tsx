@@ -7,6 +7,7 @@ import { isPlayerId } from "../lib/ids.ts";
 import { useFeed, useMatch, useSkin } from "../store/hooks.ts";
 import { controls } from "../store/session.ts";
 import { uiActions } from "../store/ui.ts";
+import { OpenTurnButton } from "../turns/open-turn.tsx";
 import { CityRef, TimeLeft, Who, unitsText } from "./bits.tsx";
 import { betrayalBattle, seqOfItem } from "./filter.ts";
 import { Shell } from "./shell.tsx";
@@ -15,14 +16,18 @@ import { Shell } from "./shell.tsx";
 // (phase-3 design §4.3, the same layout with the landing time): who turned on whom, where, since
 // when they were bound, and the moment's context from the log: "What they said before" (the
 // betrayer's last private messages to the victim within 48 game hours) and "What they were
-// thinking" (its last public thoughts naming the victim in that window).
+// thinking" (its last public thoughts naming the victim in that window, each opening its turn's
+// detail).
 
 function Context({
   context,
+  by,
   victim,
   relation,
 }: {
   readonly context: MomentContext;
+  /** The betrayer, whose thoughts these are. */
+  readonly by: string;
   readonly victim: string;
   readonly relation: "ally" | "pact";
 }) {
@@ -78,6 +83,9 @@ function Context({
                   turn {th.turn} · <GameTime t={th.t} />
                 </span>
                 <PlainText text={th.text} className="block italic" />
+                {isPlayerId(by) ? (
+                  <OpenTurnButton seat={by} turn={th.turn} className="mt-0.5" />
+                ) : null}
               </li>
             ))}
           </ul>
@@ -158,7 +166,12 @@ export function BetrayalCard({
           <Who id={item.against} /> at <CityRef id={item.city} />
         </p>
         <Outcome entry={entry} />
-        <Context context={item.context} victim={item.against} relation={item.relation} />
+        <Context
+          context={item.context}
+          by={item.by}
+          victim={item.against}
+          relation={item.relation}
+        />
         <PairButton a={item.by} b={item.against} />
       </Shell>
     );
@@ -199,7 +212,7 @@ export function BetrayalCard({
         {units === "" ? null : <span className="text-muted-foreground"> · {units}</span>}
       </p>
       {item.context === null || foe === null ? null : (
-        <Context context={item.context} victim={foe} relation={item.againstAlly} />
+        <Context context={item.context} by={item.owner} victim={foe} relation={item.againstAlly} />
       )}
       {foe === null ? null : <PairButton a={item.owner} b={foe} />}
     </Shell>

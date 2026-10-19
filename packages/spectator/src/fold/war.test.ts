@@ -21,7 +21,7 @@ import {
   type HeaderLine,
   type LogLine,
 } from "@perfidia/protocol";
-import { applySteps, standingsOf } from "../reduce/index.ts";
+import { applySteps, notebookTexts, seatTally, standingsOf } from "../reduce/index.ts";
 import { WAR_GOLDEN, expectNoSecrets, golden } from "../testkit.test.ts";
 import { createSpectatorFold, foldLog, type SpectatorFold } from "./fold.ts";
 import {
@@ -47,7 +47,7 @@ beforeAll(() => {
   fold = foldLog(lines, { match: "war-golden" });
   foldMs = performance.now() - t0;
   items = fold.steps.flatMap((s) => s.items ?? []);
-});
+}, 60_000);
 
 /** Moments of a kind. */
 const kinds = (k: string): number => fold.moments.filter((m) => m.k === k).length;
@@ -251,6 +251,116 @@ describe("the war golden through the spectator fold", () => {
     expect(itemsOf("turn").every((x) => !x.llm && x.importance === 0)).toBe(true);
   });
 
+  test("the dossier's record: p2's betrayal of p3 once on each side, the log's messages and turns", () => {
+    const seats = headerOf(lines).setup.seats.map((s) => s.id);
+    const sent = new Map<string, number>();
+    const received = new Map<string, number>();
+    for (const l of lines) {
+      if (l.k !== "ev" || l.e.type !== "message") continue;
+      const from = l.e.data["from"];
+      const to = l.e.data["to"];
+      if (typeof from !== "string") throw new Error("a message event without a sender");
+      sent.set(from, (sent.get(from) ?? 0) + 1);
+      const recipients = to === "all" ? seats : Array.isArray(to) ? to : [];
+      for (const p of recipients)
+        if (typeof p === "string" && p !== from) received.set(p, (received.get(p) ?? 0) + 1);
+    }
+    const tallies = seats.map((s) => [s, seatTally(items, s)] as const);
+    expect(tallies.map(([s, x]) => [s, x.betrayalsCommitted, x.betrayalsSuffered])).toEqual([
+      ["p1", 0, 0],
+      ["p2", 1, 0],
+      ["p3", 0, 1],
+      ["p4", 0, 0],
+      ["p5", 0, 0],
+      ["p6", 0, 0],
+    ]);
+    for (const [s, x] of tallies) {
+      const turns = lines.filter((l) => l.k === "turn" && l.seat === s).length;
+      expect([s, x.turns, x.messagesSent, x.messagesReceived]).toEqual([
+        s,
+        turns,
+        sent.get(s) ?? 0,
+        received.get(s) ?? 0,
+      ]);
+      // The server's counts (the end of the fold) agree with the record over every item.
+      expect(fold.counts(s)).toEqual({
+        turns,
+        messagesSent: x.messagesSent,
+        messagesReceived: x.messagesReceived,
+      });
+    }
+    expect(tallies.reduce((n, [, x]) => n + x.messagesSent, 0)).toBe(10);
+  });
+
+  test("the dossier's series: a point per checkpoint as the frames have it; every notebook version", () => {
+    const seats = headerOf(lines).setup.seats.map((s) => s.id);
+    const ckpts = lines.flatMap((l) => (l.k === "ckpt" || l.k === "end" ? [l] : []));
+    expect(ckpts).toHaveLength(139);
+    for (const s of seats) {
+      const points = fold.hourly(s);
+      expect(points.map((p) => p.t)).toEqual(ckpts.map((c) => c.t));
+      // The end line's point is the final frame's player.
+      const last = fold.frame().players[s];
+      expect(points.at(-1)).toEqual({
+        t: 498_807,
+        score: last?.score ?? -1,
+        cities: last?.cities ?? -1,
+      });
+      // Six-hourly keyframes sit on checkpoint lines: the point is the frame's player there.
+      for (const kf of fold.keyframes) {
+        const line = lines[kf.seq];
+        if (line?.k !== "ckpt") continue;
+        const p = kf.frame.players[s];
+        expect(points.find((x) => x.t === line.t)).toEqual({
+          t: line.t,
+          score: p?.score ?? -1,
+          cities: p?.cities ?? -1,
+        });
+      }
+    }
+    // The notebooks: every change a note line made (bots rewrite their JSON memory), all kept, the
+    // last one the notebook now.
+    const now = new Map<string, string>();
+    const changes = new Map<string, number>();
+    for (const l of lines) {
+      if (l.k !== "note") continue;
+      const prev = now.get(l.seat) ?? "";
+      const next =
+        l.mode === "replace"
+          ? l.text
+          : l.text === ""
+            ? prev
+            : prev === ""
+              ? l.text
+              : `${prev}\n${l.text}`;
+      if (next !== prev) changes.set(l.seat, (changes.get(l.seat) ?? 0) + 1);
+      now.set(l.seat, next);
+    }
+    const totals = seats.map((s) => [s, fold.notebook(s).total]);
+    expect(totals).toEqual([
+      ["p1", 80],
+      ["p2", 64],
+      ["p3", 33],
+      ["p4", 87],
+      ["p5", 39],
+      ["p6", 58],
+    ]);
+    for (const s of seats) {
+      const h = fold.notebook(s);
+      expect([s, h.total]).toEqual([s, changes.get(s) ?? 0]);
+      expect(h.versions).toHaveLength(h.total);
+      const texts = notebookTexts(h);
+      expect(texts?.at(-1)).toBe(fold.notes(s) ?? "");
+      expect(texts?.at(-1)).toBe(now.get(s) ?? "");
+      expect(h.versions.every((v, i) => i === 0 || v.t >= (h.versions[i - 1]?.t ?? 0))).toBe(true);
+    }
+    const kept = seats.map((s) => JSON.stringify(fold.notebook(s)).length);
+    const hourly = seats.map((s) => JSON.stringify(fold.hourly(s)).length);
+    console.log(
+      `war golden dossier series: hourly ${hourly.join("/")} bytes, notebook history ${kept.join("/")} bytes (p1–p6, JSON)`,
+    );
+  });
+
   test("every step and item parses; item ids are their cursor and index", () => {
     for (const step of fold.steps) {
       expect(StepSchema.parse(step)).toEqual(step);
@@ -298,6 +408,10 @@ describe("the war golden through the spectator fold", () => {
     expect(JSON.stringify(again.moments)).toBe(JSON.stringify(fold.moments));
     expect(again.keyframes.map((k) => k.seq)).toEqual(fold.keyframes.map((k) => k.seq));
     expect(canonicalJson(again.frame())).toBe(canonicalJson(fold.frame()));
+    for (const s of header.setup.seats) {
+      expect(JSON.stringify(again.hourly(s.id))).toBe(JSON.stringify(fold.hourly(s.id)));
+      expect(JSON.stringify(again.notebook(s.id))).toBe(JSON.stringify(fold.notebook(s.id)));
+    }
     expect(frames.length).toBeGreaterThan(10);
   });
 
@@ -327,6 +441,8 @@ describe("the war golden through the spectator fold", () => {
       verified: fold.verified(),
       reports: itemsOf("battle").flatMap((b) => b.reports.map((r) => fold.report(r))),
       notes: header.setup.seats.map((s) => fold.notes(s.id)),
+      hourly: header.setup.seats.map((s) => fold.hourly(s.id)),
+      notebooks: header.setup.seats.map((s) => fold.notebook(s.id)),
     };
     expectNoSecrets(served, { idKey: header.setup.idKey, seed: header.setup.seed });
   });

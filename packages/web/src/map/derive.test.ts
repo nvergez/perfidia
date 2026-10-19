@@ -6,6 +6,7 @@ import {
   citiesOfItem,
   createFeedFacts,
   fullestCopy,
+  cityTabStop,
   moveFocus,
   recentBattles,
 } from "./derive.ts";
@@ -187,5 +188,16 @@ describe("the cities' keyboard order", () => {
     expect(moveFocus(order, "c10", "End")).toBe("c33");
     expect(moveFocus(order, "c10", "x")).toBeNull();
     expect(moveFocus(order, "c99", "ArrowRight")).toBeNull();
+  });
+
+  test("one tab stop: the selected city, else the last moved to, else the first", () => {
+    const order = ["c1", "c2", "c10"];
+    expect(cityTabStop(order, null, null)).toBe("c1");
+    expect(cityTabStop(order, null, "c10")).toBe("c10");
+    expect(cityTabStop(order, "c2", "c10")).toBe("c2");
+    // A city gone from the map (a replay seeking back before it was founded) is skipped.
+    expect(cityTabStop(order, "c44", "c10")).toBe("c10");
+    expect(cityTabStop(order, "c44", "c45")).toBe("c1");
+    expect(cityTabStop([], null, null)).toBeNull();
   });
 });

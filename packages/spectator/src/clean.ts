@@ -88,6 +88,11 @@ export function cleanObject(value: JsonObject): JsonObject {
   return out;
 }
 
+/** The longest tool name kept (a turn's results, an annotation's calls): an agent may name any. */
+export const TOOL_NAME_MAX_CHARS = 64;
+/** The longest label kept from the harness's logs (a refusal's category, an error's kind). */
+export const LABEL_MAX_CHARS = 64;
+
 /**
  * The first `n` UTF-16 code units of `s` (one fewer when the last kept unit would be the first half
  * of a surrogate pair).

@@ -1,5 +1,5 @@
 import type { FeedItem, Frame, Step } from "@perfidia/protocol/spectator";
-import { applyStep } from "@perfidia/spectator/reduce";
+import { applySteps } from "@perfidia/spectator/reduce";
 
 // The client's timeline (phase-3 design §4.4): every frame and step the client holds, as segments.
 // A segment starts at a known frame (a keyframe, or `/latest`) and holds the steps after it, with
@@ -291,14 +291,18 @@ export class Timeline {
       start = from.pos.index;
       frame = from.frame;
     }
-    for (let i = start + 1; i <= index; i += 1) {
-      const step = seg.steps[i];
-      if (step === undefined) break;
-      frame = applyStep(frame, step);
-      if ((i + 1) % KEYFRAME_EVERY === 0 && !seg.frames.has(i)) {
-        seg.frames.set(i, frame);
-        insertSorted(seg.frameAt, i);
+    // In runs up to each client keyframe point (every KEYFRAME_EVERY steps): a run copies each
+    // record it touches once (`applySteps`).
+    for (let i = start + 1; i <= index;) {
+      const kf = Math.ceil((i + 1) / KEYFRAME_EVERY) * KEYFRAME_EVERY - 1;
+      const stop = Math.min(index, kf, seg.steps.length - 1);
+      if (stop < i) break;
+      frame = applySteps(frame, seg.steps.slice(i, stop + 1));
+      if (stop === kf && !seg.frames.has(kf)) {
+        seg.frames.set(kf, frame);
+        insertSorted(seg.frameAt, kf);
       }
+      i = stop + 1;
     }
     return frame;
   }

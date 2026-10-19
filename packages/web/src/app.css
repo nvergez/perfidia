@@ -6,6 +6,9 @@
 @import "tailwindcss" source(none);
 @source "./";
 @source not "./generated";
+/* Not class names: `cn`'s group tables, and the tests' fixtures. */
+@source not "./lib/cn.ts";
+@source not "./**/*.test.ts";
 @import "tw-animate-css";
 
 @custom-variant dark (&:is(.dark *));
