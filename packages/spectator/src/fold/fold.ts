@@ -35,6 +35,7 @@ import {
   type SpectatorMap,
   type Step,
   type TimelineId,
+  type TurnCall,
   type Verified,
 } from "@perfidia/protocol";
 import { cleanText, cutText } from "../clean.ts";
@@ -77,6 +78,8 @@ import { rulesetEvents } from "./rulesets.ts";
 export const KEYFRAME_STEPS = 1000;
 /** The longest public thought kept. */
 export const THOUGHT_MAX_CHARS = 400;
+/** The longest tool name kept in a turn's results (an agent may name any tool). */
+export const TOOL_NAME_MAX_CHARS = 64;
 /** The seat whose view `publicCity` is asked for (its output must not depend on the viewer). */
 const VIEWER: PlayerId = "p1";
 
@@ -153,6 +156,39 @@ interface TurnAcc {
   accepted: number;
   readonly rejected: Map<string, number>;
   readonly messages: MessageId[];
+  /** The turn's calls and their verdicts, in log order (`TurnItem.results`). */
+  readonly results: TurnCall[];
+}
+
+/**
+ * Adds one call line to a turn's results: a line whose batch item index `i` is 0 or absent starts a
+ * call, a later item of the same round and tool joins the call before it (`TurnCallSchema`).
+ */
+export function addResult(
+  results: TurnCall[],
+  rt: number | null,
+  tool: string,
+  i: number | undefined,
+  code: string | null,
+): void {
+  const name = cutText(cleanText(tool), TOOL_NAME_MAX_CHARS);
+  const last = results.at(-1);
+  if (i !== undefined && i > 0 && last !== undefined && last.rt === rt && last.tool === name) {
+    results[results.length - 1] = {
+      ...last,
+      items: last.items + 1,
+      ok: last.ok + (code === null ? 1 : 0),
+      codes: code === null || last.codes.includes(code) ? last.codes : [...last.codes, code],
+    };
+    return;
+  }
+  results.push({
+    rt,
+    tool: name,
+    items: 1,
+    ok: code === null ? 1 : 0,
+    codes: code === null ? [] : [code],
+  });
 }
 
 class Fold implements SpectatorFold {
@@ -277,6 +313,7 @@ class Fold implements SpectatorFold {
           accepted: 0,
           rejected: new Map(),
           messages: [],
+          results: [],
         });
         seats = [line.seat];
         break;
@@ -288,6 +325,7 @@ class Fold implements SpectatorFold {
         if (acc !== undefined) {
           if (line.r.ok) acc.accepted += 1;
           else acc.rejected.set(line.r.code, (acc.rejected.get(line.r.code) ?? 0) + 1);
+          addResult(acc.results, line.rt, line.tool, line.i, line.r.ok ? null : line.r.code);
         }
         seats = [line.seat];
         break;
@@ -297,15 +335,26 @@ class Fold implements SpectatorFold {
         const acc = this.turns.get(line.seat);
         if (acc !== undefined) {
           acc.rejected.set(line.r.code, (acc.rejected.get(line.r.code) ?? 0) + 1);
+          addResult(acc.results, line.rt, line.tool, line.i, line.r.code);
         }
         seats = [line.seat];
         break;
       }
-      case "obs":
+      case "obs": {
         this.seatLine(line.seat).round = line.rt;
+        const acc = this.turns.get(line.seat);
+        if (acc !== undefined) addResult(acc.results, line.rt, line.tool, undefined, null);
         seats = [line.seat];
         break;
-      case "note":
+      }
+      case "note": {
+        const acc = this.turns.get(line.seat);
+        if (acc !== undefined && acc.turn === line.turn) {
+          addResult(acc.results, null, "write_note", undefined, null);
+        }
+        seats = [line.seat];
+        break;
+      }
       case "defer":
         seats = [line.seat];
         break;
@@ -507,6 +556,7 @@ class Fold implements SpectatorFold {
         : [],
       messages: sameTurn ? [...acc.messages] : [],
       thought,
+      ...(llm ? { results: sameTurn ? [...acc.results] : [] } : {}),
     };
   }
 

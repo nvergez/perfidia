@@ -11,7 +11,13 @@ import {
 import type { PlayerId } from "../lib/ids.ts";
 import { Playback } from "../playback/playback.ts";
 import { skinFor } from "../skins/index.ts";
-import { INITIAL_MATCH_STATE, turnKey, useMatchStore, type MatchState } from "./match.ts";
+import {
+  addLiveAnnot,
+  INITIAL_MATCH_STATE,
+  turnKey,
+  useMatchStore,
+  type MatchState,
+} from "./match.ts";
 
 // The match session (phase-3 design §4.4): loads a match and keeps the match store in step with the
 // playback engine. Replay of a finished match: the meta, `/latest` (the end, shown at once), the
@@ -32,6 +38,11 @@ export function isRunningStatus(s: MatchStatus | null): boolean {
 }
 
 const PLAYHEAD_EVERY_MS = 100;
+/**
+ * While the match plays, a new frame reaches the store (and every view that renders from it) at
+ * most this often; the map's markers still move on every animation frame (docs/phase3.md §16.2).
+ */
+const FRAME_EVERY_MS = 100;
 const MOMENTS_REFRESH_MS = 3_000;
 const RELOAD_MIN_MS = 1_000;
 const RELOAD_MAX_MS = 30_000;
@@ -329,12 +340,9 @@ class Session {
       case "clock":
         if (e.speed !== null) pb.setClock({ t: e.t, speed: e.speed, cap: e.cap, at: e.at });
         return;
-      case "annot": {
-        const key = turnKey(e.msg.seat, e.msg.turn);
-        const cur = useMatchStore.getState().liveAnnots;
-        this.set({ liveAnnots: { ...cur, [key]: [...(cur[key] ?? []), e.msg] } });
+      case "annot":
+        this.set({ liveAnnots: addLiveAnnot(useMatchStore.getState().liveAnnots, e.msg) });
         return;
-      }
       case "resync":
         if (e.reason === "behind") void this.catchUp(pb);
         else this.scheduleReload();
@@ -456,25 +464,40 @@ class Session {
     const pb = this.playback;
     if (pb === null) return;
     const t = this.now();
-    const changed = pb.tick(t);
+    // Lazy: while a replay plays, the frame follows the playhead when the store is due one.
+    const changed = pb.tick(t, { lazy: true });
     if (pb.playing || pb.mode === "live") for (const l of this.listeners) l(pb.playhead);
     this.push(changed, t);
   }
 
   /**
    * Writes the playback's view into the store: at once when the frame changed (or `force`), else the
-   * playhead at most every 100 ms.
+   * playhead at most every 100 ms. While playing, a changed frame waits for the same 100 ms: a
+   * replay at speed changes it on almost every animation frame, and each one re-renders the views.
    */
   push(force: boolean, t: number = this.now()): void {
     const pb = this.playback;
     if (pb === null) return;
     const s = useMatchStore.getState();
+    // Playing as before and not due: nothing to write (the view, and its frame, are not built).
+    if (
+      !force &&
+      pb.playing &&
+      s.playing &&
+      pb.mode === s.mode &&
+      pb.speed === s.speed &&
+      t - this.lastPlayheadPush < FRAME_EVERY_MS
+    ) {
+      return;
+    }
     const v = pb.view(t);
     const frameChanged = v.frame !== s.frame;
     const due = t - this.lastPlayheadPush >= PLAYHEAD_EVERY_MS;
+    const frameDue =
+      frameChanged && (!v.playing || !s.playing || t - this.lastPlayheadPush >= FRAME_EVERY_MS);
     if (
       !force &&
-      !frameChanged &&
+      !frameDue &&
       v.mode === s.mode &&
       v.playing === s.playing &&
       v.speed === s.speed &&

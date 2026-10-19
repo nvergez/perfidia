@@ -260,6 +260,7 @@ describe("the live connection", () => {
       seat: "p1",
       turn: 3,
       round: 0,
+      kind: "round",
       reasoning: ["Fake reasoning: x"],
       text: [],
       calls: ["build"],

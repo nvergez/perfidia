@@ -480,6 +480,7 @@ export class Registry {
       timeline: t.timeline,
       keyframes: t.keyframeSeqs(),
       verified: t.verified,
+      published: { costs: e.policy.costs, reasoning: e.policy.reasoning },
     };
   }
 

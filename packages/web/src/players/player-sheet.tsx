@@ -3,6 +3,7 @@ import { Bot, Brain, Coins, Loader2, NotebookPen, UserRound } from "lucide-react
 import { useMemo, useState, type ReactNode } from "react";
 import { GameTime } from "../common/game-time.tsx";
 import { ModelBadge } from "../common/model-badge.tsx";
+import { NotPublished } from "../common/not-published.tsx";
 import { PlainText } from "../common/plain-text.tsx";
 import { PlayerGlyph } from "../common/player-glyph.tsx";
 import { turnsOf } from "../feed/filter.ts";
@@ -10,7 +11,7 @@ import { fmtInt, fmtUsd, plural } from "../lib/format.ts";
 import { isPlayerId, type PlayerId } from "../lib/ids.ts";
 import { prettyJson } from "../lib/json.ts";
 import { isFakeSeat, playedBy } from "../lib/models.ts";
-import { useDossier, useFeed, useMatch, useSeat, useUi } from "../store/hooks.ts";
+import { useDossier, useFeed, useMatch, usePublished, useSeat, useUi } from "../store/hooks.ts";
 import { uiActions } from "../store/ui.ts";
 import { ReasoningToggle } from "../thoughts/reasoning.tsx";
 import { wakeWords } from "../thoughts/wake.ts";
@@ -90,6 +91,7 @@ function WhoPlays({
   const id = seat.seat;
   const handoff = useMatch((s) => (isPlayerId(id) ? (s.frame?.seats[id]?.handoff ?? null) : null));
   const fake = isFakeSeat(seat);
+  const published = usePublished();
   const spent = dossier?.spentNanoUsd ?? null;
   const cap = dossier?.capNanoUsd ?? null;
   return (
@@ -118,7 +120,11 @@ function WhoPlays({
           <GameTime t={handoff.t} />.
         </p>
       )}
-      {spent === null ? null : (
+      {spent === null ? (
+        seat.kind === "llm" && !published.costs ? (
+          <NotPublished what="Spending" />
+        ) : null
+      ) : (
         <div className="flex flex-col gap-1" data-testid="spend">
           <p className="flex items-center gap-1.5 text-xs">
             <Coins className="text-gold size-3.5 shrink-0" aria-hidden="true" />

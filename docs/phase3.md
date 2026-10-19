@@ -1,4 +1,4 @@
-# Phase 3: the spectator view (Passes A and B as built)
+# Phase 3: the spectator view (Passes A and B as built, Pass C in progress)
 
 > **Status.** Roadmap step 3 of `docs/brief.md`, "Spectator view": a live map, a diplomatic feed
 > and a leaderboard. Exit criterion: an outsider understands the match within a few minutes.
@@ -10,7 +10,10 @@
 > - **Pass B (the exit-critical web app) is built**: the scaffold and `--web-dist` (§14), then the
 >   views, the end-to-end smoke test and an outsider screenshot set (§15). What Pass B still
 >   needs is owner work: the $0 pilot with people on the war golden and the exit test on a real
->   match of at least 4 game days (design §6.2). Pass C (extras) is not built yet (§12).
+>   match of at least 4 game days (design §6.2).
+> - **Pass C (extras) is in progress**: step C0 made room in the initial load, sped up the late
+>   replay, closed Pass B's leftovers and set the contract for the turn detail, the dossier extras
+>   and the live reasoning (§16).
 > - This document describes what was built. The reviewed phase-3 design (with its `[critic]`
 >   corrections) is the source of the decisions; "design §x" below and in code comments refers to
 >   it. Where this document and the code disagree, the code wins; fix this document.
@@ -36,6 +39,7 @@
 13. Review fixes
 14. Pass B, step B1: the web scaffold
 15. Pass B: the web app as built
+16. Pass C, step C0: room, speed and the contract
 
 ---
 
@@ -838,6 +842,8 @@ manifest).
 
 ### 15.9 Open issues
 
+Items 2 and 8 are closed and item 1 improved by Pass C's step C0 (§16.1–§16.3).
+
 1. Throttled desktops fall under 30 fps late in a long match (§15.6). Options: draw the moving
    markers in a second SVG layer over a static one (only that layer re-rasters), render fewer feed
    cards while playing.
@@ -932,3 +938,229 @@ unexplained icons and terse command-log thoughts". What changed for its confusio
 
 The screenshots were taken again after these changes (`p3b-outsider-after/`, the same sixteen
 actions); the proxy itself was not run again.
+
+## 16. Pass C, step C0: room, speed and the contract (as built)
+
+Pass C (design §4.2 "Pass C", §7 C1–C3) adds the turn detail (C1), the dossier extras (C2) and the
+live per-round reasoning (C3). Step C0 prepared the ground: room in the initial load, a faster
+late-match replay, the Pass B leftovers of §15.9, the additive data the extras need, and the
+contract under which two feature agents (T: C1 and C3; D: C2) work in parallel. §16.7 and §16.8
+are theirs to fill.
+
+### 16.1 Code splitting and the lazy helper
+
+- **Splitting.** `Bun.build` splits (`splitting: true`, hashed `chunk-<hash>.js` names, served
+  `immutable` by the server's static index like every hashed asset; `index.html` stays
+  `no-cache`). The CSP needs nothing new: a dynamic `import()` of a same-origin chunk is
+  `script-src 'self'`, and the smoke test still records no CSP or Trusted Types violation.
+  `scripts/build.ts` reads the metafile and marks each JS file **initial** (the page's entry chunk
+  and what it imports statically) or **lazy** (reached through `import()` only); the budget
+  applies to the initial set. `src/architecture.test.ts` builds from `main.tsx` the same way and
+  holds the initial set to **185 KB gzipped** (the design's 200 KB minus room for Pass C); it
+  also requires more than 5 lazy chunks and bans `tailwind-merge` from the bundle.
+- **What loads on demand** (`*/lazy.ts` in each feature directory): the dossier sheet and the
+  Players tab (`players/lazy.ts`), the Thoughts tab, a turn's reasoning and the live reasoning
+  (`thoughts/lazy.ts`), the city popover, the battle report and the map key (`map/lazy.ts`),
+  "How to watch" (`onboarding/lazy.ts`: on a first visit it still opens as soon as the match is
+  ready; a returning viewer never loads it unless asked), the key moments reel
+  (`timeline/lazy.ts`) and the turn detail sheet (`turns/lazy.ts`). Overlays mount on first open
+  and stay mounted (`useLatch`), so closing animations and focus return still run; the dossier
+  and the city popover are preloaded when the browser is idle; "Turn detail" preloads its sheet
+  on hover or focus. With these, Radix Dialog (sheets and dialogs, 13 KB gzipped with its focus
+  scope and scroll lock) left the initial load.
+- **The helper** (`common/lazy.tsx`, over the pure `lib/loader.ts`):
+  `lazyComponent(() => import("./x.tsx").then((m) => m.X), { what: "the dossier", … })` returns a
+  component with `preload()`. While the chunk loads it shows a `Skeleton` after 150 ms (or the
+  caller's `fallback`, or nothing for an `overlay`); a chunk that cannot be loaded shows "… could
+  not be loaded" with Retry and "Reload the page"; a loaded part that throws while rendering
+  shows "… failed to show" with Retry (an error boundary: one broken panel never takes the page
+  down); an overlay's error is a small fixed panel with Close. `useLatch(on)` and
+  `preloadWhenIdle(...parts)` complete it. Unit tests: `lib/loader.test.ts` (one import at a
+  time, a stable state, a failure as a state, a retry).
+- **Savings, re-measured at C0** (each put back on its own, initial JS gzipped): `cn` without
+  `tailwind-merge` 5.2 KB (`lib/cn.ts`, the same algorithm over the class groups this app writes;
+  `cn.test.ts` compares every class written under `src`, plus a list of classes a later view is
+  likely to write, pair by pair against `tailwind-merge` 3.7 itself, which stays installed for
+  that test only); tabs on a small WAI-ARIA pattern of our own instead of Radix Tabs 8.9 KB
+  (`ui/tabs.tsx`; `nextTabIndex` is unit-tested); `asChild` (Radix Slot) dropped from Button and
+  Badge 1.2 KB.
+- **Sizes** (`bun run web:build`): the initial load is **171.5 KB gzipped** (564.3 KB minified, one
+  chunk; 198.3 KB at the end of Pass B), **13.5 KB under the 185 KB budget** (28.5 KB under the
+  design's 200 KB); 37.3 KB gzipped load on demand in 19 chunks (the largest: the shared Radix
+  Dialog chunk 13.1 KB, the city popover 4.9 KB, the Thoughts tab 2.8 KB, the dossier 2.7 KB,
+  the reel 2.4 KB, "How to watch" 2.0 KB; the turn sheet and the live reasoning stubs are under
+  1 KB); CSS 9.9 KB gzipped (budget 25 KB). The architecture test's build from `main.tsx`:
+  initial 176,439 bytes gzipped (budget 189,440), lazy 36,883 bytes in 19 chunks.
+
+### 16.2 Performance late in a match
+
+- **The map in layers** (`map/match-map.tsx`): three stacked SVGs with one view box — the sea,
+  islands and routes; the moving markers alone, in a composited layer of their own
+  (`will-change: transform`); then the battle flashes and the cities, the only layer that takes
+  the pointer. Zoom and pan follow the pointer on the layers' common box and write the view into
+  each layer's content group (`map/use-zoom-pan.ts`). The view is unchanged (the war golden at
+  1920 × 1080 renders pixel-identical islands, cities and routes before and after).
+- **Fewer renders while playing**: a replay's frame reaches the store at most every 100 ms
+  (`store/session.ts`; the markers still move on every animation frame), a lazy tick moves the
+  frame only when it is read (`Playback.settle`), `applySteps` copies each record a run of steps
+  touches once (`@perfidia/spectator/reduce`; same frames as one by one, unit-tested), the
+  scrubber moves by transforms, and the feed renders its last **40** cards while the match plays
+  and the list follows its bottom (`feed/filter.ts` `windowLimit`; the 300 come back on pause, or
+  when the viewer scrolls up or asks for older cards).
+- **Measured** (headless Chromium 1194 on this shared 4-vCPU container, war golden from D6 00:33
+  at 1 h/s for 8 s, 1440 × 900; before = a901f56 built and served from an extracted copy, after =
+  this step; runs interleaved, the container's load varies between runs):
+
+  | Side tab, CPU                   | fps before | fps after | DOM nodes before → after |
+  | ------------------------------- | ---------- | --------- | ------------------------ |
+  | Feed, 4× throttled              | 8.1–8.7    | 9.8–19.7  | 8,264 → 2,163            |
+  | Thoughts, 4× throttled          | 11.7–14.7  | 15.9–25.3 | 1,941 → 1,968            |
+  | Players, 4× throttled           | 12.3–15.4  | 15.3–22.9 | 1,183 → 1,204            |
+  | Feed, unthrottled               | 51.2–56.6  | 57.9–60.1 | as above                 |
+  | Thoughts / Players, unthrottled | 58.1–60.0  | 59.4–60.1 | as above                 |
+  | Phone 390 × 844 (Board), 4×     | 12.4       | 24.1      | 964 → 993                |
+
+  The before figures are lower than §15.6's (taken on a less loaded day); each pair here ran
+  back to back. A throttled desktop still stays under 30 fps at D6: hiding the city layer alone
+  lifts it by about 10 fps (its SVG text is laid out again when a siege arc or a battle flash
+  changes), and the views' 10 Hz re-render takes most of the rest. Pushing the frame every 200 ms
+  instead of 100 ms gained nothing measurable.
+
+### 16.3 Pass B leftovers closed (§15.9)
+
+- **A long unknown model id** (a 54-character probe) no longer collapses a leaderboard row: a long
+  label gives way first (at most 5 rem of text, shrinking eight times as fast as the name, down
+  to 3 rem; `ModelBadge squeeze`), short ones ("Bot", "Fake", "Opus 5.5 · medium") keep their
+  width. "Name · pN" stays whole at 1366 and 1440 px; at 1280 px a short name loses a letter or two
+  ("Penelo… · p3"), as long bot names already did there (§15.9 item 5).
+- **The scrubber at 1366 × 768** is 345 px (was 233): from 1366 to 1439 px the side columns are
+  20 rem and 19 rem; at 1280 px it is 299 px, at 1440 px 307 px.
+- **"Start watching"** is pinned to the bottom of the "How to watch" dialog while its body
+  scrolls: in view at 1440 × 900, 1366 × 768, 1280 × 720 and 390 × 844.
+- **The hostile run plants message and proposal text**: every message's and proposal's text in the
+  act line and its event, and one more message from p1 (a 1-day fake run sends none: the bots
+  write at war), then the e2e kit re-hashes the log (`e2e/kit.ts` `rehash`: the checkpoint and end
+  hashes a replay produces, the later lines renumbered) so Level E still holds; the smoke test
+  finds both in the feed as text.
+- **Focus return and the roving tab stop**: `cityTabStop` (the selected city, else the last one
+  the arrows moved to, else the first) is unit-tested; the smoke test checks one tab stop among
+  the cities, the arrow moving it, and the focus back on the city after Escape and after ✕ on the
+  popover. Sheets and dialogs opened from the stores (no Radix `Trigger`) dropped the focus to the
+  body on close; `ui/return-focus.tsx` gives it back to whatever had it when the content opened
+  (checked for the turn sheet by the smoke test).
+
+### 16.4 The contract for agents T and D
+
+Both agents start from this commit, in their own worktrees, at the same time; the integration
+step after them merges T, then D. What each owns, and what neither touches:
+
+- **Agent T (C1 turn detail, C3 live reasoning)** owns `packages/web/src/turns/**`,
+  `packages/web/src/thoughts/**` (the Thoughts column, `live.tsx`, `reasoning.tsx`,
+  `turn-reasoning.tsx`), one-line additions of `OpenTurnButton` in `feed/thought.tsx` and
+  `feed/cards.tsx` if wanted, `packages/web/e2e/checks/turns.ts`, and §16.7 of this document.
+  Entry points made at C0 (their export names and props stay):
+  - `TurnSheet()` in `turns/turn-sheet.tsx`, mounted by `pages/match.tsx` through `LazyTurnSheet`
+    once `uiStore.openTurn` is set, and kept mounted after (a placeholder now: the wake, the
+    thought and the Pass B reasoning);
+  - `OpenTurnButton({seat, turn})` in `turns/open-turn.tsx`, in the initial chunk (keep it
+    small), already under every LLM thought ("Turn detail");
+  - `LiveReasoning({seat, turn})` in `thoughts/live.tsx`, mounted by `thoughts-panel.tsx` through
+    `LazyLiveReasoning` while an LLM seat is in a turn (an empty marker now);
+  - `uiActions.openTurn(seat, turn)` and `closeTurn()`; `uiStore.openTurn: {seat, turn} | null`
+    (cleared when another match opens).
+- **Agent D (C2 dossier extras)** owns `packages/spectator/src/fold/series.ts` (new) and its test,
+  plus the few lines that call it from `fold/fold.ts` and expose it on `SpectatorFold`;
+  `packages/spectator/src/version.ts` (`TIMELINE_VERSION` 3 → 4 if the fold's output changes); the
+  protocol's `PlayerDossierSchema` (additive) with `spectator.fixtures.test.ts` and
+  `spectator.test.ts`; the server's dossier route (`service/api.ts` `dossier()`), the timeline
+  summary that carries the seats' data (`timeline/timeline.ts`) and `contract.test.ts`;
+  `packages/web/src/players/**`; `packages/web/e2e/checks/dossier.ts`; and §16.8. Entry points:
+  `PlayerSheet()` in `players/player-sheet.tsx`, mounted through `LazyPlayerSheet` once
+  `uiStore.selectedPlayer` is set; `useDossier(seat)` and `loaders.dossier(seat)` already fetch
+  and parse the dossier. `players/player-card.tsx` (the hover card) is in the initial chunk: the
+  extras go in the sheet.
+
+**Shared files: rules.** Neither agent edits `store/*`, `api/*`, `pages/*`, `common/lazy.tsx`,
+`lib/cn.ts`, `app.css`, `ui/*`, `e2e/kit.ts`, `e2e/smoke.test.ts`, the architecture test, root
+config or `bun.lock`. Hooks an agent needs go in its own directory (read `useMatchStore` from
+`store/match.ts`, `useUiStore` from `store/ui.ts`). New Tailwind utilities must pass
+`lib/cn.test.ts`; choose classes it covers (its `LIKELY` list) rather than extending `cn.ts`; if
+it fails anyway, report the class instead of editing `cn.ts`. Only T touches `thoughts/**` and
+`turns/**`; only D touches `players/**`, the spectator package, the protocol, the server.
+`packages/web/src/common/not-published.tsx` (`NotPublished({what})`) and
+`usePublished()`/`useLiveAnnots()` (`store/hooks.ts`) are ready to use.
+
+**Budgets.** The initial load may grow by at most 2 KB gzipped per agent (build and architecture
+test); everything new loads through `lazyComponent` (the sheets already do). The smoke test runs
+in about 18 s for a 20 s budget: each agent's checks reuse the one page its check file opens and
+add at most about 1 s. New unit tests stay pure and fast. Plain text only (`PlainText`), every
+payload parsed with the protocol's schemas, ruleset ids in `src/skins/**` only, reduced motion
+respected, and "not published for this match" (`NotPublished`) wherever `MatchMeta.published`
+withholds costs or reasoning: no empty boxes.
+
+**What the data holds already, and what is missing** (never anything from `transcripts/`, the
+prompts, `idKey`, the seed, a request id, an error message or a refusal explanation):
+
+| Need (design §4.2 Pass C)                   | Where it is now                                                                                                                                                                                                                                                                                                                                                        | Missing, and where it would come from                                                                                                                                                                                                                              |
+| ------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| C1 the wake: reasons, urgency               | the turn's feed item (`k: "turn"`: `wakeT`, `reasons`, `urgent`); while a turn is open, `frame.seats[pN]` (`inTurn`, `turn`, `round`, `wakeT`, `reasons`, `urgent`)                                                                                                                                                                                                    | —                                                                                                                                                                                                                                                                  |
+| C1 each round's reasoning and text          | `GET /api/matches/:id/annotations/:seat/:turn` → `TurnAnnotation.rounds[]` (`round`, `kind`, `reasoning[]`, `text[]`; empty when `published.reasoning` is false)                                                                                                                                                                                                       | —                                                                                                                                                                                                                                                                  |
+| C1 each round's tool calls                  | the annotation's `rounds[].calls` (tool names, from `replies.jsonl`); **new at C0**: the turn item's `results[]` (`TurnCallSchema`: `rt` = the annotation's `round` of kind `round`, checked equal on a 2-day fake run; `tool`, `items`, `ok`, `codes`), from `match.jsonl` `act`/`gw`/`obs`/`note` lines                                                              | the calls' arguments (in `replies.jsonl` `calls[].args` and the act lines' `a`) are not served; a summary would be a fold addition. Codes come without the gateway's `error` text (never served)                                                                   |
+| C1 ✓/✗ and the error code                   | `results[].ok` of `items`, `results[].codes`; the turn item's `accepted` and `rejected[{code, count}]`                                                                                                                                                                                                                                                                 | an open turn's results (only a closed turn's item carries them; the fold holds them in its turn accumulator)                                                                                                                                                       |
+| C1 messages sent next to the thought        | the turn item's `messages[]` (ids) and `thought`; the message items in the store's `feed` (`k: "message"`, `message`, `turn`)                                                                                                                                                                                                                                          | —                                                                                                                                                                                                                                                                  |
+| C1 closing reason                           | the turn item's `why` (`TurnEndSchema`), `rounds`, `calls`                                                                                                                                                                                                                                                                                                             | —                                                                                                                                                                                                                                                                  |
+| C1 cost and tokens                          | annotation rounds: `costNanoUsd`, `tokens` (input, cache writes, cache read, output), `latencyMs`, `attempts`, `stop`, `refusal` (category only), `errors` (kinds only); the turn's `spentNanoUsd`, `capNanoUsd`; zeros and nulls when `published.costs` is false                                                                                                      | —                                                                                                                                                                                                                                                                  |
+| C3 live per-round reasoning                 | WebSocket `annot` per reply line: `seat`, `turn`, `round`, **`kind` (new at C0)**, `reasoning[]`, `text[]`, `calls[]`, `complete`; on subscribe, the rounds of the turns open now. The session keeps them in `matchStore.liveAnnots` by `seat:turn` (a resent round replaced, the newest 2 turns per seat kept: `addLiveAnnot`), read with `useLiveAnnots(seat, turn)` | per-round cost and tokens live (only in the annotation route, after the fact); a refused or truncated round writes no reply line, so no `annot`                                                                                                                    |
+| C2 turns played, messages sent and received | the dossier's `counts` (at the end of what the server folded, not at the playhead); at the playhead, the store's `feed` (turn items by `seat`, message items `from`/`to`)                                                                                                                                                                                              | counts at the playhead are a client computation over the feed (label them partial while `matchStore.loaded.complete` is false)                                                                                                                                     |
+| C2 betrayals committed and suffered         | the feed's betrayal items (`k: "betrayal"`: `by`, `against`, `relation`, `city`) and launch items with `againstAlly`                                                                                                                                                                                                                                                   | — (client side, at the playhead)                                                                                                                                                                                                                                   |
+| C2 hourly sparklines of score and cities    | nothing per hour: the steps carry every change (`playerFields`), the client holds them once loaded                                                                                                                                                                                                                                                                     | an hourly series per seat, from `match.jsonl` `ckpt` lines (one an hour) in the fold (`fold/series.ts`: score and cities at each checkpoint), stored in the timeline summary and served with the dossier (or its own route)                                        |
+| C2 the notebook's history                   | the dossier's `notes` (the notebook now, cleaned)                                                                                                                                                                                                                                                                                                                      | its versions, from `match.jsonl` `note` lines (`mode` append or replace, `text`, `t`, `turn`): rebuilt in `fold/series.ts`, cleaned (`cleanText`), deduplicated and capped (a dossier response under 64 KB gzipped; older versions behind a paged route if needed) |
+
+**The meta's `published`** (new at C0): `{costs, reasoning}` as the server publishes them
+(`--no-costs`, `--no-reasoning`). When false, annotations carry zeros, nulls and empty lists; the
+UI says so in one line (`NotPublished`, used by the Pass B reasoning and the dossier's spend).
+
+### 16.5 Protocol, spectator and server changes (additive)
+
+- `MatchMetaSchema.published: {costs, reasoning}` (required: the server always sends it);
+  `ServerMsg` `annot.kind: "round" | "thought_call"`; `TurnItem.results?: TurnCall[]` with the new
+  `TurnCallSchema` (an LLM turn's item has it, a bot's does not). Fixtures and contract tests
+  updated together (the spectator schemas reject unknown keys); 48 schemas convert to JSON
+  Schema (47 before).
+- The fold fills `results` (`fold.ts` `addResult`: one entry per call, a batch's later items joined
+  to it, rejections by code once each, tool names cleaned and cut at 64 characters;
+  `results.test.ts`, and `live.test.ts` checks them against `replies.jsonl` on a fake run).
+  **`TIMELINE_VERSION` is 3** (was 2): cached timelines are folded again once.
+- The live hub sends `kind` with each `annot`; the registry's meta carries `published`.
+
+### 16.6 Tests and the smoke test
+
+- Unit: `bun test packages/web/src packages/web/scripts`: 169 tests in 29 files, about 2.5 s
+  (`cn.test.ts` is 1.5 s of it); new: the loader, `cn`, the tabs' keys, `addLiveAnnot`,
+  `cityTabStop`, `windowLimit`; spectator: `addResult`, `applySteps` batching, results against the
+  replies of a fake run.
+- The smoke test is split: `e2e/kit.ts` (material, environment, helpers, `rehash`),
+  `e2e/smoke.test.ts` (the setup and the Pass B checks) and `e2e/checks/{turns,dossier}.ts`
+  (one file per Pass C agent, registered by the smoke test; at C0 they check the wiring: "Turn
+  detail" opens the sheet for its turn and Escape gives the focus back; the dossier opens with its
+  counts). New checks: the cities' tab stop and focus return, hostile messages and proposals, and a
+  second in-process server over a copy of the fake run with neither costs nor reasoning published
+  ("Reasoning not published for this match.", "Costs …", "Spending …"). The war golden, the fake
+  run and its hostile copy fold side by side (3 workers) while the fake-run checks go first: 11
+  tests in **17.9–18.4 s** (budget 20 s), `PERFIDIA_E2E=1 PERFIDIA_E2E_PORT=8303 bun test
+  packages/web/e2e`.
+
+### 16.7 C1 turn detail and C3 live reasoning (agent T: to be written)
+
+### 16.8 C2 dossier extras (agent D: to be written)
+
+### 16.9 Open issues after C0
+
+1. A throttled desktop is still under 30 fps late in a long match (§16.2): the city layer's text
+   and the views' 10 Hz re-render remain.
+2. `tailwind-merge` stays in the web package's `dependencies` for `cn.test.ts` alone; it belongs in
+   `devDependencies` (a one-line move with a lockfile change, left to a step that owns
+   dependencies). It is banned from the bundle by the architecture test.
+3. At 1280 px short names lose a letter or two beside a long model id; long bot names were already
+   cut there (§15.9 item 5).
+4. §15.9 items 3, 4, 6 and 7 stand.

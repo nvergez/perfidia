@@ -28,7 +28,10 @@ import { fmtAgo } from "../lib/time.ts";
 import { PlayerCard } from "../players/player-card.tsx";
 import { useFeed, useMatch, useSeats, useUi } from "../store/hooks.ts";
 import { uiActions } from "../store/ui.ts";
-import { ReasoningToggle, TurnReasoning } from "./reasoning.tsx";
+import { ReasoningToggle } from "./reasoning.tsx";
+import { OpenTurnButton } from "../turns/open-turn.tsx";
+import { LazyLiveReasoning } from "./lazy.ts";
+import { TurnReasoning } from "./turn-reasoning.tsx";
 import { wakeKinds, wakeWords, type WakeKind } from "./wake.ts";
 
 // The thoughts column (phase-3 design §4.3 "Thoughts"): one block per agent, its latest public
@@ -117,9 +120,12 @@ const HistoryItem = memo(function HistoryItem({
             Woke for {item.reasons.map(wakeWords).join("; ") || "no logged reason"}.
           </p>
           {llm ? (
-            <div className="border-primary/40 border-l-2 pl-2">
-              <TurnReasoning seat={item.seat} turn={item.turn} />
-            </div>
+            <>
+              <OpenTurnButton seat={item.seat} turn={item.turn} />
+              <div className="border-primary/40 border-l-2 pl-2">
+                <TurnReasoning seat={item.seat} turn={item.turn} />
+              </div>
+            </>
           ) : null}
         </div>
       ) : null}
@@ -177,6 +183,11 @@ const SeatBlock = memo(function SeatBlock({
 }) {
   const id = seat.seat;
   const last = useMatch((s) => s.frame?.seats[id]?.lastThought ?? null);
+  // The open turn (Pass C: its rounds live, `live.tsx`).
+  const openTurn = useMatch((s) => {
+    const ent = s.frame?.seats[id];
+    return ent?.inTurn === true ? ent.turn : null;
+  });
   const [all, setAll] = useState(false);
   const llm = seat.kind === "llm";
   const history = useMemo(() => {
@@ -207,6 +218,7 @@ const SeatBlock = memo(function SeatBlock({
           <SeatStatus seat={id} />
         </span>
       </header>
+      {llm && openTurn !== null ? <LazyLiveReasoning seat={id} turn={openTurn} /> : null}
       {last === null ? (
         <p className="text-muted-foreground mt-2 text-sm">No thought yet.</p>
       ) : (

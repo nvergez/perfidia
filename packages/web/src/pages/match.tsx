@@ -2,22 +2,24 @@ import { ArrowLeft, CircleHelp, Hourglass, Loader2, TriangleAlert, WifiOff } fro
 import { useEffect, useState, type ReactNode } from "react";
 import { BlocProgress } from "../board/bloc-progress.tsx";
 import { Leaderboard } from "../board/leaderboard.tsx";
+import { preloadWhenIdle, useLatch } from "../common/lazy.tsx";
 import { AppLink } from "../common/link.tsx";
 import { FakeBadge, StatusBadge } from "../common/status-badge.tsx";
 import { FeedPanel } from "../feed/feed-panel.tsx";
 import type { PlayerId } from "../lib/ids.ts";
 import { cn } from "../lib/cn.ts";
 import { isFakeSeat } from "../lib/models.ts";
+import { LazyCityPopover } from "../map/lazy.ts";
 import { MatchMap } from "../map/match-map.tsx";
-import { HowToWatch } from "../onboarding/how-to-watch.tsx";
-import { PlayerSheet } from "../players/player-sheet.tsx";
-import { PlayersPanel } from "../players/players-panel.tsx";
+import { LazyHowToWatch } from "../onboarding/lazy.ts";
+import { LazyPlayerSheet, LazyPlayersPanel } from "../players/lazy.ts";
 import { useLayout, useMatch, useUi } from "../store/hooks.ts";
 import { closeMatch, controls, isRunningStatus, openMatch } from "../store/session.ts";
 import { isPhoneTab, isSideTab, uiActions } from "../store/ui.ts";
 import { StoryStrip } from "../story/story-strip.tsx";
-import { ThoughtsPanel } from "../thoughts/thoughts-panel.tsx";
-import { KeyMomentsReel } from "../timeline/key-moments-reel.tsx";
+import { LazyThoughtsPanel } from "../thoughts/lazy.ts";
+import { LazyKeyMomentsReel } from "../timeline/lazy.ts";
+import { LazyTurnSheet } from "../turns/lazy.ts";
 import { TimelineBar } from "../timeline/timeline-bar.tsx";
 import { Badge } from "../ui/badge.tsx";
 import { Button, buttonVariants } from "../ui/button.tsx";
@@ -93,12 +95,12 @@ function SideTabs() {
       </TabsContent>
       <TabsContent value="thoughts" className="flex min-h-0 flex-col">
         <Panel label="Thoughts">
-          <ThoughtsPanel />
+          <LazyThoughtsPanel />
         </Panel>
       </TabsContent>
       <TabsContent value="players" className="flex min-h-0 flex-col">
         <Panel label="Players">
-          <PlayersPanel />
+          <LazyPlayersPanel />
         </Panel>
       </TabsContent>
     </Tabs>
@@ -163,9 +165,10 @@ function SkipLinks() {
 }
 
 function DesktopLayout() {
-  // 1280–1365 px wide: narrower side columns, so the map and the timeline keep their room.
+  // Below 1440 px, narrower side columns, so the map and the timeline keep their room (at 1366 px
+  // the scrubber had 233 px with the wide ones).
   return (
-    <div className="grid min-h-0 flex-1 grid-cols-[18.5rem_minmax(0,1fr)_18rem] gap-3 px-3 pb-3 min-[1366px]:grid-cols-[minmax(17rem,20rem)_minmax(0,1fr)_minmax(20rem,26rem)]">
+    <div className="grid min-h-0 flex-1 grid-cols-[18.5rem_minmax(0,1fr)_18rem] gap-3 px-3 pb-3 min-[1366px]:grid-cols-[20rem_minmax(0,1fr)_19rem] min-[1440px]:grid-cols-[minmax(17rem,20rem)_minmax(0,1fr)_minmax(20rem,26rem)]">
       <Scroller label="Leaderboard and blocs" className="flex flex-col gap-3">
         <Leaderboard />
         <BlocProgress />
@@ -227,10 +230,10 @@ function PhoneLayout() {
           <FeedPanel />
         </TabsContent>
         <TabsContent value="thoughts">
-          <ThoughtsPanel />
+          <LazyThoughtsPanel />
         </TabsContent>
         <TabsContent value="players">
-          <PlayersPanel />
+          <LazyPlayersPanel />
         </TabsContent>
       </Tabs>
       <div
@@ -393,6 +396,28 @@ function LoadingView() {
   );
 }
 
+/**
+ * The sheets and dialogs over the page, each a chunk loaded on demand (docs/phase3.md §16): mounted
+ * once first opened and kept mounted after (closing animations, focus return). The ones a viewer
+ * is likely to open are preloaded when the browser is idle.
+ */
+function Overlays() {
+  const ready = useMatch((s) => s.phase === "ready");
+  const player = useLatch(useUi((s) => s.selectedPlayer !== null));
+  const how = useLatch(useUi((s) => s.howToWatchOpen));
+  const reel = useLatch(useUi((s) => s.reelActive));
+  const turn = useLatch(useUi((s) => s.openTurn !== null));
+  useEffect(() => (ready ? preloadWhenIdle(LazyPlayerSheet, LazyCityPopover) : undefined), [ready]);
+  return (
+    <>
+      {player ? <LazyPlayerSheet /> : null}
+      {how ? <LazyHowToWatch /> : null}
+      {reel ? <LazyKeyMomentsReel /> : null}
+      {turn ? <LazyTurnSheet /> : null}
+    </>
+  );
+}
+
 export function MatchPage({ id, pair, reel, start }: MatchPageProps) {
   const layout = useLayout();
   const phase = useMatch((s) => s.phase);
@@ -446,9 +471,7 @@ export function MatchPage({ id, pair, reel, start }: MatchPageProps) {
           )}
         </>
       )}
-      <PlayerSheet />
-      <HowToWatch />
-      <KeyMomentsReel />
+      <Overlays />
       <MomentAnnouncer />
     </div>
   );

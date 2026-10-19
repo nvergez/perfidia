@@ -22,12 +22,13 @@ import {
 import { colorOf, labelOf, shapeOf } from "../store/selectors.ts";
 import { playheadNow } from "../store/session.ts";
 import { uiActions } from "../store/ui.ts";
+import { useLatch } from "../common/lazy.tsx";
 import { useReelFocus } from "../timeline/reel-focus.ts";
 import { Button } from "../ui/button.tsx";
-import { CityPopover } from "./city-popover.tsx";
 import {
   BATTLE_FLASH_S,
   byCityNumber,
+  cityTabStop,
   citiesOfItem,
   createFeedFacts,
   moveFocus,
@@ -56,8 +57,7 @@ import {
   type MarkerView,
   type RouteView,
 } from "./layers.tsx";
-import { MapKey } from "./map-key.tsx";
-import { ReportDialog } from "./report-dialog.tsx";
+import { LazyCityPopover, LazyMapKey, LazyReportDialog } from "./lazy.ts";
 import { landTints, blocColor } from "./style.ts";
 import { useElementSize } from "./use-size.ts";
 import { useZoomPan } from "./use-zoom-pan.ts";
@@ -65,9 +65,14 @@ import { useZoomPan } from "./use-zoom-pan.ts";
 // The map (phase-3 design §4.3 "Map (SVG)"): islands, cities in their owners' colours and shapes,
 // capitals, taken cities, sieges with their countdown, alliances as outline rings, movements as
 // curved routes with moving markers, battles flashing for two game hours. It fills its parent box
-// (an SVG with a view box, "meet" scaling); zoom and pan with the wheel, a pinch or a drag, and the
+// (SVGs with one view box, "meet" scaling); zoom and pan with the wheel, a pinch or a drag, and the
 // buttons. Markers move on every animation frame through refs (no React render per frame); with
 // reduced motion they are placed at each store update instead, and nothing pulses.
+//
+// Three stacked SVG layers (docs/phase3.md §16.2): the sea, islands and routes; the moving markers
+// alone, in a composited layer of their own (`will-change: transform`), so a frame re-rasters the
+// markers only, not the whole map; then the battle flashes and the cities, on top and the only ones
+// that take the pointer.
 
 const CIRCLE = playerShape(0).d;
 const SIEGE_DEFAULT_S = 6 * 3_600;
@@ -146,10 +151,15 @@ function MapView({
   const tints = useMemo(() => landTints(meta.map.islands), [meta]);
   const layout = useLayout();
   const reduced = usePrefersReducedMotion();
-  const svgRef = useRef<SVGSVGElement>(null);
-  const groupRef = useRef<SVGGElement>(null);
+  const baseRef = useRef<SVGSVGElement>(null);
+  const citiesRef = useRef<SVGSVGElement>(null);
+  const baseGroup = useRef<SVGGElement>(null);
+  const markerGroup = useRef<SVGGElement>(null);
+  const cityGroup = useRef<SVGGElement>(null);
+  const [groups] = useState(() => [baseGroup, markerGroup, cityGroup]);
   const boxRef = useRef<HTMLDivElement>(null);
-  const zp = useZoomPan(svgRef, groupRef, W, H, layout === "desktop");
+  const layersRef = useRef<HTMLDivElement>(null);
+  const zp = useZoomPan(layersRef, baseRef, groups, W, H, layout === "desktop");
   const size = useElementSize(boxRef);
   const highlight = useUi((s) => s.highlight);
   const selectedCity = useUi((s) => s.selectedCity);
@@ -159,6 +169,8 @@ function MapView({
   const [facts] = useState(createFeedFacts);
   const { againstAlly, siegeStarts } = facts(feed);
   const [keyOpen, setKeyOpen] = useState(false);
+  const cityOpened = useLatch(selectedCity !== null);
+  const reportOpened = useLatch(useUi((s) => s.selectedReport !== null));
 
   const lit = useMemo(() => {
     const ids = highlight.length > 0 ? highlight : focus.players;
@@ -202,18 +214,13 @@ function MapView({
   // the arrows move between them in id order, Home and End to the first and last.
   const cityOrder = useMemo(() => Object.keys(frame.cities).toSorted(byCityNumber), [frame.cities]);
   const [tabCity, setTabCity] = useState<string | null>(null);
-  const tabStop =
-    selectedCity !== null && cityOrder.includes(selectedCity)
-      ? selectedCity
-      : tabCity !== null && cityOrder.includes(tabCity)
-        ? tabCity
-        : (cityOrder[0] ?? null);
+  const tabStop = cityTabStop(cityOrder, selectedCity, tabCity);
   const onMove = useCallback(
     (id: string, key: string) => {
       const next = moveFocus(cityOrder, id, key);
       if (next === null) return;
       setTabCity(next);
-      svgRef.current?.querySelector<SVGGElement>(`[data-city="${next}"]`)?.focus();
+      citiesRef.current?.querySelector<SVGGElement>(`[data-city="${next}"]`)?.focus();
     },
     [cityOrder],
   );
@@ -363,45 +370,65 @@ function MapView({
 
   const cityCount = Object.keys(frame.cities).length;
   const moving = markerViews.length;
+  const layer = "absolute inset-0 size-full";
   return (
-    <div ref={boxRef} className="bg-sea-deep relative size-full overflow-hidden rounded-xl border">
-      <svg
-        ref={svgRef}
-        data-map=""
-        aria-label={`Map at ${fmtClock(playhead)}: ${meta.map.islands.length} islands, ${cityCount} cities, ${moving} ${moving === 1 ? "army or convoy" : "armies and convoys"} on the move. Select a city for its details.`}
-        viewBox={`0 0 ${W} ${H}`}
-        className={cn("size-full select-none", zp.zoomed ? "touch-none" : "touch-pan-y")}
+    <div
+      ref={boxRef}
+      data-map=""
+      className="bg-sea-deep relative size-full overflow-hidden rounded-xl border"
+    >
+      <div
+        ref={layersRef}
+        className={cn("absolute inset-0 select-none", zp.zoomed ? "touch-none" : "touch-pan-y")}
       >
-        <defs>
-          <radialGradient
-            id="map-sea"
-            gradientUnits="userSpaceOnUse"
-            cx={W / 2}
-            cy={H / 2}
-            r={Math.max(W, H) * 0.7}
-          >
-            <stop offset="0%" stopColor="oklch(0.24 0.05 235)" />
-            <stop offset="100%" stopColor="var(--sea-deep)" />
-          </radialGradient>
-        </defs>
-        {/* Wider than the view box: the sea fills the whole box, whatever its shape. */}
-        <rect x={-W} y={-H} width={3 * W} height={3 * H} fill="url(#map-sea)" />
-        <g ref={groupRef}>
-          <IslandsLayer islands={meta.map.islands} tints={tints} skin={skin} />
-          <g>
-            {routeViews.map((v) => (
-              <RouteLine key={v.id} v={v} />
-            ))}
+        <svg ref={baseRef} viewBox={`0 0 ${W} ${H}`} className={layer} aria-hidden="true">
+          <defs>
+            <radialGradient
+              id="map-sea"
+              gradientUnits="userSpaceOnUse"
+              cx={W / 2}
+              cy={H / 2}
+              r={Math.max(W, H) * 0.7}
+            >
+              <stop offset="0%" stopColor="oklch(0.24 0.05 235)" />
+              <stop offset="100%" stopColor="var(--sea-deep)" />
+            </radialGradient>
+          </defs>
+          {/* Wider than the view box: the sea fills the whole box, whatever its shape. */}
+          <rect x={-W} y={-H} width={3 * W} height={3 * H} fill="url(#map-sea)" />
+          <g ref={baseGroup}>
+            <IslandsLayer islands={meta.map.islands} tints={tints} skin={skin} />
+            <g>
+              {routeViews.map((v) => (
+                <RouteLine key={v.id} v={v} />
+              ))}
+            </g>
           </g>
-          <g>{flashes}</g>
-          <g>
+        </svg>
+        <svg
+          viewBox={`0 0 ${W} ${H}`}
+          aria-label="Armies and convoys at sea"
+          className={cn(layer, "pointer-events-none will-change-transform")}
+        >
+          <g ref={markerGroup}>
             {markerViews.map((v) => (
               <Marker key={v.id} v={v} setRef={setRef} />
             ))}
           </g>
-          <g>{cityMarks}</g>
-        </g>
-      </svg>
+        </svg>
+        <svg
+          ref={citiesRef}
+          data-map-cities=""
+          aria-label={`Map at ${fmtClock(playhead)}: ${meta.map.islands.length} islands, ${cityCount} cities, ${moving} ${moving === 1 ? "army or convoy" : "armies and convoys"} on the move. Select a city for its details.`}
+          viewBox={`0 0 ${W} ${H}`}
+          className={cn(layer, "pointer-events-none")}
+        >
+          <g ref={cityGroup}>
+            <g>{flashes}</g>
+            <g>{cityMarks}</g>
+          </g>
+        </svg>
+      </div>
       <div className="absolute right-2 bottom-2 flex flex-col gap-1">
         <Button
           size="icon-sm"
@@ -447,10 +474,10 @@ function MapView({
           <Info aria-hidden="true" />
           {layout === "desktop" ? "Map key" : null}
         </Button>
-        {keyOpen ? <MapKey frame={frame} /> : null}
+        {keyOpen ? <LazyMapKey frame={frame} /> : null}
       </div>
-      <CityPopover svgRef={svgRef} islands={islands} />
-      <ReportDialog />
+      {cityOpened ? <LazyCityPopover svgRef={citiesRef} islands={islands} /> : null}
+      {reportOpened ? <LazyReportDialog /> : null}
     </div>
   );
 }

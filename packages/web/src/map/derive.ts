@@ -166,6 +166,20 @@ export function byCityNumber(a: string, b: string): number {
   return a < b ? -1 : a > b ? 1 : 0;
 }
 
+/**
+ * The map's one tab stop among the cities (a roving tab index): the selected city, else the last
+ * one the arrows moved to, else the first in `order`; a city no longer on the map is skipped.
+ */
+export function cityTabStop(
+  order: readonly string[],
+  selected: string | null,
+  last: string | null,
+): string | null {
+  if (selected !== null && order.includes(selected)) return selected;
+  if (last !== null && order.includes(last)) return last;
+  return order[0] ?? null;
+}
+
 /** The city the focus moves to from `id` on `key` (arrows step, Home and End jump); null: stay. */
 export function moveFocus(order: readonly string[], id: string, key: string): string | null {
   const i = order.indexOf(id);

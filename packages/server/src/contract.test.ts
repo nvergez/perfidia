@@ -18,6 +18,7 @@ import {
   FrameSchema,
   HealthSchema,
   MatchListItemSchema,
+  MatchMetaSchema,
   MomentSchema,
   PlayerDossierSchema,
   ReportDetailSchema,
@@ -190,6 +191,15 @@ for (const adapter of ["elysia", "raw"] as const) {
           TurnAnnotationSchema,
         );
         expect(a.seat).toBe("p2");
+        // The meta says what is published; an LLM turn's item carries its calls' verdicts.
+        const fakeMeta = await getJson(`${s.url}/api/matches/fake`, MatchMetaSchema);
+        expect(fakeMeta.published).toEqual({ costs: true, reasoning: true });
+        const turns = await getJson(
+          `${s.url}/api/matches/fake/feed?kinds=turn&players=p2&limit=20`,
+          FeedPageSchema,
+        );
+        const llmTurn = turns.items.find((e) => e.item.k === "turn" && e.item.llm)?.item;
+        expect(llmTurn?.k === "turn" ? (llmTurn.results?.length ?? 0) : 0).toBeGreaterThan(0);
       },
       LONG,
     );

@@ -1,5 +1,4 @@
 import { cva, type VariantProps } from "class-variance-authority";
-import { Slot } from "radix-ui";
 import type * as React from "react";
 import { cn } from "../lib/cn.ts";
 
@@ -22,15 +21,14 @@ const badgeVariants = cva(
   },
 );
 
+// `asChild` (Radix Slot) is left out: nothing uses it, and it would cost the initial load.
 function Badge({
   className,
   variant,
-  asChild = false,
   ...props
-}: React.ComponentProps<"span"> & VariantProps<typeof badgeVariants> & { asChild?: boolean }) {
-  const Comp = asChild ? Slot.Root : "span";
+}: React.ComponentProps<"span"> & VariantProps<typeof badgeVariants>) {
   return (
-    <Comp data-slot="badge" className={cn(badgeVariants({ variant }), className)} {...props} />
+    <span data-slot="badge" className={cn(badgeVariants({ variant }), className)} {...props} />
   );
 }
 

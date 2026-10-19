@@ -141,7 +141,8 @@ export function HowToWatch() {
             </ul>
           </div>
         )}
-        <DialogFooter>
+        {/* Pinned to the dialog's bottom edge while the rest scrolls: always in view. */}
+        <DialogFooter className="bg-background sticky -bottom-6 -mx-6 -mb-6 rounded-b-lg border-t px-6 py-3">
           <Button onClick={() => uiActions.closeHowToWatch()}>Start watching</Button>
         </DialogFooter>
       </DialogContent>

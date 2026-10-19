@@ -567,6 +567,12 @@ export const ITEMS: Record<FeedItem["k"], FeedItem> = {
     rejected: [{ code: "INVALID_ARGS", count: 1 }],
     messages: ["g0k4qz"],
     thought: "Hold the line.",
+    results: [
+      { rt: 0, tool: "view_map", items: 1, ok: 1, codes: [] },
+      { rt: 1, tool: "send_message", items: 1, ok: 1, codes: [] },
+      { rt: 1, tool: "batch", items: 3, ok: 2, codes: ["INVALID_ARGS"] },
+      { rt: null, tool: "write_note", items: 1, ok: 1, codes: [] },
+    ],
   },
   handoff: {
     k: "handoff",
@@ -807,6 +813,7 @@ const meta: MatchMeta = {
   timeline: "0123456789abcdef",
   keyframes: [0],
   verified: { ok: true, divergence: null },
+  published: { costs: true, reasoning: true },
 };
 
 const listItem: MatchListItem = {
@@ -891,12 +898,27 @@ export const SPECTATOR_CASES: Record<string, SchemaCase> = {
   },
   MatchMetaSchema: {
     schema: protocol.MatchMetaSchema,
-    valid: [meta],
+    valid: [meta, { ...meta, published: { costs: false, reasoning: false } }],
     invalid: [
       bad(meta, ["id"], "../etc"),
       bad(meta, ["reason"], "operator text"),
       bad(meta, ["timeline"], "xyz"),
+      bad(meta, ["published", "costs"], "yes"),
+      extra(meta, ["published"]),
       extra(meta, []),
+    ],
+  },
+  TurnCallSchema: {
+    schema: protocol.TurnCallSchema,
+    valid: [
+      { rt: 0, tool: "view_map", items: 1, ok: 1, codes: [] },
+      { rt: null, tool: "write_note", items: 1, ok: 1, codes: [] },
+      { rt: 2, tool: "batch", items: 4, ok: 0, codes: ["INVALID_ARGS", "NOT_ENOUGH"] },
+    ],
+    invalid: [
+      { value: { rt: 0, tool: "x", items: 0, ok: 0, codes: [] }, path: ["items"] },
+      { value: { rt: -1, tool: "x", items: 1, ok: 1, codes: [] }, path: ["rt"] },
+      { value: { rt: 0, tool: "x", items: 1, ok: 1, codes: [], args: {} }, path: [] },
     ],
   },
   CityEntSchema: {
@@ -972,6 +994,8 @@ export const SPECTATOR_CASES: Record<string, SchemaCase> = {
       bad(ITEMS.launch, ["againstAlly"], "enemy"),
       bad(ITEMS.launch, ["foe"], "neutral"),
       bad(ITEMS.turn, ["importance"], 4),
+      bad(ITEMS.turn, ["results", 0, "ok"], -1),
+      extra(ITEMS.turn, ["results", 0]),
     ],
   },
   FeedKindSchema: {
@@ -1071,6 +1095,7 @@ export const SPECTATOR_CASES: Record<string, SchemaCase> = {
         seat: "p1",
         turn: 3,
         round: 0,
+        kind: "round",
         reasoning: ["thinking"],
         text: [],
         calls: ["view_map"],
@@ -1082,6 +1107,21 @@ export const SPECTATOR_CASES: Record<string, SchemaCase> = {
       { type: "pong", n: 1 },
     ],
     invalid: [
+      {
+        value: {
+          type: "annot",
+          match: "war",
+          seat: "p1",
+          turn: 3,
+          round: 0,
+          kind: "reply",
+          reasoning: [],
+          text: [],
+          calls: [],
+          complete: false,
+        },
+        path: ["kind"],
+      },
       { value: { type: "resync", match: "war", reason: "boredom" }, path: ["reason"] },
       {
         value: { type: "status", match: "war", status: "running", reason: null },

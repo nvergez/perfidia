@@ -167,6 +167,20 @@ export function filterFeed(feed: readonly FeedEntry[], view: FeedView): FeedEntr
   return feed.filter((e) => visible(e.item, view));
 }
 
+/** Cards rendered (the last ones), and "Older" adds as many. */
+export const WINDOW = 300;
+/** Cards rendered while the match plays and the list follows it (the default window only). */
+export const PLAYING_WINDOW = 40;
+
+/**
+ * How many cards to render: the viewer's window, or `PLAYING_WINDOW` while the match plays and the
+ * list follows its bottom with the default window (a long list laid out again on every new card
+ * costs frames, docs/phase3.md §16.2); a viewer who scrolled up or asked for older cards keeps them.
+ */
+export function windowLimit(limit: number, playing: boolean, following: boolean): number {
+  return playing && following && limit === WINDOW ? PLAYING_WINDOW : limit;
+}
+
 /** The last `limit` entries (the rendered window), and how many older ones are hidden. */
 export function windowOf<T>(
   list: readonly T[],

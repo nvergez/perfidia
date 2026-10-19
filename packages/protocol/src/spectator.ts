@@ -179,6 +179,12 @@ export const MatchMetaSchema = z.strictObject({
   /** Cursors of the frames the keyframe route serves. */
   keyframes: z.array(SeqSchema),
   verified: VerifiedSchema,
+  /**
+   * What the server publishes of the agents' side files (its `--no-costs` and `--no-reasoning`):
+   * when `costs` is false, annotations carry no cost, tokens, spend or cap (zeros and nulls); when
+   * `reasoning` is false, no reasoning summaries and no reply text (empty lists).
+   */
+  published: z.strictObject({ costs: z.boolean(), reasoning: z.boolean() }),
 });
 export type MatchMeta = z.infer<typeof MatchMetaSchema>;
 
@@ -581,6 +587,22 @@ const EventItemSchema = z.strictObject({
   data: JsonObjectSchema,
 });
 
+/**
+ * One tool call of an agent's turn as `match.jsonl` has it (`act`, `gw`, `obs` and `note` lines):
+ * its round (`rt`; `null` for an accepted `write_note`, whose `note` line carries none), the tool
+ * as the agent named it, how many items it had (a batch has several, one line each) and how many
+ * the engine accepted, and the codes of the rejected ones (gateway and engine), in order, each
+ * once. A read is one accepted item. An accepted `end_turn` writes no line, so it has no entry.
+ */
+export const TurnCallSchema = z.strictObject({
+  rt: Int.nullable(),
+  tool: z.string(),
+  items: z.int().positive(),
+  ok: Int,
+  codes: z.array(z.string()),
+});
+export type TurnCall = z.infer<typeof TurnCallSchema>;
+
 const TurnItemSchema = z.strictObject({
   k: z.literal("turn"),
   ...itemBase,
@@ -600,6 +622,8 @@ const TurnItemSchema = z.strictObject({
   /** Messages sent in the turn. */
   messages: z.array(MessageIdSchema),
   thought: z.string().nullable(),
+  /** An LLM turn's tool calls with their verdicts, in log order (a bot's turn has none). */
+  results: z.array(TurnCallSchema).optional(),
 });
 
 const HandoffItemSchema = z.strictObject({
@@ -856,6 +880,8 @@ export const ServerMsgSchema = z.discriminatedUnion("type", [
     seat: PlayerIdSchema,
     turn: Int,
     round: Int,
+    /** A round of the turn, or its out-of-band thought call (numbered apart). */
+    kind: z.enum(["round", "thought_call"]),
     reasoning: z.array(z.string()),
     text: z.array(z.string()),
     calls: z.array(z.string()),

@@ -121,6 +121,38 @@ describe("a fold that follows a fake arena run while it is written", () => {
   );
 });
 
+describe("the results of the LLM turns", () => {
+  test(
+    "list the turn's calls in the order of its replies, with the turn's rejections",
+    async () => {
+      const run = await fakeRun({ days: 1, seed: 3 });
+      const fold = foldLog(run.lines, { match: "fake" });
+      const turns = fold.steps
+        .flatMap((s) => s.items ?? [])
+        .flatMap((i) => (i.k === "turn" ? [i] : []));
+      expect(turns.filter((t) => !t.llm).every((t) => t.results === undefined)).toBe(true);
+      const llm = turns.filter((t) => t.llm);
+      expect(llm.length).toBeGreaterThan(20);
+      let calls = 0;
+      for (const t of llm) {
+        const results = t.results ?? [];
+        // The replies' tool calls, round by round; an accepted end_turn writes no line.
+        const replied = run.replies
+          .filter((r) => r.seat === t.seat && r.turn === t.turn && r.kind === "round")
+          .toSorted((a, b) => a.round - b.round)
+          .flatMap((r) => r.calls.map((c) => c.name))
+          .filter((name) => name !== "end_turn");
+        expect([t.seat, t.turn, results.map((r) => r.tool)]).toEqual([t.seat, t.turn, replied]);
+        const rejected = t.rejected.reduce((n, r) => n + r.count, 0);
+        expect(results.reduce((n, r) => n + r.items - r.ok, 0)).toBe(rejected);
+        calls += results.length;
+      }
+      console.log(`1-day fake arena run: ${llm.length} LLM turns, ${calls} calls with verdicts`);
+    },
+    LONG,
+  );
+});
+
 describe("annotations of the LLM turns", () => {
   test(
     "every LLM turn has its rounds, fake reasoning and costs; complete once a later turn exists",

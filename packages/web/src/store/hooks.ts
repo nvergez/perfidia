@@ -12,7 +12,7 @@ import { useEffect, useRef, useSyncExternalStore } from "react";
 import type { PlayerId } from "../lib/ids.ts";
 import type { FeedEntry } from "../playback/timeline.ts";
 import type { DominationView, Skin } from "../skins/index.ts";
-import { turnKey, useMatchStore, type Loadable, type MatchState } from "./match.ts";
+import { turnKey, useMatchStore, type AnnotMsg, type Loadable, type MatchState } from "./match.ts";
 import {
   colorOf,
   labelOf,
@@ -97,6 +97,30 @@ export function useAnnotation(
     if (enabled) loaders.annotation(seat, turn);
   }, [seat, turn, enabled]);
   return entry;
+}
+
+const NO_ANNOTS: readonly AnnotMsg[] = Object.freeze([]);
+
+/**
+ * The rounds of `seat`'s turn `turn` as the live socket brought them (`annot` messages, in arrival
+ * order, a resent round replaced in place); empty for a finished match or a turn not followed live.
+ */
+export function useLiveAnnots(seat: PlayerId, turn: number): readonly AnnotMsg[] {
+  return useMatchStore((s) => s.liveAnnots[turnKey(seat, turn)] ?? NO_ANNOTS);
+}
+
+export interface Published {
+  /** Cost, tokens, spend and cap are served (else zeros and nulls: say so, show no figure). */
+  readonly costs: boolean;
+  /** Reasoning summaries and reply text are served (else empty lists: say so). */
+  readonly reasoning: boolean;
+}
+
+const ALL_PUBLISHED: Published = Object.freeze({ costs: true, reasoning: true });
+
+/** What the server publishes of the agents' side files for this match (`MatchMeta.published`). */
+export function usePublished(): Published {
+  return useMatchStore((s) => s.meta?.published ?? ALL_PUBLISHED);
 }
 
 /** A seat's dossier (notebook, counts, spend), fetched when `seat` is set. */

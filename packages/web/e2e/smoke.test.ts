@@ -1,11 +1,13 @@
 // The end-to-end smoke test of the spectator web app (phase-3 design §6.1 "End-to-end smoke"):
 // headless Chromium (playwright-core, the pre-installed Playwright browsers) against an in-process
 // spectator server that serves a fresh build of the app, the war golden, a fake arena run generated
-// here, a copy of it with hostile player text planted (markup, script, URLs, bidi), and a run
-// written line by line while a page follows it live. Every page records CSP violations and
-// console errors; the DOM is checked for HTML sinks. Opt-in: `bun run test:e2e` (PERFIDIA_E2E=1);
-// skipped with a printed reason otherwise, or when Chromium is not installed. The server listens on
-// `PERFIDIA_E2E_PORT` (default: any free port). Budget: about 30 s.
+// here, a copy of it with hostile player text planted (markup, script, URLs, bidi; in messages and
+// proposals too, re-hashed), and a run written line by line while a page follows it live; a second
+// server, over a copy of the fake run, publishes neither costs nor reasoning. Every page records CSP
+// violations and console errors; the DOM is checked for HTML sinks. Opt-in: `bun run test:e2e`
+// (PERFIDIA_E2E=1); skipped with a printed reason otherwise, or when Chromium is not installed. The
+// server listens on `PERFIDIA_E2E_PORT` (default: any free port). Budget: 20 s. The helpers are in
+// `kit.ts`; Pass C's checks in `checks/*.ts`, one file per feature (docs/phase3.md §16.4).
 
 // oxlint-disable no-await-in-loop -- browser steps follow each other on purpose
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
@@ -13,7 +15,6 @@ import {
   appendFileSync,
   copyFileSync,
   cpSync,
-  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -24,204 +25,48 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { Browser, BrowserContext, Page } from "playwright-core";
+import { dossierChecks } from "./checks/dossier.ts";
+import { turnChecks } from "./checks/turns.ts";
+import {
+  clock,
+  clockReads,
+  closeContexts,
+  current,
+  DAY,
+  domIsClean,
+  errors,
+  focused,
+  HOSTILE,
+  HOUR,
+  isObject,
+  mapReady,
+  open,
+  plantHostile,
+  seekWithKeys,
+  setEnv,
+  skipReason,
+  WAR_GOLDEN,
+} from "./kit.ts";
 
-const WEB = join(import.meta.dir, "..");
-const WAR_GOLDEN = join(
-  WEB,
-  "..",
-  "sim",
-  "fixtures",
-  "golden",
-  "perfidia-1@1.1.0",
-  "lockstep-6p-6d-war.jsonl.gz",
-);
-const DAY = 86_400;
-const HOUR = 3_600;
 /** D4 12:51, a few seconds after p2's attack on its ally p3 lands at c18 (the betrayal). */
 const BETRAYAL_SEEK = 3 * DAY + 12 * HOUR + 51 * 60;
 /** D4 08:57: just after p2's "we remain friends" to p3 and p3's call for help (D4 08:56:32). */
 const MESSAGES_SEEK = 3 * DAY + 8 * HOUR + 57 * 60;
 
-/** Player text a page must show as text, never as markup, a script or a link. */
-const HOSTILE = {
-  img: '<img src=x onerror="window.__xss=1">',
-  script: "<script>window.__xss=2</script>",
-  js: "javascript:window.__xss=3",
-  url: "https://evil.example/phish",
-  bidi: "\u202Egnp.exe",
-  attr: '" onmouseover="window.__xss=4" x="',
-} as const;
-
-type JsonObject = Record<string, unknown>;
-const isObject = (v: unknown): v is JsonObject =>
-  v !== null && typeof v === "object" && !Array.isArray(v);
-
-/** Rewrites each JSON line of a file through `edit` (lines it returns unchanged stay byte-equal). */
-function editLines(path: string, edit: (o: JsonObject) => boolean): void {
-  const out = readFileSync(path, "utf8")
-    .split("\n")
-    .map((line) => {
-      if (line === "") return line;
-      const o: unknown = JSON.parse(line);
-      return isObject(o) && edit(o) ? JSON.stringify(o) : line;
-    });
-  writeFileSync(path, out.join("\n"));
-}
-
-/**
- * Plants hostile text in a copy of a fake run where Level E does not see it: p1's profile
- * (`seats.json`), its turn thoughts and notebook (`match.jsonl`), its reasoning and replies
- * (`replies.jsonl`).
- */
-function plantHostile(dir: string): void {
-  const seatsPath = join(dir, "seats.json");
-  const seats: unknown = JSON.parse(readFileSync(seatsPath, "utf8"));
-  const list = isObject(seats) && Array.isArray(seats.seats) ? seats.seats : [];
-  for (const seat of list) {
-    if (!isObject(seat) || seat.seat !== "p1" || !isObject(seat.profile)) continue;
-    seat.profile.goal = `${HOSTILE.img} goal`;
-    seat.profile.temperament = HOSTILE.script;
-    seat.profile.word = `${HOSTILE.js} ${HOSTILE.url}`;
-    seat.profile.style = `${HOSTILE.bidi}${HOSTILE.attr}`;
-  }
-  writeFileSync(seatsPath, JSON.stringify(seats, null, 2));
-  editLines(join(dir, "match.jsonl"), (o) => {
-    if (o.seat !== "p1") return false;
-    if (o.k === "turn" && typeof o.thought === "string") {
-      o.thought = `${HOSTILE.img} ${HOSTILE.script} ${HOSTILE.url}`;
-      return true;
-    }
-    if (o.k === "note" && typeof o.text === "string") {
-      o.text = `${HOSTILE.attr} ${HOSTILE.js} ${HOSTILE.bidi}`;
-      return true;
-    }
-    return false;
-  });
-  editLines(join(dir, "replies.jsonl"), (o) => {
-    if (o.seat !== "p1") return false;
-    o.reasoning = [`${HOSTILE.script} reasoning ${HOSTILE.url}`];
-    o.text = [HOSTILE.img];
-    return true;
-  });
-}
-
-async function skipReason(): Promise<string | null> {
-  if (process.env.PERFIDIA_E2E !== "1") {
-    return "set PERFIDIA_E2E=1 (bun run test:e2e) to run the browser smoke test";
-  }
-  const { chromium } = await import("playwright-core");
-  const exe = chromium.executablePath();
-  if (!existsSync(exe)) {
-    return `Chromium is not installed at ${exe} (PLAYWRIGHT_BROWSERS_PATH; CI: bunx playwright-core install chromium)`;
-  }
-  return null;
-}
-
 const reason = await skipReason();
 if (reason !== null) console.log(`web e2e smoke skipped: ${reason}`);
 
-interface Env {
-  readonly url: string;
-  readonly browser: Browser;
-  readonly root: string;
-  /** The finished fake run's directory (the live test writes it again, line by line). */
-  readonly fakeDir: string;
-  readonly rescan: () => void;
-  readonly stop: () => Promise<void>;
-}
-
-let env: Env | null = null;
+let stopAll: (() => Promise<void>) | null = null;
 const started = performance.now();
-const errors: string[] = [];
-const contexts: BrowserContext[] = [];
 
-function current(): Env {
-  if (env === null) throw new Error("the smoke environment did not start");
-  return env;
-}
-
-/** A page of a returning viewer ("How to watch" seen), its console errors collected. */
-async function open(path: string, size = { width: 1440, height: 900 }): Promise<Page> {
-  const { browser, url } = current();
-  const context = await browser.newContext({ viewport: size });
-  contexts.push(context);
-  // A returning viewer (storage blocked: the overlay would show); CSP violations recorded (Chromium
-  // logs none for a refused eval, so the console check alone would miss them).
-  await context.addInitScript({
-    content: `try { localStorage.setItem("perfidia.howToWatch.seen", "1"); } catch {}
-window.__csp = [];
-document.addEventListener("securitypolicyviolation", (e) => {
-  window.__csp.push(e.violatedDirective + " " + e.blockedURI + " " + e.sourceFile + ":" + e.lineNumber);
-});`,
-  });
-  const page = await context.newPage();
-  // A missing element fails its step with Playwright's message, well inside the test's timeout.
-  page.setDefaultTimeout(10_000);
-  page.on("console", (m) => {
-    if (m.type() === "error") errors.push(`${path}: console: ${m.text()}`);
-  });
-  page.on("pageerror", (e) => errors.push(`${path}: ${e.message}`));
-  await page.goto(url + path);
-  return page;
-}
-
-async function mapReady(page: Page): Promise<void> {
-  await page.waitForSelector("[data-map] [data-island]", { timeout: 15_000 });
-}
-
-/** The game clock of the timeline ("D4 12:51"). */
-async function clock(page: Page): Promise<string> {
-  return (await page.getByRole("timer", { name: "Game time" }).textContent()) ?? "";
-}
-
-/** Seeks with the scrubber's keys: Home, then 6 h (Page Up), 15 min (→) and 1 min (Shift+→). */
-async function seekWithKeys(page: Page, t: number): Promise<void> {
-  await page.getByRole("slider", { name: "Game time" }).focus();
-  await page.keyboard.press("Home");
-  let left = t;
-  for (; left >= 6 * HOUR; left -= 6 * HOUR) await page.keyboard.press("PageUp");
-  for (; left >= 900; left -= 900) await page.keyboard.press("ArrowRight");
-  for (; left >= 60; left -= 60) await page.keyboard.press("Shift+ArrowRight");
-}
-
-// Run in the page (a string: this project type-checks without the DOM library, see
-// tsconfig.e2e.json): what would show HTML made from strings, scripts, links out of the app, a
-// handler planted by hostile text that ran, or a CSP violation.
-const DIRTY_DOM = `(() => {
-  const out = [];
-  for (const el of document.querySelectorAll("*")) {
-    for (const a of el.getAttributeNames()) {
-      if (/^on/i.test(a) || /^(srcdoc|formaction)$/i.test(a)) out.push(el.tagName + " " + a);
-    }
+/** Waits until match `id` of the server at `url` is folded and ended. */
+async function ended(url: string, id: string, ms = 15_000): Promise<void> {
+  for (const end = performance.now() + ms; ;) {
+    const res = await fetch(`${url}/api/matches/${id}`);
+    if (res.ok && JSON.stringify(await res.json()).includes('"status":"ended"')) return;
+    if (performance.now() > end) throw new Error(`${url}: ${id} did not end in ${ms} ms`);
+    await Bun.sleep(50);
   }
-  for (const el of document.querySelectorAll("iframe, object, embed, img, video, audio, base, form")) {
-    out.push(el.tagName);
-  }
-  for (const s of document.querySelectorAll("script")) {
-    if (s.src === "" || s.textContent !== "") out.push("inline script");
-  }
-  for (const a of document.querySelectorAll("a[href], area[href]")) {
-    const href = a.getAttribute("href") ?? "";
-    if (!href.startsWith("/") || href.startsWith("//")) out.push("link " + href);
-  }
-  if (window.__xss !== undefined) out.push("planted handler ran: " + window.__xss);
-  for (const v of window.__csp ?? []) out.push("CSP violation: " + v);
-  return out;
-})()`;
-
-/** No HTML made from strings, no script, frame or link out of the app, no CSP violation. */
-async function domIsClean(page: Page): Promise<void> {
-  const bad: unknown = await page.evaluate(DIRTY_DOM);
-  expect(bad).toEqual([]);
-}
-
-/** Waits until the game clock reads `text`. */
-async function clockReads(page: Page, text: string): Promise<void> {
-  await page
-    .getByRole("timer", { name: "Game time" })
-    .filter({ hasText: new RegExp(`^${text}$`) })
-    .waitFor();
 }
 
 describe.skipIf(reason !== null)("the spectator web app in Chromium", () => {
@@ -242,31 +87,34 @@ describe.skipIf(reason !== null)("the spectator web app in Chromium", () => {
     ]);
     const report = await build.buildWeb({ outdir: dist, quiet: true });
     const t1 = performance.now();
-    // The war golden folds in a worker while the fake run is generated here.
-    const s = server.startServer(
-      {
-        runs,
-        cache: join(root, "cache"),
-        publish: null,
-        host: "127.0.0.1",
-        port: Number(process.env.PERFIDIA_E2E_PORT ?? "0"),
-        hosts: [],
-        dev: false,
-        webDist: dist,
-        adapter: "elysia",
-        trustProxy: null,
-        origins: [],
-        policy: { costs: true, reasoning: true },
-        workers: 2,
-        limits: {
-          ...server.DEFAULT_LIMITS,
-          httpPerMinute: 100_000,
-          httpBurst: 100_000,
+    const serve = (dir: string, cache: string, publish: boolean, port: number) =>
+      server.startServer(
+        {
+          runs: dir,
+          cache: join(root, cache),
+          publish: null,
+          host: "127.0.0.1",
+          port,
+          hosts: [],
+          dev: false,
+          webDist: dist,
+          adapter: "elysia",
+          trustProxy: null,
+          origins: [],
+          policy: { costs: publish, reasoning: publish },
+          // The war golden, the fake run and its hostile copy fold side by side.
+          workers: 3,
+          limits: {
+            ...server.DEFAULT_LIMITS,
+            httpPerMinute: 100_000,
+            httpBurst: 100_000,
+          },
+          timing: { ...server.DEFAULT_TIMING, pollMs: 50, rescanMs: 200 },
         },
-        timing: { ...server.DEFAULT_TIMING, pollMs: 50, rescanMs: 200 },
-      },
-      { warn: () => undefined },
-    );
+        { warn: () => undefined },
+      );
+    // The war golden folds in a worker while the fake run is generated here.
+    const s = serve(runs, "cache", true, Number(process.env.PERFIDIA_E2E_PORT ?? "0"));
     const plan = orchestrator.planArena(
       { ruleset: "perfidia-1@1.1.0", fake: true, seed: 3, idKey: "seed", days: 1 },
       orchestrator.arenaEnv({}),
@@ -284,39 +132,39 @@ describe.skipIf(reason !== null)("the spectator web app in Chromium", () => {
     cpSync(join(stage, "fake1"), join(stage, "fake1-copy"), { recursive: true });
     renameSync(join(stage, "fake1-copy"), join(runs, "fake1"));
     s.rescan();
+    // The second server folds a copy of the fake run alone (its folds would slow the first's).
+    const privateRuns = join(root, "runs-private");
+    mkdirSync(privateRuns);
+    cpSync(join(stage, "fake1"), join(privateRuns, "fake1"), { recursive: true });
+    const p = serve(privateRuns, "cache-private", false, 0);
     const browser = await chromium.launch({ headless: true });
-    env = {
+    // The fake runs folded and ended (the hostile copy still verifies: Level E holds); the war
+    // golden folds on while the tests of the fake runs go first.
+    await Promise.all([ended(s.url, "fake1"), ended(s.url, "hostile"), ended(p.url, "fake1")]);
+    stopAll = async () => {
+      await browser.close();
+      await p.stop();
+      await s.stop();
+      rmSync(root, { recursive: true, force: true });
+    };
+    setEnv({
       url: s.url,
+      privateUrl: p.url,
       browser,
       root,
       fakeDir: join(stage, "fake1"),
       rescan: () => s.rescan(),
-      stop: async () => {
-        await browser.close();
-        await s.stop();
-        rmSync(root, { recursive: true, force: true });
-      },
-    };
-    // The three matches folded and ended (the hostile copy still verifies: Level E holds).
-    for (const end = performance.now() + 15_000; ;) {
-      const res = await fetch(`${s.url}/api/matches`);
-      const list: unknown = await res.json();
-      const ended = Array.isArray(list)
-        ? list.filter((m: unknown) => JSON.stringify(m).includes('"status":"ended"')).length
-        : 0;
-      if (ended === 3) break;
-      if (performance.now() > end) throw new Error("the matches did not fold in 15 s");
-      await Bun.sleep(50);
-    }
+      stop: () => stopAll?.() ?? Promise.resolve(),
+    });
     const t3 = performance.now();
     console.log(
-      `web e2e setup: build ${Math.round(t1 - t0)} ms (JS ${(report.jsGzip / 1024).toFixed(1)} KB gzipped), fake run ${Math.round(t2 - t1)} ms, folds ready ${Math.round(t3 - t2)} ms more`,
+      `web e2e setup: build ${Math.round(t1 - t0)} ms (initial JS ${(report.jsGzip / 1024).toFixed(1)} KB gzipped, lazy ${(report.lazyJsGzip / 1024).toFixed(1)} KB), fake run and hostile copy ${Math.round(t2 - t1)} ms, folds ready ${Math.round(t3 - t2)} ms more`,
     );
   }, 60_000);
 
   afterAll(async () => {
-    for (const c of contexts.splice(0)) await c.close().catch(() => undefined);
-    await env?.stop();
+    await closeContexts();
+    await stopAll?.();
     console.log(`web e2e smoke: ${((performance.now() - started) / 1000).toFixed(1)} s in all`);
   });
 
@@ -331,7 +179,95 @@ describe.skipIf(reason !== null)("the spectator web app in Chromium", () => {
     await domIsClean(page);
   }, 20_000);
 
+  test("hostile player text is shown as text: no markup, script, link or handler", async () => {
+    const page = await open("/m/hostile");
+    await mapReady(page);
+    // Thoughts: p1's thought and its reasoning.
+    await page.getByRole("tab", { name: "Thoughts" }).click();
+    const thoughts = page.getByTestId("thoughts");
+    await thoughts.getByText(HOSTILE.img, { exact: false }).first().waitFor();
+    await thoughts
+      .getByRole("button", { name: /^Reasoning/ })
+      .first()
+      .click();
+    await thoughts.getByText(`${HOSTILE.script} reasoning`, { exact: false }).first().waitFor();
+    await domIsClean(page);
+    // The dossier: profile and notebook.
+    await page.locator("[data-testid=leaderboard] [data-player=p1] button").first().click();
+    const sheet = page.getByTestId("player-sheet");
+    await sheet.waitFor();
+    await sheet.getByText(`${HOSTILE.img} goal`, { exact: false }).waitFor();
+    await sheet.getByText(HOSTILE.script, { exact: false }).first().waitFor();
+    await sheet.getByText(HOSTILE.attr.trim(), { exact: false }).first().waitFor();
+    const text = (await sheet.textContent()) ?? "";
+    expect(text).toContain(HOSTILE.js);
+    expect(text).toContain(HOSTILE.url);
+    // Hovering what an attribute payload would have hooked.
+    await sheet.getByText(HOSTILE.attr.trim(), { exact: false }).first().hover();
+    await domIsClean(page);
+    // Messages and proposals (re-hashed into the log: Level E still holds).
+    await page.keyboard.press("Escape");
+    await sheet.waitFor({ state: "detached" });
+    await page.getByRole("tab", { name: "Feed" }).click();
+    await page.getByRole("button", { name: "Diplomacy", exact: true }).click();
+    const feed = page.getByTestId("feed");
+    await feed
+      .locator('[data-k="message"]')
+      .filter({ hasText: `${HOSTILE.img} ${HOSTILE.js} ${HOSTILE.script}` })
+      .first()
+      .waitFor();
+    await feed
+      .locator('[data-k="proposal"]')
+      .filter({ hasText: `${HOSTILE.attr} ${HOSTILE.url}` })
+      .first()
+      .waitFor();
+    await domIsClean(page);
+  }, 20_000);
+
+  test("a fake run's thought expands its reasoning", async () => {
+    const page = await open("/m/fake1");
+    await mapReady(page);
+    await page.getByRole("tab", { name: "Thoughts" }).click();
+    const thoughts = page.getByTestId("thoughts");
+    await thoughts
+      .getByRole("button", { name: /^Reasoning/ })
+      .first()
+      .click();
+    await thoughts
+      .getByText(/^Fake reasoning: /)
+      .first()
+      .waitFor();
+    await domIsClean(page);
+  }, 20_000);
+
+  test("a server that publishes neither costs nor reasoning: the UI says so", async () => {
+    const { privateUrl } = current();
+    const meta: unknown = await (await fetch(`${privateUrl}/api/matches/fake1`)).json();
+    expect(isObject(meta) ? meta.published : null).toEqual({ costs: false, reasoning: false });
+    const page = await open("/m/fake1", undefined, { base: privateUrl });
+    await mapReady(page);
+    await page.getByRole("tab", { name: "Thoughts" }).click();
+    const thoughts = page.getByTestId("thoughts");
+    await thoughts
+      .getByRole("button", { name: /^Reasoning/ })
+      .first()
+      .click();
+    await thoughts.getByText("Reasoning not published for this match.").first().waitFor();
+    await thoughts.getByText("Costs not published for this match.").first().waitFor();
+    expect(await thoughts.getByText(/^Fake reasoning: /).count()).toBe(0);
+    await page.locator("[data-testid=leaderboard] [data-player=p1] button").first().click();
+    const sheet = page.getByTestId("player-sheet");
+    await sheet.getByText("Spending not published for this match.").waitFor();
+    expect(await sheet.getByTestId("spend").count()).toBe(0);
+    await domIsClean(page);
+  }, 25_000);
+
+  // Pass C (docs/phase3.md §16.4): one file of checks per feature agent.
+  turnChecks();
+  dossierChecks();
+
   test("the war golden: map, leaderboard, blocs and the end; the betrayal; thoughts; moments", async () => {
+    await ended(current().url, "war");
     const page = await open("/m/war");
     await mapReady(page);
     // Arrival at the end of the finished match.
@@ -407,38 +343,33 @@ describe.skipIf(reason !== null)("the spectator web app in Chromium", () => {
     await domIsClean(page);
   }, 40_000);
 
-  test("?start=1 opens a finished match at its first second", async () => {
+  test("?start=1 opens at the first second; the cities are one tab stop; focus comes back", async () => {
     const page = await open("/m/war?start=1");
     await mapReady(page);
     await clockReads(page, "D1 00:00");
-    await domIsClean(page);
-  }, 20_000);
-
-  test("hostile player text is shown as text: no markup, script, link or handler", async () => {
-    const page = await open("/m/hostile");
-    await mapReady(page);
-    // Thoughts: p1's thought and its reasoning.
-    await page.getByRole("tab", { name: "Thoughts" }).click();
-    const thoughts = page.getByTestId("thoughts");
-    await thoughts.getByText(HOSTILE.img, { exact: false }).first().waitFor();
-    await thoughts
-      .getByRole("button", { name: /^Reasoning/ })
-      .first()
-      .click();
-    await thoughts.getByText(`${HOSTILE.script} reasoning`, { exact: false }).first().waitFor();
-    await domIsClean(page);
-    // The dossier: profile and notebook.
-    await page.locator("[data-testid=leaderboard] [data-player=p1] button").first().click();
-    const sheet = page.getByTestId("player-sheet");
-    await sheet.waitFor();
-    await sheet.getByText(`${HOSTILE.img} goal`, { exact: false }).waitFor();
-    await sheet.getByText(HOSTILE.script, { exact: false }).first().waitFor();
-    await sheet.getByText(HOSTILE.attr.trim(), { exact: false }).first().waitFor();
-    const text = (await sheet.textContent()) ?? "";
-    expect(text).toContain(HOSTILE.js);
-    expect(text).toContain(HOSTILE.url);
-    // Hovering what an attribute payload would have hooked.
-    await sheet.getByText(HOSTILE.attr.trim(), { exact: false }).first().hover();
+    const stops = page.locator('[data-map] [data-city][tabindex="0"]');
+    expect(await stops.count()).toBe(1);
+    const first = (await stops.getAttribute("data-city")) ?? "";
+    await stops.focus();
+    await page.keyboard.press("ArrowRight");
+    const next = await focused(page);
+    expect(next).toMatch(/^g\[data-city=c\d+\]$/);
+    expect(next).not.toBe(`g[data-city=${first}]`);
+    // The tab stop followed the focus: still one, on the city the arrow moved to.
+    expect(await stops.count()).toBe(1);
+    expect(`g[data-city=${(await stops.getAttribute("data-city")) ?? ""}]`).toBe(next);
+    await page.keyboard.press("Enter");
+    const popover = page.getByTestId("city-popover");
+    await popover.waitFor();
+    await page.keyboard.press("Escape");
+    await popover.waitFor({ state: "detached" });
+    expect(await focused(page)).toBe(next);
+    // The close button gives it back too.
+    await page.keyboard.press("Enter");
+    await popover.waitFor();
+    await popover.getByRole("button", { name: "Close" }).click();
+    await popover.waitFor({ state: "detached" });
+    expect(await focused(page)).toBe(next);
     await domIsClean(page);
   }, 20_000);
 
@@ -489,22 +420,6 @@ describe.skipIf(reason !== null)("the spectator web app in Chromium", () => {
     expect(got).toEqual(want);
     await domIsClean(page);
   }, 30_000);
-
-  test("a fake run's thought expands its reasoning", async () => {
-    const page = await open("/m/fake1");
-    await mapReady(page);
-    await page.getByRole("tab", { name: "Thoughts" }).click();
-    const thoughts = page.getByTestId("thoughts");
-    await thoughts
-      .getByRole("button", { name: /^Reasoning/ })
-      .first()
-      .click();
-    await thoughts
-      .getByText(/^Fake reasoning: /)
-      .first()
-      .waitFor();
-    await domIsClean(page);
-  }, 20_000);
 
   test("a phone screenshot (390 × 844)", async () => {
     const page = await open("/m/war", { width: 390, height: 844 });

@@ -166,7 +166,8 @@ const Row = memo(function Row({
             </span>
           </button>
         </PlayerCard>
-        {seat === undefined ? null : <ModelBadge seat={seat} className="shrink-0 px-1.5" />}
+        {/* A long model id gives way first: the name and id beside it stay readable. */}
+        {seat === undefined ? null : <ModelBadge seat={seat} squeeze className="px-1.5" />}
         <span className="ml-auto shrink-0 font-mono font-semibold tabular-nums">
           {fmtInt(standing.score)}
         </span>

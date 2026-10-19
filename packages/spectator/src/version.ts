@@ -7,8 +7,8 @@ import type { HeaderLine, Sha256, TimelineId } from "@perfidia/protocol";
 // changes with the fold's output format (`TIMELINE_VERSION`) and the engine version. A client that
 // holds steps of another timeline must start over.
 
-/** Bumped by any change to what the fold outputs for the same log. */
-export const TIMELINE_VERSION = 2;
+/** Bumped by any change to what the fold outputs for the same log (3: `TurnItem.results`). */
+export const TIMELINE_VERSION = 3;
 
 /** The sha256 of the header line as written (canonical JSON). */
 export function logIdOf(header: HeaderLine): Sha256 {

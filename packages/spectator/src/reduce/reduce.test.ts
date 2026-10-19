@@ -106,6 +106,28 @@ describe("applyStep", () => {
     expect(applySteps(frame, steps).seq).toBe(4);
   });
 
+  test("applySteps copies a record once for a run of steps: the same frame, inputs unchanged", () => {
+    const steps: Step[] = [
+      { seq: 1, t: 10, patch: { playerFields: { p1: { score: 121 } } } },
+      { seq: 2, t: 20, patch: { players: { p2: null }, seatFields: { p1: { round: 0 } } } },
+      { seq: 3, t: 30 },
+      { seq: 4, t: 40, patch: { playerFields: { p1: { score: 122 } }, ext: { a: 4 } } },
+    ];
+    const before = structuredClone(frame);
+    const oneByOne = steps.reduce((f, s) => applyStep(f, s), frame);
+    const batched = applySteps(frame, steps);
+    expect(batched).toEqual(oneByOne);
+    expect(frame).toEqual(before);
+    expect(batched.players).not.toBe(frame.players);
+    expect(batched.cities).toBe(frame.cities);
+    // A frame after part of the run is not changed by applying the rest.
+    const at2 = applySteps(frame, steps.slice(0, 2));
+    const at2Copy = structuredClone(at2);
+    applySteps(at2, steps);
+    expect(at2).toEqual(at2Copy);
+    expect(applySteps(frame, [])).toBe(frame);
+  });
+
   test("standings are the players in rank order", () => {
     expect(standingsOf(frame).map((s) => [s.player, s.rank, s.score])).toEqual([
       ["p1", 1, 120],
