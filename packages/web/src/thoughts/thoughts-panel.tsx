@@ -1,22 +1,6 @@
 import type { FeedItemOf, SeatInfo } from "@perfidia/protocol/spectator";
-import {
-  AlarmClock,
-  Bell,
-  Bot,
-  Brain,
-  ChevronDown,
-  ChevronRight,
-  Eye,
-  Flag,
-  Hammer,
-  Handshake,
-  Mail,
-  Siren,
-  Skull,
-  Swords,
-  type LucideIcon,
-} from "lucide-react";
-import { memo, useId, useMemo, useState } from "react";
+import { Bot, Brain, ChevronRight, Siren, Skull } from "lucide-react";
+import { memo, useMemo, useState } from "react";
 import { GameTime } from "../common/game-time.tsx";
 import { ModelBadge } from "../common/model-badge.tsx";
 import { PlainText } from "../common/plain-text.tsx";
@@ -26,109 +10,56 @@ import { fmtInt } from "../lib/format.ts";
 import { isPlayerId, type PlayerId } from "../lib/ids.ts";
 import { fmtAgo } from "../lib/time.ts";
 import { PlayerCard } from "../players/player-card.tsx";
-import { useFeed, useMatch, useSeats, useUi } from "../store/hooks.ts";
+import { useFeed, useLiveAnnots, useMatch, useSeats, useUi } from "../store/hooks.ts";
 import { uiActions } from "../store/ui.ts";
-import { ReasoningToggle } from "./reasoning.tsx";
+import { LazyTurnSheet } from "../turns/lazy.ts";
 import { OpenTurnButton } from "../turns/open-turn.tsx";
 import { LazyLiveReasoning } from "./lazy.ts";
-import { TurnReasoning } from "./turn-reasoning.tsx";
-import { wakeKinds, wakeWords, type WakeKind } from "./wake.ts";
+import { liveTopRound, roundNow } from "./live-rounds.ts";
+import { ReasoningToggle } from "./reasoning.tsx";
+import { WakeIcons } from "./wake-icons.tsx";
 
 // The thoughts column (phase-3 design §4.3 "Thoughts"): one block per agent, its latest public
-// thought large, "thinking… round N" while it is in a turn, then its history, one thought per turn
-// with icons for why it woke; opening a turn shows that turn's reasoning (annotations). Bots' turn
-// summaries are behind "Show bots" (shown at once when no agent plays). Pass C adds the live
-// per-round reasoning.
+// thought large, "thinking… round N" while it is in a turn with the rounds of that turn as they
+// arrive (Pass C, C3: `live.tsx`), then its history, one thought per turn with icons for why it
+// woke; a turn of the history opens its turn detail (Pass C, C1: `turns/`). Bots' turn summaries
+// are behind "Show bots" (shown at once when no agent plays).
 
 type TurnItem = FeedItemOf<"turn">;
 
-const WAKE_ICONS: Readonly<Record<WakeKind, LucideIcon>> = Object.freeze({
-  start: Flag,
-  alarm: AlarmClock,
-  message: Mail,
-  diplomacy: Handshake,
-  danger: Siren,
-  battle: Swords,
-  spy: Eye,
-  build: Hammer,
-  event: Bell,
-});
-
 const HISTORY = 8;
 
-function WakeIcons({ reasons }: { readonly reasons: readonly string[] }) {
-  const words = reasons.map(wakeWords).join("; ");
-  return (
-    <span className="inline-flex shrink-0 items-center gap-0.5" title={`Woke for ${words}`}>
-      {wakeKinds(reasons).map((k) => {
-        const Icon = WAKE_ICONS[k];
-        return <Icon key={k} className="size-3" aria-hidden="true" />;
-      })}
-      <span className="sr-only">Woke for {words}</span>
-    </span>
-  );
-}
-
 // Memoised: a turn never changes, and its block re-renders as the feed grows.
-const HistoryItem = memo(function HistoryItem({
-  item,
-  llm,
-}: {
-  readonly item: TurnItem;
-  readonly llm: boolean;
-}) {
-  const [open, setOpen] = useState(false);
-  const id = useId();
+const HistoryItem = memo(function HistoryItem({ item }: { readonly item: TurnItem }) {
   return (
     <li className="border-border/60 border-t pt-1.5 first:border-t-0 first:pt-0">
       <button
         type="button"
-        aria-expanded={open}
-        aria-controls={id}
-        onClick={() => setOpen((o) => !o)}
-        className="hover:bg-accent/40 flex w-full items-start gap-1.5 rounded px-1 py-0.5 text-left"
+        aria-haspopup="dialog"
+        data-open-turn={`${item.seat}:${item.turn}`}
+        onPointerEnter={() => LazyTurnSheet.preload()}
+        onFocus={() => LazyTurnSheet.preload()}
+        onClick={() => uiActions.openTurn(item.seat, item.turn)}
+        className="hover:bg-accent/40 group flex w-full items-start gap-1.5 rounded px-1 py-0.5 text-left"
       >
-        {open ? (
-          <ChevronDown
-            className="text-muted-foreground mt-0.5 size-3 shrink-0"
-            aria-hidden="true"
-          />
-        ) : (
-          <ChevronRight
-            className="text-muted-foreground mt-0.5 size-3 shrink-0"
-            aria-hidden="true"
-          />
-        )}
         <span className="min-w-0 flex-1">
           <span className="text-muted-foreground flex items-center gap-1.5 text-[0.7rem]">
             <WakeIcons reasons={item.reasons} />
             turn {item.turn} · <GameTime t={item.t} />
+            {item.urgent ? <Siren className="text-destructive size-3" aria-label="urgent" /> : null}
           </span>
           {item.thought === null || item.thought === "" ? (
             <span className="text-muted-foreground block text-xs">(no thought)</span>
           ) : (
-            <PlainText
-              text={item.thought}
-              className={cn("block text-xs", open ? null : "line-clamp-2")}
-            />
+            <PlainText text={item.thought} className="line-clamp-2 block text-xs" />
           )}
         </span>
+        <ChevronRight
+          className="text-muted-foreground group-hover:text-foreground mt-0.5 size-3 shrink-0"
+          aria-hidden="true"
+        />
+        <span className="sr-only">Open the turn detail</span>
       </button>
-      {open ? (
-        <div id={id} className="mt-1 mb-1 ml-5 flex flex-col gap-1">
-          <p className="text-muted-foreground text-[0.7rem]">
-            Woke for {item.reasons.map(wakeWords).join("; ") || "no logged reason"}.
-          </p>
-          {llm ? (
-            <>
-              <OpenTurnButton seat={item.seat} turn={item.turn} />
-              <div className="border-primary/40 border-l-2 pl-2">
-                <TurnReasoning seat={item.seat} turn={item.turn} />
-              </div>
-            </>
-          ) : null}
-        </div>
-      ) : null}
     </li>
   );
 });
@@ -150,15 +81,28 @@ function SeatStatus({ seat }: { readonly seat: PlayerId }) {
       </span>
     );
   }
-  if (ent?.inTurn === true) {
-    return (
-      <span className="text-primary inline-flex items-center gap-1 text-xs font-medium">
-        <Brain className="size-3 motion-safe:animate-pulse" aria-hidden="true" />
-        thinking…{ent.round === null ? null : ` round ${ent.round + 1}`}
-      </span>
-    );
-  }
+  if (ent?.inTurn === true) return <Thinking seat={seat} turn={ent.turn} logged={ent.round} />;
   return null;
+}
+
+/** "thinking… round N": the round the log reached, or a newer one the live socket brought. */
+function Thinking({
+  seat,
+  turn,
+  logged,
+}: {
+  readonly seat: PlayerId;
+  readonly turn: number;
+  readonly logged: number | null;
+}) {
+  const live = useLiveAnnots(seat, turn);
+  const round = roundNow(logged, liveTopRound(live));
+  return (
+    <span className="text-primary inline-flex items-center gap-1 text-xs font-medium">
+      <Brain className="size-3 motion-safe:animate-pulse" aria-hidden="true" />
+      thinking…{round === null ? null : ` round ${fmtInt(round + 1)}`}
+    </span>
+  );
 }
 
 /** "3 h ago", re-rendered once a game minute (not its whole block). */
@@ -201,7 +145,7 @@ const SeatBlock = memo(function SeatBlock({
       aria-label={`Thoughts of ${seat.name} (${id})`}
       className="bg-card rounded-lg border p-2.5"
     >
-      <header className="flex min-w-0 items-center gap-1.5 text-sm">
+      <header className="flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-0.5 text-sm">
         <PlayerCard player={id}>
           <button
             type="button"
@@ -227,7 +171,11 @@ const SeatBlock = memo(function SeatBlock({
           <p className="text-muted-foreground mt-1 text-[0.7rem]">
             turn {last.turn} · <GameTime t={last.t} /> · <Ago t={last.t} />
           </p>
-          {llm ? <ReasoningToggle seat={id} turn={last.turn} className="mt-1" /> : null}
+          {llm ? (
+            <ReasoningToggle seat={id} turn={last.turn} className="mt-1" />
+          ) : (
+            <OpenTurnButton seat={id} turn={last.turn} className="mt-1" />
+          )}
         </div>
       )}
       {history.length === 0 ? null : (
@@ -237,7 +185,7 @@ const SeatBlock = memo(function SeatBlock({
           </summary>
           <ol className="mt-1.5 flex flex-col gap-1.5">
             {shown.map((t) => (
-              <HistoryItem key={t.id} item={t} llm={llm} />
+              <HistoryItem key={t.id} item={t} />
             ))}
           </ol>
           {history.length > shown.length ? (
@@ -282,7 +230,7 @@ export function ThoughtsPanel() {
         <p className="text-muted-foreground min-w-0 flex-1">
           {noAgents
             ? "No AI agent plays this match: these are the scripted bots' turn summaries."
-            : "Each agent's public thought at the end of its turns. Open a turn for its reasoning."}
+            : "Each agent's public thought at the end of its turns. Open a turn for its rounds, tool calls and cost."}
         </p>
         {noAgents || bots.length === 0 ? null : (
           <button

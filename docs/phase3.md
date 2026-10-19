@@ -1150,7 +1150,130 @@ UI says so in one line (`NotPublished`, used by the Pass B reasoning and the dos
   tests in **17.9–18.4 s** (budget 20 s), `PERFIDIA_E2E=1 PERFIDIA_E2E_PORT=8303 bun test
   packages/web/e2e`.
 
-### 16.7 C1 turn detail and C3 live reasoning (agent T: to be written)
+### 16.7 C1 turn detail and C3 live reasoning (agent T, as built)
+
+Design §4.2 Pass C and §7 C1, C3. Everything new loads on demand; no protocol, spectator or
+server change was needed (the data of §16.4's table was enough), so `TIMELINE_VERSION` stays 3.
+
+- **Where the turn detail opens.** Every thought in the Thoughts column: the latest one's "Turn
+  detail" (beside "Reasoning"), and each turn of "Earlier thoughts", whose row now opens the sheet
+  (Pass B expanded the reasoning in place; design §4.3: "in Pass C it opens the turn detail"); a
+  message's same-turn thought in the feed ("What pN was thinking when it wrote this", then "Turn
+  detail"); a turn card of the feed (bots' too); the dossier's thought list (its "Reasoning" row
+  carries "Turn detail": the turn sheet opens over the dossier, Escape closes only the top one and
+  gives the focus back inside the dossier); the live block of an agent in a turn ("Turn detail (in
+  progress)"); and the URL: **`/m/:id?turn=p2.48`** opens seat p2's turn 48 once the match is ready.
+  Opening or closing the sheet writes the URL (replacing the history entry, as the pair filter
+  does; the other query keys are kept), and the back and forward buttons follow
+  (`turns/link.tsx`, mounted beside the match page in `app.tsx`; `parseTurnRef` and
+  `matchHref({turn})` in `lib/router.ts`). "Turn N−1" and "Turn N+1" move through the seat's turns
+  in place. Escape or ✕ closes it with the focus back on what opened it (`ui/return-focus.tsx`).
+- **The sheet** (`turns/turn-sheet.tsx`, chunk 5.9 KB gzipped with `turns/rounds.tsx`):
+  - _Why it woke_: the wake time, "urgent" or "not urgent", each reason with its icon and in words
+    (`thoughts/wake-icons.tsx`, shared with the column).
+  - _Thought and messages_: the public thought, and right under it, in the same box, the messages
+    the seat sent in that turn (the turn item's `messages`, or for an open turn the message items
+    tagged with it), with their recipients, the lock and "seen only by" of a private one, and the
+    text as plain text ("more" past six lines).
+  - _Rounds and tool calls_: "4 rounds · 11 tool calls: 10 accepted, 1 rejected (refused:
+    PACT_LIMIT ×1)", then one card per round: its figures in the heading (cost, tokens, model time,
+    attempts when more than one, an unusual stop, "refused (category)", failed attempts by error
+    kind), its reasoning (open by default, collapsible per round, "Hide all reasoning"), its reply
+    text, and its tool calls, each with ✓ (accepted), ✗ (rejected), a dashed circle (a batch
+    accepted in part, "3 of 5 items"), an hourglass (verdict when the turn ends) or "?" (no log line),
+    and the rejection codes as small red code chips. An accepted `end_turn` writes no log line: it
+    reads "✓ end_turn ended the turn". The closing thought call, when there is one, comes last.
+    Codes only: no gateway or engine error text is served or shown.
+  - _How it ended_: `why` in a sentence ("It ended its turn itself (end_turn).", "It reached the cap
+    on rounds per turn.", …) and the time.
+  - _Cost and tokens_: the turn's cost, tokens (input, cache writes, cache reads, output), model
+    calls and model time (left out when zero, as in fake runs), the seat's spend after the turn
+    against its cap, and for a fake seat "Simulated prices: a fake model costs nothing; these are
+    what a real one would have cost."
+- **The data, joined round by round** (`turns/detail.ts`, pure): the annotation route's rounds
+  (reasoning, text, tool names, figures), the live socket's rounds for an open turn (`annot`; their
+  text wins, the annotation keeps the figures), and the closed turn's `results` (verdicts and codes
+  from `match.jsonl`). Each round's reply names are matched in order with the calls the log placed
+  in that round (`rt`, tool names cut at 64 characters as the fold cuts them); an accepted
+  `write_note` (whose `note` line has no round) goes to the first round from the previous call's on
+  whose reply names it; a call the log has but no reply names is still listed; a turn with results
+  but no annotation (no side files) gets its rounds from the log alone.
+- **Degrading cleanly.** `--no-reasoning`: one "Reasoning not published for this match." line above
+  the rounds, which keep their tool calls and verdicts; `--no-costs`: "Costs not published for this
+  match." and the model-call count only, no figure in the round headings. A bot's turn (a bot seat,
+  or an LLM seat after its hand-off): "A scripted bot plays this seat: no model, so no reasoning,
+  rounds or costs", then the wake, the turn summary and messages, "N actions accepted; rejected: …"
+  and the ending; no annotation is fetched. An open turn: "In progress, round 3: rounds appear as
+  their replies arrive; the verdicts, the thought and the ending come when the turn ends", every
+  call pending, the cost so far; the annotation is fetched again 0.8 s after each live round (the
+  socket brings no figures) and once more when the turn closes, so the verdicts, thought, ending
+  and final cost replace the pending ones in place. Replaying a finished match with the playhead
+  inside a turn shows that turn's rounds up to the round the log has reached. A turn later than the
+  playhead says so ("At this point of the match Odysseus has played 1 turn: turn 5 comes later.")
+  with "Go to the end of this turn" (the feed route, then a seek); a seat the match does not have
+  says so. A closed turn whose side files may still grow keeps Pass B's "Refresh".
+- **C3, live reasoning in the Thoughts column** (`thoughts/live.tsx`, 1.0 KB; `live-rounds.ts`): while
+  an agent is in a turn of a followed match, the rounds of that turn as `annot` messages bring them,
+  newest last: each round's heading ("ROUND 3 · build") with its reasoning and reply text; the
+  newest round shows three lines, the two before it one line each, older ones are counted ("2
+  earlier rounds not shown"), "more" shows them all whole. The column's header reads "thinking…
+  round N" with N the newer of the log's round and the live one (`roundNow`). A new round fades in
+  (150 ms) only when motion is allowed (`motion-safe:`; checked: `animation-name: none` under
+  `prefers-reduced-motion: reduce`); the rounds already shown keep their place (keyed), and the
+  block's height is bounded (three rounds) until "more". With no live round (no reply yet, or a
+  replay, which has none) nothing is drawn, so turns opening and closing during a replay shift
+  nothing.
+- **The hand-over.** When the turn ends the live block goes and the turn's thought takes its place;
+  its "Reasoning" shows the rounds the socket brought at once, joined with the annotation as it
+  arrives (`withLive`), and the turn detail of that turn has everything. The store keeps the live
+  rounds of the newest 2 turns per seat (`addLiveAnnot`, C0).
+- **Reconnects.** On subscribe the server sends the open turns' rounds again; a round already held
+  (same round and kind) is replaced, never doubled, and a turn that closed while the socket was down
+  shows no live block (the frame says the seat is no longer in it). Checked by hand by stopping the
+  server mid-turn, writing the next round, then the turn's end, and starting it again: "round:0,
+  round:1" → "round:0,round:1,round:2" after the reconnect, then no live block and the closed
+  turn's thought.
+- **Sizes.** Initial JS **172.1 KB** gzipped (`bun run web:build`; 171.5 at C0, +0.6 KB: the deep
+  link, the router's `turn`, two "Turn detail" buttons); the architecture test's build **176,814
+  bytes** (176,439 at C0, +375; budget 189,440). Lazy JS 45.8 KB in 20 chunks (37.3 at C0): the turn
+  sheet 5.9 KB, the Thoughts column 2.2 KB, a turn's reasoning 1.2 KB, the live reasoning 1.0 KB,
+  the wake icons 0.9 KB. CSS 10.1 KB.
+- **Tests.** Unit (pure): `turns/detail.test.ts` (rounds and verdicts: batches, rejections, a
+  `write_note` between rounds, `end_turn` with and without a line, long tool names, results without
+  an annotation, live rounds joined with the annotation, resent rounds, the tally, the feed's turn
+  items and messages, endings, model time) and `thoughts/live-rounds.test.ts` (the live window and
+  "more", a reconnect's resent rounds through `addLiveAnnot`, a later turn's rounds kept apart,
+  "thinking… round N", the hand-over); `lib/router.test.ts` (`?turn=`). Web unit tests: 187 in 31
+  files, about 2.5 s. Browser (`e2e/checks/turns.ts`, one page of the fake run): a thought opens
+  its sheet with the wake, reasoning, ✓ verdicts, the tally, the ending, the cost with "Simulated
+  prices"; the URL carries `?turn=`; "Turn N−1" moves in place; Escape closes it with the focus
+  back on the button and the link gone; the same page then follows `?turn=p5.2` to a bot's turn. It
+  takes 1.6–1.7 s (the C0 check 1.0–1.3 s, interleaved runs); the whole smoke test 17.7–18.2 s
+  (17.4–17.7 s with the C0 check), budget 20 s.
+- **Looked at** (headless Chromium, 1440 × 900, 1280 × 720, 390 × 844): a closed turn with a
+  rejected call (fake 2-day run, `?turn=p1.2`), its bottom (ending, cost, simulated prices), the
+  same on a `--no-costs --no-reasoning` server, a bot's turn with its message, a later turn and "Go
+  to the end of this turn", the Thoughts column's history, a message's thought in the feed, the
+  sheet over the dossier, an open turn followed live (rounds 2 then 3 arriving, the sheet in
+  progress, then closed in place), the live block at 1280 px and on a phone, the reconnect and the
+  hand-over. Fixed from looking: the name squeezed to one letter by "thinking… round 3" at 1280 px
+  (the header now wraps), "ROUND 1" broken over two lines in the narrow column, a tally that mixed
+  items and calls ("8 tool calls: 9 accepted"), "0.0 s of model time" for fake seats, the open-turn
+  banner's round lagging the live rounds.
+- **Shared files touched (minimal, additive):** `app.tsx` (mounts `TurnLink`), `lib/router.ts` and
+  its test (`turn` in the route and `matchHref`, `parseTurnRef`), `feed/thought.tsx` (one "Turn
+  detail" under a message's same-turn thought) and `feed/cards.tsx` (a bot's turn card gets "Turn
+  detail"; LLM cards keep "Reasoning" with it).
+- **Open issues.** (1) The leaderboard's "thinking… round N" (`board/`, not this step's) reads the
+  log's round, one behind the Thoughts column while a reply's calls are not yet logged. (2) An open
+  turn's verdicts are not served (the fold holds them until the turn line): calls stay "pending"
+  until the turn closes. (3) Live rounds carry no cost: the figures come from the annotation route,
+  fetched 0.8 s after each live round while the sheet is open. (4) The smoke test has no live
+  per-round check (writing a run with its side files while a page follows it costs about 2 s more
+  than the budget leaves); C3 is covered by unit tests and the hand check above. (5) Tool-call
+  arguments are still not served (§16.4). (6) A deep link to a turn not yet folded on a page that
+  is still loading its history shows "Loading this part of the match…" until the background fill
+  reaches it. (7) Radix focuses the sheet's first button ("Turn N−1") on open.
 
 ### 16.8 C2 dossier extras (agent D: to be written)
 
