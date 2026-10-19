@@ -788,6 +788,37 @@ export const FeedPageSchema = z.strictObject({
 });
 export type FeedPage = z.infer<typeof FeedPageSchema>;
 
+/** A seat's score and cities at an hourly checkpoint (`ckpt` line) or the `end` line of `match.jsonl`. */
+const HourPointSchema = z.strictObject({
+  t: GameTimeSchema,
+  score: z.int(),
+  cities: Int,
+});
+export type HourPoint = z.infer<typeof HourPointSchema>;
+
+/**
+ * One version of a seat's notebook (cleaned text), written by a `note` line, as an edit of the
+ * version before it: keep its first `head` and last `tail` characters and put `text` between them.
+ * The first version kept has `head` and `tail` 0: `text` is all of it.
+ */
+const NotebookVersionSchema = z.strictObject({
+  t: GameTimeSchema,
+  turn: Int,
+  mode: z.enum(["append", "replace"]),
+  head: Int,
+  tail: Int,
+  text: z.string(),
+});
+export type NotebookVersion = z.infer<typeof NotebookVersionSchema>;
+
+const NotebookHistorySchema = z.strictObject({
+  /** Versions written so far; the oldest `total − versions.length` are not kept. */
+  total: Int,
+  /** The newest versions, oldest first (each differs from the one before). */
+  versions: z.array(NotebookVersionSchema),
+});
+export type NotebookHistory = z.infer<typeof NotebookHistorySchema>;
+
 export const PlayerDossierSchema = z.strictObject({
   seat: SeatInfoSchema,
   /** The seat's notebook now (agent-authored text). */
@@ -800,6 +831,10 @@ export const PlayerDossierSchema = z.strictObject({
   spentNanoUsd: Int.nullable(),
   capNanoUsd: Int.nullable(),
   handoff: z.strictObject({ t: GameTimeSchema, label: z.string() }).nullable(),
+  /** Score and cities at every hourly checkpoint folded so far and at the end, in time order. */
+  hourly: z.array(HourPointSchema),
+  /** How the notebook changed (its last version is `notes`). */
+  notebook: NotebookHistorySchema,
 });
 export type PlayerDossier = z.infer<typeof PlayerDossierSchema>;
 

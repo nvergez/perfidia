@@ -838,6 +838,17 @@ const dossier: PlayerDossier = {
   spentNanoUsd: null,
   capNanoUsd: null,
   handoff: null,
+  hourly: [
+    { t: 3600, score: 120, cities: 1 },
+    { t: 7200, score: 135, cities: 2 },
+  ],
+  notebook: {
+    total: 3,
+    versions: [
+      { t: 3000, turn: 2, mode: "replace", head: 0, tail: 0, text: "plan" },
+      { t: 5400, turn: 3, mode: "append", head: 4, tail: 0, text: ": grow" },
+    ],
+  },
 };
 
 const report: ReportDetail = {
@@ -1046,8 +1057,16 @@ export const SPECTATOR_CASES: Record<string, SchemaCase> = {
   },
   PlayerDossierSchema: {
     schema: protocol.PlayerDossierSchema,
-    valid: [dossier],
-    invalid: [bad(dossier, ["counts", "turns"], -1)],
+    valid: [dossier, { ...dossier, hourly: [], notebook: { total: 0, versions: [] } }],
+    invalid: [
+      bad(dossier, ["counts", "turns"], -1),
+      bad(dossier, ["hourly", 0, "cities"], -1),
+      extra(dossier, ["hourly", 1]),
+      bad(dossier, ["notebook", "versions", 1, "mode"], "rewrite"),
+      bad(dossier, ["notebook", "versions", 0, "head"], -1),
+      extra(dossier, ["notebook", "versions", 0]),
+      bad(dossier, ["notebook", "total"], undefined),
+    ],
   },
   ReportDetailSchema: {
     schema: protocol.ReportDetailSchema,

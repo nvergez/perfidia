@@ -1152,7 +1152,100 @@ UI says so in one line (`NotPublished`, used by the Pass B reasoning and the dos
 
 ### 16.7 C1 turn detail and C3 live reasoning (agent T: to be written)
 
-### 16.8 C2 dossier extras (agent D: to be written)
+### 16.8 C2 dossier extras (agent D, as built)
+
+The dossier sheet (`players/player-sheet.tsx`, already a chunk loaded on demand) gains four
+sections, all cut at the playhead, so a viewer replaying from the start learns nothing ahead of the
+clock: **Record**, **Hour by hour**, **Notebook at this time** (it replaces Pass B's "Notebook now",
+which showed the end of the fold whatever the playhead) and **Notebook history**. The new views are
+`players/dossier-extras.tsx`; their pure parts are `players/record.ts`.
+
+- **Record** (`SeatRecord`): turns played, messages sent and received, betrayals committed and
+  suffered, counted over the store's feed (every item up to the playhead) by `seatTally` in
+  `@perfidia/spectator/reduce` (`reduce/dossier.ts`): a `turn` item of the seat, a `message` item from
+  it or to it (or to everyone, from another seat), a `betrayal` item by it or against it (the
+  engine's event: the attack on an ally or pact partner landed; the launch before it is not counted,
+  so a betrayal counts once on each side). The betrayals are listed under the tiles ("Attacked its
+  ally Turtle (bot) · p3 at c18, D4 12:50:33"). While the client holds only part of the match
+  (`loaded.complete` false) a line says the counts cover what has loaded. At the end of a match they
+  equal the server's `counts` (checked on the war golden, the fake run and in the browser).
+- **Hour by hour** (`HourlyCharts`): two inline-SVG sparklines, score and cities (a step line), in
+  the player's colour; the value and its time as text beside each (text never in the series colour),
+  a crosshair and readout that follow the pointer to the nearest hour, a marker on the point shown,
+  the whole series as a screen-reader sentence (first, last, highest) and an "As a table" view. One
+  chart per measure (no second axis). Data: `PlayerDossier.hourly`, the seat's score and cities at
+  every `ckpt` line and at the `end` line (`{t, score, cities}`), folded by `fold/series.ts`
+  (`SeatSeries.checkpoint`, after the line is projected: the same values as the frame there; checked
+  against every six-hourly keyframe of the war golden).
+- **Notebook at this time** and **Notebook history** (`NotebookAt`, `NotebookHistory`): the version
+  in force at the playhead ("As written in turn 96, at D6 14:05:58"), then every version up to it,
+  newest first, each against the one before as a line diff (`lineDiff`: common head and tail lines
+  trimmed, then a longest common subsequence; more than 250,000 cells falls back to "all removed,
+  then all added"), shown as hunks with one line of context, "⋯ N lines unchanged" between them,
+  `+`/`−` marks (with screen-reader words) besides the colours, `+a −r` per version, 14 lines and
+  8 versions at first ("Show the whole change", "Show 20 older versions"). A JSON notebook (a bot's
+  memory) is indented before the diff, as Pass B lays it out (`layout` over `prettyJson`); every
+  text is `PlainText`. Data: `PlayerDossier.notebook`, `{total, versions}`, built by
+  `fold/series.ts` (`NotebookLog`) from the gateway fold's notebook after each `note` line (append or
+  replace, as the gateway applied it, so a refused write changes nothing), cleaned (`cleanText`); a
+  write that leaves the text as it was is not a version. Each version is stored as an edit of the one
+  before (`spliceOf`: the common `head` and `tail` lengths, the `text` between, never splitting a
+  surrogate pair), so appends and small edits cost what they change; `notebookTexts` (reduce) rebuilds
+  the texts and refuses an edit that does not fit. A seat keeps its newest 400 versions within 24,000
+  characters of edit text; when the oldest goes, the next is stored whole (`total` still counts
+  every version, and the UI says how many are not kept).
+- **Live**: while a live match is followed, the sheet fetches the dossier again when the seat opens a
+  turn or a game hour passes (`useLiveDossier`; the route's 10 s `max-age` bounds the requests).
+  Seen on a bot match written at 1,800× while the page followed it: the readout went from D1 02:00
+  to D1 12:00 and the history from 2 to 4 versions as the clock moved from D1 05:36 to D1 14:47
+  (2 to 5 game hours behind: up to 10 s of wall time at that speed, the route's `max-age`).
+
+**Protocol, spectator and server (additive).** `PlayerDossierSchema` gains `hourly` (`HourPoint`)
+and `notebook` (`NotebookHistory` of `NotebookVersion`), strict, required (the server always sends
+them); their schemas stay unexported (48 schemas still convert to JSON Schema), the types are
+exported; fixtures with invalid cases at each new field. `SpectatorFold` gains `hourly(seat)`,
+`notebook(seat)` and `seriesKey(seat)` (a cheap change key); the worker sends a seat's series with
+its notes and counts when the key changes (`SeatAux.hourly`, `.notebook`); the timeline keeps them
+in its seats map, its summary (in memory when the timeline is evicted) and its cache file; the
+dossier route serves them. **`TIMELINE_VERSION` is 4** (was 3): cached timelines are folded again
+once. `seatTally` and `notebookTexts` are exported by `@perfidia/spectator/reduce` (and the root).
+
+**Tests.** Pure: `fold/series.test.ts` (`spliceOf` rebuilds any text and never splits a pair,
+fast-check; a write that changes nothing is no version; the budgets keep the newest versions and
+store the oldest whole, fast-check; the worst case, 60 rewrites of 4,000 random CJK characters plus
+720 hourly points, is a 55.6 KB gzipped dossier; `seatTally` on a hand-made feed) and
+`players/record.test.ts` (the playhead cut, the layout, the line diff rebuilds both texts,
+fast-check; hunks; sparkline geometry). On the war golden (`fold/war.test.ts`, on the fold it
+already makes): p2's betrayal of p3 counted once as committed (p2) and once as suffered (p3), zero
+for the others; each seat's turns and messages equal the log's (`turn` lines; `message` events by
+sender and recipients, "all" to every other seat; 10 messages) and the server's counts; 139 points
+(138 checkpoints and the end, D6 18:33:27) equal to the keyframes' players and the final frame;
+notebook versions p1–p6 80/64/33/87/39/58, all kept, the last equal to the notebook now. On the
+1-day fake run (`fold/live.test.ts`): 24 points, the last version equal to the notebook, the record
+equal to the counts. Contract (`contract.test.ts`, both adapters): the same numbers through the
+route, each dossier under 64 KB gzipped (war 1.9–4.0 KB, fake 0.6–1.1 KB), p2's points equal to the
+served keyframes. Browser (`e2e/checks/dossier.ts`, 1.2–1.4 s, where the C0 wiring check took
+0.8 s; the smoke test's 11 tests in 16.1 s, 20.6 s on a busier run of this shared container): p2 of
+the fake run at its end shows the server's counts, the hourly series to D2 00:00, every notebook
+version with a diff; moved back to D1 06:00 it shows nothing later.
+
+**Sizes.** Initial JS 171.5 KB gzipped (`bun run web:build`; the architecture test's build: 176,779
+bytes, +340 bytes over C0's 176,439, `seatTally` and `notebookTexts` riding in the reduce module the
+initial chunk already loads); lazy JS 41.6 KB gzipped in 19 chunks, the dossier chunk 6.9 KB (was
+2.7 KB);
+CSS 10.1 KB gzipped (was 9.9 KB). The war golden's cache file is 462.9 KB gzipped, of which the
+series 14.4 KB (102 KB as JSON in the summary in memory); the fold's time is unchanged (4.3–4.7 s for
+the war golden on this loaded container, with and without the series).
+
+Screenshots (war golden p1, p2, p3 at its end and p2 at its start and p3 at D4 12:00; the 2-day fake
+run's p1 with its notebook history; 1440 × 900, 1280 × 720 and 390 × 844; the sparkline's hover and
+table) were taken and looked at.
+
+**Open issues.** (1) The history keeps the newest versions: a viewer far back in a match whose seat
+rewrote a long notebook many times may reach versions not kept (the UI says so); a paged route would
+serve them. (2) Live, the dossier lags the feed by up to the route's 10 s `max-age`. (3) `seatTally`
+and `notebookTexts` sit in the initial chunk (+340 bytes): the web may import only the `reduce`
+sub-path, whose module the initial chunk holds.
 
 ### 16.9 Open issues after C0
 

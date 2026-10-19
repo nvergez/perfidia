@@ -196,6 +196,8 @@ export class SpectatorService {
       spentNanoUsd: spend?.spentNanoUsd ?? null,
       capNanoUsd: spend?.capNanoUsd ?? null,
       handoff,
+      hourly: [...(aux?.hourly ?? [])],
+      notebook: aux?.notebook ?? { total: 0, versions: [] },
     };
     return ok(body, maxAge(10));
   }
