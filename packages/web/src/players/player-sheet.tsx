@@ -26,6 +26,7 @@ import { uiActions } from "../store/ui.ts";
 import { HourlyCharts, NotebookAt, NotebookHistory, SeatRecord } from "./dossier-extras.tsx";
 import { ReasoningToggle } from "../thoughts/reasoning.tsx";
 import { wakeWords } from "../thoughts/wake.ts";
+import { OpenTurnButton } from "../turns/open-turn.tsx";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "../ui/sheet.tsx";
 
 // The dossier (phase-3 design §4.2.3, Pass B; §4.2 Pass C): its record at the playhead (turns,
@@ -172,7 +173,11 @@ function Thought({ item, llm }: { readonly item: TurnItem; readonly llm: boolean
       ) : (
         <PlainText text={item.thought} className="block text-sm" />
       )}
-      {llm ? <ReasoningToggle seat={item.seat} turn={item.turn} /> : null}
+      {llm ? (
+        <ReasoningToggle seat={item.seat} turn={item.turn} />
+      ) : (
+        <OpenTurnButton seat={item.seat} turn={item.turn} />
+      )}
     </li>
   );
 }
@@ -297,7 +302,7 @@ export function PlayerSheet() {
             {seat === null ? "Dossier" : `Dossier of ${seat.name} (${seat.seat})`}
           </SheetDescription>
         </SheetHeader>
-        {seat === null ? null : <Body seat={seat} />}
+        {seat === null ? null : <Body key={seat.seat} seat={seat} />}
       </SheetContent>
     </Sheet>
   );

@@ -10,12 +10,11 @@ import { fmtInt } from "../lib/format.ts";
 import { isPlayerId, type PlayerId } from "../lib/ids.ts";
 import { fmtAgo } from "../lib/time.ts";
 import { PlayerCard } from "../players/player-card.tsx";
-import { useFeed, useLiveAnnots, useMatch, useSeats, useUi } from "../store/hooks.ts";
+import { useFeed, useMatch, useRoundNow, useSeats, useUi } from "../store/hooks.ts";
 import { uiActions } from "../store/ui.ts";
 import { LazyTurnSheet } from "../turns/lazy.ts";
 import { OpenTurnButton } from "../turns/open-turn.tsx";
 import { LazyLiveReasoning } from "./lazy.ts";
-import { liveTopRound, roundNow } from "./live-rounds.ts";
 import { ReasoningToggle } from "./reasoning.tsx";
 import { WakeIcons } from "./wake-icons.tsx";
 
@@ -81,22 +80,13 @@ function SeatStatus({ seat }: { readonly seat: PlayerId }) {
       </span>
     );
   }
-  if (ent?.inTurn === true) return <Thinking seat={seat} turn={ent.turn} logged={ent.round} />;
+  if (ent?.inTurn === true) return <Thinking seat={seat} />;
   return null;
 }
 
 /** "thinking… round N": the round the log reached, or a newer one the live socket brought. */
-function Thinking({
-  seat,
-  turn,
-  logged,
-}: {
-  readonly seat: PlayerId;
-  readonly turn: number;
-  readonly logged: number | null;
-}) {
-  const live = useLiveAnnots(seat, turn);
-  const round = roundNow(logged, liveTopRound(live));
+function Thinking({ seat }: { readonly seat: PlayerId }) {
+  const round = useRoundNow(seat);
   return (
     <span className="text-primary inline-flex items-center gap-1 text-xs font-medium">
       <Brain className="size-3 motion-safe:animate-pulse" aria-hidden="true" />

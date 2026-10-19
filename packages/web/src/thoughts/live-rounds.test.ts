@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import type { TurnAnnotation } from "@perfidia/protocol/spectator";
-import { addLiveAnnot, turnKey, type AnnotMsg } from "../store/match.ts";
-import { LIVE_ROUNDS_SHOWN, liveTopRound, liveView, roundNow, withLive } from "./live-rounds.ts";
+import { addLiveAnnot, liveTopRound, roundNow, turnKey, type AnnotMsg } from "../store/match.ts";
+import { LIVE_ROUNDS_SHOWN, liveView, withLive } from "./live-rounds.ts";
 
 function annot(round: number, o: Partial<AnnotMsg> = {}): AnnotMsg {
   return {

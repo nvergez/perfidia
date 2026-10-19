@@ -219,6 +219,62 @@ export function plantHostile(dir: string): void {
   });
 }
 
+/** A line of a run's files, in the order a run writes them (`livePlan`). */
+export interface PlanItem {
+  readonly file: "match.jsonl" | "llm_calls.jsonl" | "replies.jsonl";
+  readonly line: string;
+  /** The parsed line. */
+  readonly o: JsonObject;
+}
+
+const field = (v: unknown): string =>
+  typeof v === "string" || typeof v === "number" ? String(v) : "";
+const roundKey = (o: JsonObject): string =>
+  `${field(o.seat)}|${field(o.turn)}|${field(o.kind ?? "round")}|${field(o.round ?? o.rt)}`;
+
+/**
+ * A finished arena run's lines in the order a run writes them: a round's model calls and reply
+ * (`llm_calls.jsonl`, `replies.jsonl`) before that round's act, obs and gw lines in `match.jsonl`,
+ * and the rest of a turn's side lines (its closing thought call) before its turn line. Appending
+ * the items one by one replays the run as a server following it live sees it.
+ */
+export function livePlan(dir: string): PlanItem[] {
+  const read = (file: PlanItem["file"]): PlanItem[] =>
+    readFileSync(join(dir, file), "utf8")
+      .split("\n")
+      .filter((l) => l !== "")
+      .map((line) => {
+        const o: unknown = JSON.parse(line);
+        return { file, line, o: isObject(o) ? o : {} };
+      });
+  const side = new Map<string, PlanItem[]>();
+  for (const it of [...read("llm_calls.jsonl"), ...read("replies.jsonl")]) {
+    if (it.o.k !== "llm_call" && it.o.k !== "reply") continue;
+    const k = roundKey(it.o);
+    side.set(k, [...(side.get(k) ?? []), it]);
+  }
+  const plan: PlanItem[] = [];
+  const flush = (k: string): void => {
+    const xs = side.get(k);
+    if (xs === undefined) return;
+    side.delete(k);
+    plan.push(...xs.filter((x) => x.file === "llm_calls.jsonl"));
+    plan.push(...xs.filter((x) => x.file === "replies.jsonl"));
+  };
+  for (const it of read("match.jsonl")) {
+    const o = it.o;
+    if ((o.k === "act" || o.k === "gw" || o.k === "obs") && typeof o.rt === "number") {
+      for (let r = 0; r <= o.rt; r += 1) flush(roundKey({ ...o, kind: "round", round: r }));
+    }
+    if (o.k === "turn") {
+      for (const k of side.keys()) if (k.startsWith(`${field(o.seat)}|${field(o.turn)}|`)) flush(k);
+    }
+    plan.push(it);
+  }
+  for (const k of side.keys()) flush(k);
+  return plan;
+}
+
 /** Why the smoke test does not run here (null: it runs). */
 export async function skipReason(): Promise<string | null> {
   if (process.env.PERFIDIA_E2E !== "1") {

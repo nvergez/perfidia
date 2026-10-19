@@ -12,7 +12,15 @@ import { useEffect, useRef, useSyncExternalStore } from "react";
 import type { PlayerId } from "../lib/ids.ts";
 import type { FeedEntry } from "../playback/timeline.ts";
 import type { DominationView, Skin } from "../skins/index.ts";
-import { turnKey, useMatchStore, type AnnotMsg, type Loadable, type MatchState } from "./match.ts";
+import {
+  liveTopRound,
+  roundNow,
+  turnKey,
+  useMatchStore,
+  type AnnotMsg,
+  type Loadable,
+  type MatchState,
+} from "./match.ts";
 import {
   colorOf,
   labelOf,
@@ -107,6 +115,19 @@ const NO_ANNOTS: readonly AnnotMsg[] = Object.freeze([]);
  */
 export function useLiveAnnots(seat: PlayerId, turn: number): readonly AnnotMsg[] {
   return useMatchStore((s) => s.liveAnnots[turnKey(seat, turn)] ?? NO_ANNOTS);
+}
+
+/**
+ * The round (0-based) `seat` is in, while it is in a turn: the newer of the log's (its last call's)
+ * and the live socket's (a reply arrives before its calls are logged); null otherwise. Shared by
+ * the leaderboard, the Thoughts column and the turn detail, so they never disagree.
+ */
+export function useRoundNow(seat: PlayerId): number | null {
+  return useMatchStore((s) => {
+    const ent = s.frame?.seats[seat];
+    if (ent === undefined || !ent.inTurn) return null;
+    return roundNow(ent.round, liveTopRound(s.liveAnnots[turnKey(seat, ent.turn)] ?? NO_ANNOTS));
+  });
 }
 
 export interface Published {

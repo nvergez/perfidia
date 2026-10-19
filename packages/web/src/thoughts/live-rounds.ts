@@ -25,19 +25,6 @@ export function liveView(msgs: readonly AnnotMsg[], expanded: boolean): LiveView
   return { rounds, earlier: all.length - rounds.length, latest: all.at(-1)?.key ?? null };
 }
 
-/** The newest round (0-based) the live socket brought for a turn, null when none. */
-export function liveTopRound(msgs: readonly AnnotMsg[]): number | null {
-  let top: number | null = null;
-  for (const m of msgs) if (m.kind === "round" && (top === null || m.round > top)) top = m.round;
-  return top;
-}
-
-/** The round a seat is in: the newer of the log's (its last call's) and the live socket's. */
-export function roundNow(logged: number | null, live: number | null): number | null {
-  if (logged === null) return live;
-  return live === null ? logged : Math.max(logged, live);
-}
-
 type Round = TurnAnnotation["rounds"][number];
 
 const byRound = (a: Round, b: Round): number =>

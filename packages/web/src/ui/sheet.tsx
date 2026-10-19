@@ -36,11 +36,22 @@ function SheetOverlay({
   );
 }
 
+/**
+ * On open, the sheet itself takes the focus rather than its first button: this app's sheets are
+ * long pages to read (the dossier, the turn detail), whose first button may sit far down while the
+ * content above it loads. Tab then walks them from the top; a caller's `onOpenAutoFocus` wins.
+ */
+function focusSheet(e: Event): void {
+  e.preventDefault();
+  if (e.currentTarget instanceof HTMLElement) e.currentTarget.focus({ preventScroll: true });
+}
+
 function SheetContent({
   className,
   children,
   side = "right",
   onCloseAutoFocus,
+  onOpenAutoFocus = focusSheet,
   ...props
 }: React.ComponentProps<typeof SheetPrimitive.Content> & {
   side?: "top" | "right" | "bottom" | "left";
@@ -52,7 +63,7 @@ function SheetContent({
       <SheetPrimitive.Content
         data-slot="sheet-content"
         className={cn(
-          "bg-background data-[state=open]:animate-in data-[state=closed]:animate-out fixed z-50 flex flex-col gap-4 shadow-lg transition ease-in-out data-[state=closed]:duration-300 data-[state=open]:duration-500",
+          "bg-background data-[state=open]:animate-in data-[state=closed]:animate-out fixed z-50 flex flex-col gap-4 shadow-lg outline-none transition ease-in-out data-[state=closed]:duration-300 data-[state=open]:duration-500",
           side === "right" &&
             "data-[state=closed]:slide-out-to-right data-[state=open]:slide-in-from-right inset-y-0 right-0 h-full w-3/4 border-l sm:max-w-sm",
           side === "left" &&
@@ -64,6 +75,7 @@ function SheetContent({
           className,
         )}
         onCloseAutoFocus={returnFocus}
+        onOpenAutoFocus={onOpenAutoFocus}
         {...props}
       >
         <RememberOpener onMount={remember} />

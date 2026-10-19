@@ -8,10 +8,11 @@ import { unitsText } from "../feed/bits.tsx";
 import { cn } from "../lib/cn.ts";
 import { playerColor } from "../lib/colors.ts";
 import { fmtInt, plural } from "../lib/format.ts";
+import type { PlayerId } from "../lib/ids.ts";
 import { fmtTime } from "../lib/time.ts";
 import { PlayerCard } from "../players/player-card.tsx";
 import type { Skin } from "../skins/index.ts";
-import { useMatch, useSeats, useSkin, useStandings } from "../store/hooks.ts";
+import { useMatch, useRoundNow, useSeats, useSkin, useStandings } from "../store/hooks.ts";
 import { uiActions } from "../store/ui.ts";
 import { scoreSegments } from "./board.ts";
 import { Tip } from "./tip.tsx";
@@ -88,15 +89,19 @@ function Status({
       </span>
     );
   }
-  if (seatEnt?.inTurn === true) {
-    return (
-      <span className="text-primary inline-flex items-center gap-1 text-xs">
-        <Brain className="size-3 motion-safe:animate-pulse" aria-hidden="true" /> thinking…
-        {seatEnt.round === null ? null : ` round ${seatEnt.round + 1}`}
-      </span>
-    );
-  }
+  if (seatEnt?.inTurn === true) return <Thinking seat={seatEnt.seat} />;
   return null;
+}
+
+/** "thinking… round N", the live socket's round when it is ahead of the log (`useRoundNow`). */
+function Thinking({ seat }: { readonly seat: PlayerId }) {
+  const round = useRoundNow(seat);
+  return (
+    <span className="text-primary inline-flex items-center gap-1 text-xs">
+      <Brain className="size-3 motion-safe:animate-pulse" aria-hidden="true" /> thinking…
+      {round === null ? null : ` round ${round + 1}`}
+    </span>
+  );
 }
 
 const Row = memo(function Row({

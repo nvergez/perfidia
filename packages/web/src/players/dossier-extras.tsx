@@ -14,7 +14,9 @@ import { cn } from "../lib/cn.ts";
 import { fmtInt, plural } from "../lib/format.ts";
 import type { PlayerId } from "../lib/ids.ts";
 import { fmtTime } from "../lib/time.ts";
+import { OpenTurnButton } from "../turns/open-turn.tsx";
 import { useFeed, useMatch } from "../store/hooks.ts";
+import { uiActions } from "../store/ui.ts";
 import {
   countUntil,
   diffStats,
@@ -76,6 +78,7 @@ function BetrayalLine({
   readonly seat: PlayerId;
 }) {
   const committed = item.by === seat;
+  const other = committed ? item.against : item.by;
   const relation = item.relation === "ally" ? "ally" : "pact partner";
   return (
     <li className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-xs">
@@ -87,7 +90,15 @@ function BetrayalLine({
       <span>
         {committed ? "Attacked its" : "Attacked by its"} {relation}
       </span>
-      <PlayerLabel player={committed ? item.against : item.by} />
+      <button
+        type="button"
+        title="Open this player's dossier"
+        data-player={other}
+        onClick={() => uiActions.openPlayer(other)}
+        className="min-w-0 rounded hover:underline"
+      >
+        <PlayerLabel player={other} />
+      </button>
       <span className="text-muted-foreground">
         at <span className="font-mono">{item.city}</span>, <GameTime t={item.t} />
       </span>
@@ -394,7 +405,15 @@ export function NotebookAt({ dossier }: { readonly dossier: PlayerDossier | null
   return (
     <div data-testid="notebook-at">
       <p className="text-muted-foreground mb-1 text-[0.7rem]">
-        As written in turn {v.turn}, at <GameTime t={v.t} />
+        As written in{" "}
+        <OpenTurnButton
+          seat={dossier.seat.seat}
+          turn={v.turn}
+          className="inline-flex text-[0.7rem]"
+        >
+          turn {v.turn}
+        </OpenTurnButton>
+        , at <GameTime t={v.t} />
       </p>
       {text === "" ? (
         <p className="text-muted-foreground text-sm">(emptied)</p>
@@ -458,12 +477,14 @@ function rowsOf(text: string, prev: string | null, whole: boolean): Row[] {
 }
 
 function Version({
+  seat,
   version,
   text,
   prev,
   first,
   earliestKept,
 }: {
+  readonly seat: PlayerId;
   readonly version: NotebookVersion;
   readonly text: string;
   /** The version before (null for the first version kept). */
@@ -492,7 +513,10 @@ function Version({
     <li className="border-border/60 flex flex-col gap-1 border-t pt-2 first:border-t-0 first:pt-0">
       <p className="text-muted-foreground flex flex-wrap items-center gap-x-1.5 text-[0.7rem]">
         <span>
-          turn {version.turn} · <GameTime t={version.t} /> · {what}
+          <OpenTurnButton seat={seat} turn={version.turn} className="inline-flex text-[0.7rem]">
+            turn {version.turn}
+          </OpenTurnButton>{" "}
+          · <GameTime t={version.t} /> · {what}
         </span>
         {earliestKept ? null : (
           <span className="tabular-nums">
@@ -570,6 +594,7 @@ export function NotebookHistory({ dossier }: { readonly dossier: PlayerDossier |
           return (
             <Version
               key={`${v.t}:${i}`}
+              seat={dossier.seat.seat}
               version={v}
               text={text}
               prev={i === 0 ? null : (texts[i - 1] ?? null)}

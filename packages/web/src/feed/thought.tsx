@@ -145,7 +145,12 @@ export function SameTurnThought({
               That turn has not ended yet: its thought comes when it does.
             </span>
           ) : r.item.thought === null || r.item.thought === "" ? (
-            <span className="text-muted-foreground text-xs">It left no thought for that turn.</span>
+            <>
+              <span className="text-muted-foreground text-xs">
+                It left no thought for that turn.
+              </span>
+              <OpenTurnButton seat={seat} turn={turn} className="mt-1" />
+            </>
           ) : (
             <>
               <PlainText text={r.item.thought} className="italic" />

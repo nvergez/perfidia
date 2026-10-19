@@ -13,6 +13,7 @@ import {
   Mail,
   RefreshCw,
   Siren,
+  UserRound,
   type LucideIcon,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
@@ -28,7 +29,7 @@ import { LongText } from "../feed/shell.tsx";
 import { fmtInt, fmtUsd, plural } from "../lib/format.ts";
 import type { PlayerId } from "../lib/ids.ts";
 import { isFakeSeat } from "../lib/models.ts";
-import type { AnnotMsg } from "../store/match.ts";
+import { LazyPlayerSheet } from "../players/lazy.ts";
 import {
   useAnnotation,
   useFeed,
@@ -40,8 +41,8 @@ import {
   type Published,
 } from "../store/hooks.ts";
 import { controls, loaders } from "../store/session.ts";
-import { uiActions, type OpenTurn } from "../store/ui.ts";
-import { liveTopRound, roundNow } from "../thoughts/live-rounds.ts";
+import { uiActions, useUiStore, type OpenTurn } from "../store/ui.ts";
+import { liveTopRound, roundNow, type AnnotMsg } from "../store/match.ts";
 import { wakeIcon } from "../thoughts/wake-icons.tsx";
 import { wakeWords } from "../thoughts/wake.ts";
 import { Button } from "../ui/button.tsx";
@@ -622,28 +623,60 @@ function roundOf(ent: SeatEnt, live: readonly AnnotMsg[]): string {
   return r === null ? "" : `, round ${fmtInt(r + 1)}`;
 }
 
-/** Previous and next turn of the same seat (up to the turns opened at the playhead). */
+/**
+ * Previous and next turn of the same seat (up to the turns opened at the playhead), and the seat's
+ * dossier. A neighbour button that becomes disabled (turn 1, the last turn opened) hands the focus
+ * to the other one, so the keyboard stays in the sheet's header.
+ */
 function Neighbours({ seat, turn }: { readonly seat: PlayerId; readonly turn: number }) {
   const opened = useMatch((s) => s.frame?.seats[seat]?.turn ?? 0);
+  const prev = useRef<HTMLButtonElement>(null);
+  const next = useRef<HTMLButtonElement>(null);
+  const noPrev = turn <= 1;
+  const noNext = turn >= opened;
+  // The button about to be disabled hands the focus over first (a disabled button drops it).
+  const go = (to: number): void => {
+    if (to <= 1) next.current?.focus();
+    else if (to >= opened) prev.current?.focus();
+    uiActions.openTurn(seat, to);
+  };
   return (
-    <div className="flex items-center gap-1">
+    <div className="flex flex-wrap items-center gap-1">
       <Button
+        ref={prev}
         size="sm"
         variant="ghost"
         className="h-7 px-2 text-xs"
-        disabled={turn <= 1}
-        onClick={() => uiActions.openTurn(seat, turn - 1)}
+        disabled={noPrev}
+        onClick={() => go(turn - 1)}
       >
         <ChevronLeft className="size-3.5" aria-hidden="true" /> Turn {fmtInt(Math.max(1, turn - 1))}
       </Button>
       <Button
+        ref={next}
         size="sm"
         variant="ghost"
         className="h-7 px-2 text-xs"
-        disabled={turn >= opened}
-        onClick={() => uiActions.openTurn(seat, turn + 1)}
+        disabled={noNext}
+        onClick={() => go(turn + 1)}
       >
         Turn {fmtInt(turn + 1)} <ChevronRight className="size-3.5" aria-hidden="true" />
+      </Button>
+      <Button
+        size="sm"
+        variant="ghost"
+        className="ml-auto h-7 px-2 text-xs"
+        data-testid="turn-dossier"
+        onPointerEnter={() => LazyPlayerSheet.preload()}
+        onFocus={() => LazyPlayerSheet.preload()}
+        onClick={() => {
+          // The dossier under this sheet (it was opened from there), or the seat's dossier in its
+          // place; the focus goes back to what opened this sheet when the dossier closes.
+          if (useUiStore.getState().selectedPlayer !== seat) uiActions.openPlayer(seat);
+          uiActions.closeTurn();
+        }}
+      >
+        <UserRound className="size-3.5" aria-hidden="true" /> Dossier
       </Button>
     </div>
   );
