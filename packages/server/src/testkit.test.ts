@@ -202,6 +202,7 @@ export function testConfig(o: Partial<ServeConfig> & { readonly runs: string }):
     port: 0,
     hosts: [],
     dev: false,
+    webDist: null,
     adapter: "elysia",
     trustProxy: null,
     origins: [],

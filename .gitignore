@@ -5,3 +5,6 @@ coverage/
 *.log
 .DS_Store
 .claude/worktrees/
+packages/web/dist/
+packages/web/src/generated/
+.cache/

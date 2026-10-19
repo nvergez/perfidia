@@ -86,8 +86,10 @@ export interface ServeConfig {
    * `127.0.0.1`, `localhost` and `[::1]` with its port. `/api/health` answers any host.
    */
   readonly hosts: readonly string[];
-  /** Development mode: the OpenAPI UI page is served. */
+  /** Development mode: the OpenAPI UI page is served; the web app's directory is re-indexed on changes. */
   readonly dev: boolean;
+  /** The built web app (`packages/web/dist`) served outside `/api`; null: the API only. */
+  readonly webDist: string | null;
   /** HTTP framework: Elysia (default) or the raw `Bun.serve` fallback (§5.4). */
   readonly adapter: "elysia" | "raw";
   /** Read the client IP from `Fly-Client-IP` (behind Fly's proxy only). */
@@ -138,7 +140,8 @@ export const USAGE = [
   "  --no-costs          leave costs, tokens and spend out of the annotations",
   "  --no-reasoning      leave reasoning summaries and reply text out of the annotations",
   "  --adapter <name>    elysia (default) or raw (the Bun.serve fallback)",
-  "  --dev               serve the OpenAPI UI page",
+  "  --web-dist <dir>    serve the built web app (bun run web:build) outside /api",
+  "  --dev               serve the OpenAPI UI page; re-read --web-dist when it changes",
   "environment: PORT, PERFIDIA_SERVE_TRUST_PROXY=fly; nothing else is read.",
   "",
 ].join("\n");
@@ -165,6 +168,7 @@ export function parseServeArgs(argv: readonly string[], env: EnvConfig = readEnv
         "no-costs": { type: "boolean" },
         "no-reasoning": { type: "boolean" },
         adapter: { type: "string" },
+        "web-dist": { type: "string" },
         dev: { type: "boolean" },
         help: { type: "boolean" },
       },
@@ -237,6 +241,7 @@ export function parseServeArgs(argv: readonly string[], env: EnvConfig = readEnv
     port,
     hosts,
     dev: values.dev === true,
+    webDist: values["web-dist"] ?? null,
     adapter,
     trustProxy: env.trustProxy,
     origins: values.origin ?? [],

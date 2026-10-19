@@ -4,7 +4,9 @@ import {
   allowedHosts,
   clientIp,
   gate,
+  malformed,
   notFoundRoute,
+  requestUrl,
   upgradeRefusal,
   upgradeRequired,
 } from "./gate.ts";
@@ -12,11 +14,13 @@ import type { HttpContext, RunningHttp } from "./context.ts";
 import { openApiDocument } from "./openapi.ts";
 import { respond } from "./respond.ts";
 import { LIVE_PATH, OPENAPI_JSON_PATH, ROUTES, type Route } from "./routes.ts";
+import { isApiPath, serveStatic } from "./static.ts";
 
 // The raw `Bun.serve` adapter (phase-3 design §5.4): the fallback if Elysia's betas break the thin
 // HTTP layer. It serves the same route table (exact paths only), the same OpenAPI document and the
 // same WebSocket hub as the Elysia adapter, behind the same gate, and the contract tests run
-// against both. It never serves the OpenAPI UI page.
+// against both. It never serves the OpenAPI UI page. With `--web-dist`, paths outside `/api` are
+// the web app's (`static.ts`).
 
 interface Compiled {
   readonly route: Route;
@@ -71,11 +75,16 @@ export function serveRaw(ctx: HttpContext): RunningHttp {
     hostname: config.host,
     port: config.port,
     fetch(req, srv) {
-      const url = new URL(req.url);
       const ip = clientIp(req, srv.requestIP(req)?.address ?? null, config);
+      const url = requestUrl(req);
+      if (url === null) return respond(req, malformed(ip, limiter, now()), o);
       hosts ??= allowedHosts(config, srv.port ?? config.port);
       const refused = gate(req, url.pathname, ip, hosts, limiter, now());
       if (refused !== null) return respond(req, refused, o);
+      if (ctx.site !== null && !isApiPath(url.pathname)) {
+        const page = serveStatic(req, url.pathname, ctx.site, o.hsts);
+        if (page !== null) return page;
+      }
       if (url.pathname === LIVE_PATH) {
         const no = upgradeRefusal(req, ip, config, hosts, hub);
         if (no !== null) return respond(req, no, o);
