@@ -2,9 +2,10 @@ import { useSyncExternalStore } from "react";
 import { isPlayerId, type PlayerId } from "./ids.ts";
 
 // A tiny router on the History API: `/` (the match list) and `/m/:id` (a match), with the query
-// `?pair=pA,pB` (the feed's pair mode), `?reel=1` (start the key moments reel) and `?start=1`
-// (open at the first second instead of the latest). Parsing is pure; `useRoute` follows
-// `history.pushState` (through `navigate`) and the back and forward buttons.
+// `?pair=pA,pB` (the feed's pair mode), `?reel=1` (start the key moments reel), `?start=1`
+// (open at the first second instead of the latest) and `?turn=pN.T` (the turn detail of seat pN's
+// turn T, `turns/link.tsx`). Parsing is pure; `useRoute` follows `history.pushState` (through
+// `navigate`) and the back and forward buttons.
 
 const MATCH_ID = /^[A-Za-z0-9][A-Za-z0-9._@-]{0,127}$/;
 
@@ -16,8 +17,15 @@ export type Route =
       readonly pair: readonly [PlayerId, PlayerId] | null;
       readonly reel: boolean;
       readonly start: boolean;
+      readonly turn: TurnRef | null;
     }
   | { readonly page: "not-found"; readonly path: string };
+
+/** A seat's turn, as the feed's turn items and the annotations number it (`?turn=p2.48`). */
+export interface TurnRef {
+  readonly seat: PlayerId;
+  readonly turn: number;
+}
 
 function decode(s: string): string | null {
   try {
@@ -37,6 +45,16 @@ export function parsePair(value: string | null): readonly [PlayerId, PlayerId] |
   return isPlayerId(a) && isPlayerId(b) ? [a, b] : null;
 }
 
+const TURN_REF = /^(p[1-9][0-9]{0,2})\.([0-9]{1,7})$/;
+
+/** `p2.48`: a player id and a turn number, or null. */
+export function parseTurnRef(value: string | null): TurnRef | null {
+  const m = value === null ? null : TURN_REF.exec(value);
+  const seat = m?.[1];
+  if (m === null || seat === undefined || !isPlayerId(seat)) return null;
+  return { seat, turn: Number(m[2]) };
+}
+
 export function parseRoute(pathname: string, search: string): Route {
   if (pathname === "/" || pathname === "") return { page: "list" };
   const m = /^\/m\/([^/]+)\/?$/.exec(pathname);
@@ -49,6 +67,7 @@ export function parseRoute(pathname: string, search: string): Route {
     pair: parsePair(q.get("pair")),
     reel: q.get("reel") === "1",
     start: q.get("start") === "1",
+    turn: parseTurnRef(q.get("turn")),
   };
 }
 
@@ -56,6 +75,7 @@ export interface MatchHrefOptions {
   readonly pair?: readonly [PlayerId, PlayerId] | null;
   readonly reel?: boolean;
   readonly start?: boolean;
+  readonly turn?: TurnRef | null;
 }
 
 /** `/m/<id>` with its query. */
@@ -64,6 +84,7 @@ export function matchHref(id: string, o: MatchHrefOptions = {}): string {
   if (o.pair !== undefined && o.pair !== null) q.set("pair", `${o.pair[0]},${o.pair[1]}`);
   if (o.reel === true) q.set("reel", "1");
   if (o.start === true) q.set("start", "1");
+  if (o.turn !== undefined && o.turn !== null) q.set("turn", `${o.turn.seat}.${o.turn.turn}`);
   const query = q.toString().replaceAll("%2C", ",");
   return `/m/${encodeURIComponent(id)}${query === "" ? "" : `?${query}`}`;
 }

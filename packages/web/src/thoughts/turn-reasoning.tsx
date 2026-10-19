@@ -5,9 +5,16 @@ import { PlainText } from "../common/plain-text.tsx";
 import type { PlayerId } from "../lib/ids.ts";
 import { fmtUsd, plural } from "../lib/format.ts";
 import { isFakeSeat } from "../lib/models.ts";
-import { useAnnotation, usePublished, useSeat, type Published } from "../store/hooks.ts";
+import {
+  useAnnotation,
+  useLiveAnnots,
+  usePublished,
+  useSeat,
+  type Published,
+} from "../store/hooks.ts";
 import { loaders } from "../store/session.ts";
 import { Button } from "../ui/button.tsx";
+import { withLive } from "./live-rounds.ts";
 
 // A turn's reasoning (phase-3 design §4.3 "Thoughts", §2.7 annotations): the reasoning summaries
 // and reply text of each round, with the tools it called, fetched from the annotations route when
@@ -94,7 +101,12 @@ export function TurnReasoning({ seat, turn }: { readonly seat: PlayerId; readonl
   const info = useSeat(seat);
   const fake = info !== null && isFakeSeat(info);
   const published = usePublished();
-  if (a === null || a.status === "loading") {
+  const live = useLiveAnnots(seat, turn);
+  const loading = a === null || a.status === "loading";
+  // The rounds followed live hand over at once; the annotation adds the figures when it comes.
+  const shown = withLive(seat, turn, a?.status === "ok" ? a.value : null, live);
+  if (shown === null) {
+    if (a?.status === "error") return <p className="text-muted-foreground text-xs">{a.message}.</p>;
     return (
       <p className="text-muted-foreground flex items-center gap-2 text-xs">
         <Loader2 className="size-3 motion-safe:animate-spin" aria-hidden="true" /> Loading the
@@ -102,13 +114,15 @@ export function TurnReasoning({ seat, turn }: { readonly seat: PlayerId; readonl
       </p>
     );
   }
-  if (a.status === "error") {
-    return <p className="text-muted-foreground text-xs">{a.message}.</p>;
-  }
   return (
     <div className="flex flex-col gap-2">
-      <Rounds a={a.value} fake={fake} published={published} />
-      {a.value.complete ? null : (
+      <Rounds a={shown} fake={fake} published={published} />
+      {loading ? (
+        <p className="text-muted-foreground flex items-center gap-2 text-xs">
+          <Loader2 className="size-3 motion-safe:animate-spin" aria-hidden="true" /> Loading the
+          rest of the turn…
+        </p>
+      ) : shown.complete ? null : (
         <p className="text-muted-foreground flex items-center gap-2 text-xs">
           This turn's side files may still grow.
           <Button
