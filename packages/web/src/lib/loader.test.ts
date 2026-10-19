@@ -2,7 +2,8 @@ import { describe, expect, test } from "bun:test";
 import { createLoader } from "./loader.ts";
 
 // The on-demand loader behind `common/lazy.tsx` (docs/phase3.md §16): one import at a time, a
-// stable state object, a failure as a state, and a retry that imports again.
+// stable state object, a failure as a state, loading again after one (the browser may answer from
+// its module map: `LazyProblem` offers a page load), and a preload whose failure stays quiet.
 
 describe("createLoader", () => {
   test("idle, then loading, then ready; one import while it loads", async () => {
@@ -42,6 +43,34 @@ describe("createLoader", () => {
     const ready = await l.load();
     expect(ready).toEqual({ status: "ready", value: 42 });
     expect(calls).toBe(2);
+  });
+
+  test("a failed preload leaves the state idle; a load then fails visibly", async () => {
+    let calls = 0;
+    const gone = Promise.withResolvers<number>();
+    const l = createLoader(() => {
+      calls += 1;
+      return calls === 1 ? gone.promise : Promise.reject(new Error("chunk gone"));
+    });
+    l.preload();
+    l.preload();
+    expect([calls, l.state().status]).toEqual([1, "loading"]);
+    gone.reject(new Error("offline"));
+    await Bun.sleep(0);
+    expect(l.state().status).toBe("idle");
+    expect((await l.load()).status).toBe("failed");
+    // A failure the viewer sees is not hidden by a later preload.
+    l.preload();
+    expect([calls, l.state().status]).toEqual([2, "failed"]);
+  });
+
+  test("a load asked for while a preload runs makes its failure visible", async () => {
+    const gone = Promise.withResolvers<number>();
+    const l = createLoader(() => gone.promise);
+    l.preload();
+    const asked = l.load();
+    gone.reject(new Error("offline"));
+    expect((await asked).status).toBe("failed");
   });
 
   test("an importer that throws synchronously fails the same way", async () => {

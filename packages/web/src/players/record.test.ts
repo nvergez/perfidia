@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import fc from "fast-check";
+import { indentBound, PRETTY_MAX_CHARS, PRETTY_MAX_DEPTH } from "../lib/json.ts";
 import {
   countUntil,
   diffStats,
@@ -31,6 +32,11 @@ describe("countUntil", () => {
   });
 });
 
+/** The longest text an indented notebook may have. */
+const limit = (s: string): number => Math.max(PRETTY_MAX_CHARS, 4 * s.length);
+/** `d` nested arrays around a number. */
+const nested = (d: number): string => `${"[".repeat(d)}1${"]".repeat(d)}`;
+
 describe("layout", () => {
   test("a JSON notebook is indented; prose stays as written", () => {
     expect(layout('{"v":2,"m":[1]}')).toEqual({
@@ -38,6 +44,43 @@ describe("layout", () => {
       json: true,
     });
     expect(layout("plan: grow\n{not json")).toEqual({ text: "plan: grow\n{not json", json: false });
+  });
+
+  test("JSON whose indented form would be huge stays as written (an agent's 4,000 characters)", () => {
+    const deep = "[".repeat(2000) + "]".repeat(2000);
+    const deepOne = `${"[".repeat(1990)}1${"]".repeat(1990)}`;
+    // 30 levels, then 1,900 numbers: each on its own line under 62 spaces (about 120 KB).
+    const wide = `${"[".repeat(30)}${"0,".repeat(1900)}0${"]".repeat(30)}`;
+    for (const s of [deep, deepOne, wide]) {
+      expect(layout(s)).toEqual({ text: s, json: false });
+    }
+    expect(layout(nested(PRETTY_MAX_DEPTH)).json).toBe(true);
+    expect(layout(nested(PRETTY_MAX_DEPTH + 1)).json).toBe(false);
+    // A number written again can grow (1e20 has 21 digits): past the bound's guess, the result is
+    // checked too (15,001 characters, about 75,000 once indented).
+    const grown = `[${"1e20,".repeat(2999)}1e20]`;
+    expect(indentBound(grown)).toBeLessThanOrEqual(limit(grown));
+    expect(layout(grown)).toEqual({ text: grown, json: false });
+    for (const s of [deep, deepOne, wide, grown, `{"a":${deepOne}}`]) {
+      expect(layout(s).text.length).toBeLessThanOrEqual(limit(s));
+    }
+  });
+
+  test("the indentation bound holds for any JSON; within it, the text is indented", () => {
+    fc.assert(
+      fc.property(fc.jsonValue({ maxDepth: 8 }), (v) => {
+        const s = JSON.stringify(v);
+        const pretty = JSON.stringify(v, null, 2);
+        expect(indentBound(s)).toBeGreaterThanOrEqual(pretty.length);
+        const shown = layout(s);
+        if (v !== null && typeof v === "object") {
+          expect(shown).toEqual({ text: pretty, json: true });
+        } else {
+          expect(shown).toEqual({ text: s, json: false });
+        }
+      }),
+      { numRuns: 300 },
+    );
   });
 });
 

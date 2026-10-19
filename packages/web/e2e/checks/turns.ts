@@ -3,8 +3,8 @@
 // environment, `open` and the DOM checks come from `../kit.ts`. One page of the fake run: a thought's
 // reasoning expands in place (Pass B's check), then the thought opens its turn's sheet (a chunk loaded only then) with the turn's wake, rounds and tool calls
 // with their verdicts, ending and cost (simulated prices: a fake model), its deep link in the URL;
-// the previous turn is a click away; Escape closes it with the focus back on the opener and the
-// link gone. The same page then opens, through the URL's history (no reload), an agent's turn with
+// turn 2, then turn 1 from the keyboard, in place (the focus stays in the sheet's header); its
+// "Dossier" takes its place (the link gone), and Escape there gives the focus back to the thought. The same page then opens, through the URL's history (no reload), an agent's turn with
 // a refused call (✗ and its code) and a bot's turn, which has no model calls. The live per-round
 // reasoning (C3) is checked by the smoke test's live run; a cold deep link by its private server.
 
@@ -38,6 +38,8 @@ export function turnChecks(): void {
     await button.click();
     const sheet = page.getByTestId("turn-sheet");
     await sheet.locator('[data-turn-state="closed"]').waitFor();
+    // The sheet takes the focus itself (Tab then walks it from the top).
+    expect(await focused(page)).toBe("div[data-testid=turn-sheet]");
     // The sheet came in a chunk of its own, loaded on demand (not part of the initial load).
     expect(Number(await page.evaluate(CHUNKS))).toBeGreaterThan(loaded);
     expect((await sheet.textContent()) ?? "").toContain(`${seat} · turn ${turn}`);
@@ -61,16 +63,31 @@ export function turnChecks(): void {
     const costs = (await sheet.getByTestId("turn-costs").textContent()) ?? "";
     expect(costs).toMatch(/\$\d+\.\d\d · [\d,]+ tokens/);
     expect(costs).toContain("Simulated prices");
-    // The previous turn, in place (a click event: no wait for the sheet's opening slide to end).
-    if (Number(turn) > 1) {
-      await sheet.getByRole("button", { name: `Turn ${Number(turn) - 1}` }).dispatchEvent("click");
-      await sheet.getByText(`${seat} · turn ${Number(turn) - 1}`).waitFor();
-      expect(new URL(page.url()).searchParams.get("turn")).toBe(`${seat}.${Number(turn) - 1}`);
-    }
-    await page.keyboard.press("Escape");
+    // Turn 2 (through the URL's history), then the previous turn in place from the keyboard: the
+    // URL follows, and the focus moves to "Turn 2" before "Turn 1" is disabled (it stays in the
+    // sheet's header).
+    await page.evaluate(
+      `history.pushState(null, "", "/m/fake1?turn=${seat}.2"); dispatchEvent(new PopStateEvent("popstate"))`,
+    );
+    await sheet.getByText(`${seat} · turn 2`).waitFor();
+    await sheet.getByRole("button", { name: "Turn 1", exact: true }).focus();
+    await page.keyboard.press("Enter");
+    await sheet.getByText(`${seat} · turn 1`).waitFor();
+    expect(new URL(page.url()).searchParams.get("turn")).toBe(`${seat}.1`);
+    expect(String(await page.evaluate("document.activeElement?.textContent?.trim()"))).toBe(
+      "Turn 2",
+    );
+    // "Dossier": the seat's dossier takes the sheet's place (the link goes); Escape then gives the
+    // focus back along the chain of openers, to the thought's "Turn detail" (the sheet's "Dossier"
+    // that opened the dossier is gone).
+    await sheet.getByTestId("turn-dossier").dispatchEvent("click");
+    const dossier = page.getByTestId("player-sheet");
+    await dossier.getByText(`(${seat})`).first().waitFor();
     await sheet.waitFor({ state: "detached" });
-    expect(await focused(page)).toBe(`button[data-open-turn=${which}]`);
     expect(new URL(page.url()).searchParams.has("turn")).toBe(false);
+    await page.keyboard.press("Escape");
+    await dossier.waitFor({ state: "detached" });
+    expect(await focused(page)).toBe(`button[data-open-turn=${which}]`);
     await domIsClean(page);
     // A turn with a refused call (from the feed route), opened in place through the URL's history
     // (back and forward follow it): ✗ with the rejection's code beside the ✓.

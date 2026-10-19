@@ -45,9 +45,9 @@ export function parsePair(value: string | null): readonly [PlayerId, PlayerId] |
   return isPlayerId(a) && isPlayerId(b) ? [a, b] : null;
 }
 
-const TURN_REF = /^(p[1-9][0-9]{0,2})\.([0-9]{1,7})$/;
+const TURN_REF = /^(p[1-9][0-9]{0,2})\.([1-9][0-9]{0,6})$/;
 
-/** `p2.48`: a player id and a turn number, or null. */
+/** `p2.48`: a player id and a turn number (turns count from 1), or null. */
 export function parseTurnRef(value: string | null): TurnRef | null {
   const m = value === null ? null : TURN_REF.exec(value);
   const seat = m?.[1];

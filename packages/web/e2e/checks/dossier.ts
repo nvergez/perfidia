@@ -7,7 +7,7 @@
 
 import { expect, test } from "bun:test";
 import { PlayerDossierSchema, type PlayerDossier } from "@perfidia/protocol/spectator";
-import { HOUR, current, domIsClean, mapReady, open, seekWithKeys } from "../kit.ts";
+import { HOUR, current, domIsClean, focused, mapReady, open, seekWithKeys } from "../kit.ts";
 
 const n = (v: number): string => v.toLocaleString("en-US");
 const versions = (v: number): string => `${n(v)} ${v === 1 ? "version" : "versions"} so far`;
@@ -30,6 +30,8 @@ export function dossierChecks(): void {
     };
     await openP2();
     const sheet = page.getByTestId("player-sheet");
+    // The sheet takes the focus itself, not the first button far down its body.
+    expect(await focused(page)).toBe("div[data-testid=player-sheet]");
     // At the end of the finished run: the record equals the server's counts.
     const record = (await sheet.getByTestId("seat-record").textContent()) ?? "";
     expect([

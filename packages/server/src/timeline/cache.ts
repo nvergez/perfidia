@@ -1,8 +1,10 @@
-import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { ENGINE_VERSION } from "@perfidia/engine";
 import { sha256Hex } from "@perfidia/engine/core";
 import type { Sha256 } from "@perfidia/protocol";
 import type { MatchId, TimelineId } from "@perfidia/protocol/spectator";
+import { TIMELINE_VERSION } from "@perfidia/spectator";
 import { z } from "zod";
 import { CACHE_FORMAT, Timeline, type LogSource, type TimelineData } from "./timeline.ts";
 
@@ -11,7 +13,10 @@ import { CACHE_FORMAT, Timeline, type LogSource, type TimelineData } from "./tim
 // (milliseconds instead of a refold). A file is named by the timeline id (which changes with the
 // log, `TIMELINE_VERSION` and `ENGINE_VERSION`), the match id and the log id, and is written through
 // a temporary file and a rename. The directory is outside every served path; the files hold
-// spectator data only. A file that does not parse is deleted and the log refolded.
+// spectator data only. A file that does not parse is deleted and the log refolded. A file's name
+// ends with the fold and engine versions that wrote it: at startup the files of other versions
+// (and the untagged names written before Pass C's review) are deleted, since their timeline ids are
+// never asked for again.
 //
 // A file also records the log prefix it was folded from (`source`: its length and a hash of its
 // last bytes). Two different logs can share a header, hence a log id (a lockstep rerun with the same
@@ -48,18 +53,27 @@ export type CacheLoad =
 /** Whether the log file still holds the prefix a cached timeline was folded from. */
 export type SourceCheck = (source: LogSource, final: boolean) => boolean;
 
+/** The versions a cache file was written by, at the end of its name. */
+export const CACHE_VERSION_TAG = `t${TIMELINE_VERSION}e${ENGINE_VERSION}`;
+/** The name of a cache file of any version (versions before the tag wrote none), or its temporary. */
+const CACHE_NAME =
+  /^[0-9a-f]{16}-[0-9a-f]{16}-[0-9a-f]{16}(?:-t\d+e[0-9a-z.+-]+)?\.json\.gz(?:\.tmp)?$/;
+
 export class TimelineCache {
   readonly dir: string;
+  /** Files of other fold or engine versions deleted when this cache opened its directory. */
+  readonly pruned: number;
 
   constructor(dir: string) {
     this.dir = dir;
     mkdirSync(dir, { recursive: true });
+    this.pruned = prune(dir);
   }
 
   path(match: MatchId, logId: Sha256, timeline: TimelineId): string {
     return join(
       this.dir,
-      `${timeline}-${sha256Hex(match).slice(0, 16)}-${logId.slice(0, 16)}.json.gz`,
+      `${timeline}-${sha256Hex(match).slice(0, 16)}-${logId.slice(0, 16)}-${CACHE_VERSION_TAG}.json.gz`,
     );
   }
 
@@ -100,4 +114,15 @@ export class TimelineCache {
     writeFileSync(tmp, Bun.gzipSync(JSON.stringify(t.toData(source))));
     renameSync(tmp, path);
   }
+}
+
+/** Deletes the cache files of other versions in `dir` (other files are left alone); how many. */
+function prune(dir: string): number {
+  let n = 0;
+  for (const name of readdirSync(dir)) {
+    if (!CACHE_NAME.test(name) || name.includes(`-${CACHE_VERSION_TAG}.json.gz`)) continue;
+    rmSync(join(dir, name), { force: true });
+    n += 1;
+  }
+  return n;
 }

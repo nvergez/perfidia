@@ -11,8 +11,10 @@ import {
   callTally,
   findTurnItem,
   fmtLatency,
+  roundsUpTo,
   shapeRounds,
   tokenSum,
+  totalsOf,
   turnMessages,
   whyWords,
   type RoundRow,
@@ -203,6 +205,32 @@ describe("an open turn's rounds (live)", () => {
       ["round:1", "retried"],
       ["thought_call:0", "thought"],
     ]);
+  });
+
+  test("replayed with the playhead inside: the rounds reached, their totals, the cost after", () => {
+    // Three rounds and a closing thought call of 11, 18, 11 and 4 thousandths of a dollar.
+    const a = annotation([
+      round(0, ["rules"], { costNanoUsd: 11_000_000 }),
+      round(1, ["view_city"], { costNanoUsd: 18_000_000 }),
+      round(2, ["build"], { costNanoUsd: 11_000_000 }),
+      round(0, [], { kind: "thought_call", costNanoUsd: 4_000_000 }),
+    ]);
+    const all = shapeRounds({ annotation: a, live: [], results: null });
+    expect(all.totals.attempts).toBe(4);
+    const at1 = roundsUpTo(all, 1);
+    expect(at1.rounds.map((r) => r.key)).toEqual(["round:0", "round:1"]);
+    expect(at1.totals).toEqual(totalsOf(at1.rounds));
+    expect([at1.totals.costNanoUsd, at1.totals.attempts, at1.totals.metered]).toEqual([
+      29_000_000, 2, 2,
+    ]);
+    expect(tokenSum(at1.totals.tokens)).toBe(2 * tokenSum(TOKENS));
+    expect(at1.laterCostNanoUsd).toBe(15_000_000);
+    // Before the first logged call: nothing yet; the whole turn's cost comes later.
+    const none = roundsUpTo(all, null);
+    expect([none.rounds.length, none.totals.metered, none.laterCostNanoUsd]).toEqual([
+      0, 0, 44_000_000,
+    ]);
+    expect(roundsUpTo(all, 2).laterCostNanoUsd).toBe(4_000_000);
   });
 
   test("once the turn closes, its results give the live rounds their verdicts", () => {

@@ -111,7 +111,7 @@ bun run serve -- --runs runs --cache .cache/spectator --all-runs
 | `--host`, `--port`             | Default `127.0.0.1` and `$PORT`, else 8080.                                                                                                                    |
 | `--public-host <name[:port]>`  | A `Host` the server answers to (repeatable; required to bind a non-loopback host). A loopback bind answers to `127.0.0.1`, `localhost`, `[::1]` with its port. |
 | `--origin <url>`               | Another browser origin allowed to open the WebSocket (repeatable).                                                                                             |
-| `--no-costs`, `--no-reasoning` | Leave costs, tokens and spend, or reasoning summaries and reply text, out of the annotations (design §9 Q2, Q4; both are served by default).                   |
+| `--no-costs`, `--no-reasoning` | Leave costs, tokens, model time and spend, or reasoning summaries and reply text, out of the annotations (design §9 Q2, Q4; both are served by default).       |
 | `--adapter raw`                | Serve with the raw `Bun.serve` adapter instead of Elysia.                                                                                                      |
 | `--web-dist <dir>`             | Serve the built web app (`bun run web:build` → `packages/web/dist`) outside `/api` (§14).                                                                      |
 | `--dev`                        | Serve the OpenAPI UI page (`/api/openapi`); re-read `--web-dist` when it changes.                                                                              |
@@ -228,12 +228,16 @@ bun run sim -- run --clock realtime --time system --speed 600 --days 1 --live-fl
   from (its length and a hash of its last 64 KB; a `.gz` log: the compressed file's); a cached
   timeline is used only while the log file still holds that prefix (exactly that, for a finished
   log), else the log gets a new timeline (§4). A file that does not parse is deleted and the log
-  refolded. 544 KB for the 7-day fake run.
+  refolded. A file's name ends with the fold and engine versions that wrote it
+  (`-t4e0.1.0.json.gz`); opening the directory deletes the cache files of other versions, and the
+  untagged names written before the Pass C review (§16.11), since their timeline ids are never
+  asked for again. 544 KB for the 7-day fake run.
 - **LRU.** Finished timelines stay in memory in an LRU of 8, with their annotations. An evicted
-  one leaves a summary in memory (meta fields, the tail frame, notebooks and counts), which
-  answers the meta, `/latest`, the dossier and the listing; immutable bodies the HTTP layer still
-  holds are answered without it too (§6). Other routes read it back from the cache (never a
-  refold). Running matches always stay in memory.
+  one leaves a summary in memory (meta fields and the tail frame), which answers the meta,
+  `/latest` and the listing; immutable bodies the HTTP layer still holds are answered without it
+  too (§6). Other routes, the dossier included (its notebook, counts and series are not kept in
+  the summary, so an evicted match's memory does not grow with its length: §16.11), read it back
+  from the cache (never a refold). Running matches always stay in memory.
 
 ## 6. The REST API
 
@@ -727,7 +731,8 @@ in-process bundle under 200 KB).
 variable, or without Chromium at `chromium.executablePath()`, it is skipped with a printed reason
 (so the default `bun test` stays browser-free). It builds the app into a temporary directory
 (in-process `buildWeb`), starts the server in process (`startServer` from `@perfidia/server`, with
-`--web-dist` on that build, on `PERFIDIA_E2E_PORT` or any free port), copies the war golden in,
+`--web-dist` on that build, on `PERFIDIA_E2E_PORT` or any free port; Pass C's second server, on
+`PERFIDIA_E2E_PORT2` or any free port), copies the war golden in,
 generates a 1-day fake arena run (`planArena`/`runArena` from `@perfidia/orchestrator`, both dev
 dependencies of the web package), copies it once more with hostile text planted, waits for the
 three to be folded and ended (the hostile copy still verifies), and drives headless Chromium
@@ -974,11 +979,15 @@ issues.
   `lazyComponent(() => import("./x.tsx").then((m) => m.X), { what: "the dossier", … })` returns a
   component with `preload()`. While the chunk loads it shows a `Skeleton` after 150 ms (or the
   caller's `fallback`, or nothing for an `overlay`); a chunk that cannot be loaded shows "… could
-  not be loaded" with Retry and "Reload the page"; a loaded part that throws while rendering
-  shows "… failed to show" with Retry (an error boundary: one broken panel never takes the page
-  down); an overlay's error is a small fixed panel with Close. `useLatch(on)` and
-  `preloadWhenIdle(...parts)` complete it. Unit tests: `lib/loader.test.ts` (one import at a
-  time, a stable state, a failure as a state, a retry).
+  not be loaded" with "Reload the page" (the browser keeps a module whose fetch failed in its
+  module map: Chromium answers a second `import()` of that chunk with the same failure at once,
+  without a request, so a Retry could never bring it back; amended at the review, §16.11); a
+  loaded part that throws while rendering shows "… failed to show" with Retry (an error boundary:
+  one broken panel never takes the page down); an overlay's error is a small fixed panel with
+  Close. A preload that fails (a hover, an idle moment) leaves the part idle: the first real open
+  tries again and shows the failure if it fails. `useLatch(on)` and `preloadWhenIdle(...parts)`
+  complete it. Unit tests: `lib/loader.test.ts` (one import at a time, a stable state, a failure
+  as a state, loading again, a failed preload that stays quiet until a real load).
 - **Savings, re-measured at C0** (each put back on its own, initial JS gzipped): `cn` without
   `tailwind-merge` 5.2 KB (`lib/cn.ts`, the same algorithm over the class groups this app writes;
   `cn.test.ts` compares every class written under `src`, plus a list of classes a later view is
@@ -1202,18 +1211,25 @@ server change was needed (the data of §16.4's table was enough), so `TIMELINE_V
   but no annotation (no side files) gets its rounds from the log alone.
 - **Degrading cleanly.** `--no-reasoning`: one "Reasoning not published for this match." line above
   the rounds, which keep their tool calls and verdicts; `--no-costs`: "Costs not published for this
-  match." and the model-call count only, no figure in the round headings. A bot's turn (a bot seat,
+  match." and the model-call count only, no figure in the round headings (model time included:
+  the server withholds it with the costs since the review, §16.11). A bot's turn (a bot seat,
   or an LLM seat after its hand-off): "A scripted bot plays this seat: no model, so no reasoning,
-  rounds or costs", then the wake, the turn summary and messages, "N actions accepted; rejected: …"
-  and the ending; no annotation is fetched. An open turn: "In progress, round 3: rounds appear as
+  rounds or costs. Its moves appear in the feed and on the map.", then the wake, the turn summary
+  and messages, "N actions accepted; rejected: …" ("Orders and messages count as actions; what it
+  looked at does not.") and the ending; no annotation is fetched. An open turn: "In progress, round 3: rounds appear as
   their replies arrive; the verdicts, the thought and the ending come when the turn ends", every
   call pending, the cost so far; the annotation is fetched again 0.8 s after each live round (the
   socket brings no figures) and once more when the turn closes, so the verdicts, thought, ending
   and final cost replace the pending ones in place. Replaying a finished match with the playhead
-  inside a turn shows that turn's rounds up to the round the log has reached. A turn later than the
-  playhead says so ("At this point of the match Odysseus has played 1 turn: turn 5 comes later.")
-  with "Go to the end of this turn" (the feed route, then a seek); a seat the match does not have
-  says so. A closed turn whose side files may still grow keeps Pass B's "Refresh".
+  inside a turn shows that turn's rounds up to the round the log has reached, with their cost,
+  tokens and model calls only, and the seat's spend at the playhead (`roundsUpTo`), under "In
+  progress at this point of the match, round 2: play on to see its verdicts, its thought and how
+  it ends." A turn later than the playhead says so ("At this point of the match Odysseus has
+  played 1 turn: turn 5 comes later.") with "Go to the end of this turn" (the feed route, then a
+  seek); at the end of a finished match, a turn the seat never played says that instead
+  ("Odysseus played 26 turns in this match: there is no turn 999."), and "Turn N−1" goes back to
+  the last turn played; `?turn=p2.0` is not a turn link (turns count from 1); a seat the match
+  does not have says so. A closed turn whose side files may still grow keeps Pass B's "Refresh".
 - **C3, live reasoning in the Thoughts column** (`thoughts/live.tsx`, 1.0 KB; `live-rounds.ts`): while
   an agent is in a turn of a followed match, the rounds of that turn as `annot` messages bring them,
   newest last: each round's heading ("ROUND 3 · build") with its reasoning and reply text; the
@@ -1224,7 +1240,8 @@ server change was needed (the data of §16.4's table was enough), so `TIMELINE_V
   `prefers-reduced-motion: reduce`); the rounds already shown keep their place (keyed), and the
   block's height is bounded (three rounds) until "more". With no live round (no reply yet, or a
   replay, which has none) nothing is drawn, so turns opening and closing during a replay shift
-  nothing.
+  nothing; the header's "thinking… round N" is then the way into the turn in progress (a button
+  that opens its detail, in the place it already takes; added at the review, §16.11).
 - **The hand-over.** When the turn ends the live block goes and the turn's thought takes its place;
   its "Reasoning" shows the rounds the socket brought at once, joined with the annotation as it
   arrives (`withLive`), and the turn detail of that turn has everything. The store keeps the live
@@ -1310,9 +1327,11 @@ which showed the end of the fold whatever the playhead) and **Notebook history**
   trimmed, then a longest common subsequence; more than 250,000 cells falls back to "all removed,
   then all added"), shown as hunks with one line of context, "⋯ N lines unchanged" between them,
   `+`/`−` marks (with screen-reader words) besides the colours, `+a −r` per version, 14 lines and
-  8 versions at first ("Show the whole change", "Show 20 older versions"). A JSON notebook (a bot's
-  memory) is indented before the diff, as Pass B lays it out (`layout` over `prettyJson`); every
-  text is `PlainText`. Data: `PlayerDossier.notebook`, `{total, versions}`, built by
+  8 versions at first ("Show the whole change", "Show 20 older versions"; since the review a long
+  change opens 400 lines at a time). A JSON notebook (a bot's memory) is indented before the diff,
+  as Pass B lays it out (`layout` over `prettyJson`, remembered for the last 64 texts), only when
+  that cannot blow it up: at most 32 levels deep and 64 KB (or 4 times its text) once indented,
+  else it is shown as written (§16.11); every text is `PlainText`. Data: `PlayerDossier.notebook`, `{total, versions}`, built by
   `fold/series.ts` (`NotebookLog`) from the gateway fold's notebook after each `note` line (append or
   replace, as the gateway applied it, so a refused write changes nothing), cleaned (`cleanText`); a
   write that leaves the text as it was is not a version. Each version is stored as an edit of the one
@@ -1333,7 +1352,8 @@ them); their schemas stay unexported (48 schemas still convert to JSON Schema), 
 exported; fixtures with invalid cases at each new field. `SpectatorFold` gains `hourly(seat)`,
 `notebook(seat)` and `seriesKey(seat)` (a cheap change key); the worker sends a seat's series with
 its notes and counts when the key changes (`SeatAux.hourly`, `.notebook`); the timeline keeps them
-in its seats map, its summary (in memory when the timeline is evicted) and its cache file; the
+in its seats map and its cache file (since the review, not in the summary an evicted timeline
+leaves in memory: the dossier route reads the timeline back, §16.11); the
 dossier route serves them. **`TIMELINE_VERSION` is 4** (was 3): cached timelines are folded again
 once. `seatTally` and `notebookTexts` are exported by `@perfidia/spectator/reduce` (and the root).
 
@@ -1361,7 +1381,8 @@ bytes, +340 bytes over C0's 176,439, `seatTally` and `notebookTexts` riding in t
 initial chunk already loads); lazy JS 41.6 KB gzipped in 19 chunks, the dossier chunk 6.9 KB (was
 2.7 KB);
 CSS 10.1 KB gzipped (was 9.9 KB). The war golden's cache file is 462.9 KB gzipped, of which the
-series 14.4 KB (102 KB as JSON in the summary in memory); the fold's time is unchanged (4.3–4.7 s for
+series 14.4 KB (102 KB as JSON, no longer kept in memory for an evicted match); the fold's time is
+unchanged (4.3–4.7 s for
 the war golden on this loaded container, with and without the series).
 
 Screenshots (war golden p1, p2, p3 at its end and p2 at its start and p3 at D4 12:00; the 2-day fake
@@ -1406,8 +1427,8 @@ smoke test, and measured.
     opened from that dossier it simply closes back to it; otherwise the dossier takes its place.
   - In the dossier's record, a betrayal line names the other player as a button that opens their
     dossier (betrayer and victim, both ways).
-  - The dossier's body is keyed by seat, so another player's dossier starts at its top with its
-    own state.
+  - The dossier's body is keyed by seat, so another player's dossier starts with its own state;
+    since the review it also starts at its top (the key alone kept the sheet's scroll: §16.11).
 - **Live reasoning hands over to history, and every view agrees on the round.**
   - The leaderboard's "thinking… round N" now reads the same round as the Thoughts column and the
     turn detail: `useRoundNow` (`store/hooks.ts`) takes the newer of the log's round and the live
@@ -1480,7 +1501,8 @@ To stay within the budget:
 - Pass B's fake-reasoning test runs on the C1 check's page instead of its own;
 - the clicks made while a sheet still slides in are dispatched events (no wait for the slide);
 - the war test ends on the dossier, with no sheet to close;
-- the betrayal card's turn link is checked by hand, not in the smoke test.
+- the betrayal card's turn link is checked by hand, not in the smoke test (it is since the review,
+  §16.11).
 
 Overlapping the build with the fake run's generation was tried and gained nothing.
 
@@ -1519,7 +1541,8 @@ Overlapping the build with the fake run's generation was tried and gained nothin
   `thoughts/live.tsx`) held, with the contract's shared lines (§16.4). Integration also touched
   `ui/sheet.tsx`, `ui/return-focus.tsx`, `store/hooks.ts`, `store/match.ts`,
   `board/leaderboard.tsx`, `feed/betrayal-card.tsx` and `feed/thought.tsx`, and the e2e files.
-- **Not in the smoke test.** The betrayal card's turn link is checked by hand only.
+- **Not in the smoke test.** The betrayal card's turn link was checked by hand only (the review
+  added it, §16.11).
 
 **Looked at** (headless Chromium through playwright-core 1.56.1; 1440 × 900, 1280 × 720 and
 390 × 844). Each view below was opened on the merged build:
@@ -1564,13 +1587,64 @@ Fixed from looking: the light focus outline drawn around a whole sheet opened by
 10. **The live dossier lags** the feed by up to the route's 10 s `max-age`.
 11. **Initial chunk.** `seatTally` and `notebookTexts` ride in the initial chunk (+340 bytes): the
     web may import only the `reduce` sub-path, whose module the initial chunk already holds.
-12. **The smoke test's margin is 1 to 2 s** on a quiet container (18.1 to 19.2 s against 20 s), and
-    a busy container takes about a second of it. The largest parts are the setup (3.5 to 3.8 s),
-    the war golden's test (3.4 to 3.6 s) and the hostile run's test (2.6 to 3.4 s).
+12. **The smoke test's margin is 1 to 2 s** on a quiet container (17.8 to 19.0 s against 20 s
+    after the review, §16.11), and a busy container takes about a second of it. The largest parts
+    are the setup (3.4 to 3.9 s), the war golden's test (3.4 to 3.6 s) and the hostile run's test
+    (2.6 to 2.8 s).
 13. **A noisy note under ended turns.** The note "This turn's side files may still grow" and its
     Refresh show under a turn that has ended in a match still being followed, because the
     annotation's `complete` waits for the run's end. It is accurate but noisy.
 14. **Nothing shows the dossier under a stacked turn detail.** The turn detail (36 rem) covers the
     dossier under it (28 rem) entirely; "Dossier" brings it back.
-15. **The focus chain has no unit test,** since it is DOM-only. It was checked by hand. The smoke
-    test checks one level of focus return (T's Escape check).
+15. **The focus chain has no unit test,** since it is DOM-only. The smoke test checks it since the
+    review (the turn detail's "Dossier", then Escape, back to the thought's "Turn detail").
+16. **A chunk that failed to load needs a page load** (§16.1): the browser keeps the failed module,
+    so the error offers "Reload the page", and a failed preload makes the first open fail at once.
+17. **The replayed open turn's cut is unit-tested only.** `roundsUpTo` is; its wiring in the turn
+    detail (a replay paused inside a turn) was checked by hand at the review, not in the smoke test
+    (a seek inside a turn costs more than its margin).
+
+### 16.11 Review fixes (Pass C)
+
+An independent review of the integrated Pass C (security and correctness lenses) reported 14
+findings; each was checked again here (reproduced in headless Chromium on the merged build, or by
+a unit test) before it was fixed. None was refuted or deferred.
+
+| Finding                                                                                       | Verdict | What changed                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| --------------------------------------------------------------------------------------------- | ------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| A JSON notebook of nested arrays (3,981 characters) indented to 7.9 M characters, per version | fixed   | `prettyJson` indents only JSON at most 32 levels deep whose indented form stays within 64 KB or 4 times its text (`indentBound`, one pass, checked before anything is built; the result is checked too), else the text shows as written; `layout` remembers its last 64 texts, `NotebookBox` memoises it; an opened version shows 400 more lines per click. Unit tests: the reviewer's case, depth 32/33, a wide case, `1e20` growth, the bound over random JSON (fast-check). In Chromium, the planted copy's p2 dossier: longest text node 3,981 characters (was 7.9 M), long tasks ≤ 113 ms (were 715 and 994 ms). |
+| The hostile smoke test reached no Pass C sink                                                 | fixed   | `plantHostile` also plants a tool name in p1's first reply and in its first read (`obs`) line, a refusal's category and an error's kind in its first model call, and markup in each note version; the hostile test checks the notebook history's diff rows and opens p1's turn 1 (through the URL's history) with its tool names and labels as text; `domIsClean` now also fails on a bidi control in any text node.                                                                                                                                                                                                  |
+| A refusal's category and error kinds reached the DOM uncleaned (bidi controls)                | fixed   | The annotation fold cleans and cuts them to 64 characters (`LABEL_MAX_CHARS`; an empty one reads "uncategorised" or "unknown"); the round heading isolates them in `<bdi>`. Unit test (`annotations.test.ts`); checked in Chromium: no bidi control in the DOM.                                                                                                                                                                                                                                                                                                                                                       |
+| Annotation tool names were not cut (a 5,000-character name on the route and every `annot`)    | fixed   | Cut to `TOOL_NAME_MAX_CHARS` (64, now in `clean.ts`) as the fold cuts `results[].tool`, so `detail.ts` matches them as before. Unit test.                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| Under `--no-costs` the round headings and costs still showed model time                       | fixed   | Model time goes with the costs: the annotation fold serves `latencyMs: 0` when costs are not published (§3's flag, the protocol's comment), and the turn detail shows it only when they are. Checked on a copy with 2,345 ms per call: headings "Round 1", costs "4 model calls".                                                                                                                                                                                                                                                                                                                                     |
+| Evicted matches kept their series in memory; old-version cache files were never deleted       | fixed   | The summary an evicted timeline leaves holds no seat data (meta fields and the tail frame only); the dossier route reads the timeline back from the cache, as the feed and step routes do. A cache file's name now ends with its fold and engine versions (`-t4e0.1.0.json.gz`); opening the directory deletes other versions' files and untagged ones (the current caches refold once). Unit tests (`units.test.ts`); server and spectator suites green.                                                                                                                                                             |
+| A turn open at a replay's playhead showed the whole turn's cost, tokens, calls and spend      | fixed   | `roundsUpTo` (pure, unit-tested): the rounds reached, their own totals, and the cost after the playhead, taken off the seat's spend. A 2-day fake run's `p3.2` at its first key moment (round 2 of 3 reached): "$0.03 · 18,551 tokens · 2 model calls", "Spent $0.13 so far", as `llm_calls.jsonl` gives for the first two rounds (the whole turn: $0.04, 28,819 tokens, 3 calls, $0.14).                                                                                                                                                                                                                             |
+| Retry after a chunk failed never fetched again; a failed preload broke the part               | fixed   | Reproduced: after a failed hover preload, a click made no request (Chromium's module map). A load failure now offers "Reload the page" (no Retry); a failed preload leaves the part idle, so the first real open tries and fails visibly; §16.1 and `lib/loader.ts` say why. Unit tests.                                                                                                                                                                                                                                                                                                                              |
+| 7 of 10 UI mutants survived the smoke test; the private server ignored the port setting       | fixed   | New checks: the sheet takes the focus (turn detail, dossier); "Turn 1" from the keyboard at turn 2 leaves the focus on "Turn 2"; the focus chain (turn detail → "Dossier" → Escape → the thought); the betrayal card's `[data-open-turn^="p2:"]`; "Attacked its ally" and "Attacked by its ally"; the victim's dossier at its top with its own state. U1, U4, U5, U6, U9 and U10 re-applied: each now fails the smoke test; U3 is `roundsUpTo`'s unit test (open issue 17). `PERFIDIA_E2E_PORT2`.                                                                                                                     |
+| In an ended match, a turn never played read "comes later"; `?turn=p2.0` opened a sheet        | fixed   | At the end of a finished match: "Odysseus played 26 turns in this match: there is no turn 999." (no annotation asked for); "Go to the end of this turn" on a finished match says "… played no turn 999 in this match."; "Turn N−1" goes back to the last turn played; `TURN_REF` needs a turn from 1 (router test).                                                                                                                                                                                                                                                                                                   |
+| A first visit by a shared `?turn=` link stacked "How to watch" and the turn detail            | fixed   | "How to watch" waits while the URL names a turn or the turn detail is open, and opens when it closes. Checked at 1440 × 900 and 390 × 844.                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| A bot's turn detail pointed to "the log" and counted only accepted actions                    | fixed   | "Its moves appear in the feed and on the map."; under the count, "Orders and messages count as actions; what it looked at does not." (no fold change).                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| An open turn's wording assumed a live match                                                   | fixed   | In a replay: "In progress at this point of the match, round 2: play on to see its verdicts, its thought and how it ends." and "No round logged yet at this point of the match."                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| No way into an open turn's detail before its first reply                                      | fixed   | The Thoughts column header's "thinking… round N" is a button that opens the turn in progress (in the place it already takes: no layout shift as turns open and close in a replay).                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+
+Found while checking: the dossier kept its scroll position when it switched seats (the docs said it
+started at its top); the dossier and the turn detail now scroll to their top on another seat or
+turn. The turn detail no longer asks for the annotation of a turn the seat never played (a 404 in
+the console).
+
+**Sizes** (`bun run web:build`): initial JS 172.9 KB gzipped (567.5 KB minified; 172.5 KB before
+the review); the architecture test's build 177,582 bytes against 189,440 (177,318 before); lazy JS
+51.5 KB in 21 chunks (the dossier 7.1 KB, the turn detail 6.5 KB, Radix Dialog 13.2 KB); CSS
+10.2 KB. What the initial chunk gained: the quiet preload, the onboarding's wait for a linked turn,
+the router's turn from 1; the rest is in the chunks loaded on demand.
+
+**Smoke test** (`PERFIDIA_E2E_PORT=8363 PERFIDIA_E2E_PORT2=8364 bun run test:e2e`, 11 tests): 17.8
+to 19.0 s in seven runs after the last saving (18.0, 18.4 and 18.8 s after the full check; bun's
+own total 18.4 to 19.2 s), against 20 s. The new checks cost about 1 s; the hostile test's hover
+became dispatched events (about 0.9 s less: no wait for the sheet's opening slide), and the C1
+check's "previous turn" click became the keyboard check at turn 2.
+
+**Looked at** (headless Chromium, 1440 × 900, 1280 × 720, 390 × 844): the replayed open turn and its
+costs, a turn never played at a finished match's end, the hostile turn 1, the deep-JSON dossier
+history, the Thoughts column with agents in a turn, a first visit by a turn link and after Escape,
+a bot's turn, the turn detail on a `--no-costs --no-reasoning` server, the failed-chunk panel.

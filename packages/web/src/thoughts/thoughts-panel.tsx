@@ -80,18 +80,31 @@ function SeatStatus({ seat }: { readonly seat: PlayerId }) {
       </span>
     );
   }
-  if (ent?.inTurn === true) return <Thinking seat={seat} />;
+  if (ent?.inTurn === true) return <Thinking seat={seat} turn={ent.turn} />;
   return null;
 }
 
-/** "thinking… round N": the round the log reached, or a newer one the live socket brought. */
-function Thinking({ seat }: { readonly seat: PlayerId }) {
+/**
+ * "thinking… round N": the round the log reached, or a newer one the live socket brought. It opens
+ * the turn in progress (before any round arrives, and in a replay, it is the only way there), in
+ * the place it already takes: no layout shift as turns open and close.
+ */
+function Thinking({ seat, turn }: { readonly seat: PlayerId; readonly turn: number }) {
   const round = useRoundNow(seat);
   return (
-    <span className="text-primary inline-flex items-center gap-1 text-xs font-medium">
+    <button
+      type="button"
+      data-open-turn={`${seat}:${turn}`}
+      title="Turn detail (in progress)"
+      onPointerEnter={() => LazyTurnSheet.preload()}
+      onFocus={() => LazyTurnSheet.preload()}
+      onClick={() => uiActions.openTurn(seat, turn)}
+      className="text-primary inline-flex items-center gap-1 rounded text-xs font-medium hover:underline"
+    >
       <Brain className="size-3 motion-safe:animate-pulse" aria-hidden="true" />
       thinking…{round === null ? null : ` round ${fmtInt(round + 1)}`}
-    </span>
+      <span className="sr-only">: open the turn detail (in progress)</span>
+    </button>
   );
 }
 

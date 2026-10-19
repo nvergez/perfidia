@@ -16,7 +16,7 @@ import {
   UserRound,
   type LucideIcon,
 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { api } from "../api/client.ts";
 import { GameTime } from "../common/game-time.tsx";
 import { ModelBadge } from "../common/model-badge.tsx";
@@ -40,7 +40,7 @@ import {
   useUi,
   type Published,
 } from "../store/hooks.ts";
-import { controls, loaders } from "../store/session.ts";
+import { controls, isRunningStatus, loaders } from "../store/session.ts";
 import { uiActions, useUiStore, type OpenTurn } from "../store/ui.ts";
 import { liveTopRound, roundNow, type AnnotMsg } from "../store/match.ts";
 import { wakeIcon } from "../thoughts/wake-icons.tsx";
@@ -51,11 +51,11 @@ import {
   callTally,
   findTurnItem,
   fmtLatency,
+  roundsUpTo,
   shapeRounds,
   tokenSum,
   turnMessages,
   whyWords,
-  type RoundRow,
   type TurnRounds,
 } from "./detail.ts";
 import { RoundList } from "./rounds.tsx";
@@ -78,18 +78,32 @@ type Where =
   | { readonly k: "open"; readonly ent: SeatEnt }
   | { readonly k: "later"; readonly played: number }
   | { readonly k: "loading" }
-  | { readonly k: "missing" };
+  /** No such turn: `played` turns in all (a finished match seen at its end), or none logged. */
+  | { readonly k: "missing"; readonly played: number | null };
+
+/** The playhead is at the end of a match that no longer grows: nothing comes later. */
+function useAtFinalEnd(): boolean {
+  return useMatch(
+    (s) =>
+      !isRunningStatus(s.status) &&
+      s.frame !== null &&
+      s.meta !== null &&
+      s.frame.seq >= s.meta.lastSeq,
+  );
+}
 
 function useWhere(seat: PlayerId, turn: number): Where {
   const feed = useFeed();
   const found = useMemo(() => findTurnItem(feed, seat, turn), [feed, seat, turn]);
   const ent = useMatch((s) => s.frame?.seats[seat] ?? null);
   const complete = useMatch((s) => s.loaded.complete);
+  const atEnd = useAtFinalEnd();
   if (found !== null) return { k: "closed", seq: found.seq, item: found.item };
   if (ent === null) return { k: "loading" };
   if (ent.inTurn && ent.turn === turn) return { k: "open", ent };
-  if (ent.turn < turn) return { k: "later", played: ent.turn };
-  return complete ? { k: "missing" } : { k: "loading" };
+  if (ent.turn < turn)
+    return atEnd ? { k: "missing", played: ent.turn } : { k: "later", played: ent.turn };
+  return complete ? { k: "missing", played: null } : { k: "loading" };
 }
 
 function Section({
@@ -279,6 +293,7 @@ function Rounds({
   readonly seat: PlayerId;
   readonly turn: number;
 }) {
+  const following = useMatch((s) => s.mode === "live");
   const loading = annotation === null || annotation.status === "loading";
   // An open turn's first reply may not be logged yet (no annotation): not a failure.
   const failed = annotation?.status === "error" && !open ? annotation.message : null;
@@ -300,7 +315,11 @@ function Rounds({
         </p>
       ) : rounds.rounds.length === 0 ? (
         <p className="text-muted-foreground text-xs">
-          {open ? "No reply has arrived yet in this turn." : "No round was logged for this turn."}
+          {!open
+            ? "No round was logged for this turn."
+            : following
+              ? "No reply has arrived yet in this turn."
+              : "No round logged yet at this point of the match."}
         </p>
       ) : (
         <RoundList rounds={rounds.rounds} published={published} live={open} />
@@ -325,17 +344,24 @@ function Rounds({
 function Costs({
   rounds,
   annotation,
+  laterCostNanoUsd,
   published,
   fake,
   open,
 }: {
   readonly rounds: TurnRounds;
   readonly annotation: TurnAnnotation | null;
+  /** The cost of the rounds after the playhead (a replayed open turn), left out of the spend. */
+  readonly laterCostNanoUsd: number;
   readonly published: Published;
   readonly fake: boolean;
   readonly open: boolean;
 }) {
   const t = rounds.totals;
+  const spent =
+    annotation?.spentNanoUsd === null || annotation?.spentNanoUsd === undefined
+      ? null
+      : Math.max(0, annotation.spentNanoUsd - laterCostNanoUsd);
   return (
     <Section
       title={open ? "Cost and tokens so far" : "Cost and tokens"}
@@ -346,10 +372,7 @@ function Costs({
         <>
           <NotPublished what="Costs" />
           {t.metered === 0 ? null : (
-            <p className="text-muted-foreground text-xs">
-              {plural(t.attempts, "model call")}
-              {t.latencyMs > 0 ? ` · ${fmtLatency(t.latencyMs)} of model time` : null}
-            </p>
+            <p className="text-muted-foreground text-xs">{plural(t.attempts, "model call")}</p>
           )}
         </>
       ) : t.metered === 0 ? (
@@ -373,10 +396,10 @@ function Costs({
             <dt>Output</dt>
             <dd className="tabular-nums">{fmtInt(t.tokens.output)}</dd>
           </dl>
-          {annotation?.spentNanoUsd === null || annotation?.spentNanoUsd === undefined ? null : (
+          {spent === null ? null : (
             <p className="text-muted-foreground text-xs">
-              Spent {fmtUsd(annotation.spentNanoUsd)} so far
-              {annotation.capNanoUsd === null ? null : (
+              Spent {fmtUsd(spent)} so far
+              {annotation?.capNanoUsd === null || annotation?.capNanoUsd === undefined ? null : (
                 <> of a {fmtUsd(annotation.capNanoUsd)} cap</>
               )}
               .
@@ -417,8 +440,12 @@ function useRounds(
   readonly rounds: TurnRounds;
   readonly annotation: ReturnType<typeof useAnnotation>;
   readonly live: readonly AnnotMsg[];
+  /** The cost of the rounds the playhead has not reached (a replayed open turn; else 0). */
+  readonly laterCostNanoUsd: number;
 } {
-  const annotation = useAnnotation(seat, turn, llm && where.k !== "later");
+  // No annotation for a turn that comes later or that the seat never played.
+  const none = where.k === "later" || (where.k === "missing" && where.played !== null);
+  const annotation = useAnnotation(seat, turn, llm && !none);
   const live = useLiveAnnots(seat, turn);
   const mode = useMatch((s) => s.mode);
   const closed = where.k === "closed";
@@ -437,20 +464,28 @@ function useRounds(
   const value = annotation?.status === "ok" ? annotation.value : null;
   const results = where.k === "closed" ? (where.item.results ?? NO_CALLS) : null;
   const ent = where.k === "open" ? where.ent : null;
-  const rounds = useMemo(() => {
+  const shaped = useMemo(() => {
     const all = shapeRounds({ annotation: value, live, results });
-    // Replaying an open turn: only the rounds whose calls the log has reached at the playhead.
-    if (ent === null || mode === "live") return all;
-    const upTo = ent.round ?? -1;
-    const kept: RoundRow[] = all.rounds.filter((r) => r.kind === "round" && r.round <= upTo);
-    return { ...all, rounds: kept };
+    // Replaying an open turn: only the rounds whose calls the log has reached at the playhead,
+    // with their own totals (the annotation holds the whole turn).
+    if (ent === null || mode === "live") return { ...all, laterCostNanoUsd: 0 };
+    return roundsUpTo(all, ent.round);
   }, [value, live, results, ent, mode]);
-  return { rounds, annotation, live };
+  return { rounds: shaped, annotation, live, laterCostNanoUsd: shaped.laterCostNanoUsd };
 }
 
 /** "Go to this turn": finds the turn's end in the feed route and seeks just after it. */
-function GoToTurn({ seat, turn }: { readonly seat: PlayerId; readonly turn: number }) {
+function GoToTurn({
+  seat,
+  name,
+  turn,
+}: {
+  readonly seat: PlayerId;
+  readonly name: string;
+  readonly turn: number;
+}) {
   const match = useMatch((s) => s.id);
+  const running = useMatch((s) => isRunningStatus(s.status));
   const after = useMatch((s) => s.frame?.seq ?? -1);
   const [state, setState] = useState<"idle" | "busy" | "none" | "error">("idle");
   const go = async (): Promise<void> => {
@@ -497,7 +532,11 @@ function GoToTurn({ seat, turn }: { readonly seat: PlayerId; readonly turn: numb
         Go to the end of this turn
       </Button>
       {state === "none" ? (
-        <p className="text-muted-foreground text-xs">This turn has not ended in the log yet.</p>
+        <p className="text-muted-foreground text-xs">
+          {running
+            ? "This turn has not ended in the log yet."
+            : `${name} played no turn ${fmtInt(turn)} in this match.`}
+        </p>
       ) : state === "error" ? (
         <p className="text-muted-foreground text-xs">The match's feed could not be read.</p>
       ) : null}
@@ -519,7 +558,8 @@ function Body({
   const handedOff = useMatch((s) => (s.frame?.seats[seat]?.handoff ?? null) !== null);
   const llm = where.k === "closed" ? where.item.llm : info.kind === "llm" && !handedOff;
   const fake = isFakeSeat(info);
-  const { rounds, annotation, live } = useRounds(seat, turn, where, llm);
+  const following = useMatch((s) => s.mode === "live");
+  const { rounds, annotation, live, laterCostNanoUsd } = useRounds(seat, turn, where, llm);
   const feed = useFeed();
   const item = where.k === "closed" ? where.item : null;
   const messages = useMemo(
@@ -543,9 +583,11 @@ function Body({
         <p>
           {where.k === "later"
             ? `At this point of the match ${info.name} has played ${plural(where.played, "turn")}: turn ${fmtInt(turn)} comes later.`
-            : `The log has no end for turn ${fmtInt(turn)} of ${info.name}.`}
+            : where.played !== null
+              ? `${info.name} played ${plural(where.played, "turn")} in this match: there is no turn ${fmtInt(turn)}.`
+              : `The log has no end for turn ${fmtInt(turn)} of ${info.name}.`}
         </p>
-        {where.k === "later" ? <GoToTurn seat={seat} turn={turn} /> : null}
+        {where.k === "later" ? <GoToTurn seat={seat} name={info.name} turn={turn} /> : null}
       </div>
     );
   }
@@ -563,8 +605,9 @@ function Body({
         >
           <Brain className="size-4 shrink-0 motion-safe:animate-pulse" aria-hidden="true" />
           <span>
-            In progress{roundOf(where.ent, live)}: rounds appear as their replies arrive; the
-            verdicts, the thought and the ending come when the turn ends.
+            {following
+              ? `In progress${roundOf(where.ent, live)}: rounds appear as their replies arrive; the verdicts, the thought and the ending come when the turn ends.`
+              : `In progress at this point of the match${roundOf(where.ent, live)}: play on to see its verdicts, its thought and how it ends.`}
           </span>
         </p>
       ) : null}
@@ -572,7 +615,7 @@ function Body({
         <p className="text-muted-foreground flex items-start gap-2 text-sm" data-testid="turn-bot">
           <Bot className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
           {info.kind === "bot"
-            ? "A scripted bot plays this seat: no model, so no reasoning, rounds or costs. What it did is in the log."
+            ? "A scripted bot plays this seat: no model, so no reasoning, rounds or costs. Its moves appear in the feed and on the map."
             : "A bot played this turn (the seat was handed over): no model call, so no reasoning or costs."}
         </p>
       )}
@@ -601,6 +644,9 @@ function Body({
               ? "."
               : `; rejected: ${item.rejected.map((r) => `${r.code} ×${fmtInt(r.count)}`).join(", ")}.`}
           </p>
+          <p className="text-muted-foreground text-xs">
+            Orders and messages count as actions; what it looked at does not.
+          </p>
         </Section>
       )}
       {item === null ? null : <Ending item={item} />}
@@ -608,6 +654,7 @@ function Body({
         <Costs
           rounds={rounds}
           annotation={annotation?.status === "ok" ? annotation.value : null}
+          laterCostNanoUsd={laterCostNanoUsd}
           published={published}
           fake={fake}
           open={open}
@@ -634,10 +681,19 @@ function Neighbours({ seat, turn }: { readonly seat: PlayerId; readonly turn: nu
   const next = useRef<HTMLButtonElement>(null);
   const noPrev = turn <= 1;
   const noNext = turn >= opened;
-  // The button about to be disabled hands the focus over first (a disabled button drops it).
-  const go = (to: number): void => {
-    if (to <= 1) next.current?.focus();
-    else if (to >= opened) prev.current?.focus();
+  // From a turn past the last one opened, back to that one (not through turns that do not exist).
+  const before = Math.max(1, Math.min(turn - 1, opened));
+  const dossier = useRef<HTMLButtonElement>(null);
+  // The button about to be disabled hands the focus over first (a disabled button drops it): to
+  // the other one, or to "Dossier" when both will be.
+  const go = (to: number, from: "prev" | "next"): void => {
+    const prevOff = to <= 1;
+    const nextOff = to >= opened;
+    if (from === "prev" ? prevOff : nextOff) {
+      const other =
+        from === "prev" ? (nextOff ? null : next.current) : prevOff ? null : prev.current;
+      (other ?? dossier.current)?.focus();
+    }
     uiActions.openTurn(seat, to);
   };
   return (
@@ -648,9 +704,9 @@ function Neighbours({ seat, turn }: { readonly seat: PlayerId; readonly turn: nu
         variant="ghost"
         className="h-7 px-2 text-xs"
         disabled={noPrev}
-        onClick={() => go(turn - 1)}
+        onClick={() => go(before, "prev")}
       >
-        <ChevronLeft className="size-3.5" aria-hidden="true" /> Turn {fmtInt(Math.max(1, turn - 1))}
+        <ChevronLeft className="size-3.5" aria-hidden="true" /> Turn {fmtInt(before)}
       </Button>
       <Button
         ref={next}
@@ -658,11 +714,12 @@ function Neighbours({ seat, turn }: { readonly seat: PlayerId; readonly turn: nu
         variant="ghost"
         className="h-7 px-2 text-xs"
         disabled={noNext}
-        onClick={() => go(turn + 1)}
+        onClick={() => go(turn + 1, "next")}
       >
         Turn {fmtInt(turn + 1)} <ChevronRight className="size-3.5" aria-hidden="true" />
       </Button>
       <Button
+        ref={dossier}
         size="sm"
         variant="ghost"
         className="ml-auto h-7 px-2 text-xs"
@@ -694,6 +751,14 @@ export function TurnSheet() {
   const shown = useShown(open);
   const seat = useSeat(shown?.seat ?? "");
   const known = useMatch((s) => s.meta !== null);
+  const content = useRef<HTMLDivElement>(null);
+  const which = shown === null ? null : `${shown.seat}:${shown.turn}`;
+  const last = useRef(which);
+  // Another turn starts at its top.
+  useLayoutEffect(() => {
+    if (last.current !== which && content.current !== null) content.current.scrollTop = 0;
+    last.current = which;
+  }, [which]);
   return (
     <Sheet
       open={open !== null}
@@ -701,7 +766,11 @@ export function TurnSheet() {
         if (!o) uiActions.closeTurn();
       }}
     >
-      <SheetContent data-testid="turn-sheet" className="w-full overflow-y-auto sm:max-w-xl">
+      <SheetContent
+        ref={content}
+        data-testid="turn-sheet"
+        className="w-full overflow-y-auto sm:max-w-xl"
+      >
         <SheetHeader className="gap-1">
           <SheetTitle className="flex min-w-0 items-center gap-2 pr-6 text-lg">
             {seat === null || shown === null ? (

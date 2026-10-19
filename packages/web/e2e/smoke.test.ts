@@ -5,10 +5,11 @@
 // proposals too, re-hashed), and a run written line by line with its side files while a page
 // follows it live (its reasoning round by round, Pass C's C3); a second server, over a copy of the
 // fake run, publishes neither costs nor reasoning. Every page records CSP violations and console
-// errors; the DOM is checked for HTML sinks. Opt-in: `bun run test:e2e`
+// errors; the DOM is checked for HTML sinks and bidi controls. Opt-in: `bun run test:e2e`
 // (PERFIDIA_E2E=1); skipped with a printed reason otherwise, or when Chromium is not installed. The
-// server listens on `PERFIDIA_E2E_PORT` (default: any free port). Budget: 20 s. The helpers are in
-// `kit.ts`; Pass C's checks in `checks/*.ts`, one file per feature (docs/phase3.md §16.4).
+// servers listen on `PERFIDIA_E2E_PORT` and `PERFIDIA_E2E_PORT2` (default: any free port). Budget:
+// 20 s. The helpers are in `kit.ts`; Pass C's checks in `checks/*.ts`, one file per feature
+// (docs/phase3.md §16.4).
 
 // oxlint-disable no-await-in-loop -- browser steps follow each other on purpose
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
@@ -37,6 +38,9 @@ import {
   errors,
   focused,
   HOSTILE,
+  HOSTILE_LABEL,
+  HOSTILE_LOGGED_TOOL,
+  HOSTILE_TOOL,
   HOUR,
   isObject,
   livePlan,
@@ -61,6 +65,9 @@ let stopAll: (() => Promise<void>) | null = null;
 /** The build's JavaScript, gzipped: the initial load (under its budget) and what loads on demand. */
 let bundle = { initial: 0, lazy: 0, budget: 0 };
 const started = performance.now();
+
+/** Hostile text as the spectator fold serves it: the bidi override removed. */
+const cleaned = (s: string): string => s.replace(HOSTILE.bidi, "gnp.exe");
 
 /** The animation of the element `selector` finds (a string: no DOM library in this project). */
 const animation = (selector: string): string =>
@@ -144,7 +151,12 @@ describe.skipIf(reason !== null)("the spectator web app in Chromium", () => {
     const privateRuns = join(root, "runs-private");
     mkdirSync(privateRuns);
     cpSync(join(stage, "fake1"), join(privateRuns, "fake1"), { recursive: true });
-    const p = serve(privateRuns, "cache-private", false, 0);
+    const p = serve(
+      privateRuns,
+      "cache-private",
+      false,
+      Number(process.env.PERFIDIA_E2E_PORT2 ?? "0"),
+    );
     const browser = await chromium.launch({ headless: true });
     // The fake runs folded and ended (the hostile copy still verifies: Level E holds); the war
     // golden folds on while the tests of the fake runs go first.
@@ -217,8 +229,13 @@ describe.skipIf(reason !== null)("the spectator web app in Chromium", () => {
     const text = (await sheet.textContent()) ?? "";
     expect(text).toContain(HOSTILE.js);
     expect(text).toContain(HOSTILE.url);
-    // Hovering what an attribute payload would have hooked.
-    await sheet.getByText(HOSTILE.attr.trim(), { exact: false }).first().hover();
+    // Hovering what an attribute payload would have hooked (the events a hover sends, dispatched:
+    // no wait for the sheet's opening slide to end).
+    const hooked = sheet.getByText(HOSTILE.attr.trim(), { exact: false }).first();
+    for (const type of ["mouseover", "mouseenter", "mousemove"]) await hooked.dispatchEvent(type);
+    // The notebook's history: each version's changed lines, markup included, as text.
+    const history = sheet.getByTestId("notebook-history");
+    await history.locator("[data-diff=add]").filter({ hasText: HOSTILE.img }).first().waitFor();
     await domIsClean(page);
     // Messages and proposals (re-hashed into the log: Level E still holds).
     await page.keyboard.press("Escape");
@@ -236,6 +253,18 @@ describe.skipIf(reason !== null)("the spectator web app in Chromium", () => {
       .filter({ hasText: `${HOSTILE.attr} ${HOSTILE.url}` })
       .first()
       .waitFor();
+    await domIsClean(page);
+    // p1's turn 1 in detail (through the URL's history): its reasoning, a tool name its reply sent
+    // and one its read logged, a refusal's category and an error's kind, all text, cleaned.
+    await page.evaluate(
+      `history.pushState(null, "", "/m/hostile?turn=p1.1"); dispatchEvent(new PopStateEvent("popstate"))`,
+    );
+    const rounds = page.getByTestId("turn-sheet").getByTestId("turn-rounds");
+    await rounds.getByText(`${HOSTILE.script} reasoning`, { exact: false }).first().waitFor();
+    const shown = (await rounds.textContent()) ?? "";
+    for (const s of [HOSTILE_TOOL, HOSTILE_LOGGED_TOOL, `refused (${HOSTILE_LABEL})`]) {
+      expect([s, shown.includes(cleaned(s))]).toEqual([s, true]);
+    }
     await domIsClean(page);
   }, 20_000);
 
@@ -356,19 +385,34 @@ describe.skipIf(reason !== null)("the spectator web app in Chromium", () => {
     expect(await said.locator("li").count()).toBeGreaterThanOrEqual(1);
     const thinking = betrayal.getByRole("region", { name: "What they were thinking" });
     expect(await thinking.locator("li").count()).toBeGreaterThanOrEqual(1);
+    // Each of the betrayer's thoughts opens its turn's detail.
+    expect(await thinking.locator('[data-open-turn^="p2:"]').count()).toBeGreaterThanOrEqual(1);
     // The dossiers at D4 12:51: the betrayal counted once on each side; score and cities hour by
     // hour up to the playhead (84 hourly points). The victim's dossier is a click away.
     await page.locator("[data-testid=leaderboard] [data-player=p2] button").first().click();
     const dossier = page.getByTestId("player-sheet");
     const record = dossier.getByTestId("seat-record");
     await record.filter({ hasText: "Betrayals committed1Betrayals suffered0" }).waitFor();
+    expect((await record.textContent()) ?? "").toContain("Attacked its ally");
+    expect(await focused(page)).toBe("div[data-testid=player-sheet]");
     const sparks = dossier.locator("[data-testid=hourly] svg path");
     expect(await sparks.count()).toBe(2);
     expect(((await sparks.first().getAttribute("d")) ?? "").match(/[ML]/g)?.length).toBe(84);
-    // A click event: no wait for the sheet's opening slide to end.
+    // All 27 notebook versions shown and the sheet scrolled down, then the victim's dossier (a click
+    // event: no wait for the opening slide): it starts at its top, with its own state (8 of 17).
+    const versions = dossier.locator("[data-testid=notebook-history] > ol > li");
+    await dossier.getByRole("button", { name: "Show 19 older versions" }).dispatchEvent("click");
+    expect(await versions.count()).toBe(27);
+    const scrollTop = `document.querySelector("[data-testid=player-sheet]").scrollTop`;
+    await page.evaluate(`${scrollTop} = 400`);
+    expect(Number(await page.evaluate(scrollTop))).toBeGreaterThan(0);
     await record.locator("button[data-player=p3]").dispatchEvent("click");
     await record.filter({ hasText: "Betrayals committed0Betrayals suffered1" }).waitFor();
+    expect((await record.textContent()) ?? "").toContain("Attacked by its ally");
     expect((await dossier.textContent()) ?? "").toContain("Dossier of Turtle (bot) (p3)");
+    expect(Number(await page.evaluate(scrollTop))).toBe(0);
+    await dossier.getByTestId("notebook-history").waitFor();
+    expect(await versions.count()).toBe(8);
 
     await domIsClean(page);
   }, 40_000);

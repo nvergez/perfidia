@@ -40,7 +40,7 @@ import {
   type TurnCall,
   type Verified,
 } from "@perfidia/protocol";
-import { cleanText, cutText } from "../clean.ts";
+import { TOOL_NAME_MAX_CHARS, cleanText, cutText } from "../clean.ts";
 import { logIdOf, timelineIdOf } from "../version.ts";
 import { EntityCache, ValueCache } from "./diff.ts";
 import { FeedState, type FeedDraft, type FeedEnv } from "./feed.ts";
@@ -81,8 +81,6 @@ import { SeatSeries } from "./series.ts";
 export const KEYFRAME_STEPS = 1000;
 /** The longest public thought kept. */
 export const THOUGHT_MAX_CHARS = 400;
-/** The longest tool name kept in a turn's results (an agent may name any tool). */
-export const TOOL_NAME_MAX_CHARS = 64;
 /** The seat whose view `publicCity` is asked for (its output must not depend on the viewer). */
 const VIEWER: PlayerId = "p1";
 

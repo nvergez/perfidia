@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import type { TurnCall } from "@perfidia/protocol";
-import { TOOL_NAME_MAX_CHARS, addResult } from "./fold.ts";
+import { TOOL_NAME_MAX_CHARS } from "../clean.ts";
+import { addResult } from "./fold.ts";
 
 // A turn's results (`TurnItem.results`, docs/phase3.md §16.4): one entry per call, a batch's later
 // items joined to it, rejections counted by code once each, a long or odd tool name cleaned and cut.

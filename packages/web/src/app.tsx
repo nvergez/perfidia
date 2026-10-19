@@ -20,6 +20,7 @@ export function App() {
             pair={route.pair}
             reel={route.reel}
             start={route.start}
+            linkedTurn={route.turn !== null}
           />
           <TurnLink key={`turn:${route.id}`} id={route.id} />
         </>

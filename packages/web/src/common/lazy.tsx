@@ -15,11 +15,12 @@ import { Skeleton } from "../ui/skeleton.tsx";
 // Parts of the app that load on demand (docs/phase3.md §16): each is a dynamic `import()` chunk
 // (Bun.build splitting), so the initial load stays within its budget. `lazyComponent` wraps a
 // chunk's component: it starts the import when first rendered, shows a skeleton while it loads
-// (after a short delay, so a fast load does not flash), an error with "Retry" when the chunk cannot
-// be loaded, and the same error when the loaded part fails to render (an error boundary: one
-// broken panel never takes the page down). `preload()` starts the import early (a hover, an idle
-// moment); `useLatch` keeps an overlay mounted once it has been opened, so its closing animation
-// and focus return still run.
+// (after a short delay, so a fast load does not flash), an error with "Reload the page" when the
+// chunk cannot be loaded (the browser keeps a failed module fetch: importing it again fails at once,
+// `lib/loader.ts`), and an error with "Retry" when the loaded part fails to render (an error
+// boundary: one broken panel never takes the page down). `preload()` starts the import early (a
+// hover, an idle moment; its failure shows nothing until the part is opened); `useLatch` keeps an
+// overlay mounted once it has been opened, so its closing animation and focus return still run.
 //
 //   const PlayerSheet = lazyComponent(
 //     () => import("../players/player-sheet.tsx").then((m) => m.PlayerSheet),
@@ -81,7 +82,10 @@ function Placeholder({ options }: { readonly options: LazyOptions }) {
   );
 }
 
-/** "Could not be loaded" (the chunk) or "failed to show" (a render error), with Retry. */
+/**
+ * "Could not be loaded" (the chunk: only a page load fetches it again) with "Reload the page", or
+ * "failed to show" (a render error) with "Retry".
+ */
 export function LazyProblem({
   options,
   crashed,
@@ -89,7 +93,7 @@ export function LazyProblem({
 }: {
   readonly options: LazyOptions;
   readonly crashed: boolean;
-  readonly onRetry: () => void;
+  readonly onRetry?: () => void;
 }) {
   const [closed, setClosed] = useState(false);
   if (closed) return null;
@@ -110,13 +114,15 @@ export function LazyProblem({
         {crashed ? "failed to show." : "could not be loaded (the connection, or a newer version)."}
       </span>
       <span className="flex gap-2">
-        <button
-          type="button"
-          className="text-primary hover:text-primary/80 font-medium"
-          onClick={onRetry}
-        >
-          Retry
-        </button>
+        {onRetry === undefined ? null : (
+          <button
+            type="button"
+            className="text-primary hover:text-primary/80 font-medium"
+            onClick={onRetry}
+          >
+            Retry
+          </button>
+        )}
         {crashed ? null : (
           <button
             type="button"
@@ -196,13 +202,13 @@ export function lazyComponent<P extends object>(
       );
     }
     if (state.status === "failed") {
-      return <LazyProblem options={options} crashed={false} onRetry={() => void loader.load()} />;
+      return <LazyProblem options={options} crashed={false} />;
     }
     return <Placeholder options={options} />;
   }
   return Object.assign(Lazy, {
     preload: (): void => {
-      void loader.load();
+      loader.preload();
     },
     displayName: `Lazy(${options.what})`,
   });

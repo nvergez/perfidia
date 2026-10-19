@@ -371,7 +371,7 @@ function useNotebook(dossier: PlayerDossier | null): Notebook & { readonly n: nu
 }
 
 function NotebookBox({ text }: { readonly text: string }) {
-  const shown = layout(text);
+  const shown = useMemo(() => layout(text), [text]);
   return (
     <>
       {shown.json ? (
@@ -427,6 +427,8 @@ export function NotebookAt({ dossier }: { readonly dossier: PlayerDossier | null
 const VERSIONS_SHOWN = 8;
 const VERSIONS_MORE = 20;
 const LINES_SHOWN = 14;
+/** Lines each "more" adds to an opened version (a rewrite can run to thousands of lines). */
+const LINES_MORE = 400;
 
 function DiffRow({ line }: { readonly line: DiffLine }) {
   const mark = line.kind === "add" ? "+" : line.kind === "del" ? "−" : " ";
@@ -494,14 +496,15 @@ function Version({
   /** The oldest version kept, whose predecessor is not: shown whole. */
   readonly earliestKept: boolean;
 }) {
-  const [all, setAll] = useState(false);
+  const [limit, setLimit] = useState(LINES_SHOWN);
   const id = useId();
   const rows = useMemo(() => rowsOf(text, prev, earliestKept), [text, prev, earliestKept]);
   const stats = useMemo(
     () => diffStats(rows.flatMap((r) => (r.line === null ? [] : [r.line]))),
     [rows],
   );
-  const shown = all ? rows : rows.slice(0, LINES_SHOWN);
+  const shown = rows.slice(0, limit);
+  const hidden = rows.length - shown.length;
   const what = first
     ? "first version"
     : earliestKept
@@ -544,14 +547,18 @@ function Version({
           )}
         </div>
       )}
-      {!all && rows.length > LINES_SHOWN ? (
+      {hidden > 0 ? (
         <button
           type="button"
           aria-controls={id}
-          onClick={() => setAll(true)}
+          onClick={() => setLimit((l) => l + LINES_MORE)}
           className="text-primary hover:text-primary/80 w-fit text-xs font-medium"
         >
-          {earliestKept ? "Show it all" : "Show the whole change"}
+          {hidden > LINES_MORE
+            ? `Show ${fmtInt(LINES_MORE)} more lines (${fmtInt(hidden)} not shown)`
+            : earliestKept
+              ? "Show it all"
+              : "Show the whole change"}
         </button>
       ) : null}
     </li>

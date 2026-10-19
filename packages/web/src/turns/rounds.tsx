@@ -92,7 +92,7 @@ function Meter({ r, published }: { readonly r: RoundRow; readonly published: Pub
   if (published.costs && (m.costNanoUsd > 0 || tokenSum(m.tokens) > 0)) {
     parts.push(fmtUsd(m.costNanoUsd), `${fmtInt(tokenSum(m.tokens))} tokens`);
   }
-  if (m.latencyMs > 0) parts.push(fmtLatency(m.latencyMs));
+  if (published.costs && m.latencyMs > 0) parts.push(fmtLatency(m.latencyMs));
   if (m.attempts > 1) parts.push(`${fmtInt(m.attempts)} attempts`);
   if (m.stop !== null && m.stop !== "tool_use" && m.stop !== "end_turn")
     parts.push(`stop: ${m.stop}`);
@@ -130,11 +130,14 @@ function Round({
         <span>{roundTitle(r)}</span>
         <Meter r={r} published={published} />
         {r.meter?.refusal === null || r.meter?.refusal === undefined ? null : (
-          <span className="text-destructive normal-case">refused ({r.meter.refusal})</span>
+          <span className="text-destructive normal-case">
+            refused (<bdi>{r.meter.refusal}</bdi>)
+          </span>
         )}
         {r.meter === null || r.meter.errors.length === 0 ? null : (
           <span className="text-destructive font-normal tracking-normal normal-case">
-            {plural(r.meter.errors.length, "failed attempt")}: {r.meter.errors.join(", ")}
+            {plural(r.meter.errors.length, "failed attempt")}:{" "}
+            <bdi>{r.meter.errors.join(", ")}</bdi>
           </span>
         )}
       </h4>

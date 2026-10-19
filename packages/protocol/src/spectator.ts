@@ -181,8 +181,8 @@ export const MatchMetaSchema = z.strictObject({
   verified: VerifiedSchema,
   /**
    * What the server publishes of the agents' side files (its `--no-costs` and `--no-reasoning`):
-   * when `costs` is false, annotations carry no cost, tokens, spend or cap (zeros and nulls); when
-   * `reasoning` is false, no reasoning summaries and no reply text (empty lists).
+   * when `costs` is false, annotations carry no cost, tokens, model time, spend or cap (zeros and
+   * nulls); when `reasoning` is false, no reasoning summaries and no reply text (empty lists).
    */
   published: z.strictObject({ costs: z.boolean(), reasoning: z.boolean() }),
 });

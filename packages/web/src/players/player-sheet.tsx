@@ -9,7 +9,7 @@ import {
   Swords,
   UserRound,
 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { GameTime } from "../common/game-time.tsx";
 import { ModelBadge } from "../common/model-badge.tsx";
 import { NotPublished } from "../common/not-published.tsx";
@@ -278,12 +278,24 @@ function Body({ seat }: { readonly seat: SeatInfo }) {
 export function PlayerSheet() {
   const selected = useUi((s) => s.selectedPlayer);
   const seat = useSeat(selected ?? "");
+  const content = useRef<HTMLDivElement>(null);
+  const shown = seat?.seat ?? null;
+  const last = useRef(shown);
+  // Another player's dossier starts at its top (its body, keyed by seat, starts with its own state).
+  useLayoutEffect(() => {
+    if (last.current !== shown && content.current !== null) content.current.scrollTop = 0;
+    last.current = shown;
+  }, [shown]);
   return (
     <Sheet
       open={selected !== null}
       onOpenChange={(open) => (open ? undefined : uiActions.closePlayer())}
     >
-      <SheetContent data-testid="player-sheet" className="w-full overflow-y-auto sm:max-w-md">
+      <SheetContent
+        ref={content}
+        data-testid="player-sheet"
+        className="w-full overflow-y-auto sm:max-w-md"
+      >
         <SheetHeader>
           <SheetTitle className="flex items-center gap-2 pr-6 text-lg">
             {seat === null ? (

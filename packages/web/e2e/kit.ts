@@ -167,6 +167,17 @@ export function rehash(path: string, extra?: ExtraMessage): void {
 const hostileMessage = (text: string): string => `${HOSTILE.img} ${HOSTILE.js} ${text}`;
 const hostileProposal = (text: string): string => `${HOSTILE.attr} ${HOSTILE.url} ${text}`;
 
+/** Hostile names where the harness and the log hold tool names and labels (p1's turn 1). */
+export const HOSTILE_TOOL = `${HOSTILE.img}${HOSTILE.bidi}`;
+export const HOSTILE_LOGGED_TOOL = `${HOSTILE.script}${HOSTILE.bidi}`;
+export const HOSTILE_LABEL = `<b>cat</b>${HOSTILE.bidi}`;
+
+/**
+ * Plants hostile text in a copy of a fake run: p1's profile, messages and proposals (re-hashed),
+ * p1's thoughts and notes (each note a new version), its replies' reasoning and text; in p1's
+ * turn 1, a tool name in its first reply and in its first read (`obs`) line, and a refusal's
+ * category and an error's kind in its first model call.
+ */
 export function plantHostile(dir: string): void {
   const seatsPath = join(dir, "seats.json");
   const seats: unknown = JSON.parse(readFileSync(seatsPath, "utf8"));
@@ -179,6 +190,8 @@ export function plantHostile(dir: string): void {
     seat.profile.style = `${HOSTILE.bidi}${HOSTILE.attr}`;
   }
   writeFileSync(seatsPath, JSON.stringify(seats, null, 2));
+  let notes = 0;
+  let obs = false;
   editLines(join(dir, "match.jsonl"), (o) => {
     const a = o.a;
     if (o.k === "act" && isObject(a) && typeof a.text === "string") {
@@ -200,7 +213,13 @@ export function plantHostile(dir: string): void {
       return true;
     }
     if (o.k === "note" && typeof o.text === "string") {
-      o.text = `${HOSTILE.attr} ${HOSTILE.js} ${HOSTILE.bidi}`;
+      notes += 1;
+      o.text = `${HOSTILE.attr} ${HOSTILE.js} ${HOSTILE.bidi}\n${HOSTILE.img} version ${notes}`;
+      return true;
+    }
+    if (o.k === "obs" && o.turn === 1 && !obs) {
+      obs = true;
+      o.tool = HOSTILE_LOGGED_TOOL;
       return true;
     }
     return false;
@@ -215,6 +234,17 @@ export function plantHostile(dir: string): void {
     if (o.seat !== "p1") return false;
     o.reasoning = [`${HOSTILE.script} reasoning ${HOSTILE.url}`];
     o.text = [HOSTILE.img];
+    const first: unknown = Array.isArray(o.calls) ? o.calls[0] : undefined;
+    if (o.turn === 1 && o.round === 0 && isObject(first)) first.name = HOSTILE_TOOL;
+    return true;
+  });
+  let call = false;
+  editLines(join(dir, "llm_calls.jsonl"), (o) => {
+    if (o.k !== "llm_call" || o.seat !== "p1" || o.turn !== 1 || call) return false;
+    call = true;
+    o.stop = "refusal";
+    o.refusal = { category: HOSTILE_LABEL, explanation: "not for viewers", recommendedModel: null };
+    o.error = { kind: HOSTILE_LABEL, status: null, message: "not for viewers" };
     return true;
   });
 }
@@ -371,7 +401,8 @@ export async function seekWithKeys(page: Page, t: number): Promise<void> {
 
 // Run in the page (a string: this project type-checks without the DOM library, see
 // tsconfig.e2e.json): what would show HTML made from strings, scripts, links out of the app, a
-// handler planted by hostile text that ran, or a CSP violation.
+// bidi control that reached the text (the spectator text is cleaned of them), a handler planted by
+// hostile text that ran, or a CSP violation.
 const DIRTY_DOM = `(() => {
   const out = [];
   for (const el of document.querySelectorAll("*")) {
@@ -389,12 +420,17 @@ const DIRTY_DOM = `(() => {
     const href = a.getAttribute("href") ?? "";
     if (!href.startsWith("/") || href.startsWith("//")) out.push("link " + href);
   }
+  const walk = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+  while (walk.nextNode()) {
+    const v = walk.currentNode.nodeValue ?? "";
+    if (/[\\u202A-\\u202E\\u2066-\\u2069]/.test(v)) out.push("bidi control in text: " + v.slice(0, 40));
+  }
   if (window.__xss !== undefined) out.push("planted handler ran: " + window.__xss);
   for (const v of window.__csp ?? []) out.push("CSP violation: " + v);
   return out;
 })()`;
 
-/** No HTML made from strings, no script, frame or link out of the app, no CSP violation. */
+/** No HTML made from strings, no script, frame or link out of the app, no bidi control, no CSP violation. */
 export async function domIsClean(page: Page): Promise<void> {
   const bad: unknown = await page.evaluate(DIRTY_DOM);
   expect(bad).toEqual([]);

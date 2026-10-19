@@ -18,10 +18,30 @@ export function countUntil(xs: readonly { readonly t: number }[], t: number): nu
   return lo;
 }
 
-/** A notebook's text as shown: a JSON notebook indented (a bot's memory), else as written. */
-export function layout(text: string): { readonly text: string; readonly json: boolean } {
+export interface Layout {
+  readonly text: string;
+  readonly json: boolean;
+}
+
+/** The last texts laid out: a version's text is laid out again as the next version's `prev`. */
+const LAYOUTS = new Map<string, Layout>();
+const LAYOUTS_KEPT = 64;
+
+/**
+ * A notebook's text as shown: a JSON notebook indented (a bot's memory, within the bounds of
+ * `prettyJson`), else as written. Remembered for the last 64 texts.
+ */
+export function layout(text: string): Layout {
+  const held = LAYOUTS.get(text);
+  if (held !== undefined) return held;
   const pretty = prettyJson(text);
-  return pretty === null ? { text, json: false } : { text: pretty, json: true };
+  const out: Layout = pretty === null ? { text, json: false } : { text: pretty, json: true };
+  if (LAYOUTS.size >= LAYOUTS_KEPT) {
+    const oldest = LAYOUTS.keys().next();
+    if (oldest.done !== true) LAYOUTS.delete(oldest.value);
+  }
+  LAYOUTS.set(text, out);
+  return out;
 }
 
 export type DiffKind = "same" | "add" | "del";

@@ -313,6 +313,25 @@ export function shapeRounds({ annotation, live, results }: RoundSources): TurnRo
   return { rounds: rows, verdicts: true, totals: totalsOf(rows) };
 }
 
+/**
+ * An open turn replayed with the playhead inside it: the rounds the log has reached (`upTo`, the
+ * round of the seat's last logged call; null before any), with their totals, and the cost of the
+ * rounds left out (later rounds, the closing thought call): the seat's spend after the turn less
+ * that cost is its spend at the playhead.
+ */
+export function roundsUpTo(
+  all: TurnRounds,
+  upTo: number | null,
+): TurnRounds & { readonly laterCostNanoUsd: number } {
+  const kept: RoundRow[] = [];
+  let later = 0;
+  for (const r of all.rounds) {
+    if (r.kind === "round" && upTo !== null && r.round <= upTo) kept.push(r);
+    else later += r.meter?.costNanoUsd ?? 0;
+  }
+  return { ...all, rounds: kept, totals: totalsOf(kept), laterCostNanoUsd: later };
+}
+
 export function totalsOf(rows: readonly RoundRow[]): TurnTotals {
   const tokens = { ...ZERO_TOKENS };
   let costNanoUsd = 0;

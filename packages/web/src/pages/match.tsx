@@ -40,6 +40,8 @@ export interface MatchPageProps {
   readonly pair: readonly [PlayerId, PlayerId] | null;
   readonly reel: boolean;
   readonly start: boolean;
+  /** The URL names a turn (`?turn=`): its detail opens first, "How to watch" after it closes. */
+  readonly linkedTurn?: boolean;
 }
 
 /** A column that scrolls on its own (desktop and tablet). */
@@ -418,13 +420,14 @@ function Overlays() {
   );
 }
 
-export function MatchPage({ id, pair, reel, start }: MatchPageProps) {
+export function MatchPage({ id, pair, reel, start, linkedTurn = false }: MatchPageProps) {
   const layout = useLayout();
   const phase = useMatch((s) => s.phase);
   const hasFrame = useMatch((s) => s.frame !== null);
   const title = useMatch((s) => s.meta?.title ?? null);
   const seen = useUi((s) => s.onboardingSeen);
   const howOpen = useUi((s) => s.howToWatchOpen);
+  const turnOpen = useUi((s) => s.openTurn !== null);
 
   useEffect(() => {
     uiActions.resetForMatch();
@@ -436,9 +439,11 @@ export function MatchPage({ id, pair, reel, start }: MatchPageProps) {
     uiActions.syncPair(pair);
   }, [pair]);
 
+  // A first visit opens "How to watch"; one that arrives by a shared turn link sees that turn
+  // first, and "How to watch" once its detail is closed (never two sheets stacked).
   useEffect(() => {
-    if (phase === "ready" && !seen) uiActions.openHowToWatch();
-  }, [phase, seen]);
+    if (phase === "ready" && !seen && !linkedTurn && !turnOpen) uiActions.openHowToWatch();
+  }, [phase, seen, linkedTurn, turnOpen]);
 
   useEffect(() => {
     if (reel && phase === "ready" && !howOpen && seen) uiActions.startReel();

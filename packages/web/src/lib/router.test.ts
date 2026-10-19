@@ -45,7 +45,9 @@ describe("the router", () => {
 
   test("a turn is a player id and a turn number", () => {
     expect(parseTurnRef("p2.48")).toEqual({ seat: "p2", turn: 48 });
-    expect(parseTurnRef("p12.0")).toEqual({ seat: "p12", turn: 0 });
+    expect(parseTurnRef("p12.1")).toEqual({ seat: "p12", turn: 1 });
+    expect(parseTurnRef("p12.0")).toBeNull();
+    expect(parseTurnRef("p12.007")).toBeNull();
     for (const bad of ["p2", "p0.4", "p2.-1", "p2.4.5", "x2.4", "p2.12345678", "p2.4 ", ""])
       expect(parseTurnRef(bad)).toBeNull();
     expect(parseTurnRef(null)).toBeNull();

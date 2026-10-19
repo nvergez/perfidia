@@ -8,7 +8,7 @@
 
 // oxlint-disable no-await-in-loop -- the requests, pages and chunks follow each other on purpose (one cursor, one writer)
 import { describe, expect, test } from "bun:test";
-import { appendFileSync, renameSync, symlinkSync, writeFileSync } from "node:fs";
+import { appendFileSync, readdirSync, renameSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { ClockSpec } from "@perfidia/protocol";
 import { ServerMsgSchema, type ServerMsg, type Step } from "@perfidia/protocol/spectator";
@@ -30,7 +30,8 @@ import {
   readFirstLine,
   readLastLine,
 } from "./store/tail.ts";
-import { STEPS_PAGE, Timeline } from "./timeline/timeline.ts";
+import { CACHE_VERSION_TAG, TimelineCache } from "./timeline/cache.ts";
+import { STEPS_PAGE, Timeline, summaryOf } from "./timeline/timeline.ts";
 import { fakeRun, foldWhole, tempDir, testConfig } from "./testkit.test.ts";
 
 const byText = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
@@ -321,10 +322,55 @@ async function timelineOf(): Promise<{ t: Timeline; steps: readonly Step[] }> {
   return { t, steps };
 }
 
+describe("TimelineCache", () => {
+  test("opening the directory deletes the files of other fold versions, and only those", () => {
+    const dir = tempDir("cache-prune");
+    const id = "0123456789abcdef-0123456789abcdef-0123456789abcdef";
+    const names = [
+      `${id}.json.gz`,
+      `${id}.json.gz.tmp`,
+      `${id}-t3e0.1.0.json.gz`,
+      `${id}-${CACHE_VERSION_TAG}.json.gz`,
+      `${id}-${CACHE_VERSION_TAG}.json.gz.tmp`,
+      "notes.txt",
+      "abc.json.gz",
+    ];
+    for (const n of names) writeFileSync(join(dir, n), "x");
+    const cache = new TimelineCache(dir);
+    expect(cache.pruned).toBe(3);
+    expect(readdirSync(dir).toSorted(byText)).toEqual(
+      [
+        `${id}-${CACHE_VERSION_TAG}.json.gz`,
+        `${id}-${CACHE_VERSION_TAG}.json.gz.tmp`,
+        "abc.json.gz",
+        "notes.txt",
+      ].toSorted(byText),
+    );
+    expect(cache.path("m", "f".repeat(64), "0123456789abcdef")).toEndWith(
+      `-${CACHE_VERSION_TAG}.json.gz`,
+    );
+  });
+});
+
 describe("Timeline", () => {
   test("steps pages cover every step once; a refold adds nothing; the tail is the whole frame", async () => {
     const { t, steps } = await timelineOf();
     expect(t.steps).toEqual([...steps]);
+    // What an evicted timeline leaves in memory: no steps and no seat data (series, notebooks).
+    expect(Object.keys(summaryOf(t)).toSorted(byText)).toEqual(
+      [
+        "final",
+        "keyframeSeqs",
+        "lastSeq",
+        "lastT",
+        "map",
+        "match",
+        "status",
+        "tail",
+        "timeline",
+        "verified",
+      ].toSorted(byText),
+    );
     expect(steps.length).toBeGreaterThan(3 * PAGE);
     expect(STEPS_PAGE).toBe(2_000);
     for (const limit of [1, 7, 50, PAGE - 1, PAGE]) {

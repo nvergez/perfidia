@@ -56,7 +56,6 @@ export interface TimelineSummary {
   readonly final: boolean;
   keyframeSeqs(): Seq[];
   tail(): Frame | null;
-  readonly seats: ReadonlyMap<string, SeatData>;
 }
 
 /** A seat's data besides the steps: its notebook, counts, hourly points and notebook history. */
@@ -334,11 +333,14 @@ export class Timeline implements TimelineSummary {
   }
 }
 
-/** A timeline's summary, kept in memory when the timeline itself is evicted (`Lru`). */
+/**
+ * A timeline's summary, kept in memory when the timeline itself is evicted (`Lru`): no steps and
+ * no seat data (a dossier reads the timeline back, as the steps routes do), so what an evicted
+ * match holds does not grow with its length.
+ */
 export function summaryOf(t: Timeline): TimelineSummary {
   const keyframes = t.keyframeSeqs();
   const tail = t.tail();
-  const seats = new Map(t.seats);
   return {
     match: t.match,
     timeline: t.timeline,
@@ -350,6 +352,5 @@ export function summaryOf(t: Timeline): TimelineSummary {
     final: t.final,
     keyframeSeqs: () => [...keyframes],
     tail: () => tail,
-    seats,
   };
 }
