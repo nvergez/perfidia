@@ -1,0 +1,89 @@
+{
+  "synthetic": true,
+  "written": "2026-10-20",
+  "sources": [
+    {
+      "url": "https://openrouter.ai/docs/api_reference/streaming.md",
+      "read": "2026-10-20",
+      "what": "\"OpenAI's spec emits this chunk with an empty choices array\": the usage chunk of an OpenAI-compatible stream (stream_options.include_usage)"
+    },
+    {
+      "url": "https://openrouter.ai/docs/api/api-reference/chat/create-a-chat-completion.md",
+      "read": "2026-10-20",
+      "what": "ChatStreamToolCall deltas by index; ChatUsage"
+    }
+  ],
+  "note": "a compatible endpoint (e.g. a local vLLM): reasoning in reasoning_content, tool calls by index, a usage chunk with no choice, no cost, no metadata",
+  "status": 200,
+  "headers": {
+    "content-type": "text/event-stream"
+  },
+  "events": [
+    {
+      "id": "chatcmpl-1",
+      "object": "chat.completion.chunk",
+      "model": "local/glm",
+      "choices": [
+        {
+          "index": 0,
+          "delta": {
+            "role": "assistant",
+            "reasoning_content": "Check the briefing."
+          },
+          "finish_reason": null
+        }
+      ]
+    },
+    {
+      "id": "chatcmpl-1",
+      "object": "chat.completion.chunk",
+      "model": "local/glm",
+      "choices": [
+        {
+          "index": 0,
+          "delta": {
+            "tool_calls": [
+              {
+                "index": 0,
+                "id": "call_0",
+                "type": "function",
+                "function": {
+                  "name": "end_turn",
+                  "arguments": "{}"
+                }
+              }
+            ]
+          },
+          "finish_reason": null
+        }
+      ]
+    },
+    {
+      "id": "chatcmpl-1",
+      "object": "chat.completion.chunk",
+      "model": "local/glm",
+      "choices": [
+        {
+          "index": 0,
+          "delta": {},
+          "finish_reason": "tool_calls"
+        }
+      ]
+    },
+    {
+      "id": "chatcmpl-1",
+      "object": "chat.completion.chunk",
+      "model": "local/glm",
+      "choices": [],
+      "usage": {
+        "prompt_tokens": 5000,
+        "completion_tokens": 40,
+        "total_tokens": 5040,
+        "prompt_tokens_details": {
+          "cached_tokens": 4096
+        }
+      }
+    },
+    "[DONE]"
+  ]
+}

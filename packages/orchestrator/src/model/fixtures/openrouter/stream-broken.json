@@ -1,0 +1,54 @@
+{
+  "synthetic": true,
+  "written": "2026-10-20",
+  "sources": [
+    {
+      "url": "https://openrouter.ai/docs/api_reference/streaming.md",
+      "read": "2026-10-20",
+      "what": "every Chat Completions stream ends with the usage chunk and [DONE]: a body that ends before them broke"
+    }
+  ],
+  "note": "a body cut after some output: no usage, no [DONE]",
+  "status": 200,
+  "headers": {
+    "content-type": "text/event-stream",
+    "x-generation-id": "gen-1729000000-synthetic"
+  },
+  "events": [
+    {
+      "id": "gen-1729000000-synthetic",
+      "provider": "Z.AI",
+      "model": "z-ai/glm-5.3",
+      "object": "chat.completion.chunk",
+      "created": 1792500000,
+      "choices": [
+        {
+          "index": 0,
+          "delta": {
+            "role": "assistant",
+            "content": "Build"
+          },
+          "finish_reason": null,
+          "native_finish_reason": null
+        }
+      ]
+    },
+    {
+      "id": "gen-1729000000-synthetic",
+      "provider": "Z.AI",
+      "model": "z-ai/glm-5.3",
+      "object": "chat.completion.chunk",
+      "created": 1792500000,
+      "choices": [
+        {
+          "index": 0,
+          "delta": {
+            "content": "ing"
+          },
+          "finish_reason": null,
+          "native_finish_reason": null
+        }
+      ]
+    }
+  ]
+}

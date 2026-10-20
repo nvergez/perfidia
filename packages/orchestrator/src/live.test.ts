@@ -14,7 +14,8 @@
 import { describe, expect, test } from "bun:test";
 import { verifyLog } from "@perfidia/engine";
 import { memoryIo } from "@perfidia/sim";
-import { arenaEnv, planArena } from "./arena/plan.ts";
+import { arenaEnv, planArena, providerEnv } from "./arena/plan.ts";
+import { smokeOpenRouter } from "./arena/providers/openrouter.ts";
 import { smokeCommand } from "./arena/smoke.ts";
 import { play, runDir } from "./arena/rig.test.ts";
 
@@ -68,6 +69,32 @@ describe.skipIf(!LIVE)("live: the real Claude API (opt-in)", () => {
       const code = await smokeCommand({ env, io, model: "opus-5-5", effort: "low" });
       console.log(io.stdout(), io.stderr());
       expect(code).toBe(0);
+    },
+    FIVE_MINUTES,
+  );
+});
+
+// 3. OpenRouter (Pass 2): `arena smoke --provider openrouter`, GLM-5.3 Flash pinned to z-ai/fp8
+//    (its bound, printed first, is under $0.05: `providers/openrouter.test.ts`). The pinned request
+//    is accepted, the routing metadata names the pin, and usage and OpenRouter's cost come back. It
+//    needs PERFIDIA_LIVE=1 and PERFIDIA_OPENROUTER_API_KEY; otherwise it is skipped, saying why.
+const OPENROUTER_LIVE = env.live && providerEnv(env, "openrouter").apiKey !== null;
+if (!OPENROUTER_LIVE) {
+  console.log(
+    `live OpenRouter test skipped: ${env.live ? "PERFIDIA_OPENROUTER_API_KEY is not set" : "PERFIDIA_LIVE is not 1"}`,
+  );
+}
+
+describe.skipIf(!OPENROUTER_LIVE)("live: OpenRouter (opt-in)", () => {
+  test(
+    "one GLM-5.3 Flash call pinned to z-ai/fp8: shape, routing metadata, usage and cost",
+    async () => {
+      const io = memoryIo();
+      const code = await smokeOpenRouter({ env, io });
+      console.log(io.stdout(), io.stderr());
+      expect(code).toBe(0);
+      expect(io.stdout()).toContain("served by z-ai/glm-5.3-flash on z-ai/fp8");
+      expect(io.stdout()).not.toContain("OpenRouter reports no cost");
     },
     FIVE_MINUTES,
   );

@@ -31,6 +31,8 @@ import {
 import { formatCost } from "./report.ts";
 import { CALLS_FILE, runArena, type SignalSource } from "./run.ts";
 import { smokeCommand } from "./smoke.ts";
+import { EFFORTS } from "../model/adapter.ts";
+import { planLive, smokeOpenRouter } from "./providers/openrouter.ts";
 
 /** The largest seed. */
 const UINT32_MAX = 4_294_967_295;
@@ -62,7 +64,8 @@ export const USAGE = [
   "environment: PERFIDIA_<PROVIDER>_API_KEY for each provider a seat plays on, unless --fake",
   "             (ANTHROPIC, OPENAI, GOOGLE, OPENROUTER; COMPAT: optional on loopback), and",
   "             PERFIDIA_<PROVIDER>_BASE_URL (optional; required for COMPAT); nothing else is read.",
-  "             This build calls Anthropic only: the other providers run with --fake.",
+  "             This build calls Anthropic, OpenRouter and compat endpoints; the other providers",
+  "             run with --fake.",
   "exit codes: 0 ok, 1 replay divergence, 2 fatal error, abort or degraded run, 3 usage, config,",
   "            budget or preflight error, 4 reconciliation outside tolerance",
   "",
@@ -281,9 +284,26 @@ const SMOKE_FLAGS: FlagSpecs = {
     value: "<alias | id>",
     help: "opus-5-5, sonnet-5-5, haiku-5-5, fable-5-1 or a full id (default haiku-5-5)",
   },
-  effort: { type: "string", value: "<effort>", help: `${CLAUDE_EFFORTS.join("|")} (default low)` },
+  effort: {
+    type: "string",
+    value: "<effort>",
+    help: `${CLAUDE_EFFORTS.join("|")} (default low; openrouter: the model's efforts, default medium)`,
+  },
+  provider: {
+    type: "string",
+    value: "<provider>",
+    help: "anthropic (default) or openrouter (default model z-ai/glm-5.3-flash)",
+  },
+  endpoint: {
+    type: "string",
+    value: "<slug>",
+    help: "openrouter: the full endpoint slug (default the model's catalogued one, e.g. z-ai/fp8)",
+  },
 };
-const SMOKE_USAGE = usageText("arena smoke [--model <alias>] [--effort <effort>]", SMOKE_FLAGS);
+const SMOKE_USAGE = usageText(
+  "arena smoke [--provider <p>] [--model <alias | id>] [--endpoint <slug>] [--effort <effort>]",
+  SMOKE_FLAGS,
+);
 
 const int = (text: string | undefined, flag: string, min: number, max: number) =>
   text === undefined ? undefined : parseIntIn(text, flag, min, max);
@@ -359,7 +379,8 @@ async function runCommand(
   nowMs: () => number,
 ): Promise<number> {
   const { req, out, quiet } = runRequestOf(argv);
-  const plan = planArena(req, env, { now: nowMs });
+  // OpenRouter seats of a real run are planned on OpenRouter's live endpoint metadata (Pass 2).
+  const plan = await planLive(req, env, { now: nowMs });
   assertFreeRunDir(out);
   try {
     const outcome = await runArena(plan, {
@@ -487,6 +508,31 @@ function dispatch(
     case "smoke": {
       const f = parseFlags(argv, SMOKE_FLAGS, SMOKE_USAGE, { min: 0, max: 0, name: "positional" });
       const effort = f.string("effort");
+      const provider = f.string("provider") ?? "anthropic";
+      if (provider === "openrouter") {
+        const any = effort === undefined ? undefined : EFFORTS.find((x) => x === effort);
+        if (effort !== undefined && any === undefined) {
+          throw new UsageError(`--effort must be one of ${EFFORTS.join(", ")}, got "${effort}"`);
+        }
+        const model = f.string("model");
+        const endpoint = f.string("endpoint");
+        return smokeOpenRouter({
+          env,
+          io,
+          ...(model === undefined ? {} : { model }),
+          ...(endpoint === undefined ? {} : { endpoint }),
+          ...(any === undefined ? {} : { effort: any }),
+          ...(o.nowMs === undefined ? {} : { now: o.nowMs }),
+        });
+      }
+      if (provider !== "anthropic") {
+        throw new UsageError(
+          `--provider must be anthropic or openrouter in this build, got "${provider}"`,
+        );
+      }
+      if (f.string("endpoint") !== undefined) {
+        throw new UsageError("--endpoint applies to --provider openrouter only");
+      }
       const e = effort === undefined ? undefined : CLAUDE_EFFORTS.find((x) => x === effort);
       if (effort !== undefined && e === undefined) {
         throw new UsageError(

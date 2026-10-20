@@ -6,9 +6,9 @@ import { toolTransformOf, transformTools } from "../model/tools.ts";
 // The provider registry of the arena (phase-4 design §2.8, Pass 1b): for each provider, the
 // environment variables the harness reads (`PERFIDIA_<PROVIDER>_*` only, read once by `arenaEnv`),
 // its default base URL, its auth header, whether this build has its adapter, where its price cards
-// live, and how a seat pins it (OpenRouter needs a full endpoint slug). Only Anthropic has an
-// adapter in this build; every other provider plans and runs on the fake path, which mirrors it
-// (Pass 2 adds the OpenAI, Gemini and OpenAI-compatible adapters).
+// live, and how a seat pins it (OpenRouter needs a full endpoint slug). A provider without an
+// adapter plans and runs on the fake path only, which mirrors it. Pass 2: OpenRouter and compat
+// endpoints run on the OpenAI-compatible adapter (`model/compat.ts`, `arena/providers/compat.ts`).
 
 export interface ProviderInfo {
   readonly id: Exclude<Provider, "fake">;
@@ -80,7 +80,7 @@ export const PROVIDERS: Readonly<Record<Exclude<Provider, "fake">, ProviderInfo>
     defaultBaseUrl: "https://openrouter.ai/api/v1",
     key: "always",
     authHeader: "authorization",
-    adapter: false,
+    adapter: true,
     pricesFile: `${PRICES_DIR}/openrouter.ts`,
     needsEndpoint: true,
     toolTransform: "none",
@@ -92,7 +92,7 @@ export const PROVIDERS: Readonly<Record<Exclude<Provider, "fake">, ProviderInfo>
     defaultBaseUrl: null,
     key: "remote",
     authHeader: "authorization",
-    adapter: false,
+    adapter: true,
     pricesFile: `${PRICES_DIR}/compat.ts`,
     needsEndpoint: false,
     toolTransform: "none",
@@ -120,8 +120,9 @@ export const ENV_VARS: readonly string[] = Object.freeze([
 
 /**
  * The plan's endpoint-metadata hook (design §2.5): what OpenRouter's `/models/{id}/endpoints` says
- * of a pinned endpoint (prices aside), with its ZDR listing. This build reads the snapshot checked
- * on 2026-10-20 (`model/catalog.ts`); Pass 2's OpenRouter adapter fetches it live at plan time.
+ * of a pinned endpoint (prices aside), with its ZDR listing. `arena estimate`, `--fake` and the
+ * tests read the snapshot checked on 2026-10-20 (`model/catalog.ts`); a real `arena run` fetches it
+ * live at plan time (`planLive`, `arena/providers/openrouter.ts`).
  */
 export type EndpointSource = (model: string, endpoint: string) => EndpointInfo | undefined;
 

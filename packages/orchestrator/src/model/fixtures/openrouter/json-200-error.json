@@ -1,0 +1,27 @@
+{
+  "synthetic": true,
+  "written": "2026-10-20",
+  "sources": [
+    {
+      "url": "https://openrouter.ai/docs/api_reference/errors-and-debugging.md",
+      "read": "2026-10-20",
+      "what": "a non-streaming 200 whose JSON body holds only an error object (headers committed, then the provider failed)"
+    }
+  ],
+  "note": "a 200 JSON body with only error, rate limited",
+  "status": 200,
+  "headers": {
+    "content-type": "application/json",
+    "x-generation-id": "gen-1729000000-synthetic"
+  },
+  "body": {
+    "id": "gen-1729000000-synthetic",
+    "error": {
+      "code": 429,
+      "message": "Rate limit exceeded",
+      "metadata": {
+        "error_type": "rate_limit_exceeded"
+      }
+    }
+  }
+}
