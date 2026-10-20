@@ -58,15 +58,18 @@ import {
   seatModels,
   type ModelInfo,
 } from "../model/catalog.ts";
+import { effortSent } from "../model/compat.ts";
 import { cardAt, cardsFrom, formatCents, usdToNano } from "../model/prices.ts";
 import { modelTools } from "../model/tools.ts";
 import type { SeatPolicy } from "../seat/agent.ts";
 import { PROFILES, findProfile, profileRef, type Profile } from "../seat/personalities.ts";
 import { seatPrompt, sharedPrompt } from "../seat/prompt.ts";
 import { EFFORT_FACTOR_PCT, centralWakeNanoOf, loggedSpend, scenarioCard } from "./cost.ts";
+import { profilesFor } from "./calibrate.ts";
 import {
   budgetCheck,
   estimateFile,
+  plannedWallMsPerGameDay,
   predict,
   type PlanBudget,
   type Prediction,
@@ -340,6 +343,8 @@ export interface ArenaRequest {
   readonly promptCap?: number | undefined;
   /** `YYYY-MM-DD`: price at that UTC day's start (`--fake` and `arena estimate` only). */
   readonly priceDate?: string | undefined;
+  /** Pass 2: a directory of calibration profiles the prediction draws on; `off` or absent: none. */
+  readonly profiles?: string | undefined;
 }
 
 export const DEFAULT_ARENA_DAYS = 7;
@@ -697,7 +702,7 @@ function checkSeat(
     }
     if (!e.supportedParams.includes("parallel_tool_calls")) {
       warnings.push(
-        `${d.seat}: ${d.model}@${d.endpoint} does not list parallel_tool_calls: it is not sent, and a seat that never makes parallel calls gets fewer calls per wake (reported per seat)`,
+        `${d.seat}: ${d.model}@${d.endpoint} does not list parallel_tool_calls: it is not sent, and a seat that never makes parallel calls gets fewer calls per wake (the parallel-call share per seat is Pass 3's statistics, not reported yet)`,
       );
     }
     quantization = e.quantization;
@@ -735,12 +740,12 @@ function checkSeat(
   const info = modelInfo(d.provider, d.model);
   const advertised = info?.advertisedEfforts ?? null;
   if (advertised !== null && info !== undefined && !advertised.includes(d.effort)) {
-    // Phase-4 review: what an unsupported effort becomes is the model's default (max for GLM-5.3),
-    // which would break effort parity and the prediction; the mapping is decided with Pass 2's
-    // adapter and its smoke, before the first comparison.
+    // Phase-4 review C9, settled with Pass 2's adapter: the request carries the nearest level the
+    // model lists (`effortSent`), recorded per seat (`effortSent` in seats.json).
     const f = effortFactorText;
+    const sent = effortSent(d.provider, d.model, d.effort);
     warnings.push(
-      `${d.seat}: OpenRouter lists ${d.model}'s efforts as ${advertised.join(", ")}, default ${info.defaultEffort} (models list, ${CATALOG_CHECKED}): ${d.effort} is sent as is, unverified until a smoke records what OpenRouter does with it; if it is dropped, the seat reasons at ${info.defaultEffort} while the others run at ${d.effort} and the prediction assumes ${d.effort} (output factor ${f(d.effort)}, against ${f(info.defaultEffort)}): map the effort before the first comparison`,
+      `${d.seat}: OpenRouter lists ${d.model}'s efforts as ${advertised.join(", ")}, default ${info.defaultEffort} (models list, ${CATALOG_CHECKED}): ${d.effort} is sent as ${sent}, the nearest listed level (OpenRouter maps an unlisted effort to the nearest supported level with no rule for a tie; the harness sends the lower level of a tie itself); the prediction keeps ${d.effort}'s output factor ${f(d.effort)} against ${sent}'s ${f(sent)}, an upper bound; unverified until a smoke records the reasoning tokens; set the seat's effort to one of ${advertised.join(", ")} to send that level instead`,
     );
   }
   for (const n of info?.notes ?? []) warnings.push(`${d.seat}: ${n}`);
@@ -1152,6 +1157,12 @@ export function planArena(req: ArenaRequest, env: ArenaEnv, o: PlanOptions = {})
           `${p.baseUrlVar} is not set: the ${id} seats (${seats.join(", ")}) need a base URL`,
         );
       }
+      if (id !== "anthropic") {
+        // Pass 2: the same check as Anthropic's (http:// on loopback only), and the provider's own.
+        checkedBaseUrl(base, p.baseUrlVar);
+        const problem = p.baseUrlProblem?.(base) ?? null;
+        if (problem !== null) throw new UsageError(`${problem} (seats ${seats.join(", ")})`);
+      }
       const loopback = isLoopback(base);
       if (pe.apiKey === null && (p.key === "always" || !loopback)) {
         throw new UsageError(
@@ -1217,10 +1228,28 @@ export function planArena(req: ArenaRequest, env: ArenaEnv, o: PlanOptions = {})
         },
         s.promptVariant,
       ),
+      promptVariant: s.promptVariant,
     })),
-    { days, clock: clockKind, cacheTtl, maxTokens, promptCapTokens, priceAt },
+    {
+      days,
+      clock: clockKind,
+      cacheTtl,
+      maxTokens,
+      promptCapTokens,
+      priceAt,
+      profiles: profilesFor(req.profiles),
+      reminders,
+      ruleset: setup.ruleset,
+      wallMsPerGameDay: plannedWallMsPerGameDay(clock, priceFixed),
+    },
   );
   const predicted = new Map(prediction.seats.map((p) => [p.seat, p]));
+  const calibratedSeats = prediction.seats.filter((p) => p.source === "calibrated");
+  if (calibratedSeats.length > 0) {
+    warnings.push(
+      `${calibratedSeats.map((p) => p.seat).join(", ")}: predicted from a calibrated profile (a bootstrap of measured wakes); on bot-shaped data its p10–p90 band missed most seats' spend (docs/phase4.md §39), so exit4.withinPrediction may fail: for an exit match, plan with --profiles off`,
+    );
+  }
 
   // Caps: --seat-cap, the lineup seat's, --cap-usd, the lineup default (§3.9), phase 2's $100.
   // Wake caps: --wake-cap-usd, the lineup seat's, the lineup default (§3.9), phase 2's $2.
@@ -1231,7 +1260,10 @@ export function planArena(req: ArenaRequest, env: ArenaEnv, o: PlanOptions = {})
       continue;
     }
     const extras = extrasOf(d.seat);
-    const high = predicted.get(d.seat)?.high ?? 0;
+    // The default cap never falls below the scenario's (review: a calibrated p90 from bot-shaped
+    // data missed real seats by up to 1.77×, and a cap must not decide the game, design §3.9).
+    const p = predicted.get(d.seat);
+    const high = Math.max(p?.high ?? 0, p?.scenarioHigh ?? 0);
     const capNanoUsd =
       caps.get(d.seat) ??
       extras?.capNanoUsd ??
@@ -1289,6 +1321,16 @@ export function planArena(req: ArenaRequest, env: ArenaEnv, o: PlanOptions = {})
       throw new UsageError(
         `--lineup ${lineup.id} is a comparison lineup, but ${on.map((s) => `${s.seat} (${s.model})`).join(", ")} would run with server-side fallbacks on: another model could serve its turns (design §3.5); set the seat's fallbacks, or the lineup's defaults.fallbacks, to "off"`,
       );
+    }
+    // The effort a seat is labelled with is the effort its requests carry (review: no silent
+    // mapping in a comparison): an effort the model does not list is refused, naming its levels.
+    for (const s of llmSeats) {
+      const listed = modelInfo(s.provider, s.model)?.advertisedEfforts ?? null;
+      if (listed !== null && listed.length > 0 && !listed.includes(s.effort)) {
+        throw new UsageError(
+          `--lineup ${lineup.id} is a comparison lineup, but ${s.seat} (${s.model}) would run at ${s.effort}, an effort the model does not list (${listed.join(", ")}): its requests would carry ${effortSent(s.provider, s.model, s.effort)} under a ${s.effort} label; set the seat's effort to one of ${listed.join(", ")}`,
+        );
+      }
     }
     const models = llmSeats.map((s) => s.model);
     const repeated = [...new Set(models.filter((m, i) => models.indexOf(m) !== i))];

@@ -9,9 +9,13 @@ import { costOf, formatUsd } from "../model/prices.ts";
 import { ENTRY_OVERHEAD_TOKENS, entryTokensUpper } from "../seat/agent.ts";
 import { turnHeader } from "../seat/prompt.ts";
 import { canonicalJson } from "@perfidia/engine/core";
-import { main } from "./cli.ts";
+import { main as arenaMain } from "./cli.ts";
 import { sampleTokensUpper } from "./preflight.ts";
 import { SMOKE_MAX_TOKENS, smokeBoundNano, smokeCommand, smokePlan } from "./smoke.ts";
+
+/** `arena` as the CLI runs it, with no calibration profile unless a test passes `--profiles`. */
+const main = (...[argv, io, env, o]: Parameters<typeof arenaMain>) =>
+  arenaMain(argv, io, env, { profilesDir: "off", ...o });
 
 const bytes = (text: string): number => new TextEncoder().encode(text).length;
 

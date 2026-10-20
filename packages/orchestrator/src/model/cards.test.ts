@@ -78,10 +78,11 @@ describe("price cards (pico-dollars per token)", () => {
       10, 50, 0.25, 12.5, 20,
     ]);
     expect(rates(card("anthropic", "claude-sonnet-5-5", null, OCT))).toEqual([2, 10, 0.1, 2.5, 4]);
-    expect(rates(card("openai", "gpt-6.1-sol", null, OCT))).toEqual([2, 10, 0.1, 2.5, 2.5]);
-    expect(rates(card("openai", "gpt-6-sol", null, OCT))).toEqual([2, 10, 0.2, 2.5, 2.5]);
-    expect(rates(card("openai", "gpt-6-luna", null, OCT))).toEqual([0.1, 0.5, 0.01, 0.125, 0.125]);
-    expect(rates(card("openai", "gpt-6-astra", null, OCT))).toEqual([10, 50, 1, 12.5, 12.5]);
+    // OpenAI: the 30-minute write (1.25×) and the 12-hour write (2.5×, the long bucket).
+    expect(rates(card("openai", "gpt-6.1-sol", null, OCT))).toEqual([2, 10, 0.1, 2.5, 5]);
+    expect(rates(card("openai", "gpt-6-sol", null, OCT))).toEqual([2, 10, 0.2, 2.5, 5]);
+    expect(rates(card("openai", "gpt-6-luna", null, OCT))).toEqual([0.1, 0.5, 0.01, 0.125, 0.25]);
+    expect(rates(card("openai", "gpt-6-astra", null, OCT))).toEqual([10, 50, 1, 12.5, 25]);
     expect(rates(card("google", "gemini-4-argon", null, OCT))).toEqual([2, 10, 0.1, 2, 2]);
     expect(rates(card("google", "gemini-3.8-flash", null, OCT))).toEqual([
       0.75, 3.75, 0.075, 0.75, 0.75,
@@ -101,7 +102,7 @@ describe("price cards (pico-dollars per token)", () => {
     // OpenAI's long-context tier (over 272K input tokens): 2× input and cache, 1.5× output.
     const sol = card("openai", "gpt-6.1-sol", null, OCT);
     expect(sol.longContext?.aboveTokens).toBe(272_000);
-    expect(rates({ ...(sol.longContext?.card ?? sol) })).toEqual([4, 15, 0.2, 5, 5]);
+    expect(rates({ ...(sol.longContext?.card ?? sol) })).toEqual([4, 15, 0.2, 5, 10]);
     // Fees: OpenRouter only.
     for (const c of ALL_CARDS)
       expect(c.platformFeePermille).toBe(c.provider === "openrouter" ? 55 : 0);

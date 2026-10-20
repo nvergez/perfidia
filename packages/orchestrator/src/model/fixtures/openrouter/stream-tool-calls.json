@@ -1,0 +1,270 @@
+{
+  "synthetic": true,
+  "written": "2026-10-20",
+  "sources": [
+    {
+      "url": "https://openrouter.ai/docs/api_reference/overview.md",
+      "read": "2026-10-20",
+      "what": "ResponseUsage: prompt_tokens, completion_tokens, prompt_tokens_details.cached_tokens and cache_write_tokens, completion_tokens_details.reasoning_tokens, cost in credits; finish reasons tool_calls, stop, length, content_filter, error"
+    },
+    {
+      "url": "https://openrouter.ai/docs/api_reference/streaming.md",
+      "read": "2026-10-20",
+      "what": "comments (: OPENROUTER PROCESSING), the final usage chunk before [DONE] with one content-free choice repeating finish_reason"
+    },
+    {
+      "url": "https://openrouter.ai/docs/guides/features/router-metadata.md",
+      "read": "2026-10-20",
+      "what": "openrouter_metadata on the final chunk when X-OpenRouter-Metadata: enabled"
+    },
+    {
+      "url": "https://openrouter.ai/docs/guides/best-practices/reasoning-tokens.md",
+      "read": "2026-10-20",
+      "what": "reasoning_details in choices[].delta, reasoning.text and reasoning.summary, fragments concatenated in order"
+    },
+    {
+      "url": "https://openrouter.ai/docs/api/api-reference/chat/create-a-chat-completion.md",
+      "read": "2026-10-20",
+      "what": "ChatStreamChunk, ChatStreamDelta, ChatStreamToolCall (index, id, function.name, function.arguments)"
+    },
+    {
+      "url": "https://openrouter.ai/api/v1/models/z-ai/glm-5.3/endpoints",
+      "read": "2026-10-20",
+      "what": "z-ai/fp8 prices of z-ai/glm-5.3: prompt 0.0000014, completion 0.0000044, input_cache_read 0.00000026"
+    }
+  ],
+  "note": "a GLM-5.3 reply with raw reasoning in two fragments of one detail, a text and two tool calls (the first split over two chunks), its usage priced at the z-ai/fp8 card ($0.0105 = 3,000 input + 9,000 cache reads + 900 output) and the routing metadata naming Z.AI",
+  "status": 200,
+  "headers": {
+    "content-type": "text/event-stream",
+    "x-generation-id": "gen-1729000000-synthetic"
+  },
+  "events": [
+    ": OPENROUTER PROCESSING",
+    {
+      "id": "gen-1729000000-synthetic",
+      "provider": "Z.AI",
+      "model": "z-ai/glm-5.3",
+      "object": "chat.completion.chunk",
+      "created": 1792500000,
+      "choices": [
+        {
+          "index": 0,
+          "delta": {
+            "role": "assistant",
+            "content": "",
+            "reasoning_details": [
+              {
+                "type": "reasoning.text",
+                "text": "p3 is weak at c12; ",
+                "format": "unknown",
+                "index": 0
+              }
+            ]
+          },
+          "finish_reason": null,
+          "native_finish_reason": null
+        }
+      ]
+    },
+    {
+      "id": "gen-1729000000-synthetic",
+      "provider": "Z.AI",
+      "model": "z-ai/glm-5.3",
+      "object": "chat.completion.chunk",
+      "created": 1792500000,
+      "choices": [
+        {
+          "index": 0,
+          "delta": {
+            "content": "",
+            "reasoning_details": [
+              {
+                "type": "reasoning.text",
+                "text": "build first, then scout.",
+                "format": "unknown",
+                "index": 0
+              }
+            ]
+          },
+          "finish_reason": null,
+          "native_finish_reason": null
+        }
+      ]
+    },
+    {
+      "id": "gen-1729000000-synthetic",
+      "provider": "Z.AI",
+      "model": "z-ai/glm-5.3",
+      "object": "chat.completion.chunk",
+      "created": 1792500000,
+      "choices": [
+        {
+          "index": 0,
+          "delta": {
+            "content": "Building up before the strike."
+          },
+          "finish_reason": null,
+          "native_finish_reason": null
+        }
+      ]
+    },
+    {
+      "id": "gen-1729000000-synthetic",
+      "provider": "Z.AI",
+      "model": "z-ai/glm-5.3",
+      "object": "chat.completion.chunk",
+      "created": 1792500000,
+      "choices": [
+        {
+          "index": 0,
+          "delta": {
+            "content": "",
+            "tool_calls": [
+              {
+                "index": 0,
+                "id": "call_a1",
+                "type": "function",
+                "function": {
+                  "name": "build",
+                  "arguments": "{\"city\":\"c"
+                }
+              }
+            ]
+          },
+          "finish_reason": null,
+          "native_finish_reason": null
+        }
+      ]
+    },
+    {
+      "id": "gen-1729000000-synthetic",
+      "provider": "Z.AI",
+      "model": "z-ai/glm-5.3",
+      "object": "chat.completion.chunk",
+      "created": 1792500000,
+      "choices": [
+        {
+          "index": 0,
+          "delta": {
+            "content": "",
+            "tool_calls": [
+              {
+                "index": 0,
+                "function": {
+                  "arguments": "3\",\"building\":\"farm\"}"
+                }
+              }
+            ]
+          },
+          "finish_reason": null,
+          "native_finish_reason": null
+        }
+      ]
+    },
+    {
+      "id": "gen-1729000000-synthetic",
+      "provider": "Z.AI",
+      "model": "z-ai/glm-5.3",
+      "object": "chat.completion.chunk",
+      "created": 1792500000,
+      "choices": [
+        {
+          "index": 0,
+          "delta": {
+            "content": "",
+            "tool_calls": [
+              {
+                "index": 1,
+                "id": "call_a2",
+                "type": "function",
+                "function": {
+                  "name": "end_turn",
+                  "arguments": "{}"
+                }
+              }
+            ]
+          },
+          "finish_reason": null,
+          "native_finish_reason": null
+        }
+      ]
+    },
+    {
+      "id": "gen-1729000000-synthetic",
+      "provider": "Z.AI",
+      "model": "z-ai/glm-5.3",
+      "object": "chat.completion.chunk",
+      "created": 1792500000,
+      "choices": [
+        {
+          "index": 0,
+          "delta": {
+            "content": "",
+            "role": "assistant"
+          },
+          "finish_reason": "tool_calls",
+          "native_finish_reason": "tool_calls"
+        }
+      ]
+    },
+    {
+      "id": "gen-1729000000-synthetic",
+      "provider": "Z.AI",
+      "model": "z-ai/glm-5.3",
+      "object": "chat.completion.chunk",
+      "created": 1792500000,
+      "choices": [
+        {
+          "index": 0,
+          "delta": {
+            "content": "",
+            "role": "assistant"
+          },
+          "finish_reason": "tool_calls",
+          "native_finish_reason": "tool_calls"
+        }
+      ],
+      "usage": {
+        "prompt_tokens": 12000,
+        "completion_tokens": 900,
+        "total_tokens": 12900,
+        "prompt_tokens_details": {
+          "cached_tokens": 9000,
+          "cache_write_tokens": 0
+        },
+        "completion_tokens_details": {
+          "reasoning_tokens": 600
+        },
+        "cost": 0.0105,
+        "is_byok": false
+      },
+      "openrouter_metadata": {
+        "requested": "z-ai/glm-5.3",
+        "strategy": "direct",
+        "region": "iad",
+        "summary": "available=1, selected=Z.AI",
+        "attempt": 1,
+        "is_byok": false,
+        "endpoints": {
+          "total": 1,
+          "available": [
+            {
+              "provider": "Z.AI",
+              "model": "z-ai/glm-5.3",
+              "selected": true
+            }
+          ]
+        },
+        "attempts": [
+          {
+            "provider": "Z.AI",
+            "model": "z-ai/glm-5.3",
+            "status": 200
+          }
+        ]
+      }
+    },
+    "[DONE]"
+  ]
+}

@@ -27,7 +27,7 @@ import { AnthropicAdapter, AnthropicClient, type HttpFetch } from "../model/anth
 import { LEGACY_AT, costOf } from "../model/prices.ts";
 import { FakeAdapter, type Brain } from "../model/fake.ts";
 import { botBrain } from "./brain.ts";
-import { main, processSignalsOf } from "./cli.ts";
+import { main as arenaMain, processSignalsOf } from "./cli.ts";
 import { LINEUPS_DIR } from "./lineup.ts";
 import { arenaEnv, planArena, type ArenaRequest, type LlmSeatPlan } from "./plan.ts";
 import { SNAPSHOT_ENDPOINTS, toolsFor, type EndpointSource } from "./providers.ts";
@@ -37,6 +37,10 @@ import { ledgerOf, reconcileDir, reconcileRun, tokensWithin } from "./reconcile.
 import { exit4Met } from "./report.ts";
 import { operatorHashOf, runArena, type AdapterContext, type SignalSource } from "./run.ts";
 import { RULESET, readCalls, runDir } from "./rig.test.ts";
+
+/** `arena` as the CLI runs it, with no calibration profile unless a test passes `--profiles`. */
+const main = (...[argv, io, env, o]: Parameters<typeof arenaMain>) =>
+  arenaMain(argv, io, env, { profilesDir: "off", ...o });
 
 const LONG = 120_000;
 const FAKE = ["--fake", "--lineup", "claude-duo", "--seed", "1", "--id-key", "seed", "--quiet"];
@@ -886,17 +890,44 @@ describe("seat checks (review: correctness)", () => {
     );
   });
 
-  test("GLM-5.3's effort warning says what medium may fall to (its default, max)", () => {
+  test("GLM-5.3's effort warning says what medium is sent as (C9, Pass 2: the nearest listed level)", () => {
+    // Outside a comparison lineup the nearest listed level is sent, with this warning.
     const plan = planArena(
-      { fake: true, seed: 1, idKey: "seed", priceDate: "2026-10-20", lineup: "mid-tier" },
+      {
+        fake: true,
+        seed: 1,
+        idKey: "seed",
+        priceDate: "2026-10-20",
+        seats: ["p4=openrouter:z-ai/glm-5.3@z-ai/fp8:medium:agamemnon"],
+      },
       arenaEnv({}),
     );
     expect(plan.warnings.join("\n")).toContain(
-      "p4: OpenRouter lists z-ai/glm-5.3's efforts as max, high, low, default max (models list, 2026-10-20): medium is sent as is",
+      "p4: OpenRouter lists z-ai/glm-5.3's efforts as max, high, low, default max (models list, 2026-10-20): medium is sent as low, the nearest listed level",
     );
     expect(plan.warnings.join("\n")).toContain(
-      "if it is dropped, the seat reasons at max while the others run at medium and the prediction assumes medium (output factor 1, against 3)",
+      "the prediction keeps medium's output factor 1 against low's 0.6, an upper bound; unverified until a smoke records the reasoning tokens",
     );
+  });
+
+  test("a comparison lineup refuses an effort the model does not list; the presets name GLM's level (review)", () => {
+    expect(
+      planOutcome({
+        lineup: "mid-tier",
+        seats: ["p4=openrouter:z-ai/glm-5.3@z-ai/fp8:medium:agamemnon"],
+      }),
+    ).toBe(
+      "--lineup mid-tier is a comparison lineup, but p4 (z-ai/glm-5.3) would run at medium, an effort the model does not list (max, high, low): its requests would carry low under a medium label; set the seat's effort to one of max, high, low",
+    );
+    for (const lineup of ["budget-mix", "mid-tier", "mid-tier-flash", "frontier"]) {
+      const plan = planArena(
+        { fake: true, seed: 1, idKey: "seed", priceDate: "2026-10-20", lineup },
+        arenaEnv({}),
+      );
+      const p4 = plan.seats.find((s) => s.seat === "p4");
+      expect([lineup, p4?.kind === "llm" ? p4.effort : null]).toEqual([lineup, "low"]);
+      expect(plan.warnings.join("\n")).not.toContain("is sent as");
+    }
   });
 
   test("a compat seat names the card file it needs, which exists", () => {
@@ -938,8 +969,9 @@ describe("per-seat prompt hashes (review: correctness)", () => {
       for (const s of llm) {
         const provider = s.intended?.provider ?? s.provider;
         expect(s.toolsHash).toBe(sha256Hex(canonicalJson(toolsFor(provider, plan.texts.tools))));
-        // This build's transforms are all the identity: the neutral list's hash.
-        expect(s.toolsHash).toBe(neutral);
+        // Pass 2: Gemini's schema subset (`gemini@1`) shows; the other transforms are the identity.
+        if (provider === "google") expect(s.toolsHash).not.toBe(neutral);
+        else expect(s.toolsHash).toBe(neutral);
       }
       // The system channel keeps phase 2's hash (prompts.operator); the others differ.
       expect(llm[0]?.operatorHash).toBe(seats.prompts.operator);

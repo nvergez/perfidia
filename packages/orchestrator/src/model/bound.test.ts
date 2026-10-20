@@ -12,6 +12,7 @@ import { seatAttemptBound } from "../arena/estimate.ts";
 import {
   attemptBoundNano,
   brokenStreamOutput,
+  completionUpper,
   maxAttemptOutput,
   type UsageEntry,
 } from "./adapter.ts";
@@ -160,7 +161,11 @@ describe("the attempt bound of every seat model (Pass 1b)", () => {
     const seen: string[] = [];
     for (const m of MODELS.filter((x) => x.seat)) {
       const endpoint = m.endpoints[0]?.tag ?? null;
-      const out = maxAttemptOutput({ maxOutputTokens: 32_768 }, m.capabilities.maxOutputTokens);
+      // OpenRouter's completion may exceed max_tokens a little: its slack is part of the bound.
+      const out = completionUpper(
+        m.provider,
+        maxAttemptOutput({ maxOutputTokens: 32_768 }, m.capabilities.maxOutputTokens),
+      );
       for (const from of starts) {
         const bound = seatAttemptBound(m.model, "off", 32_768, CAP, {
           provider: m.provider,

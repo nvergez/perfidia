@@ -1,0 +1,77 @@
+{
+  "synthetic": true,
+  "checked": "2026-10-20",
+  "sources": [
+    "https://ai.google.dev/api/generate-content.md.txt (GenerateContentResponse, Candidate, Part, FunctionCall, UsageMetadata, FinishReason)",
+    "https://ai.google.dev/gemini-api/docs/generate-content/thought-signatures.md.txt (parallel calls: the signature on the first functionCall part only)",
+    "https://ai.google.dev/gemini-api/docs/generate-content/thinking.md.txt (includeThoughts: parts with thought: true are summaries; thoughtsTokenCount)",
+    "https://ai.google.dev/gemini-api/docs/text-generation.md.txt (streamGenerateContent?alt=sse)"
+  ],
+  "note": "Written from the docs, not recorded: a streamed reply with a thought summary in two deltas, then two parallel calls (the first carries the signature), then the finish with the final usage. The first `arena smoke --provider google --record` replaces it.",
+  "events": [
+    {
+      "candidates": [
+        {
+          "content": {
+            "role": "model",
+            "parts": [{ "text": "Checking the island before ", "thought": true }]
+          },
+          "index": 0
+        }
+      ],
+      "modelVersion": "gemini-4-argon",
+      "responseId": "resp-parallel-1"
+    },
+    {
+      "candidates": [
+        {
+          "content": {
+            "role": "model",
+            "parts": [{ "text": "building.", "thought": true }]
+          },
+          "index": 0
+        }
+      ],
+      "modelVersion": "gemini-4-argon",
+      "responseId": "resp-parallel-1"
+    },
+    {
+      "candidates": [
+        {
+          "content": {
+            "role": "model",
+            "parts": [
+              {
+                "functionCall": { "id": "fc-a", "name": "view_city", "args": { "city": "c1" } },
+                "thoughtSignature": "U2lnbmF0dXJlX0E="
+              },
+              { "functionCall": { "id": "fc-b", "name": "view_map", "args": {} } }
+            ]
+          },
+          "index": 0
+        }
+      ],
+      "modelVersion": "gemini-4-argon",
+      "responseId": "resp-parallel-1"
+    },
+    {
+      "candidates": [
+        {
+          "content": { "role": "model", "parts": [] },
+          "finishReason": "STOP",
+          "index": 0
+        }
+      ],
+      "usageMetadata": {
+        "promptTokenCount": 12000,
+        "cachedContentTokenCount": 8000,
+        "candidatesTokenCount": 40,
+        "thoughtsTokenCount": 900,
+        "totalTokenCount": 12940,
+        "promptTokensDetails": [{ "modality": "TEXT", "tokenCount": 12000 }]
+      },
+      "modelVersion": "gemini-4-argon",
+      "responseId": "resp-parallel-1"
+    }
+  ]
+}

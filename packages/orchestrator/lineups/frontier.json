@@ -41,6 +41,7 @@
       "provider": "openrouter",
       "model": "moonshotai/kimi-k3",
       "endpoint": "moonshotai/mxfp4",
+      "effort": "low",
       "profile": "agamemnon@1"
     },
     {

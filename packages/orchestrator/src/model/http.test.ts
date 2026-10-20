@@ -109,6 +109,16 @@ describe("guardedFetch", () => {
     const s = stub(() => json({}));
     const f = guardedFetch({ baseURL: s.url, auth, allowHeaders: /^$/ });
     expect(await rejection(f(`${s.url}/models?key=${KEY}`))).toContain("carries the key");
+    // A Bearer key: the bare key in a URL is refused too (raw and URL-encoded).
+    const bearer = guardedFetch({
+      baseURL: s.url,
+      auth: { header: "authorization", value: `Bearer ${KEY}` },
+      allowHeaders: /^$/,
+    });
+    expect(await rejection(bearer(`${s.url}/models?key=${KEY}`))).toContain("carries the key");
+    expect(await rejection(bearer(`${s.url}/m/${encodeURIComponent(KEY)}`))).toContain(
+      "carries the key",
+    );
     expect(s.seen).toEqual([]);
   });
 

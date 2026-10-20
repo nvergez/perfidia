@@ -142,6 +142,8 @@ export interface RigOptions {
   readonly intended?: IntendedModel;
   readonly promptVariant?: PromptVariant;
   readonly reminders?: ReminderCadence;
+  /** The ledger's attempt bound for the seat (what an unpriceable usage is charged). */
+  readonly attemptBoundNanoUsd?: number;
 }
 
 const idleBot = (label: string): SeatAgent => ({
@@ -166,6 +168,9 @@ export function rig(brain: Brain | readonly FakeStep[], o: RigOptions = {}): Sea
     wakeCapNanoUsd: o.wakeCapNanoUsd ?? 2_000_000_000,
     handoffTo: () => ({ label: "bot:turtle@3", agent: idleBot("bot:turtle@3") }),
     onHandoff: (n) => handoffs.push(n),
+    ...(o.attemptBoundNanoUsd === undefined
+      ? {}
+      : { attemptBounds: new Map([[seat, o.attemptBoundNanoUsd]]) }),
   });
   const rate = new RateGate({ clock, maxInflight: 4 });
   const profile = PROFILES[0];

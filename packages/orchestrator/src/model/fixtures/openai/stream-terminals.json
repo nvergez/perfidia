@@ -1,0 +1,268 @@
+{
+  "synthetic": true,
+  "checked": "2026-10-20",
+  "sources": [
+    "https://developers.openai.com/api/reference/resources/responses/streaming-events.md",
+    "https://developers.openai.com/api/reference/resources/responses/methods/create.md",
+    "https://developers.openai.com/api/docs/guides/reasoning.md",
+    "https://developers.openai.com/api/docs/guides/safety-checks/misalignment-monitoring.md"
+  ],
+  "note": "Written from the docs, not recorded: the terminal event of each case the adapter maps (design §2.3's stop table). Every case is streamed after a response.created event. `usage` follows the Response object's schema; the cases whose usage is broken on purpose say so.",
+  "cases": {
+    "text": {
+      "type": "response.completed",
+      "response": {
+        "id": "resp_text",
+        "object": "response",
+        "status": "completed",
+        "model": "gpt-6-luna",
+        "output": [
+          {
+            "id": "rs_text",
+            "type": "reasoning",
+            "summary": [{ "type": "summary_text", "text": "Nothing urgent: hold." }],
+            "encrypted_content": "gAAAAABsynthetic-encrypted-reasoning-text"
+          },
+          {
+            "id": "msg_text",
+            "type": "message",
+            "status": "completed",
+            "role": "assistant",
+            "phase": "final_answer",
+            "content": [
+              {
+                "type": "output_text",
+                "text": "I hold c1 and wait for p3's answer.",
+                "annotations": [],
+                "logprobs": []
+              }
+            ]
+          }
+        ],
+        "service_tier": "default",
+        "usage": {
+          "input_tokens": 9000,
+          "input_tokens_details": { "cached_tokens": 8192, "cache_write_tokens": 0 },
+          "output_tokens": 300,
+          "output_tokens_details": { "reasoning_tokens": 250 },
+          "total_tokens": 9300
+        }
+      }
+    },
+    "incomplete_max_output_tokens": {
+      "type": "response.incomplete",
+      "response": {
+        "id": "resp_incomplete",
+        "object": "response",
+        "status": "incomplete",
+        "model": "gpt-6-luna",
+        "incomplete_details": { "reason": "max_output_tokens" },
+        "output": [
+          {
+            "id": "rs_incomplete",
+            "type": "reasoning",
+            "summary": [],
+            "encrypted_content": "gAAAAABsynthetic-encrypted-reasoning-incomplete"
+          }
+        ],
+        "usage": {
+          "input_tokens": 9000,
+          "input_tokens_details": { "cached_tokens": 0, "cache_write_tokens": 9000 },
+          "output_tokens": 32768,
+          "output_tokens_details": { "reasoning_tokens": 32768 },
+          "total_tokens": 41768
+        }
+      }
+    },
+    "incomplete_content_filter": {
+      "type": "response.incomplete",
+      "response": {
+        "id": "resp_filtered",
+        "object": "response",
+        "status": "incomplete",
+        "model": "gpt-6-luna",
+        "incomplete_details": { "reason": "content_filter" },
+        "output": [],
+        "usage": {
+          "input_tokens": 9000,
+          "input_tokens_details": { "cached_tokens": 8192, "cache_write_tokens": 0 },
+          "output_tokens": 40,
+          "output_tokens_details": { "reasoning_tokens": 40 },
+          "total_tokens": 9040
+        }
+      }
+    },
+    "refusal": {
+      "type": "response.completed",
+      "response": {
+        "id": "resp_refusal",
+        "object": "response",
+        "status": "completed",
+        "model": "gpt-6-luna",
+        "output": [
+          {
+            "id": "msg_refusal",
+            "type": "message",
+            "status": "completed",
+            "role": "assistant",
+            "content": [{ "type": "refusal", "refusal": "I can't help with that." }]
+          }
+        ],
+        "usage": {
+          "input_tokens": 9000,
+          "input_tokens_details": { "cached_tokens": 8192, "cache_write_tokens": 0 },
+          "output_tokens": 12,
+          "output_tokens_details": { "reasoning_tokens": 0 },
+          "total_tokens": 9012
+        }
+      }
+    },
+    "failed_misalignment": {
+      "type": "response.failed",
+      "response": {
+        "id": "resp_blocked",
+        "object": "response",
+        "status": "failed",
+        "model": "gpt-6-astra",
+        "error": {
+          "code": "misalignment_policy_violation",
+          "message": "This request was stopped by misalignment monitoring.",
+          "type": "invalid_request_error"
+        },
+        "output": [],
+        "usage": null
+      }
+    },
+    "failed_server_error": {
+      "type": "response.failed",
+      "response": {
+        "id": "resp_failed",
+        "object": "response",
+        "status": "failed",
+        "model": "gpt-6-luna",
+        "error": { "code": "server_error", "message": "The server had an error." },
+        "output": [],
+        "usage": null
+      }
+    },
+    "failed_rate_limit_with_usage": {
+      "type": "response.failed",
+      "response": {
+        "id": "resp_failed_rl",
+        "object": "response",
+        "status": "failed",
+        "model": "gpt-6-luna",
+        "error": { "code": "rate_limit_exceeded", "message": "Rate limit reached." },
+        "output": [],
+        "usage": {
+          "input_tokens": 9000,
+          "input_tokens_details": { "cached_tokens": 0, "cache_write_tokens": 0 },
+          "output_tokens": 100,
+          "output_tokens_details": { "reasoning_tokens": 100 },
+          "total_tokens": 9100
+        }
+      }
+    },
+    "stream_error_event": {
+      "type": "error",
+      "code": "server_error",
+      "message": "Something went wrong",
+      "param": null,
+      "sequence_number": 3
+    },
+    "stream_error_misalignment": {
+      "type": "error",
+      "code": "misalignment_policy_violation",
+      "message": "This request was stopped by misalignment monitoring.",
+      "param": null,
+      "sequence_number": 7
+    },
+    "malformed_arguments": {
+      "type": "response.completed",
+      "response": {
+        "id": "resp_malformed",
+        "object": "response",
+        "status": "completed",
+        "model": "gpt-6-luna",
+        "output": [
+          {
+            "type": "function_call",
+            "id": "fc_malformed",
+            "call_id": "call_malformed",
+            "name": "view_city",
+            "arguments": "{\"city\": \"c1\"",
+            "status": "completed"
+          }
+        ],
+        "usage": {
+          "input_tokens": 9000,
+          "input_tokens_details": { "cached_tokens": 8192, "cache_write_tokens": 0 },
+          "output_tokens": 60,
+          "output_tokens_details": { "reasoning_tokens": 40 },
+          "total_tokens": 9060
+        }
+      }
+    },
+    "usage_without_details": {
+      "type": "response.completed",
+      "response": {
+        "id": "resp_bad_usage",
+        "object": "response",
+        "status": "completed",
+        "model": "gpt-6-luna",
+        "output": [],
+        "usage": { "input_tokens": 9000, "output_tokens": 60, "total_tokens": 9060 }
+      }
+    },
+    "usage_contradictory": {
+      "type": "response.completed",
+      "response": {
+        "id": "resp_bad_usage_2",
+        "object": "response",
+        "status": "completed",
+        "model": "gpt-6-luna",
+        "output": [],
+        "usage": {
+          "input_tokens": 100,
+          "input_tokens_details": { "cached_tokens": 90, "cache_write_tokens": 20 },
+          "output_tokens": 60,
+          "output_tokens_details": { "reasoning_tokens": 40 },
+          "total_tokens": 160
+        }
+      }
+    },
+    "usage_missing": {
+      "type": "response.completed",
+      "response": {
+        "id": "resp_no_usage",
+        "object": "response",
+        "status": "completed",
+        "model": "gpt-6-luna",
+        "output": [],
+        "usage": null
+      }
+    },
+    "priority_tier": {
+      "type": "response.completed",
+      "response": {
+        "id": "resp_priority",
+        "object": "response",
+        "status": "completed",
+        "model": "gpt-6-luna",
+        "service_tier": "priority",
+        "output": [],
+        "usage": {
+          "input_tokens": 9000,
+          "input_tokens_details": { "cached_tokens": 0, "cache_write_tokens": 0 },
+          "output_tokens": 60,
+          "output_tokens_details": { "reasoning_tokens": 40 },
+          "total_tokens": 9060
+        }
+      }
+    },
+    "not_a_response": {
+      "type": "response.completed",
+      "response": { "id": "resp_garbage", "status": "done" }
+    }
+  }
+}

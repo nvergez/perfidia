@@ -30,12 +30,16 @@ import { ModelError } from "../model/adapter.ts";
 import { FakeAdapter, type Brain } from "../model/fake.ts";
 import { formatCents, requirePrice } from "../model/prices.ts";
 import { botBrain } from "./brain.ts";
-import { main } from "./cli.ts";
+import { main as arenaMain } from "./cli.ts";
 import { estimateSeat } from "./cost.ts";
 import { arenaEnv, planArena, type LlmSeatPlan } from "./plan.ts";
 import { reconcileRun } from "./reconcile.ts";
 import { runArena, type AdapterContext, type SignalSource } from "./run.ts";
 import { FlakyAdapter, RULESET, readCalls, runDir } from "./rig.test.ts";
+
+/** `arena` as the CLI runs it, with no calibration profile unless a test passes `--profiles`. */
+const main = (...[argv, io, env, o]: Parameters<typeof arenaMain>) =>
+  arenaMain(argv, io, env, { profilesDir: "off", ...o });
 
 const LONG = 120_000;
 const PLAN = ["--fake", "--lineup", "claude-duo", "--seed", "1", "--id-key", "seed"];
@@ -143,8 +147,8 @@ describe("arena estimate (phase 4 §5.3, §5.4)", () => {
       );
     }
     expect(existsSync(dir)).toBe(false);
-    // A lineup with a non-Anthropic seat plans (Pass 1b) but runs only on the fake path: this build
-    // has no adapter for it.
+    // A lineup with a non-Anthropic seat plans (Pass 1b); a real run of it needs that provider's
+    // key too (Pass 2: every provider has an adapter).
     const bad = join(runDir("lineup"), "..", "mixed.json");
     const mixed = LineupSchema.parse(
       JSON.parse(
@@ -154,20 +158,22 @@ describe("arena estimate (phase 4 §5.3, §5.4)", () => {
     mixed.seats[1] = {
       seat: "p2",
       kind: "llm",
-      provider: "openai",
-      model: "gpt-6-luna",
+      provider: "google",
+      model: "gemini-3.8-flash",
       profile: "achilles@1",
     };
     writeFileSync(bad, JSON.stringify(mixed));
     const planned = await cli(["estimate", "--lineup", bad]);
     expect(planned.code).toBe(0);
-    expect(planned.out).toMatch(/p2 +gpt-6-luna +medium/);
+    expect(planned.out).toMatch(/p2 +gemini-3\.8-flash +medium/);
     const refused = await cli(["run", "--lineup", bad, "--out", dir], {
       PERFIDIA_ANTHROPIC_API_KEY: "k",
-      PERFIDIA_OPENAI_API_KEY: "k",
+      // Loopback, a closed port: were the refusal to fail, nothing would leave the machine.
+      PERFIDIA_ANTHROPIC_BASE_URL: "http://127.0.0.1:9",
+      PERFIDIA_GOOGLE_BASE_URL: "http://127.0.0.1:9",
     });
     expect(refused.code).toBe(3);
-    expect(refused.err).toContain("p2: openai has no adapter in this build");
+    expect(refused.err).toContain("PERFIDIA_GOOGLE_API_KEY is not set: the LLM seats (p2) need it");
     expect(existsSync(dir)).toBe(false);
   });
 });

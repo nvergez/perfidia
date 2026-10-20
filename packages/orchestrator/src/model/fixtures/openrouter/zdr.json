@@ -1,0 +1,30 @@
+{
+  "synthetic": false,
+  "recorded": "2026-10-20",
+  "source": "https://openrouter.ai/api/v1/endpoints/zdr",
+  "note": "the public ZDR list as fetched on 2026-10-20 (1028 endpoints), trimmed to 4 entries and the fields the adapter reads",
+  "response": {
+    "data": [
+      {
+        "model_id": "z-ai/glm-5.3",
+        "tag": "mistral/zdr",
+        "provider_name": "Mistral"
+      },
+      {
+        "model_id": "z-ai/glm-5.3-flash",
+        "tag": "z-ai/fp8",
+        "provider_name": "Z.AI"
+      },
+      {
+        "model_id": "z-ai/glm-5.3",
+        "tag": "z-ai/fp8",
+        "provider_name": "Z.AI"
+      },
+      {
+        "model_id": "moonshotai/kimi-k3",
+        "tag": "moonshotai/mxfp4",
+        "provider_name": "Moonshot AI"
+      }
+    ]
+  }
+}

@@ -1,7 +1,8 @@
-import type { PlayerId } from "@perfidia/protocol";
+import type { PlayerId, PromptVariant, ReminderCadence, TokenProfile } from "@perfidia/protocol";
 import type { EstimateFile, PredictionSource } from "../log/schema.ts";
 import {
   attemptBoundNano,
+  completionUpper,
   maxInputSide,
   maxOutputPrice,
   type CacheTtl,
@@ -10,24 +11,41 @@ import {
 } from "../model/adapter.ts";
 import { fallbacksOn } from "../model/anthropic.ts";
 import { capabilitiesFor, modelInfo } from "../model/catalog.ts";
+import { seededRandom } from "../model/clock.ts";
 import {
   ALL_CARDS,
   FALLBACK_TARGETS,
   LEGACY_AT,
   billable,
+  cardAt,
   cardsFrom,
+  costOf,
   formatCents,
   type BillableCard,
   type PriceCard,
+  type PriceContext,
 } from "../model/prices.ts";
+import { PROMPT_VERSION } from "../seat/prompt.ts";
 import {
+  BRIEFING_BYTES_PER_TOKEN,
+  MIN_CALIBRATED_SEAT_DAYS,
+  independentSeatDays,
+  profileKeyLabel,
+  profileKeyText,
+  rulesetMajorOf,
+  type ProfileKey,
+} from "./calibrate.ts";
+import {
+  BOT_DAY_PROFILE,
   BRIEFING_TOKENS,
   EFFORT_FACTOR_PCT,
   IMPLICIT_HIT_PCT,
   PREFIX_TOKENS,
+  PROJECTION_MARGIN_PCT,
   RESULTS_TOKENS,
   SCENARIOS,
   estimateCard,
+  projectSpend,
   scenarioCard,
 } from "./cost.ts";
 import { PREFLIGHT_OUTPUT_TOKENS } from "./preflight.ts";
@@ -47,6 +65,53 @@ import { PREFLIGHT_OUTPUT_TOKENS } from "./preflight.ts";
 // from that instant on (a later, dearer window included: a run that crosses a price change stays
 // within its reserve), the long-context tiers its prompt cap can reach, and its model's own output
 // limit for the `max_tokens` retry.
+//
+// Pass 2: the `measured-point` and `calibrated` sources (design §5.3), from the calibration
+// profiles of `arena calibrate` (`arena/calibrate.ts`) whose key is the seat's (provider, model,
+// endpoint, effort, prompt variant, reminder cadence, `maxTokens`, `PROMPT_VERSION`, ruleset major),
+// on lockstep plans:
+// - `measured-point` (1–2 seat-days): central = phase 2's projection (`projectSpend`: the bots'
+//   per-day wake profile, +15%) of the measured spend of one seat, re-priced at the cards of the
+//   planned wall times; low and high = central × the scenario's low/central and high/central ratios.
+//   No percentiles.
+// - `calibrated` (≥ 3 seat-days): a seeded bootstrap of 2,000 replicates. Per game day, a wake count
+//   drawn from the seat-days measured on that day index, then that many whole wakes drawn from that
+//   day's wakes; a day not measured draws a count from any seat-day, scaled by `BOT_DAY_PROFILE`,
+//   and wakes from every day, each round's prompt grown by the briefing growth of 7-day fake runs
+//   between the wake's day and this one. Every wake is priced at the card of its day's planned wall
+//   time. Per seat p10 / p50 / p90; the match is the bootstrap of the seats' sum when every seat is
+//   calibrated, else the sum of the seat bounds.
+
+/** Replicates of the calibrated bootstrap (design §5.3). */
+export const BOOTSTRAP_REPLICATES = 2_000;
+/** The bootstrap's default seed: a prediction is reproducible (same seed, same figures). */
+export const BOOTSTRAP_SEED = 20_261_019;
+/** Wall hours of a 7-day lockstep match, at most (design §2.9: 10 to 15), an assumption. */
+export const LOCKSTEP_WEEK_WALL_HOURS = 15;
+/** The planned wall time of one lockstep game day. */
+export const LOCKSTEP_WALL_MS_PER_GAME_DAY = Math.ceil((LOCKSTEP_WEEK_WALL_HOURS * 3_600_000) / 7);
+/**
+ * How much later than planned a game day may be played when its card is chosen (review: timeouts,
+ * pauses and rate limits stretch a real run): day d is priced at the dearer card of its window
+ * from its planned start to `WALL_SLACK` × its planned end, so a run that slips past a price change
+ * stays inside its prediction.
+ */
+export const WALL_SLACK = 2;
+
+/**
+ * Wall milliseconds per game day of a plan, to choose the card of each planned day: 0 when every
+ * attempt is priced at one pinned instant (`--fake`, `--price-date`); real time from its speed.
+ */
+export function plannedWallMsPerGameDay(
+  clock:
+    | { readonly kind: "lockstep" }
+    | { readonly kind: "realtime"; readonly speed: { readonly num: number; readonly den: number } },
+  priceFixed: string | null,
+): number {
+  if (priceFixed !== null) return 0;
+  if (clock.kind === "lockstep") return LOCKSTEP_WALL_MS_PER_GAME_DAY;
+  return Math.ceil((86_400_000 * clock.speed.den) / clock.speed.num);
+}
 
 /** One LLM seat as the prediction needs it. */
 export interface PredictSeat {
@@ -61,6 +126,8 @@ export interface PredictSeat {
   readonly profile: string;
   /** An upper bound of the seat's preflight shape check prompt (`sampleTokensUpper`). */
   readonly sampleTokens: number;
+  /** Pass 2: the seat's operator channel, part of its profile key (default `system`). */
+  readonly promptVariant?: PromptVariant;
 }
 
 export interface SeatPrediction {
@@ -75,6 +142,8 @@ export interface SeatPrediction {
   readonly central: number;
   readonly high: number;
   readonly source: PredictionSource;
+  /** The scenario's high, whatever the source (the default seat cap's floor). */
+  readonly scenarioHigh: number;
   readonly priceCards: readonly string[];
   readonly attemptBoundNanoUsd: number;
 }
@@ -99,6 +168,8 @@ export interface Prediction {
     readonly source: PredictionSource;
   };
   readonly reserve: Reserve;
+  /** The prediction's assumptions and sources, in words (`estimate.json`, `arena estimate`). */
+  readonly assumptions: readonly string[];
 }
 
 export interface PredictOptions {
@@ -109,6 +180,16 @@ export interface PredictOptions {
   readonly promptCapTokens: number;
   /** The UTC instant the cards are chosen at (the run's start, or `--price-date`). */
   readonly priceAt?: string;
+  /** Pass 2: the calibration profiles to predict from (none: the scenario only). */
+  readonly profiles?: readonly TokenProfile[];
+  /** Pass 2: the plan's reminder cadence (profile key; default `every-round`). */
+  readonly reminders?: ReminderCadence;
+  /** Pass 2: the plan's ruleset id (its major is in the profile key); absent: no profile matches. */
+  readonly ruleset?: string;
+  /** Pass 2: wall milliseconds per game day (`plannedWallMsPerGameDay`); 0: every day at `priceAt`. */
+  readonly wallMsPerGameDay?: number;
+  /** Pass 2: the calibrated bootstrap's seed (default `BOOTSTRAP_SEED`). */
+  readonly bootstrapSeed?: number;
 }
 
 /** Where a seat is billed: its provider, endpoint, and the instant its run starts. */
@@ -180,6 +261,7 @@ export function seatAttemptBound(
     {
       modelMax: capabilitiesFor(provider, model, k.endpoint ?? null).maxOutputTokens,
       feePermille: feeOfCards(model, k),
+      provider,
     },
   );
 }
@@ -222,9 +304,10 @@ export function callBound(
   const tierCap = o.tierCap ?? promptTokens;
   const at = (c: readonly TokenPrices[]): TokenPrices[] =>
     o.ttl === "5m" ? c.map((p) => ({ ...p, write1h: p.write5m })) : [...c];
+  const output = completionUpper(k.provider ?? "anthropic", outputTokens);
   const one = (c: readonly TokenPrices[], permille: number): number => {
     const nano = Math.ceil(
-      (promptTokens * maxInputSide(at(c)) + outputTokens * maxOutputPrice(c)) / 1000,
+      (promptTokens * maxInputSide(at(c)) + output * maxOutputPrice(c)) / 1000,
     );
     return nano + (permille === 0 ? 0 : Math.ceil((nano * permille) / 1000));
   };
@@ -245,10 +328,281 @@ function groupKeys(seats: readonly PredictSeat[]): PredictSeat[] {
   return [...out.values()];
 }
 
-/** The prediction and reserve of a run's LLM seats (scenario source). */
+type ProfileRound = TokenProfile["seatDays"][number]["wakes"][number]["rounds"][number];
+
+/** A measured wake and the game day it was measured on. */
+interface ProfileWake {
+  readonly day: number;
+  readonly rounds: readonly ProfileRound[];
+}
+
+/** One planned game day: its index, the share of it the run plays, the instant it is priced at. */
+interface PlannedDay {
+  readonly day: number;
+  readonly share: number;
+  readonly at: string;
+}
+
+/** An instant in ms as an ISO 8601 UTC string. */
+const isoOf = (ms: number): string => new Date(ms).toISOString();
+
+/** The bots' per-day wake weight of game day `d` (from 0; the last day repeats). */
+const dayWeight = (d: number): number =>
+  BOT_DAY_PROFILE[Math.min(d, BOT_DAY_PROFILE.length - 1)] ?? 0;
+
+/** `v × num ÷ den`, rounded half up, exact (BigInt). */
+function scaled(v: number, num: number, den: number): number {
+  if (den <= 0) return v;
+  const d = BigInt(den);
+  return Number((BigInt(v) * BigInt(num) * 2n + d) / (2n * d));
+}
+
+/** The nearest-rank percentile `p` of ascending `sorted` values. */
+export function percentile(sorted: readonly number[], p: number): number {
+  if (sorted.length === 0) return 0;
+  const i = Math.max(0, Math.ceil((p * sorted.length) / 100) - 1);
+  return sorted[Math.min(i, sorted.length - 1)] ?? 0;
+}
+
+/** The briefing growth of a profile as a function of the game day (the last day repeats). */
+function growthOf(p: TokenProfile): (day: number) => number {
+  const g = p.briefingGrowth.toSorted((a, b) => a.day - b.day);
+  return (day) => {
+    let v = g[0]?.briefingTokens ?? 0;
+    for (const e of g) if (e.day <= day) v = e.briefingTokens;
+    return v;
+  };
+}
+
+/**
+ * The cost of one measured wake at `ctx`, in nano-dollars (each attempt priced as the ledger prices
+ * a usage entry, the platform fee included), with `delta` tokens of briefing growth: the first
+ * attempt reads them uncached, the later ones in the share their prompt was read from the cache.
+ * Uncached tokens are cache writes in the measured share (a profile without it: all of them), at
+ * the plan's TTL bucket; implicit-cache cards bill writes as input.
+ */
+function wakeNanoAt(
+  model: string,
+  rounds: readonly ProfileRound[],
+  delta: number,
+  ctx: PriceContext,
+  ttl: CacheTtl,
+): number {
+  let n = 0;
+  for (const [i, r] of rounds.entries()) {
+    const prompt = Math.max(0, r.promptTokens + delta);
+    const grownRead =
+      i === 0 || r.promptTokens === 0
+        ? r.cacheReadTokens
+        : r.cacheReadTokens + Math.round((delta * r.cacheReadTokens) / r.promptTokens);
+    const read = Math.min(prompt, Math.max(0, grownRead));
+    const uncached = prompt - read;
+    const before = r.promptTokens - r.cacheReadTokens;
+    const write =
+      r.cacheWriteTokens === undefined || before <= 0
+        ? uncached
+        : Math.min(uncached, Math.round((uncached * r.cacheWriteTokens) / before));
+    n += costOf(
+      [
+        {
+          model,
+          kind: "message",
+          tokens: {
+            input: uncached - write,
+            cacheWrite5m: ttl === "1h" ? 0 : write,
+            cacheWrite1h: ttl === "1h" ? write : 0,
+            cacheRead: read,
+            output: r.outputTokens,
+          },
+          estimated: false,
+        },
+      ],
+      ctx,
+    ).nanoUsd;
+  }
+  return n;
+}
+
+/** What a profile predicts for one seat. */
+interface ProfilePrediction {
+  readonly low: number;
+  readonly central: number;
+  readonly high: number;
+  readonly source: "calibrated" | "measured-point";
+  /** The bootstrap's replicate totals (calibrated), in replicate order. */
+  readonly replicates: readonly number[] | null;
+}
+
+/**
+ * The planned days of a run and the instant each is priced at: of its window's start and end
+ * (`wallMsPerGameDay` from `priceAt`, the end stretched by `WALL_SLACK`), the one whose card makes
+ * the measured wakes dearer.
+ */
+function plannedDays(
+  s: PredictSeat,
+  wakes: readonly ProfileWake[],
+  o: PredictOptions,
+  ttl: CacheTtl,
+): PlannedDay[] {
+  const start = Date.parse(o.priceAt ?? LEGACY_AT);
+  const wall = o.wallMsPerGameDay ?? 0;
+  const ctx = (at: string): PriceContext => ({ provider: s.provider, endpoint: s.endpoint, at });
+  const poolAt = (at: string): number =>
+    wakes.reduce((n, w) => n + wakeNanoAt(s.model, w.rounds, 0, ctx(at), ttl), 0);
+  const out: PlannedDay[] = [];
+  for (let d = 0; d < Math.ceil(o.days); d += 1) {
+    const share = Math.min(1, o.days - d);
+    const a = isoOf(start + d * wall);
+    const b = isoOf(
+      Math.max(start + d * wall, start + Math.ceil((d + share) * wall * WALL_SLACK) - 1),
+    );
+    const same =
+      cardAt(s.provider, s.model, s.endpoint, a)?.id ===
+      cardAt(s.provider, s.model, s.endpoint, b)?.id;
+    out.push({ day: d, share, at: same || poolAt(a) >= poolAt(b) ? a : b });
+  }
+  return out;
+}
+
+/** `measured-point` (1–2 seat-days): phase 2's projection of one seat's measured spend, re-priced. */
+function measuredPoint(
+  s: PredictSeat,
+  p: TokenProfile,
+  days: readonly PlannedDay[],
+  scenario: { readonly low: number; readonly central: number; readonly high: number },
+  o: PredictOptions,
+): ProfilePrediction {
+  const ctx = (at: string): PriceContext => ({ provider: s.provider, endpoint: s.endpoint, at });
+  const measured = [...new Set(p.seatDays.map((d) => d.day))].toSorted((a, b) => a - b);
+  /** One seat's measured spend at `at`: per measured day, the mean of its seat-days. */
+  const spendAt = (at: string): number =>
+    measured.reduce((n, day) => {
+      const of = p.seatDays.filter((sd) => sd.day === day);
+      const sum = of.reduce(
+        (m, sd) =>
+          m +
+          sd.wakes.reduce((k, w) => k + wakeNanoAt(s.model, w.rounds, 0, ctx(at), o.cacheTtl), 0),
+        0,
+      );
+      return n + Math.round(sum / of.length);
+    }, 0);
+  const groups = new Map<string, number>();
+  for (const d of days) groups.set(d.at, (groups.get(d.at) ?? 0) + dayWeight(d.day) * d.share);
+  const prefix = measured.every((day, i) => day === i);
+  let central: number;
+  const only = [...groups.keys()];
+  if (only.length === 1 && prefix && only[0] !== undefined) {
+    central = projectSpend(spendAt(only[0]), measured.length, o.days);
+  } else {
+    const wm = measured.reduce((n, day) => n + dayWeight(day), 0);
+    central = [...groups.entries()].reduce(
+      (n, [at, w]) =>
+        n + Math.round((spendAt(at) * w * (100 + PROJECTION_MARGIN_PCT)) / (wm * 100)),
+      0,
+    );
+  }
+  return {
+    low: scaled(central, scenario.low, scenario.central),
+    central,
+    high: scaled(central, scenario.high, scenario.central),
+    source: "measured-point",
+    replicates: null,
+  };
+}
+
+/** `calibrated` (≥ 3 seat-days): the seeded bootstrap of whole wakes by game day. */
+function calibrated(
+  s: PredictSeat,
+  p: TokenProfile,
+  days: readonly PlannedDay[],
+  o: PredictOptions,
+  seed: number,
+): ProfilePrediction {
+  const ctx = (at: string): PriceContext => ({ provider: s.provider, endpoint: s.endpoint, at });
+  const wakes: ProfileWake[] = p.seatDays.flatMap((sd) =>
+    sd.wakes.map((w) => ({ day: sd.day, rounds: w.rounds })),
+  );
+  const growth = growthOf(p);
+  const counts = new Map<number, number[]>();
+  for (const sd of p.seatDays) counts.set(sd.day, [...(counts.get(sd.day) ?? []), sd.wakes.length]);
+  const anyDay = p.seatDays.map((sd) => ({ day: sd.day, count: sd.wakes.length }));
+  // Per planned day: where its counts and wakes are drawn from, and every candidate wake's cost.
+  const plan = days.map((d) => {
+    const own = counts.get(d.day);
+    const pool = wakes.flatMap((w, i) => (own === undefined || w.day === d.day ? [i] : []));
+    const cost = pool.map((i) => {
+      const w = wakes[i];
+      if (w === undefined) return 0;
+      const delta = own === undefined ? growth(d.day) - growth(w.day) : 0;
+      return wakeNanoAt(s.model, w.rounds, delta, ctx(d.at), o.cacheTtl);
+    });
+    return { ...d, own, cost };
+  });
+  const rand = seededRandom(seed);
+  const pick = (n: number): number => Math.min(n - 1, Math.floor(rand() * n));
+  const totals: number[] = [];
+  for (let b = 0; b < BOOTSTRAP_REPLICATES; b += 1) {
+    let total = 0;
+    for (const d of plan) {
+      let n: number;
+      if (d.own !== undefined) {
+        n = d.own[pick(d.own.length)] ?? 0;
+      } else {
+        const from = anyDay[pick(anyDay.length)];
+        n =
+          from === undefined
+            ? 0
+            : Math.round((from.count * dayWeight(d.day)) / dayWeight(from.day));
+      }
+      if (d.share < 1) n = Math.round(n * d.share);
+      if (d.cost.length === 0) continue;
+      for (let k = 0; k < n; k += 1) total += d.cost[pick(d.cost.length)] ?? 0;
+    }
+    totals.push(total);
+  }
+  const sorted = totals.toSorted((a, b) => a - b);
+  return {
+    low: percentile(sorted, 10),
+    central: percentile(sorted, 50),
+    high: percentile(sorted, 90),
+    source: "calibrated",
+    replicates: totals,
+  };
+}
+
+/** The bootstrap seed of the `i`-th LLM seat: one independent stream per seat. */
+const seatSeed = (seed: number, i: number): number => (seed + Math.imul(i + 1, 0x9e3779b1)) >>> 0;
+
+/** The profile key a seat would be measured under. */
+function seatKey(s: PredictSeat, o: PredictOptions, ruleset: string): ProfileKey {
+  return {
+    provider: s.provider,
+    model: s.model,
+    endpoint: s.endpoint,
+    effort: s.effort,
+    promptVariant: s.promptVariant ?? "system",
+    reminders: o.reminders ?? "every-round",
+    maxTokens: o.maxTokens,
+    promptVersion: PROMPT_VERSION,
+    rulesetMajor: rulesetMajorOf(ruleset),
+  };
+}
+
+const SOURCE_RANK: Readonly<Record<PredictionSource, number>> = {
+  scenario: 0,
+  "measured-point": 1,
+  calibrated: 2,
+};
+
+/** The prediction and reserve of a run's LLM seats (the scenario, or their profiles: Pass 2). */
 export function predict(seats: readonly PredictSeat[], o: PredictOptions): Prediction {
   const at = o.priceAt ?? LEGACY_AT;
-  const predictions = seats.map((s): SeatPrediction => {
+  const byKey = new Map((o.profiles ?? []).map((p) => [profileKeyText(p.key), p]));
+  const seed = o.bootstrapSeed ?? BOOTSTRAP_SEED;
+  const used = new Map<string, { readonly profile: TokenProfile; readonly seats: PlayerId[] }>();
+  const lockstepOnly: PlayerId[] = [];
+  const replicates: (readonly number[] | null)[] = [];
+  const predictions = seats.map((s, i): SeatPrediction => {
     const k: BillingKey = { provider: s.provider, endpoint: s.endpoint, from: at };
     const card = scenarioCard(s.model, { provider: s.provider, endpoint: s.endpoint, at });
     const e = estimateCard(card, o.days, o.clock, o.cacheTtl, s.effort);
@@ -256,6 +610,26 @@ export function predict(seats: readonly PredictSeat[], o: PredictOptions): Predi
       ...servedCards(s.model, k, o.promptCapTokens),
       ...fallbackCards(s.model, s.fallbacks, k, o.promptCapTokens).flat(),
     ];
+    const key = o.ruleset === undefined ? null : profileKeyText(seatKey(s, o, o.ruleset));
+    const profile = key === null ? undefined : byKey.get(key);
+    let measuredSeat: ProfilePrediction | null = null;
+    if (profile !== undefined && profile.seatDays.length > 0) {
+      if (o.clock !== "lockstep") {
+        lockstepOnly.push(s.seat);
+      } else {
+        const wakes = profile.seatDays.flatMap((sd) =>
+          sd.wakes.map((w) => ({ day: sd.day, rounds: w.rounds })),
+        );
+        const days = plannedDays(s, wakes, o, o.cacheTtl);
+        measuredSeat =
+          independentSeatDays(profile) >= MIN_CALIBRATED_SEAT_DAYS
+            ? calibrated(s, profile, days, o, seatSeed(seed, i))
+            : measuredPoint(s, profile, days, e, o);
+        const u = used.get(key ?? "") ?? { profile, seats: [] };
+        used.set(key ?? "", { profile, seats: [...u.seats, s.seat] });
+      }
+    }
+    replicates.push(measuredSeat?.replicates ?? null);
     return {
       seat: s.seat,
       provider: s.provider,
@@ -264,10 +638,11 @@ export function predict(seats: readonly PredictSeat[], o: PredictOptions): Predi
       effort: s.effort,
       fallbacks: s.fallbacks,
       profile: s.profile,
-      low: e.low,
-      central: e.central,
-      high: e.high,
-      source: "scenario",
+      low: measuredSeat?.low ?? e.low,
+      central: measuredSeat?.central ?? e.central,
+      high: measuredSeat?.high ?? e.high,
+      source: measuredSeat?.source ?? "scenario",
+      scenarioHigh: e.high,
       priceCards: [...new Set(cards.map((c) => c.id))],
       attemptBoundNanoUsd: seatAttemptBound(
         s.model,
@@ -291,17 +666,108 @@ export function predict(seats: readonly PredictSeat[], o: PredictOptions): Predi
   );
   const bounds = predictions.reduce((n, s) => n + s.attemptBoundNanoUsd, 0);
   const sum = (k: "low" | "central" | "high"): number => predictions.reduce((n, s) => n + s[k], 0);
+  // The match: the bootstrap of the sum when every seat is calibrated, else the sum of the seat
+  // bounds (conservative), labelled with the weakest seat source.
+  const all = replicates.every((r) => r !== null) && replicates.length > 0;
+  let match: Prediction["match"];
+  if (all) {
+    const totals = Array.from({ length: BOOTSTRAP_REPLICATES }, (_, b) =>
+      replicates.reduce((n, r) => n + (r?.[b] ?? 0), 0),
+    ).toSorted((a, b) => a - b);
+    match = {
+      low: percentile(totals, 10),
+      central: percentile(totals, 50),
+      high: percentile(totals, 90),
+      source: "calibrated",
+    };
+  } else {
+    const weakest = predictions.reduce<PredictionSource>(
+      (w, s) => (SOURCE_RANK[s.source] < SOURCE_RANK[w] ? s.source : w),
+      predictions.length === 0 ? "scenario" : "calibrated",
+    );
+    match = { low: sum("low"), central: sum("central"), high: sum("high"), source: weakest };
+  }
   return {
     days: o.days,
     seats: predictions,
-    match: { low: sum("low"), central: sum("central"), high: sum("high"), source: "scenario" },
+    match,
     reserve: {
       attemptBoundsNanoUsd: bounds,
       probeBoundNanoUsd: probe,
       startPreflightBoundNanoUsd: probe,
       reserveNanoUsd: bounds + 2 * probe,
     },
+    assumptions: assumptionsOf(predictions, match, [...used.values()], lockstepOnly, o, seed),
   };
+}
+
+/** The seats of a source, for the assumption lines. */
+const seatsOf = (ps: readonly SeatPrediction[], source: PredictionSource): string =>
+  ps
+    .filter((p) => p.source === source)
+    .map((p) => p.seat)
+    .join(", ");
+
+/**
+ * The assumptions of a prediction: the scenario's when a seat uses it, then each other source's,
+ * the profiles drawn on and the planned wall times, and how the match interval is made. A
+ * scenario-only prediction says exactly `scenarioAssumptions()`.
+ */
+function assumptionsOf(
+  ps: readonly SeatPrediction[],
+  match: Prediction["match"],
+  used: readonly { readonly profile: TokenProfile; readonly seats: readonly PlayerId[] }[],
+  lockstepOnly: readonly PlayerId[],
+  o: PredictOptions,
+  seed: number,
+): string[] {
+  const scenario = scenarioAssumptions();
+  const out: string[] = [];
+  if (ps.length === 0 || ps.some((p) => p.source === "scenario")) {
+    out.push(...scenario.slice(0, -1));
+  }
+  if (lockstepOnly.length > 0) {
+    out.push(
+      `profiles are measured on lockstep runs: this real-time plan keeps the scenario for ${lockstepOnly.join(", ")}`,
+    );
+  }
+  if (ps.some((p) => p.source === "measured-point")) {
+    out.push(
+      `source measured-point (${seatsOf(ps, "measured-point")}): 1–2 seat-days of a calibration profile, so no percentiles: central = the measured spend of one seat re-priced at the cards of the planned wall-clock times and projected to the run's days by phase 2's projection (the bots' per-day wake profile, +${PROJECTION_MARGIN_PCT}%); low and high = central × the scenario's low/central and high/central ratios`,
+    );
+  }
+  if (ps.some((p) => p.source === "calibrated")) {
+    out.push(
+      `source calibrated (${seatsOf(ps, "calibrated")}): a seeded bootstrap (seed ${seed}, ${BOOTSTRAP_REPLICATES} replicates) of the profile's measured wakes: per game day a wake count drawn from the seat-days of that day (a day not measured: any seat-day's, scaled by the bots' per-day wake profile), then whole wakes of that day (a day not measured: of any day, each prompt grown by the briefing growth of 7-day --fake runs, at ${BRIEFING_BYTES_PER_TOKEN} bytes per token); low / central / high = p10 / p50 / p90`,
+    );
+  }
+  for (const u of used) {
+    const p = u.profile;
+    // Only the bootstrap grows prompts; the projection of a measured point scales spend.
+    const growth =
+      independentSeatDays(p) < MIN_CALIBRATED_SEAT_DAYS
+        ? ""
+        : p.briefingGrowth.length === 0
+          ? "; no briefing growth (days not measured keep the measured prompt sizes: biased low)"
+          : `; briefing growth over ${p.briefingGrowth.length} game days`;
+    out.push(
+      `profile ${profileKeyLabel(p.key)} (${u.seats.join(", ")}): ${p.seatDays.length} seat-day(s) on game day(s) ${[...new Set(p.seatDays.map((d) => d.day + 1))].toSorted((a, b) => a - b).join(", ")} from ${p.runs.map((r) => r.run).join(", ")}${growth}`,
+    );
+  }
+  if (used.length > 0) {
+    const wall = o.wallMsPerGameDay ?? 0;
+    out.push(
+      wall === 0
+        ? `measured wakes priced at the cards of ${o.priceAt ?? LEGACY_AT} (one pinned instant)`
+        : `measured wakes priced at the cards of each game day's planned wall-clock time: from ${o.priceAt ?? LEGACY_AT}, ${(wall / 3_600_000).toFixed(2)} wall-clock hours per game day (lockstep: a 7-day match in at most ${LOCKSTEP_WEEK_WALL_HOURS} hours, an assumption), the dearer card of a day's window, its end stretched ×${WALL_SLACK} (a slower run)`,
+    );
+  }
+  out.push(
+    match.source === "calibrated"
+      ? "the match interval is p10 / p50 / p90 of the bootstrap of the seats' sum (every seat calibrated)"
+      : (scenario.at(-1) ?? ""),
+  );
+  return out;
 }
 
 /** The scenario's assumptions, in words (`estimate.json`, `arena estimate`). */
@@ -435,7 +901,7 @@ export function estimateFile(o: {
             carryNanoUsd: o.budget.carryNanoUsd,
             onBudget: o.budget.onBudget,
           },
-    assumptions: scenarioAssumptions(),
+    assumptions: [...p.assumptions],
   };
 }
 
@@ -471,8 +937,12 @@ export function formatEstimate(e: EstimateFile): string {
       ].join(" "),
     );
   }
+  const how =
+    e.match.source === "calibrated"
+      ? "p10 / p50 / p90 of the bootstrap of the sum"
+      : "the sum of the seat bounds";
   out.push(
-    `match (${e.match.source}, the sum of the seat bounds): ${formatCents(e.match.low)} low · ${formatCents(e.match.central)} central · ${formatCents(e.match.high)} high`,
+    `match (${e.match.source}, ${how}): ${formatCents(e.match.low)} low · ${formatCents(e.match.central)} central · ${formatCents(e.match.high)} high`,
   );
   out.push(`reserve ${reserveText(e.reserve)}`);
   if (e.budget === null) {

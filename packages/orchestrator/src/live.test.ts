@@ -10,11 +10,18 @@
 //    is written, and Level E holds.
 // 2. One Claude Opus 5.5 call at `low` (`arena smoke --model opus-5-5`): the `fallbacks` and
 //    `betas` shape, and the operator entries as mid-conversation system messages.
+// 3. Phase 4 Pass 2, one smoke per provider, each with its own opt-in (PERFIDIA_LIVE=1 and that
+//    provider's PERFIDIA_<PROVIDER>_API_KEY), each under $0.05 and skipped with a printed reason
+//    otherwise: OpenAI (`arena smoke --provider openai`, GPT-6 Luna at `low`), Gemini (`--provider
+//    google`, Gemini 3.8 Flash at `low` with a 1,024-token output limit) and OpenRouter
+//    (`--provider openrouter`, GLM-5.3 Flash pinned to z-ai/fp8).
 
 import { describe, expect, test } from "bun:test";
 import { verifyLog } from "@perfidia/engine";
 import { memoryIo } from "@perfidia/sim";
-import { arenaEnv, planArena } from "./arena/plan.ts";
+import { arenaEnv, planArena, providerEnv } from "./arena/plan.ts";
+import { runGeminiSmoke } from "./arena/providers/gemini-smoke.ts";
+import { smokeOpenRouter } from "./arena/providers/openrouter.ts";
 import { smokeCommand } from "./arena/smoke.ts";
 import { play, runDir } from "./arena/rig.test.ts";
 
@@ -68,6 +75,89 @@ describe.skipIf(!LIVE)("live: the real Claude API (opt-in)", () => {
       const code = await smokeCommand({ env, io, model: "opus-5-5", effort: "low" });
       console.log(io.stdout(), io.stderr());
       expect(code).toBe(0);
+    },
+    FIVE_MINUTES,
+  );
+});
+
+// Phase 4 Pass 2: the OpenAI adapter, behind PERFIDIA_LIVE=1 and PERFIDIA_OPENAI_API_KEY. One
+// `arena smoke --provider openai` on GPT-6 Luna at low effort: the model's access, the production
+// shape at 16 output tokens, the input-token count and one streamed call of a real round-0
+// request capped at 4,000 output tokens, no retry. Its bound is printed first and asserted under
+// $0.05 ($0.017938 at the 2026-10-20 card, the 12-hour write price included since the Pass 2
+// review). The test name carries why it is skipped.
+const OPENAI_LIVE = env.live && providerEnv(env, "openai").apiKey !== null;
+if (!OPENAI_LIVE) {
+  console.log(
+    `live: the OpenAI test is skipped: it needs PERFIDIA_LIVE=1 (${env.live ? "set" : "not set"}) and PERFIDIA_OPENAI_API_KEY (${providerEnv(env, "openai").apiKey === null ? "not set" : "set"}); it spends under $0.05`,
+  );
+}
+
+describe("live: the real OpenAI API (opt-in)", () => {
+  test.skipIf(!OPENAI_LIVE)(
+    "one GPT-6 Luna smoke at low effort, under $0.05 (skipped unless PERFIDIA_LIVE=1 and PERFIDIA_OPENAI_API_KEY are set)",
+    async () => {
+      const io = memoryIo();
+      const code = await smokeCommand({ env, io, provider: "openai" });
+      console.log(io.stdout(), io.stderr());
+      const bound = /at most \$(\d+\.\d+)/.exec(io.stdout());
+      expect(Number(bound?.[1] ?? "1")).toBeLessThan(0.05);
+      expect(code).toBe(0);
+    },
+    FIVE_MINUTES,
+  );
+});
+
+// Phase 4 Pass 2: the Gemini adapter, behind PERFIDIA_LIVE=1 and PERFIDIA_GOOGLE_API_KEY: one
+// `arena smoke --provider google` on Gemini 3.8 Flash at low effort, under $0.05.
+const GEMINI_LIVE = env.live && providerEnv(env, "google").apiKey !== null;
+if (!GEMINI_LIVE) {
+  console.log(
+    "live Gemini test skipped: it needs PERFIDIA_LIVE=1 (bun run test:live) and PERFIDIA_GOOGLE_API_KEY",
+  );
+}
+
+describe.skipIf(!GEMINI_LIVE)("live: the real Gemini API (opt-in)", () => {
+  test(
+    "arena smoke --provider google on Gemini 3.8 Flash at low: ok, under $0.05",
+    async () => {
+      const io = memoryIo();
+      const r = await runGeminiSmoke({
+        env,
+        io,
+        model: "gemini-3.8-flash",
+        effort: "low",
+        maxTokens: 1024,
+      });
+      console.log(io.stdout(), io.stderr());
+      expect(r.code).toBe(0);
+      expect(r.spentNanoUsd).toBeLessThan(50_000_000);
+    },
+    FIVE_MINUTES,
+  );
+});
+
+// Phase 4 Pass 2, OpenRouter: `arena smoke --provider openrouter`, GLM-5.3 Flash pinned to z-ai/fp8
+// (its bound, printed first, is under $0.05: `providers/openrouter.test.ts`). The pinned request
+// is accepted, the routing metadata names the pin, and usage and OpenRouter's cost come back. It
+// needs PERFIDIA_LIVE=1 and PERFIDIA_OPENROUTER_API_KEY; otherwise it is skipped, saying why.
+const OPENROUTER_LIVE = env.live && providerEnv(env, "openrouter").apiKey !== null;
+if (!OPENROUTER_LIVE) {
+  console.log(
+    `live OpenRouter test skipped: ${env.live ? "PERFIDIA_OPENROUTER_API_KEY is not set" : "PERFIDIA_LIVE is not 1"}`,
+  );
+}
+
+describe.skipIf(!OPENROUTER_LIVE)("live: OpenRouter (opt-in)", () => {
+  test(
+    "one GLM-5.3 Flash call pinned to z-ai/fp8: shape, routing metadata, usage and cost",
+    async () => {
+      const io = memoryIo();
+      const code = await smokeOpenRouter({ env, io });
+      console.log(io.stdout(), io.stderr());
+      expect(code).toBe(0);
+      expect(io.stdout()).toContain("served by z-ai/glm-5.3-flash on z-ai/fp8");
+      expect(io.stdout()).not.toContain("OpenRouter reports no cost");
     },
     FIVE_MINUTES,
   );

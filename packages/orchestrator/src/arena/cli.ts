@@ -13,13 +13,23 @@ import {
   type FlagSpecs,
 } from "@perfidia/sim";
 import { LlmLogLineSchema, type LlmLogLine } from "../log/schema.ts";
-import { capabilitiesFor } from "../model/catalog.ts";
+import { EFFORTS } from "../model/adapter.ts";
+import { capabilitiesFor, seatModels } from "../model/catalog.ts";
 import { PROFILES, profileRef } from "../seat/personalities.ts";
 import { seatPrompt } from "../seat/prompt.ts";
+import { PROFILES_DIR, calibrate, formatCalibrate } from "./calibrate.ts";
 import { formatCardTable, formatEstimate } from "./estimate.ts";
 import { PRESETS } from "./lineup.ts";
 import { PreflightError } from "./preflight.ts";
-import { arenaEnv, parseDuration, planArena, type ArenaEnv, type ArenaRequest } from "./plan.ts";
+import {
+  arenaEnv,
+  parseDuration,
+  planArena,
+  randomSeed,
+  providerEnv,
+  type ArenaEnv,
+  type ArenaRequest,
+} from "./plan.ts";
 import {
   EXIT_RECONCILE,
   RECONCILE_AFTER_HOURS,
@@ -30,7 +40,11 @@ import {
 } from "./reconcile.ts";
 import { formatCost } from "./report.ts";
 import { CALLS_FILE, runArena, type SignalSource } from "./run.ts";
+import { geminiSmokeCommand } from "./providers/gemini-smoke.ts";
+import { startRecording } from "./record.ts";
+import { runSeries } from "./series.ts";
 import { smokeCommand } from "./smoke.ts";
+import { planLive, smokeOpenRouter } from "./providers/openrouter.ts";
 
 /** The largest seed. */
 const UINT32_MAX = 4_294_967_295;
@@ -54,6 +68,8 @@ export const USAGE = [
   "  estimate       the prediction, reserve and kill threshold of a run, without running it",
   "  cost           spend per seat and model of a run, from its llm_calls.jsonl",
   "  reconcile      check a run's ledger against the provider's usage pages (48 h after it)",
+  "  calibrate      measure real runs into calibration profiles (and 7-day --fake runs' briefing growth)",
+  "  series         play a lineup as rotated matches (Latin squares over seats and profiles)",
   "  personalities  list the profiles and their exact seat text",
   "  smoke          one live check of the key, the model and the request shape (needs the key)",
   "",
@@ -62,7 +78,8 @@ export const USAGE = [
   "environment: PERFIDIA_<PROVIDER>_API_KEY for each provider a seat plays on, unless --fake",
   "             (ANTHROPIC, OPENAI, GOOGLE, OPENROUTER; COMPAT: optional on loopback), and",
   "             PERFIDIA_<PROVIDER>_BASE_URL (optional; required for COMPAT); nothing else is read.",
-  "             This build calls Anthropic only: the other providers run with --fake.",
+  "             This build calls all five (Anthropic, OpenAI, Google, OpenRouter, compat); --fake",
+  "             rehearses any lineup at $0.",
   "exit codes: 0 ok, 1 replay divergence, 2 fatal error, abort or degraded run, 3 usage, config,",
   "            budget or preflight error, 4 reconciliation outside tolerance",
   "",
@@ -109,6 +126,11 @@ const RUN_FLAGS: FlagSpecs = {
     type: "string",
     value: "<YYYY-MM-DD>",
     help: "--fake runs and estimates: price at the cards of that UTC day (default: today; a real run prices each attempt at its start)",
+  },
+  profiles: {
+    type: "string",
+    value: "<dir>|off",
+    help: "calibration profiles the prediction draws on (arena calibrate; default packages/orchestrator/profiles/; off: the scenario only)",
   },
   "budget-usd": {
     type: "string",
@@ -272,18 +294,91 @@ const RECONCILE_USAGE = usageText(
   "arena reconcile <run-dir> (--input <file> | --usd <provider=usd> ...) [--force]",
   RECONCILE_FLAGS,
 );
+const CALIBRATE_FLAGS: FlagSpecs = {
+  profiles: {
+    type: "string",
+    value: "<dir>",
+    help: "where the profiles are kept (default packages/orchestrator/profiles/): a run measured again replaces its seat-days",
+  },
+};
+const CALIBRATE_USAGE = usageText(
+  "arena calibrate <run-dir>... [--profiles <dir>]   (real runs give seat-days; 7-day --fake runs give the briefing growth only)",
+  CALIBRATE_FLAGS,
+);
+/** `arena series`: the run flags every match shares, and the series' own. */
+const SERIES_FLAGS: FlagSpecs = {
+  ...Object.fromEntries(
+    Object.entries(RUN_FLAGS).filter(
+      ([k]) => !["out", "seat", "seed", "brain", "budget-carry", "watch", "lineup"].includes(k),
+    ),
+  ),
+  lineup: {
+    type: "string",
+    value: "<preset | file>",
+    help: "the lineup whose LLM seat entries and profiles rotate (required)",
+  },
+  out: {
+    type: "string",
+    value: "<dir>",
+    help: "the series directory: series.json, lineups/ and one run directory per match (required)",
+  },
+  blocks: {
+    type: "string",
+    value: "<N>",
+    help: "blocks of rotated matches, each as many matches as the lineup has LLM seats (default 1)",
+  },
+  seed: {
+    type: "string",
+    value: "<uint32>",
+    help: "series seed: the squares, and the game seed of block b (seed + b) (default: random, printed)",
+  },
+};
+const SERIES_USAGE = usageText(
+  "arena series --lineup <preset | file> --out <dir> [--blocks N] [--seed S] [run flags]",
+  SERIES_FLAGS,
+);
 const PERSONALITIES_USAGE = usageText("arena personalities", {});
 /** The efforts a Claude smoke takes. */
 const CLAUDE_EFFORTS = capabilitiesFor("anthropic", "claude-haiku-5-5").efforts;
+/** The providers `arena smoke` checks (`gemini` is an alias of `google`). */
+const SMOKE_PROVIDERS: ReadonlySet<string> = new Set([
+  "anthropic",
+  "openai",
+  "google",
+  "gemini",
+  "openrouter",
+]);
 const SMOKE_FLAGS: FlagSpecs = {
+  provider: {
+    type: "string",
+    value: "<provider>",
+    help: "anthropic (default), openai, google (alias gemini) or openrouter: needs PERFIDIA_<PROVIDER>_API_KEY",
+  },
   model: {
     type: "string",
     value: "<alias | id>",
-    help: "opus-5-5, sonnet-5-5, haiku-5-5, fable-5-1 or a full id (default haiku-5-5)",
+    help: "anthropic: opus-5-5, sonnet-5-5, haiku-5-5, fable-5-1 or a full id (default haiku-5-5); another provider: one of its seat models (openai: default gpt-6-luna; google: default gemini-3.8-flash; openrouter: default z-ai/glm-5.3-flash)",
   },
-  effort: { type: "string", value: "<effort>", help: `${CLAUDE_EFFORTS.join("|")} (default low)` },
+  effort: {
+    type: "string",
+    value: "<effort>",
+    help: `anthropic: ${CLAUDE_EFFORTS.join("|")}; another provider: one the model accepts; default low (openrouter: medium)`,
+  },
+  endpoint: {
+    type: "string",
+    value: "<slug>",
+    help: "openrouter: the full endpoint slug (default the model's catalogued one, e.g. z-ai/fp8)",
+  },
+  record: {
+    type: "string",
+    value: "<dir>",
+    help: "write every exchange, sanitised (keys, request and account ids replaced), as a perfidia-recording/1 file into <dir> (new or empty)",
+  },
 };
-const SMOKE_USAGE = usageText("arena smoke [--model <alias>] [--effort <effort>]", SMOKE_FLAGS);
+const SMOKE_USAGE = usageText(
+  "arena smoke [--provider <p>] [--model <alias | id>] [--endpoint <slug>] [--effort <effort>] [--record <dir>]",
+  SMOKE_FLAGS,
+);
 
 const int = (text: string | undefined, flag: string, min: number, max: number) =>
   text === undefined ? undefined : parseIntIn(text, flag, min, max);
@@ -293,7 +388,10 @@ const duration = (text: string | undefined, flag: string) =>
 type Flags = ReturnType<typeof parseFlags>;
 
 /** The request and output directory of an `arena run` command line. */
-export function runRequestOf(argv: readonly string[]): {
+export function runRequestOf(
+  argv: readonly string[],
+  profilesDir: string = PROFILES_DIR,
+): {
   readonly req: ArenaRequest;
   readonly out: string;
   readonly quiet: boolean;
@@ -301,11 +399,11 @@ export function runRequestOf(argv: readonly string[]): {
   const f = parseFlags(argv, RUN_FLAGS, RUN_USAGE, { min: 0, max: 0, name: "positional" });
   const out = f.string("out");
   if (out === undefined) throw new UsageError(`--out <dir> is required\n\n${RUN_USAGE}`);
-  return { req: requestOf(f), out, quiet: f.bool("quiet") };
+  return { req: requestOf(f, profilesDir), out, quiet: f.bool("quiet") };
 }
 
-/** The plan request of `arena run` or `arena estimate` flags. */
-function requestOf(f: Flags): ArenaRequest {
+/** The plan request of `arena run` or `arena estimate` flags (`--profiles` default: `profilesDir`). */
+function requestOf(f: Flags, profilesDir: string): ArenaRequest {
   const speed = f.string("speed");
   const latency = f.string("bot-latency");
   const req: ArenaRequest = {
@@ -347,6 +445,7 @@ function requestOf(f: Flags): ArenaRequest {
     budgetCarry: f.string("budget-carry"),
     promptCap: int(f.string("prompt-cap"), "--prompt-cap", 1_000, 1_000_000),
     priceDate: f.string("price-date"),
+    profiles: f.string("profiles") ?? profilesDir,
   };
   return req;
 }
@@ -357,9 +456,11 @@ async function runCommand(
   env: ArenaEnv,
   signals: SignalSource | undefined,
   nowMs: () => number,
+  profilesDir: string,
 ): Promise<number> {
-  const { req, out, quiet } = runRequestOf(argv);
-  const plan = planArena(req, env, { now: nowMs });
+  const { req, out, quiet } = runRequestOf(argv, profilesDir);
+  // OpenRouter seats of a real run are planned on OpenRouter's live endpoint metadata (Pass 2).
+  const plan = await planLive(req, env, { now: nowMs });
   assertFreeRunDir(out);
   try {
     const outcome = await runArena(plan, {
@@ -406,6 +507,7 @@ function estimateCommand(
   io: CliIo,
   env: ArenaEnv,
   nowMs: () => number,
+  profilesDir: string,
 ): number {
   const f = parseFlags(argv, ESTIMATE_FLAGS, ESTIMATE_USAGE, {
     min: 0,
@@ -416,7 +518,7 @@ function estimateCommand(
     io.out(formatCardTable());
     return EXIT.ok;
   }
-  const plan = planArena(requestOf(f), env, { requireKey: false, now: nowMs });
+  const plan = planArena(requestOf(f, profilesDir), env, { requireKey: false, now: nowMs });
   io.out(formatEstimate(plan.estimate));
   for (const w of plan.warnings) io.out(`warning: ${w}\n`);
   return EXIT.ok;
@@ -449,12 +551,129 @@ function reconcileCommand(argv: readonly string[], io: CliIo, nowMs: number): nu
   return r.ok ? EXIT.ok : EXIT_RECONCILE;
 }
 
+/** `arena calibrate`: measures run directories into the profiles. */
+function calibrateCommand(argv: readonly string[], io: CliIo, profilesDir: string): number {
+  const f = parseFlags(argv, CALIBRATE_FLAGS, CALIBRATE_USAGE, {
+    min: 1,
+    max: Infinity,
+    name: "run",
+  });
+  io.out(
+    formatCalibrate(calibrate(f.positionals, { profilesDir: f.string("profiles") ?? profilesDir })),
+  );
+  return EXIT.ok;
+}
+
+/** `arena series`: a rotation series of a lineup (exit code of the first match that failed). */
+function seriesCommand(
+  argv: readonly string[],
+  io: CliIo,
+  env: ArenaEnv,
+  signals: SignalSource | undefined,
+  nowMs: () => number,
+  profilesDir: string,
+): Promise<number> {
+  const f = parseFlags(argv, SERIES_FLAGS, SERIES_USAGE, { min: 0, max: 0, name: "positional" });
+  const lineup = f.string("lineup");
+  const out = f.string("out");
+  if (lineup === undefined || out === undefined) {
+    throw new UsageError(`--lineup and --out are required\n\n${SERIES_USAGE}`);
+  }
+  const given = int(f.string("seed"), "--seed", 0, UINT32_MAX);
+  const seed = given ?? randomSeed();
+  if (given === undefined) io.out(`series seed ${seed} (random; pass --seed ${seed} to replay)\n`);
+  return runSeries({
+    lineup,
+    out,
+    blocks: int(f.string("blocks"), "--blocks", 1, 1000) ?? 1,
+    seed,
+    // Each match's lineup file and game seed replace the request's.
+    request: requestOf(f, profilesDir),
+    env,
+    io,
+    quiet: f.bool("quiet"),
+    now: nowMs,
+    ...(signals === undefined ? {} : { signals }),
+  });
+}
+
 /** What `main` takes besides its streams and environment (the process's by default). */
 export interface MainOptions {
   /** `arena run`'s operator signals. */
   readonly signals?: SignalSource;
   /** The wall clock in ms (`arena reconcile`'s 48-hour check). */
   readonly nowMs?: () => number;
+  /**
+   * The profiles directory when no `--profiles` is given (default `PROFILES_DIR`): the tests pass
+   * `off`, so profiles an owner calibrates into the source tree never change pinned figures.
+   */
+  readonly profilesDir?: string;
+}
+
+/** `arena smoke`: one provider's live check, recorded when `--record` names a directory. */
+async function smoke(
+  argv: readonly string[],
+  io: CliIo,
+  env: ArenaEnv,
+  o: MainOptions,
+): Promise<number> {
+  const f = parseFlags(argv, SMOKE_FLAGS, SMOKE_USAGE, { min: 0, max: 0, name: "positional" });
+  const provider = f.string("provider") ?? "anthropic";
+  if (!SMOKE_PROVIDERS.has(provider)) {
+    throw new UsageError(
+      `--provider must be anthropic, openai, google (gemini) or openrouter, got "${provider}"`,
+    );
+  }
+  const effort = f.string("effort");
+  // Another provider's efforts are checked against its model by its smoke (Pass 2).
+  const efforts = provider === "anthropic" ? CLAUDE_EFFORTS : EFFORTS;
+  const e = effort === undefined ? undefined : efforts.find((x) => x === effort);
+  if (effort !== undefined && e === undefined) {
+    throw new UsageError(`--effort must be one of ${efforts.join(", ")}, got "${effort}"`);
+  }
+  const model = f.string("model");
+  const endpoint = f.string("endpoint");
+  if (endpoint !== undefined && provider !== "openrouter") {
+    throw new UsageError("--endpoint applies to --provider openrouter only");
+  }
+  const id = provider === "gemini" ? "google" : provider;
+  const dir = f.string("record");
+  const key = id === "anthropic" ? env.apiKey : providerEnv(env, id).apiKey;
+  const recording =
+    dir === undefined
+      ? null
+      : startRecording(dir, {
+          provider: id,
+          secrets: key === null ? [] : [key],
+          now: o.nowMs ?? Date.now,
+          keep: seatModels(id).map((m) => m.model),
+        });
+  const common = {
+    env,
+    io,
+    ...(model === undefined ? {} : { model }),
+    ...(e === undefined ? {} : { effort: e }),
+    ...(recording === null ? {} : { fetch: recording.fetch }),
+  };
+  const code =
+    id === "openrouter"
+      ? await smokeOpenRouter({
+          ...common,
+          ...(endpoint === undefined ? {} : { endpoint }),
+          ...(o.nowMs === undefined ? {} : { now: o.nowMs }),
+        })
+      : id === "google"
+        ? await geminiSmokeCommand(common)
+        : await smokeCommand({ ...common, ...(id === "anthropic" ? {} : { provider: id }) });
+  if (recording !== null && dir !== undefined) {
+    const n = await recording.done();
+    io.out(
+      n === 0
+        ? `nothing recorded: ${dir} was not created\n`
+        : `recorded ${n} exchange(s), sanitised, in ${dir}\n`,
+    );
+  }
+  return code;
 }
 
 function dispatch(
@@ -464,13 +683,18 @@ function dispatch(
   env: ArenaEnv,
   o: MainOptions,
 ): Promise<number> | number {
+  const profilesDir = o.profilesDir ?? PROFILES_DIR;
   switch (command) {
     case "run":
-      return runCommand(argv, io, env, o.signals, o.nowMs ?? Date.now);
+      return runCommand(argv, io, env, o.signals, o.nowMs ?? Date.now, profilesDir);
     case "estimate":
-      return estimateCommand(argv, io, env, o.nowMs ?? Date.now);
+      return estimateCommand(argv, io, env, o.nowMs ?? Date.now, profilesDir);
     case "reconcile":
       return reconcileCommand(argv, io, (o.nowMs ?? Date.now)());
+    case "calibrate":
+      return calibrateCommand(argv, io, profilesDir);
+    case "series":
+      return seriesCommand(argv, io, env, o.signals, o.nowMs ?? Date.now, profilesDir);
     case "cost": {
       const f = parseFlags(argv, COST_FLAGS, COST_USAGE, { min: 1, max: 1, name: "run" });
       io.out(
@@ -484,23 +708,8 @@ function dispatch(
     case "personalities":
       parseFlags(argv, {}, PERSONALITIES_USAGE, { min: 0, max: 0, name: "positional" });
       return personalities(io);
-    case "smoke": {
-      const f = parseFlags(argv, SMOKE_FLAGS, SMOKE_USAGE, { min: 0, max: 0, name: "positional" });
-      const effort = f.string("effort");
-      const e = effort === undefined ? undefined : CLAUDE_EFFORTS.find((x) => x === effort);
-      if (effort !== undefined && e === undefined) {
-        throw new UsageError(
-          `--effort must be one of ${CLAUDE_EFFORTS.join(", ")}, got "${effort}"`,
-        );
-      }
-      const model = f.string("model");
-      return smokeCommand({
-        env,
-        io,
-        ...(model === undefined ? {} : { model }),
-        ...(e === undefined ? {} : { effort: e }),
-      });
-    }
+    case "smoke":
+      return smoke(argv, io, env, o);
     default:
       throw new UsageError(`unknown command "${command}"\n\n${USAGE}`);
   }
@@ -510,6 +719,8 @@ const COMMAND_USAGE: Readonly<Record<string, string>> = {
   run: RUN_USAGE,
   estimate: ESTIMATE_USAGE,
   reconcile: RECONCILE_USAGE,
+  calibrate: CALIBRATE_USAGE,
+  series: SERIES_USAGE,
   cost: COST_USAGE,
   personalities: PERSONALITIES_USAGE,
   smoke: SMOKE_USAGE,

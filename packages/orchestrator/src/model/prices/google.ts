@@ -6,6 +6,12 @@ import { FIRST_READ, cardId, prices, type PriceCard } from "./card.ts";
 // hits are not guaranteed. Output includes thinking tokens. Each model has two dated windows: the
 // page says "through November 30, 2026" (Argon) and "through December 31, 2026" (3.8 Flash) with no
 // timezone, so the higher card applies from 00:00 UTC of that last day (conservative, design §2.9).
+// Re-verified by Pass 2 with the adapter, the same day (2026-10-20, so the check date and the ids
+// stand): the Standard rows are unchanged (Argon $2 / $10 / $0.10 "through November 30, 2026",
+// $4 / $20 / $0.20 "starting December 1, 2026"; 3.8 Flash $0.75 / $3.75 / $0.075 "through December
+// 31, 2026", $1.50 / $7.50 / $0.15 "starting January 1, 2027"); neither model has a long-prompt
+// tier; Priority (1.8×) is never requested, and a response that reports another tier is charged
+// at no card (`model/gemini.ts`). The page's only changes were deprecation notes of other models.
 
 export const GOOGLE_PRICING_URL = "https://ai.google.dev/gemini-api/docs/pricing.md.txt";
 export const GOOGLE_CHECKED = "2026-10-20";

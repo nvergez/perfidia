@@ -61,7 +61,9 @@ export function checkedOrigin(baseURL: string): string {
 export function guardedFetch(o: GuardOptions): HttpFetch {
   const origin = checkedOrigin(o.baseURL);
   const inner: HttpFetch = o.fetch ?? ((input, init) => fetch(input, init));
-  const secret = o.auth?.value ?? "";
+  // The key itself: a Bearer header's value without its scheme (a URL holding the bare key is
+  // refused too, Pass 2 integration).
+  const secret = (o.auth?.value ?? "").replace(/^Bearer /, "");
   return (input, init) => {
     const url = new URL(input instanceof Request ? input.url : input);
     if (url.origin !== origin) {
@@ -85,6 +87,78 @@ export function guardedFetch(o: GuardOptions): HttpFetch {
     if (o.auth !== null) headers.set(o.auth.header, o.auth.value);
     // Never follow a redirect: the key would go to wherever it points (phase-4 design §2.2).
     return inner(url.toString(), { ...init, headers, redirect: "error" });
+  };
+}
+
+/** A body read to its end as text; one that breaks keeps what came. */
+async function readAll(
+  body: ReadableStream<Uint8Array>,
+): Promise<{ readonly text: string; readonly broken: boolean }> {
+  const decoder = new TextDecoder();
+  const chunks: string[] = [];
+  const reader = body.getReader();
+  try {
+    for (;;) {
+      // oxlint-disable-next-line no-await-in-loop -- a stream is read in order
+      const { done, value } = await reader.read();
+      if (done) break;
+      chunks.push(decoder.decode(value, { stream: true }));
+    }
+    return { text: chunks.join("") + decoder.decode(), broken: false };
+  } catch {
+    return { text: chunks.join(""), broken: true };
+  }
+}
+
+/** One request and its response as `arena smoke --record` keeps them (design §8.2). */
+export interface RecordedExchange {
+  readonly method: string;
+  readonly url: string;
+  /** The request body when it was a string (every adapter sends JSON text); else null. */
+  readonly requestBody: string | null;
+  readonly status: number;
+  readonly contentType: string | null;
+  /** The whole response body, as text; a body that broke ends where it broke. */
+  readonly responseBody: string;
+  readonly broken: boolean;
+}
+
+/**
+ * A fetch that copies each exchange for a recording: `sink` gets, at the response, a promise of
+ * the exchange that settles once its body was read to the end; the caller reads its own branch of
+ * the stream, unchanged. It sits under the guard (`GuardOptions.fetch`), so the guard's checks run
+ * first, and it keeps no header but the response's content type (no key, no account header). A
+ * request that fails before a response records nothing.
+ */
+export function recordingFetch(
+  sink: (exchange: Promise<RecordedExchange>) => void,
+  inner?: HttpFetch,
+): HttpFetch {
+  const next: HttpFetch = inner ?? ((input, init) => fetch(input, init));
+  return async (input, init) => {
+    const res = await next(input, init);
+    const base = {
+      method: init?.method ?? (input instanceof Request ? input.method : "GET"),
+      url: input instanceof Request ? input.url : String(input),
+      requestBody: typeof init?.body === "string" ? init.body : null,
+      status: res.status,
+      contentType: res.headers.get("content-type"),
+    };
+    if (res.body === null) {
+      sink(Promise.resolve({ ...base, responseBody: "", broken: false }));
+      return res;
+    }
+    const [mine, theirs] = res.body.tee();
+    const read = async (): Promise<RecordedExchange> => {
+      const r = await readAll(mine);
+      return { ...base, responseBody: r.text, broken: r.broken };
+    };
+    sink(read());
+    return new Response(theirs, {
+      status: res.status,
+      statusText: res.statusText,
+      headers: res.headers,
+    });
   };
 }
 
@@ -154,13 +228,16 @@ export interface SseEvent {
  * are comments; consecutive `data:` lines join with `\n`; an event without data is skipped; an
  * event the body ends inside (no blank line after it) is discarded, as the SSE rule says. When the
  * body ends before an event for which `terminal` is true, the stream broke: a retryable
- * `connection` error (with `spent()`, what the caller says the attempt cost so far).
+ * `connection` error (with `spent()`, what the caller says the attempt cost so far). With
+ * `endOk`, the end of the body is the normal end (a protocol with no terminal event: Gemini's),
+ * unless it ends inside an event; a failed read is a break either way.
  */
 export async function* readSse(
   body: ReadableStream<Uint8Array>,
   o: {
     readonly terminal: (e: SseEvent) => boolean;
     readonly spent?: () => readonly UsageEntry[];
+    readonly endOk?: boolean;
   },
 ): AsyncGenerator<SseEvent> {
   const decoder = new TextDecoder();
@@ -218,7 +295,14 @@ export async function* readSse(
       }
       // At the end of the body, an event not closed by a blank line was cut in transit: it is
       // discarded (the SSE rule), so a body cut inside its terminal event is a broken stream.
-      if (done) break;
+      if (done) {
+        // A body that ends inside an event (data not closed by a blank line) was cut: a break.
+        if (o.endOk === true && data.length === 0) {
+          ended = true;
+          return;
+        }
+        break;
+      }
     }
   } catch (e) {
     throw new ModelError(

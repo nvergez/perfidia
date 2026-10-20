@@ -1,0 +1,76 @@
+{
+  "synthetic": true,
+  "written": "2026-10-20",
+  "sources": [
+    {
+      "url": "https://openrouter.ai/docs/api_reference/errors-and-debugging.md",
+      "read": "2026-10-20",
+      "what": "mid-stream errors: a top-level error {code, message, metadata.error_type} with a choice whose finish_reason is error; the stream ends after it; the error can be the first and only event"
+    },
+    {
+      "url": "https://openrouter.ai/docs/api_reference/streaming.md",
+      "read": "2026-10-20",
+      "what": "errors after the response is committed arrive as an SSE event, the status stays 200"
+    },
+    {
+      "url": "https://openrouter.ai/docs/guides/features/zero-completion-insurance.md",
+      "read": "2026-10-20",
+      "what": "zero completion insurance: a response with an error finish reason is not billed"
+    },
+    {
+      "url": "https://openrouter.ai/docs/api_reference/errors-and-debugging.md",
+      "read": "2026-10-20",
+      "what": "error_type max_tokens_exceeded: generation stopped because max_tokens was reached"
+    }
+  ],
+  "note": "a generation stopped at max_tokens reported as a typed mid-stream error",
+  "status": 200,
+  "headers": {
+    "content-type": "text/event-stream",
+    "x-generation-id": "gen-1729000000-synthetic"
+  },
+  "events": [
+    {
+      "id": "gen-1729000000-synthetic",
+      "provider": "Z.AI",
+      "model": "z-ai/glm-5.3",
+      "object": "chat.completion.chunk",
+      "created": 1792500000,
+      "choices": [
+        {
+          "index": 0,
+          "delta": {
+            "role": "assistant",
+            "content": "",
+            "reasoning": "Thinking..."
+          },
+          "finish_reason": null,
+          "native_finish_reason": null
+        }
+      ]
+    },
+    {
+      "id": "gen-1729000000-synthetic",
+      "object": "chat.completion.chunk",
+      "created": 1792500000,
+      "model": "z-ai/glm-5.3",
+      "provider": "Z.AI",
+      "error": {
+        "code": 400,
+        "message": "max tokens reached",
+        "metadata": {
+          "error_type": "max_tokens_exceeded"
+        }
+      },
+      "choices": [
+        {
+          "index": 0,
+          "delta": {
+            "content": ""
+          },
+          "finish_reason": "error"
+        }
+      ]
+    }
+  ]
+}

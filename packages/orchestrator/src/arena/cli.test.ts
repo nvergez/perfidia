@@ -5,8 +5,12 @@ import { describe, expect, test } from "bun:test";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { memoryIo } from "@perfidia/sim";
-import { main } from "./cli.ts";
+import { main as arenaMain } from "./cli.ts";
 import { runDir } from "./rig.test.ts";
+
+/** `arena` as the CLI runs it, with no calibration profile unless a test passes `--profiles`. */
+const main = (...[argv, io, env, o]: Parameters<typeof arenaMain>) =>
+  arenaMain(argv, io, env, { profilesDir: "off", ...o });
 
 const LONG = 60_000;
 const JUNK = {

@@ -246,11 +246,32 @@ interface Where {
 const userOf = (parts: readonly UserPart[]): Entry => ({ role: "user", parts });
 const operatorOf = (text: string): Entry => ({ role: "operator", text });
 
-function asModelError(e: unknown): ModelError {
+/**
+ * What an adapter's rejection means. An adapter rejects with `ModelError` only; anything else (a
+ * bug, a pricing error) may come after the request ran, so it is charged `unknownSpent`: one usage
+ * the ledger cannot price, which costs the seat's attempt bound (never 0).
+ */
+function asModelError(e: unknown, unknownSpent: readonly UsageEntry[]): ModelError {
   if (e instanceof ModelError) return e;
   const message = e instanceof Error ? `${e.name}: ${e.message}` : String(e);
-  return new ModelError("unknown", message.replaceAll(/\s+/g, " ").slice(0, 300));
+  return new ModelError("unknown", message.replaceAll(/\s+/g, " ").slice(0, 300), {
+    spent: unknownSpent,
+  });
 }
+
+/** A usage entry no card prices: the ledger charges it the seat's attempt bound. */
+const unpriceable = (model: string): UsageEntry => ({
+  model,
+  kind: "message",
+  tokens: {
+    input: Number.NaN,
+    cacheWrite5m: 0,
+    cacheWrite1h: 0,
+    cacheRead: 0,
+    output: Number.NaN,
+  },
+  estimated: true,
+});
 
 /** The game time a request is built on: the briefing's in round 0, else the latest result's. */
 function requestTime(input: RoundInput): GameTime {
@@ -516,6 +537,7 @@ export class LlmSeatAgent implements SeatAgent {
         ...(maxOutputTokens === undefined ? {} : { maxOutputTokens }),
         signal,
         meta: this.meta(w.input, "round"),
+        promptTokensUpper: promptEstimate(entries, s.known, this.prefixTokens),
       };
       try {
         this.logRequest(s, w, attempt, req);
@@ -534,7 +556,7 @@ export class LlmSeatAgent implements SeatAgent {
       } catch (e) {
         release();
         attemptTimer.cancel();
-        let err = asModelError(e);
+        let err = asModelError(e, this.unknownSpent());
         if (
           err.kind === "aborted" &&
           attemptTimer.signal.aborted &&
@@ -639,8 +661,12 @@ export class LlmSeatAgent implements SeatAgent {
           continue;
         }
         case "pause":
-        case "other":
           throw new AgentError(`${where}: unexpected stop ${res.rawStop}`);
+        case "other":
+          // A malformed call, an unknown finish (Gemini `MALFORMED_FUNCTION_CALL`, `OTHER`, an
+          // OpenRouter or OpenAI reason without a mapping): the turn closes, outside the breaker,
+          // the same for every provider (design §3.5).
+          throw new AgentError(`${where}: unexpected stop ${res.rawStop}`, false);
         case "end_turn":
         case "tool_use":
           return res;
@@ -686,17 +712,21 @@ export class LlmSeatAgent implements SeatAgent {
       entries,
       signal,
       meta: this.meta(input, "thought"),
+      promptTokensUpper: promptEstimate(entries, s.known, this.prefixTokens),
     };
     let release: (() => void) | null = null;
     const started = o.clock.time.nowMs();
     const wallStart = o.clock.iso?.();
+    let inChat = false;
     try {
       await o.gate.open(roundSignal);
       release = await o.rate.acquire(roundSignal);
       // As for a round: no thought call starts once the seat is over its cap or halted.
       if (o.ledger.over(this.seat)) return undefined;
       this.logRequest(s, w, 1, req);
+      inChat = true;
       const res = await o.adapter.chat(req);
+      inChat = false;
       const charge = o.ledger.charge(this.seat, input.turn, t, res.usage, wallStart);
       this.writeCall(w, 1, req, {
         wallStart,
@@ -710,7 +740,8 @@ export class LlmSeatAgent implements SeatAgent {
       return res.stop === "refusal" ? undefined : thoughtOf(res.reply.text);
     } catch (e) {
       if (e instanceof ArenaAborted) throw e;
-      const err = asModelError(e);
+      // Only the adapter's own rejection may follow a request that ran.
+      const err = asModelError(e, inChat ? this.unknownSpent() : []);
       const charge = o.ledger.charge(this.seat, input.turn, t, err.spent, wallStart);
       this.writeCall(w, 1, req, {
         wallStart,
@@ -725,6 +756,13 @@ export class LlmSeatAgent implements SeatAgent {
       release?.();
       attemptTimer.cancel();
     }
+  }
+
+  /** What a rejection that is not a `ModelError` is charged: the attempt bound, when the ledger has one. */
+  private unknownSpent(): UsageEntry[] {
+    return this.o.ledger.attemptBound(this.seat) === null
+      ? []
+      : [unpriceable(this.o.adapter.spec.model)];
   }
 
   // Logs ------------------------------------------------------------------------------------------
@@ -833,7 +871,12 @@ export class LlmSeatAgent implements SeatAgent {
         : { reportedCostNanoUsd: res.reportedCostNanoUsd }),
       ...(res === null
         ? {}
-        : { reasoningKind: res.reply.reasoningKind ?? this.o.adapter.capabilities.reasoning }),
+        : {
+            // No reasoning text is `none` whatever the provider (review: one coverage statistic).
+            reasoningKind: res.reply.reasoning.every((t) => t === "")
+              ? "none"
+              : (res.reply.reasoningKind ?? this.o.adapter.capabilities.reasoning),
+          }),
     };
     this.o.log.write(line);
     if (r.err !== null) {

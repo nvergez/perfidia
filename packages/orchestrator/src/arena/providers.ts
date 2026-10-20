@@ -1,14 +1,37 @@
-import type { Provider } from "@perfidia/protocol";
-import type { ModelTool } from "../model/adapter.ts";
+import type { Provider, TimeSource } from "@perfidia/protocol";
+import type { Effort, ModelAdapter, ModelSpec, ModelTool } from "../model/adapter.ts";
 import { endpointInfo as catalogEndpoint, type EndpointInfo } from "../model/catalog.ts";
+import { GEMINI_TOOL_TRANSFORM_ID } from "../model/gemini-tools.ts";
+import type { HttpFetch } from "../model/http.ts";
 import { toolTransformOf, transformTools } from "../model/tools.ts";
+import { createCompatAdapter } from "./providers/compat.ts";
+import { geminiAdapter } from "./providers/gemini.ts";
+import { OPENAI_SMOKE, createOpenAIAdapter, openaiBaseUrlProblem } from "./providers/openai.ts";
+
+/** What a provider's adapter factory gets from the arena (Pass 2): the plan's key and URL. */
+export interface AdapterEnv {
+  /** The provider's key; null only where the plan allows none (`compat` on loopback). */
+  readonly apiKey: string | null;
+  /** The checked base URL (`PERFIDIA_<PROVIDER>_BASE_URL` or the provider's default). */
+  readonly baseURL: string;
+  /** The harness clock (latency, the attempt backstop). */
+  readonly time: TimeSource;
+  /** The backstop of one attempt (the plan's attempt timeout). */
+  readonly timeoutMs: number;
+  /** Tests: a stub fetch (the guarded transport still applies). */
+  readonly fetch?: HttpFetch;
+}
+
+/** Builds a seat's adapter (Pass 2: one per provider with a raw-fetch adapter). */
+export type AdapterFactory = (spec: ModelSpec, env: AdapterEnv) => ModelAdapter;
 
 // The provider registry of the arena (phase-4 design §2.8, Pass 1b): for each provider, the
 // environment variables the harness reads (`PERFIDIA_<PROVIDER>_*` only, read once by `arenaEnv`),
 // its default base URL, its auth header, whether this build has its adapter, where its price cards
-// live, and how a seat pins it (OpenRouter needs a full endpoint slug). Only Anthropic has an
-// adapter in this build; every other provider plans and runs on the fake path, which mirrors it
-// (Pass 2 adds the OpenAI, Gemini and OpenAI-compatible adapters).
+// live, and how a seat pins it (OpenRouter needs a full endpoint slug). Anthropic's adapter is
+// built by the arena on its SDK client; Pass 2's raw-fetch adapters are built by `create`: OpenAI
+// Responses, Gemini `generateContent`, and the OpenAI-compatible adapter for OpenRouter and compat
+// endpoints. `--fake` mirrors every provider at $0.
 
 export interface ProviderInfo {
   readonly id: Exclude<Provider, "fake">;
@@ -30,6 +53,12 @@ export interface ProviderInfo {
   readonly needsEndpoint: boolean;
   /** The tool transform its adapter applies (`none`, or Gemini's, planned for Pass 2). */
   readonly toolTransform: string;
+  /** Pass 2: builds a seat's adapter (Anthropic's is built by the arena on its shared SDK client). */
+  readonly create?: AdapterFactory;
+  /** Pass 2: why a base URL cannot carry the provider's seats (exit 3), or null. */
+  readonly baseUrlProblem?: (base: string) => string | null;
+  /** Pass 2: what `arena smoke --provider <id>` calls by default. */
+  readonly smoke?: { readonly model: string; readonly effort: Effort };
 }
 
 const PRICES_DIR = "packages/orchestrator/src/model/prices";
@@ -54,10 +83,13 @@ export const PROVIDERS: Readonly<Record<Exclude<Provider, "fake">, ProviderInfo>
     defaultBaseUrl: "https://api.openai.com/v1",
     key: "always",
     authHeader: "authorization",
-    adapter: false,
+    adapter: true,
     pricesFile: `${PRICES_DIR}/openai.ts`,
     needsEndpoint: false,
     toolTransform: "none",
+    create: createOpenAIAdapter,
+    baseUrlProblem: openaiBaseUrlProblem,
+    smoke: OPENAI_SMOKE,
   },
   google: {
     id: "google",
@@ -66,12 +98,14 @@ export const PROVIDERS: Readonly<Record<Exclude<Provider, "fake">, ProviderInfo>
     defaultBaseUrl: "https://generativelanguage.googleapis.com",
     key: "always",
     authHeader: "x-goog-api-key",
-    adapter: false,
+    adapter: true,
     pricesFile: `${PRICES_DIR}/google.ts`,
     needsEndpoint: false,
-    // The Gemini schema transform (design §2.4) is built with its adapter (Pass 2): until then the
-    // fake path sends the neutral list, and `toolsHash` shows it.
-    toolTransform: "none",
+    // Gemini's JSON Schema subset (design §2.4, Pass 2): every Google seat, real or fake, gets the
+    // neutral list through it, and `toolsHash` shows it.
+    toolTransform: GEMINI_TOOL_TRANSFORM_ID,
+    create: geminiAdapter,
+    smoke: { model: "gemini-3.8-flash", effort: "low" },
   },
   openrouter: {
     id: "openrouter",
@@ -80,10 +114,11 @@ export const PROVIDERS: Readonly<Record<Exclude<Provider, "fake">, ProviderInfo>
     defaultBaseUrl: "https://openrouter.ai/api/v1",
     key: "always",
     authHeader: "authorization",
-    adapter: false,
+    adapter: true,
     pricesFile: `${PRICES_DIR}/openrouter.ts`,
     needsEndpoint: true,
     toolTransform: "none",
+    create: createCompatAdapter,
   },
   compat: {
     id: "compat",
@@ -92,10 +127,11 @@ export const PROVIDERS: Readonly<Record<Exclude<Provider, "fake">, ProviderInfo>
     defaultBaseUrl: null,
     key: "remote",
     authHeader: "authorization",
-    adapter: false,
+    adapter: true,
     pricesFile: `${PRICES_DIR}/compat.ts`,
     needsEndpoint: false,
     toolTransform: "none",
+    create: createCompatAdapter,
   },
 });
 
@@ -120,8 +156,9 @@ export const ENV_VARS: readonly string[] = Object.freeze([
 
 /**
  * The plan's endpoint-metadata hook (design §2.5): what OpenRouter's `/models/{id}/endpoints` says
- * of a pinned endpoint (prices aside), with its ZDR listing. This build reads the snapshot checked
- * on 2026-10-20 (`model/catalog.ts`); Pass 2's OpenRouter adapter fetches it live at plan time.
+ * of a pinned endpoint (prices aside), with its ZDR listing. `arena estimate`, `--fake` and the
+ * tests read the snapshot checked on 2026-10-20 (`model/catalog.ts`); a real `arena run` fetches it
+ * live at plan time (`planLive`, `arena/providers/openrouter.ts`).
  */
 export type EndpointSource = (model: string, endpoint: string) => EndpointInfo | undefined;
 
