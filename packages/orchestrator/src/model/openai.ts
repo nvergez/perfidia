@@ -810,7 +810,9 @@ export class OpenAIAdapter implements ModelAdapter {
         };
       }
       const stop: StopReason = reason === "max_output_tokens" ? "max_tokens" : "other";
-      return { ...base, reply: EMPTY_REPLY, stop, rawStop, refusal: null };
+      // The cut reply as far as it went (its reasoning summaries reach the spectators, as with the
+      // other providers); the seat retries or closes the turn and never runs its calls.
+      return { ...base, reply: replyOf(output).reply, stop, rawStop, refusal: null };
     }
     if (r.status !== "completed") {
       throw new ModelError("unknown", `openai: a terminal response with status ${r.status}`, {
