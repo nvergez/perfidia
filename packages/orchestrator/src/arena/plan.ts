@@ -58,6 +58,7 @@ import {
   seatModels,
   type ModelInfo,
 } from "../model/catalog.ts";
+import { effortSent } from "../model/compat.ts";
 import { cardAt, cardsFrom, formatCents, usdToNano } from "../model/prices.ts";
 import { modelTools } from "../model/tools.ts";
 import type { SeatPolicy } from "../seat/agent.ts";
@@ -735,12 +736,12 @@ function checkSeat(
   const info = modelInfo(d.provider, d.model);
   const advertised = info?.advertisedEfforts ?? null;
   if (advertised !== null && info !== undefined && !advertised.includes(d.effort)) {
-    // Phase-4 review: what an unsupported effort becomes is the model's default (max for GLM-5.3),
-    // which would break effort parity and the prediction; the mapping is decided with Pass 2's
-    // adapter and its smoke, before the first comparison.
+    // Phase-4 review C9, settled with Pass 2's adapter: the request carries the nearest level the
+    // model lists (`effortSent`), recorded per seat (`effortSent` in seats.json).
     const f = effortFactorText;
+    const sent = effortSent(d.provider, d.model, d.effort);
     warnings.push(
-      `${d.seat}: OpenRouter lists ${d.model}'s efforts as ${advertised.join(", ")}, default ${info.defaultEffort} (models list, ${CATALOG_CHECKED}): ${d.effort} is sent as is, unverified until a smoke records what OpenRouter does with it; if it is dropped, the seat reasons at ${info.defaultEffort} while the others run at ${d.effort} and the prediction assumes ${d.effort} (output factor ${f(d.effort)}, against ${f(info.defaultEffort)}): map the effort before the first comparison`,
+      `${d.seat}: OpenRouter lists ${d.model}'s efforts as ${advertised.join(", ")}, default ${info.defaultEffort} (models list, ${CATALOG_CHECKED}): ${d.effort} is sent as ${sent}, the nearest listed level (OpenRouter maps an unlisted effort to the nearest supported level with no rule for a tie; the harness sends the lower level of a tie itself); the prediction keeps ${d.effort}'s output factor ${f(d.effort)} against ${sent}'s ${f(sent)}, an upper bound; unverified until a smoke records the reasoning tokens; set the seat's effort to one of ${advertised.join(", ")} to send that level instead`,
     );
   }
   for (const n of info?.notes ?? []) warnings.push(`${d.seat}: ${n}`);

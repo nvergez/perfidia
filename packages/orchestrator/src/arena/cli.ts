@@ -33,6 +33,7 @@ import { formatCost } from "./report.ts";
 import { CALLS_FILE, runArena, type SignalSource } from "./run.ts";
 import { geminiSmokeCommand } from "./providers/gemini-smoke.ts";
 import { smokeCommand } from "./smoke.ts";
+import { planLive, smokeOpenRouter } from "./providers/openrouter.ts";
 
 /** The largest seed. */
 const UINT32_MAX = 4_294_967_295;
@@ -64,7 +65,8 @@ export const USAGE = [
   "environment: PERFIDIA_<PROVIDER>_API_KEY for each provider a seat plays on, unless --fake",
   "             (ANTHROPIC, OPENAI, GOOGLE, OPENROUTER; COMPAT: optional on loopback), and",
   "             PERFIDIA_<PROVIDER>_BASE_URL (optional; required for COMPAT); nothing else is read.",
-  "             This build calls Anthropic only: the other providers run with --fake.",
+  "             This build calls all five (Anthropic, OpenAI, Google, OpenRouter, compat); --fake",
+  "             rehearses any lineup at $0.",
   "exit codes: 0 ok, 1 replay divergence, 2 fatal error, abort or degraded run, 3 usage, config,",
   "            budget or preflight error, 4 reconciliation outside tolerance",
   "",
@@ -278,26 +280,37 @@ const PERSONALITIES_USAGE = usageText("arena personalities", {});
 /** The efforts a Claude smoke takes. */
 const CLAUDE_EFFORTS = capabilitiesFor("anthropic", "claude-haiku-5-5").efforts;
 /** The providers `arena smoke` checks (`gemini` is an alias of `google`). */
-const SMOKE_PROVIDERS: ReadonlySet<string> = new Set(["anthropic", "openai", "google", "gemini"]);
+const SMOKE_PROVIDERS: ReadonlySet<string> = new Set([
+  "anthropic",
+  "openai",
+  "google",
+  "gemini",
+  "openrouter",
+]);
 const SMOKE_FLAGS: FlagSpecs = {
   provider: {
     type: "string",
     value: "<provider>",
-    help: "anthropic (default), openai or google (alias gemini): needs PERFIDIA_<PROVIDER>_API_KEY",
+    help: "anthropic (default), openai, google (alias gemini) or openrouter: needs PERFIDIA_<PROVIDER>_API_KEY",
   },
   model: {
     type: "string",
     value: "<alias | id>",
-    help: "anthropic: opus-5-5, sonnet-5-5, haiku-5-5, fable-5-1 or a full id (default haiku-5-5); another provider: one of its seat models (openai: default gpt-6-luna; google: default gemini-3.8-flash)",
+    help: "anthropic: opus-5-5, sonnet-5-5, haiku-5-5, fable-5-1 or a full id (default haiku-5-5); another provider: one of its seat models (openai: default gpt-6-luna; google: default gemini-3.8-flash; openrouter: default z-ai/glm-5.3-flash)",
   },
   effort: {
     type: "string",
     value: "<effort>",
-    help: `anthropic: ${CLAUDE_EFFORTS.join("|")}; another provider: one the model accepts; default low`,
+    help: `anthropic: ${CLAUDE_EFFORTS.join("|")}; another provider: one the model accepts; default low (openrouter: medium)`,
+  },
+  endpoint: {
+    type: "string",
+    value: "<slug>",
+    help: "openrouter: the full endpoint slug (default the model's catalogued one, e.g. z-ai/fp8)",
   },
 };
 const SMOKE_USAGE = usageText(
-  "arena smoke [--provider <provider>] [--model <alias>] [--effort <effort>]",
+  "arena smoke [--provider <p>] [--model <alias | id>] [--endpoint <slug>] [--effort <effort>]",
   SMOKE_FLAGS,
 );
 
@@ -375,7 +388,8 @@ async function runCommand(
   nowMs: () => number,
 ): Promise<number> {
   const { req, out, quiet } = runRequestOf(argv);
-  const plan = planArena(req, env, { now: nowMs });
+  // OpenRouter seats of a real run are planned on OpenRouter's live endpoint metadata (Pass 2).
+  const plan = await planLive(req, env, { now: nowMs });
   assertFreeRunDir(out);
   try {
     const outcome = await runArena(plan, {
@@ -505,7 +519,7 @@ function dispatch(
       const provider = f.string("provider") ?? "anthropic";
       if (!SMOKE_PROVIDERS.has(provider)) {
         throw new UsageError(
-          `--provider must be anthropic, openai or google (gemini), got "${provider}"`,
+          `--provider must be anthropic, openai, google (gemini) or openrouter, got "${provider}"`,
         );
       }
       const effort = f.string("effort");
@@ -516,6 +530,20 @@ function dispatch(
         throw new UsageError(`--effort must be one of ${efforts.join(", ")}, got "${effort}"`);
       }
       const model = f.string("model");
+      const endpoint = f.string("endpoint");
+      if (provider === "openrouter") {
+        return smokeOpenRouter({
+          env,
+          io,
+          ...(model === undefined ? {} : { model }),
+          ...(endpoint === undefined ? {} : { endpoint }),
+          ...(e === undefined ? {} : { effort: e }),
+          ...(o.nowMs === undefined ? {} : { now: o.nowMs }),
+        });
+      }
+      if (endpoint !== undefined) {
+        throw new UsageError("--endpoint applies to --provider openrouter only");
+      }
       if (provider === "google" || provider === "gemini") {
         return geminiSmokeCommand({
           env,

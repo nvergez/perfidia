@@ -49,6 +49,7 @@ import { ArenaPauseGate, type ArenaAborted, type PauseReason } from "../seat/pau
 import { PROMPT_VERSION, operatorTemplates, seatPrompt } from "../seat/prompt.ts";
 import { botBrain } from "./brain.ts";
 import { providerInfo, toolsFor } from "./providers.ts";
+import { effortSent } from "../model/compat.ts";
 import { estimateCard, projectSpend, scenarioCard } from "./cost.ts";
 import { reserveText } from "./estimate.ts";
 import {
@@ -865,6 +866,9 @@ async function runArenaWith(
             toolsHash: sha256Hex(canonicalJson(seatTools(s.seat))),
             operatorHash: operatorHashOf(s.promptVariant),
             ...(s.reasoningContext === null ? {} : { reasoningContext: s.reasoningContext }),
+            ...(!plan.fake && effortSent(s.provider, s.model, s.effort) !== s.effort
+              ? { effortSent: effortSent(s.provider, s.model, s.effort) }
+              : {}),
           },
     ),
   });

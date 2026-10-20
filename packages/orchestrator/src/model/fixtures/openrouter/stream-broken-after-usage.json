@@ -1,0 +1,94 @@
+{
+  "synthetic": true,
+  "written": "2026-10-20",
+  "sources": [
+    {
+      "url": "https://openrouter.ai/docs/api_reference/streaming.md",
+      "read": "2026-10-20",
+      "what": "the usage chunk is sent just before [DONE]"
+    }
+  ],
+  "note": "a body cut between the usage chunk and [DONE]: the usage is final, flagged estimated",
+  "status": 200,
+  "headers": {
+    "content-type": "text/event-stream",
+    "x-generation-id": "gen-1729000000-synthetic"
+  },
+  "events": [
+    {
+      "id": "gen-1729000000-synthetic",
+      "provider": "Z.AI",
+      "model": "z-ai/glm-5.3",
+      "object": "chat.completion.chunk",
+      "created": 1792500000,
+      "choices": [
+        {
+          "index": 0,
+          "delta": {
+            "role": "assistant",
+            "content": "Holding course."
+          },
+          "finish_reason": null,
+          "native_finish_reason": null
+        }
+      ]
+    },
+    {
+      "id": "gen-1729000000-synthetic",
+      "provider": "Z.AI",
+      "model": "z-ai/glm-5.3",
+      "object": "chat.completion.chunk",
+      "created": 1792500000,
+      "choices": [
+        {
+          "index": 0,
+          "delta": {
+            "content": "",
+            "role": "assistant"
+          },
+          "finish_reason": "stop",
+          "native_finish_reason": "stop"
+        }
+      ],
+      "usage": {
+        "prompt_tokens": 4000,
+        "completion_tokens": 120,
+        "total_tokens": 4120,
+        "prompt_tokens_details": {
+          "cached_tokens": 0,
+          "cache_write_tokens": 0
+        },
+        "completion_tokens_details": {
+          "reasoning_tokens": 80
+        },
+        "cost": 0.006128,
+        "is_byok": false
+      },
+      "openrouter_metadata": {
+        "requested": "z-ai/glm-5.3",
+        "strategy": "direct",
+        "region": "iad",
+        "summary": "available=1, selected=Z.AI",
+        "attempt": 1,
+        "is_byok": false,
+        "endpoints": {
+          "total": 1,
+          "available": [
+            {
+              "provider": "Z.AI",
+              "model": "z-ai/glm-5.3",
+              "selected": true
+            }
+          ]
+        },
+        "attempts": [
+          {
+            "provider": "Z.AI",
+            "model": "z-ai/glm-5.3",
+            "status": 200
+          }
+        ]
+      }
+    }
+  ]
+}

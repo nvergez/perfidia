@@ -413,6 +413,11 @@ export const SeatsFileSchema = z.strictObject({
         operatorHash: z.string().optional(),
         /** Pass 1b: OpenAI's `reasoning.context` of the seat. */
         reasoningContext: ReasoningContextSchema.optional(),
+        /**
+         * Pass 2: the effort the requests carry when it is not the seat's (an OpenRouter model that
+         * does not list it gets the nearest level it lists, phase-4 review C9); absent: the seat's.
+         */
+        effortSent: EffortSchema.optional(),
       }),
     ]),
   ),

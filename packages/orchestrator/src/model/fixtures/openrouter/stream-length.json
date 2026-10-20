@@ -1,0 +1,144 @@
+{
+  "synthetic": true,
+  "written": "2026-10-20",
+  "sources": [
+    {
+      "url": "https://openrouter.ai/docs/api_reference/overview.md",
+      "read": "2026-10-20",
+      "what": "ResponseUsage: prompt_tokens, completion_tokens, prompt_tokens_details.cached_tokens and cache_write_tokens, completion_tokens_details.reasoning_tokens, cost in credits; finish reasons tool_calls, stop, length, content_filter, error"
+    },
+    {
+      "url": "https://openrouter.ai/docs/api_reference/streaming.md",
+      "read": "2026-10-20",
+      "what": "comments (: OPENROUTER PROCESSING), the final usage chunk before [DONE] with one content-free choice repeating finish_reason"
+    },
+    {
+      "url": "https://openrouter.ai/docs/guides/features/router-metadata.md",
+      "read": "2026-10-20",
+      "what": "openrouter_metadata on the final chunk when X-OpenRouter-Metadata: enabled"
+    },
+    {
+      "url": "https://openrouter.ai/docs/guides/best-practices/reasoning-tokens.md",
+      "read": "2026-10-20",
+      "what": "reasoning_details in choices[].delta, reasoning.text and reasoning.summary, fragments concatenated in order"
+    },
+    {
+      "url": "https://openrouter.ai/docs/api/api-reference/chat/create-a-chat-completion.md",
+      "read": "2026-10-20",
+      "what": "ChatStreamChunk, ChatStreamDelta, ChatStreamToolCall (index, id, function.name, function.arguments)"
+    },
+    {
+      "url": "https://openrouter.ai/api/v1/models/z-ai/glm-5.3/endpoints",
+      "read": "2026-10-20",
+      "what": "z-ai/fp8 prices of z-ai/glm-5.3: prompt 0.0000014, completion 0.0000044, input_cache_read 0.00000026"
+    },
+    {
+      "url": "https://openrouter.ai/docs/api_reference/errors-and-debugging.md",
+      "read": "2026-10-20",
+      "what": "a reasoning model that spends the whole max_tokens on reasoning: 200, finish_reason length, empty content, reasoning_tokens close to completion_tokens"
+    }
+  ],
+  "note": "max_tokens 32,768 spent on reasoning: finish length (the harness retries once at twice the limit)",
+  "status": 200,
+  "headers": {
+    "content-type": "text/event-stream",
+    "x-generation-id": "gen-1729000000-synthetic"
+  },
+  "events": [
+    {
+      "id": "gen-1729000000-synthetic",
+      "provider": "Z.AI",
+      "model": "z-ai/glm-5.3",
+      "object": "chat.completion.chunk",
+      "created": 1792500000,
+      "choices": [
+        {
+          "index": 0,
+          "delta": {
+            "role": "assistant",
+            "content": "",
+            "reasoning": "Thinking..."
+          },
+          "finish_reason": null,
+          "native_finish_reason": null
+        }
+      ]
+    },
+    {
+      "id": "gen-1729000000-synthetic",
+      "provider": "Z.AI",
+      "model": "z-ai/glm-5.3",
+      "object": "chat.completion.chunk",
+      "created": 1792500000,
+      "choices": [
+        {
+          "index": 0,
+          "delta": {
+            "content": "",
+            "role": "assistant"
+          },
+          "finish_reason": "length",
+          "native_finish_reason": "length"
+        }
+      ]
+    },
+    {
+      "id": "gen-1729000000-synthetic",
+      "provider": "Z.AI",
+      "model": "z-ai/glm-5.3",
+      "object": "chat.completion.chunk",
+      "created": 1792500000,
+      "choices": [
+        {
+          "index": 0,
+          "delta": {
+            "content": "",
+            "role": "assistant"
+          },
+          "finish_reason": "length",
+          "native_finish_reason": "length"
+        }
+      ],
+      "usage": {
+        "prompt_tokens": 4000,
+        "completion_tokens": 32768,
+        "total_tokens": 36768,
+        "prompt_tokens_details": {
+          "cached_tokens": 0,
+          "cache_write_tokens": 0
+        },
+        "completion_tokens_details": {
+          "reasoning_tokens": 32767
+        },
+        "cost": 0.1497792,
+        "is_byok": false
+      },
+      "openrouter_metadata": {
+        "requested": "z-ai/glm-5.3",
+        "strategy": "direct",
+        "region": "iad",
+        "summary": "available=1, selected=Z.AI",
+        "attempt": 1,
+        "is_byok": false,
+        "endpoints": {
+          "total": 1,
+          "available": [
+            {
+              "provider": "Z.AI",
+              "model": "z-ai/glm-5.3",
+              "selected": true
+            }
+          ]
+        },
+        "attempts": [
+          {
+            "provider": "Z.AI",
+            "model": "z-ai/glm-5.3",
+            "status": 200
+          }
+        ]
+      }
+    },
+    "[DONE]"
+  ]
+}

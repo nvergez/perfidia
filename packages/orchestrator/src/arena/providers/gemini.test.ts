@@ -297,7 +297,7 @@ describe("arena smoke --provider google (against the wire stub)", () => {
     const other = memoryIo();
     expect(await main(["smoke", "--provider", "mistral"], other, {})).toBe(3);
     expect(other.stderr()).toContain(
-      '--provider must be anthropic, openai or google (gemini), got "mistral"',
+      '--provider must be anthropic, openai, google (gemini) or openrouter, got "mistral"',
     );
   });
 });

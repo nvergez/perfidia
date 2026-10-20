@@ -4,6 +4,7 @@ import { endpointInfo as catalogEndpoint, type EndpointInfo } from "../model/cat
 import { GEMINI_TOOL_TRANSFORM_ID } from "../model/gemini-tools.ts";
 import type { HttpFetch } from "../model/http.ts";
 import { toolTransformOf, transformTools } from "../model/tools.ts";
+import { createCompatAdapter } from "./providers/compat.ts";
 import { geminiAdapter } from "./providers/gemini.ts";
 import { OPENAI_SMOKE, createOpenAIAdapter, openaiBaseUrlProblem } from "./providers/openai.ts";
 
@@ -28,8 +29,9 @@ export type AdapterFactory = (spec: ModelSpec, env: AdapterEnv) => ModelAdapter;
 // environment variables the harness reads (`PERFIDIA_<PROVIDER>_*` only, read once by `arenaEnv`),
 // its default base URL, its auth header, whether this build has its adapter, where its price cards
 // live, and how a seat pins it (OpenRouter needs a full endpoint slug). Anthropic's adapter is
-// built by the arena on its SDK client; Pass 2's raw-fetch adapters are built by `create` (OpenAI,
-// Google). Every other provider plans and runs on the fake path, which mirrors it.
+// built by the arena on its SDK client; Pass 2's raw-fetch adapters are built by `create`: OpenAI
+// Responses, Gemini `generateContent`, and the OpenAI-compatible adapter for OpenRouter and compat
+// endpoints. `--fake` mirrors every provider at $0.
 
 export interface ProviderInfo {
   readonly id: Exclude<Provider, "fake">;
@@ -112,10 +114,11 @@ export const PROVIDERS: Readonly<Record<Exclude<Provider, "fake">, ProviderInfo>
     defaultBaseUrl: "https://openrouter.ai/api/v1",
     key: "always",
     authHeader: "authorization",
-    adapter: false,
+    adapter: true,
     pricesFile: `${PRICES_DIR}/openrouter.ts`,
     needsEndpoint: true,
     toolTransform: "none",
+    create: createCompatAdapter,
   },
   compat: {
     id: "compat",
@@ -124,10 +127,11 @@ export const PROVIDERS: Readonly<Record<Exclude<Provider, "fake">, ProviderInfo>
     defaultBaseUrl: null,
     key: "remote",
     authHeader: "authorization",
-    adapter: false,
+    adapter: true,
     pricesFile: `${PRICES_DIR}/compat.ts`,
     needsEndpoint: false,
     toolTransform: "none",
+    create: createCompatAdapter,
   },
 });
 
@@ -152,8 +156,9 @@ export const ENV_VARS: readonly string[] = Object.freeze([
 
 /**
  * The plan's endpoint-metadata hook (design §2.5): what OpenRouter's `/models/{id}/endpoints` says
- * of a pinned endpoint (prices aside), with its ZDR listing. This build reads the snapshot checked
- * on 2026-10-20 (`model/catalog.ts`); Pass 2's OpenRouter adapter fetches it live at plan time.
+ * of a pinned endpoint (prices aside), with its ZDR listing. `arena estimate`, `--fake` and the
+ * tests read the snapshot checked on 2026-10-20 (`model/catalog.ts`); a real `arena run` fetches it
+ * live at plan time (`planLive`, `arena/providers/openrouter.ts`).
  */
 export type EndpointSource = (model: string, endpoint: string) => EndpointInfo | undefined;
 

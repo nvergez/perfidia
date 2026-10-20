@@ -732,8 +732,23 @@ export const ARENA_CASES: Record<string, SchemaCase> = {
           { ...seatsFile.seats[0], seat: "p2", reasoningContext: "all_turns" },
         ],
       },
+      {
+        ...seatsFile,
+        seats: [
+          {
+            ...seatsFile.seats[0],
+            provider: "openrouter",
+            model: "z-ai/glm-5.3",
+            endpoint: "z-ai/fp8",
+            effort: "medium",
+            effortSent: "low",
+          },
+          seatsFile.seats[1],
+        ],
+      },
     ],
     invalid: [
+      bad(seatsFile, ["seats", 0, "effortSent"], "moderate"),
       bad(seatsFile, ["seats", 0, "effort"], "huge"),
       bad(seatsFile, ["seats", 1, "kind"], "human"),
       bad(seatsFile, ["seats", 0, "fallbacks"], "on"),

@@ -1,0 +1,39 @@
+{
+  "synthetic": true,
+  "written": "2026-10-20",
+  "sources": [
+    {
+      "url": "https://openrouter.ai/docs/api_reference/streaming.md",
+      "read": "2026-10-20",
+      "what": "the streaming page's mid-stream example: error {code: \"server_error\", message: \"Provider disconnected unexpectedly\"}, provider \"openai\", no error_type"
+    }
+  ],
+  "note": "a mid-stream error whose code is a string and has no error_type",
+  "status": 200,
+  "headers": {
+    "content-type": "text/event-stream",
+    "x-generation-id": "gen-1729000000-synthetic"
+  },
+  "events": [
+    {
+      "id": "cmpl-abc123",
+      "object": "chat.completion.chunk",
+      "created": 1234567890,
+      "model": "z-ai/glm-5.3",
+      "provider": "openai",
+      "error": {
+        "code": "server_error",
+        "message": "Provider disconnected unexpectedly"
+      },
+      "choices": [
+        {
+          "index": 0,
+          "delta": {
+            "content": ""
+          },
+          "finish_reason": "error"
+        }
+      ]
+    }
+  ]
+}

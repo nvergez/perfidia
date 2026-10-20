@@ -886,16 +886,16 @@ describe("seat checks (review: correctness)", () => {
     );
   });
 
-  test("GLM-5.3's effort warning says what medium may fall to (its default, max)", () => {
+  test("GLM-5.3's effort warning says what medium is sent as (C9, Pass 2: the nearest listed level)", () => {
     const plan = planArena(
       { fake: true, seed: 1, idKey: "seed", priceDate: "2026-10-20", lineup: "mid-tier" },
       arenaEnv({}),
     );
     expect(plan.warnings.join("\n")).toContain(
-      "p4: OpenRouter lists z-ai/glm-5.3's efforts as max, high, low, default max (models list, 2026-10-20): medium is sent as is",
+      "p4: OpenRouter lists z-ai/glm-5.3's efforts as max, high, low, default max (models list, 2026-10-20): medium is sent as low, the nearest listed level",
     );
     expect(plan.warnings.join("\n")).toContain(
-      "if it is dropped, the seat reasons at max while the others run at medium and the prediction assumes medium (output factor 1, against 3)",
+      "the prediction keeps medium's output factor 1 against low's 0.6, an upper bound; unverified until a smoke records the reasoning tokens",
     );
   });
 
