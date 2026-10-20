@@ -1,5 +1,7 @@
 import type { Provider } from "@perfidia/protocol";
+import type { ModelTool } from "../model/adapter.ts";
 import { endpointInfo as catalogEndpoint, type EndpointInfo } from "../model/catalog.ts";
+import { toolTransformOf, transformTools } from "../model/tools.ts";
 
 // The provider registry of the arena (phase-4 design §2.8, Pass 1b): for each provider, the
 // environment variables the harness reads (`PERFIDIA_<PROVIDER>_*` only, read once by `arenaEnv`),
@@ -100,6 +102,14 @@ export const PROVIDERS: Readonly<Record<Exclude<Provider, "fake">, ProviderInfo>
 /** The provider of `id`, or undefined (`fake` is not a provider seats are planned on). */
 export function providerInfo(id: string): ProviderInfo | undefined {
   return Object.values(PROVIDERS).find((p) => p.id === id);
+}
+
+/**
+ * The tools a seat of `provider` gets: the neutral list through its provider's transform (the same
+ * list for every provider of this build). `arena run` hashes each seat's list into `seats.json`.
+ */
+export function toolsFor(provider: string, tools: readonly ModelTool[]): readonly ModelTool[] {
+  return transformTools(tools, toolTransformOf(providerInfo(provider)?.toolTransform ?? "none"));
 }
 
 /** Every environment variable the harness reads (the architecture test checks the names). */

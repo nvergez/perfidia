@@ -53,6 +53,11 @@ export const UsageLineSchema = z.strictObject({
   output: Int,
   /** Pass 1b: reasoning tokens, a part of `output`, where the provider reports them. */
   reasoning: Int.optional(),
+  /**
+   * Phase-4 review: the inference geography the provider reported when it is not the global
+   * default (Anthropic `usage.inference_geo: "us"`, billed 1.1×); absent: global or unreported.
+   */
+  geo: z.string().min(1).optional(),
   estimated: z.boolean(),
 });
 export type UsageLine = z.infer<typeof UsageLineSchema>;
@@ -229,11 +234,14 @@ export const KillSwitchLineSchema = z.strictObject({
 });
 export type KillSwitchLine = z.infer<typeof KillSwitchLineSchema>;
 
-/** An operator signal: the first hands every LLM seat to its bot, the second aborts the run. */
+/**
+ * An operator signal: the first hands every LLM seat to its bot, the second aborts the run, a third
+ * exits the process at once (`exit`, phase-4 review: written just before it).
+ */
 export const OperatorLineSchema = z.strictObject({
   k: z.literal("operator"),
   signal: z.string().min(1),
-  action: z.enum(["handoff", "abort"]),
+  action: z.enum(["handoff", "abort", "exit"]),
   t: Int,
   wall: z.string().optional(),
 });
@@ -250,6 +258,13 @@ export const CarryLineSchema = z.strictObject({
   from: z.string().min(1),
   lines: Int,
   costNanoUsd: Nano,
+  /**
+   * Phase-4 review: the part of `costNanoUsd` that no line of the carried run logs: a run that did
+   * not end (its `arena.json` not `ended`, `stopped` or `degraded`) may have had attempts and a
+   * check in flight when it died, billed but never logged, so its reserve (`estimate.json`: the
+   * attempt bounds, a probe and the start preflight) is carried too.
+   */
+  inFlightNanoUsd: Nano.optional(),
 });
 export type CarryLine = z.infer<typeof CarryLineSchema>;
 
@@ -665,6 +680,41 @@ export const ArenaReportSchema = z.strictObject({
 });
 export type ArenaReport = z.infer<typeof ArenaReportSchema>;
 
+/**
+ * `arena.json` as phases 2 and 3 wrote it (`perfidia-arena/1`, phase-4 review): read, never
+ * written. No `budget` or `exit4` block, no per-seat `promptCaps`, and a hand-off without its
+ * reason (the seat cap was the only one).
+ */
+export const ARENA_REPORT_V1_FORMAT = "perfidia-arena/1";
+
+export const ArenaSeatReportV1Schema = ArenaSeatReportSchema.omit({
+  promptCaps: true,
+  handoff: true,
+}).extend({
+  handoff: z
+    .strictObject({ t: Int, time: z.string(), label: z.string(), spentNanoUsd: Nano })
+    .nullable(),
+});
+export type ArenaSeatReportV1 = z.infer<typeof ArenaSeatReportV1Schema>;
+
+export const ArenaReportV1Schema = ArenaReportSchema.omit({
+  format: true,
+  seats: true,
+  budget: true,
+  exit4: true,
+}).extend({
+  format: z.literal(ARENA_REPORT_V1_FORMAT),
+  seats: z.array(ArenaSeatReportV1Schema),
+});
+export type ArenaReportV1 = z.infer<typeof ArenaReportV1Schema>;
+
+/** A reader's schema: `arena.json` of any version this build knows (the writer writes `/2`). */
+export const ArenaReportAnySchema = z.discriminatedUnion("format", [
+  ArenaReportSchema,
+  ArenaReportV1Schema,
+]);
+export type ArenaReportAny = z.infer<typeof ArenaReportAnySchema>;
+
 // `estimate.json` (phase 4, §5.1 and §5.3): the prediction of a run, written once before turn 1;
 // its sha256 is in `seats.json`. Integer nano-dollars; no wall time, so `--fake` runs stay
 // byte-identical.
@@ -830,7 +880,11 @@ export const ReconcileFileSchema = z.strictObject({
     z.strictObject({
       provider: z.string().min(1),
       ledgerNanoUsd: Nano,
-      /** The conservative part of estimated (broken-stream) lines: their output. */
+      /**
+       * The conservative part of the ledger: the output of estimated (broken-stream) lines, and
+       * (phase-4 review) what lines priced at a dated card inside its uncertain change window
+       * cost over the card before it.
+       */
       estimatedExcessNanoUsd: Nano,
       reportedNanoUsd: Nano,
       feesNanoUsd: Nano,
@@ -845,6 +899,11 @@ export const ReconcileFileSchema = z.strictObject({
           kind: z.enum(["input", "cacheWrite", "cacheRead", "output"]),
           ledger: Int,
           reported: Int,
+          /**
+           * Phase-4 review: the part of `ledger` from estimated (broken-stream) entries, which may
+           * never have been generated: the reported count may fall short by up to this much.
+           */
+          estimated: Int.optional(),
           ok: z.boolean(),
         }),
       ),

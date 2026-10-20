@@ -39,6 +39,13 @@ export interface PriceCard extends PicoPrices {
   readonly validFrom: string;
   /** UTC instant at which it stops applying (exclusive); null: open. */
   readonly validTo: string | null;
+  /**
+   * The source dates the change without a timezone (phase-4 review): the card applies from the
+   * earliest instant the date can mean (`validFrom`, the conservative side, which the ledger and
+   * the bounds use), and until this instant (the latest one it can mean) the provider may still
+   * bill the card before it. `arena reconcile` counts that difference as conservative excess.
+   */
+  readonly uncertainUntil?: string;
   /** Prompt-length pricing: a request whose prompt is over `aboveTokens` pays `card` throughout. */
   readonly longContext: {
     readonly aboveTokens: number;
@@ -48,6 +55,13 @@ export interface PriceCard extends PicoPrices {
   readonly overrides: readonly PriceOverride[];
   /** A platform fee on top of the token cost, in permille (OpenRouter's 5.5% on credits: 55). */
   readonly platformFeePermille: number;
+  /**
+   * Inference geographies other than the global default and their multiplier on every price kind,
+   * in permille (Anthropic's US-only inference: `{ us: 1100 }`). An attempt whose usage reports one
+   * of them is charged at the scaled prices; attempt bounds take the scaled prices too. A reported
+   * geography a card does not list is charged at `MAX_CARD`. Absent: none.
+   */
+  readonly geo?: Readonly<Record<string, number>>;
   /** `explicit`: writes priced as marked; `implicit`: no write premium, hits not guaranteed. */
   readonly cache: "explicit" | "implicit";
   /** The page the prices were read from. */
@@ -79,6 +93,18 @@ export function prices(r: Row): PicoPrices {
     cacheRead: perMTok(r[2]),
     write5m: perMTok(r[3]),
     write1h: perMTok(r[4]),
+  };
+}
+
+/** Prices scaled by `permille` (a geography's multiplier), each rounded up. */
+export function scalePrices(p: PicoPrices, permille: number): PicoPrices {
+  const k = (v: number): number => Math.ceil((v * permille) / 1000);
+  return {
+    input: k(p.input),
+    output: k(p.output),
+    cacheRead: k(p.cacheRead),
+    write5m: k(p.write5m),
+    write1h: k(p.write1h),
   };
 }
 

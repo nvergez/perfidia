@@ -1,4 +1,4 @@
-import type { PlayerId } from "@perfidia/protocol";
+import type { PlayerId, PromptVariant } from "@perfidia/protocol";
 import { ENTRY_OVERHEAD_TOKENS, entryTokensUpper } from "../seat/agent.ts";
 import {
   ModelError,
@@ -84,14 +84,20 @@ export interface PreflightOptions {
   readonly price?: (group: PreflightGroup, usage: readonly UsageEntry[]) => Cost;
 }
 
-/** The placeholder conversation of the shape check: a user entry, then an operator entry. */
-export function sampleRequest(g: Pick<PreflightGroup, "seat" | "prompt" | "tools">): ChatRequest {
+/**
+ * The placeholder conversation of the shape check: a user entry, then an operator entry (the turn
+ * header's template, worded for the seat's operator channel).
+ */
+export function sampleRequest(
+  g: Pick<PreflightGroup, "seat" | "prompt" | "tools">,
+  variant: PromptVariant = "system",
+): ChatRequest {
   return {
     prompt: g.prompt,
     tools: g.tools,
     entries: [
       { role: "user", parts: [{ kind: "text", text: '{"preflight":true}' }] },
-      { role: "operator", text: operatorTemplates()["turnHeader"] ?? "" },
+      { role: "operator", text: operatorTemplates(variant)["turnHeader"] ?? "" },
     ],
     meta: { seat: g.seat, turn: 0, round: 0, maxRounds: 1, maxCalls: 1, kind: "round" },
   };
@@ -103,8 +109,11 @@ const utf8 = new TextEncoder();
  * An upper bound of the shape check's prompt in tokens: one token per UTF-8 byte of the prefix
  * (tools and both system blocks) and of the sample entries, plus per-block overheads.
  */
-export function sampleTokensUpper(g: Pick<PreflightGroup, "seat" | "prompt" | "tools">): number {
-  const req = sampleRequest(g);
+export function sampleTokensUpper(
+  g: Pick<PreflightGroup, "seat" | "prompt" | "tools">,
+  variant: PromptVariant = "system",
+): number {
+  const req = sampleRequest(g, variant);
   let n =
     utf8.encode(g.prompt.shared).length +
     utf8.encode(g.prompt.seat).length +
@@ -131,20 +140,60 @@ export function groupsOf(seats: readonly PreflightGroup[]): PreflightGroup[] {
   return [...out.values()];
 }
 
+interface Problem {
+  readonly kind: string;
+  readonly message: string;
+}
+
 /** Why a group's allowed fallback models fail the plan: unpriced, or outside the attempt bound. */
-function fallbackProblem(g: PreflightGroup, report: PreflightReport): string | null {
+function fallbackProblem(g: PreflightGroup, report: PreflightReport): Problem | null {
   if (!fallbacksOn(g.adapter.spec)) return null;
   const allowed = report.allowedFallbackModels;
   const unpriced = allowed.filter((m) => !isPriced(m));
   if (unpriced.length > 0) {
-    return `no price for its fallback model(s) ${unpriced.join(", ")}: add them to CARDS (packages/orchestrator/src/model/prices.ts) first`;
+    return {
+      kind: "price",
+      message: `no price for its fallback model(s) ${unpriced.join(", ")}: add them to CARDS (packages/orchestrator/src/model/prices.ts) first`,
+    };
   }
   const planned = FALLBACK_TARGETS[g.adapter.spec.model] ?? [];
   const unplanned = allowed.filter((m) => !planned.includes(m));
   if (unplanned.length > 0) {
-    return `its fallback model(s) ${unplanned.join(", ")} are not in the attempt bound's targets (${planned.join(", ") || "none"}): add them to FALLBACK_TARGETS (packages/orchestrator/src/model/prices.ts), or set the seat's fallbacks to "off"`;
+    return {
+      kind: "price",
+      message: `its fallback model(s) ${unplanned.join(", ")} are not in the attempt bound's targets (${planned.join(", ") || "none"}): add them to FALLBACK_TARGETS (packages/orchestrator/src/model/prices.ts), or set the seat's fallbacks to "off"`,
+    };
   }
   return null;
+}
+
+/**
+ * A check served under a model id no card prices (phase-4 review): every attempt would be charged
+ * at `MAX_CARD`, far over its attempt bound (the reserve), so the kill switch would fire on
+ * phantom spend. A dated or aliased id needs its card (or the seat another model) first.
+ */
+function unpricedProblem(g: PreflightGroup, cost: Cost): Problem | null {
+  if (cost.unpriced.length === 0) return null;
+  return {
+    kind: "price",
+    message: `the API served ${cost.unpriced.join(", ")} for ${g.adapter.spec.model}, and no price card lists it: every attempt would be charged at the highest price of any card, over its attempt bound; add a card for it (packages/orchestrator/src/model/prices/) before running`,
+  };
+}
+
+/**
+ * A check that ran outside the global inference geography (phase-4 review): the workspace's
+ * default inference geo applies to every request (they send none), US-only inference bills 1.1×
+ * every token, and the prediction and the comparison assume global routing. The run is refused
+ * until the owner sets the workspace back to global (the attempt bounds cover 1.1× anyway, so a
+ * change in the middle of a run stays within the budget).
+ */
+function geoProblem(usage: readonly UsageEntry[]): Problem | null {
+  const geo = usage.find((u) => u.geo !== undefined)?.geo;
+  if (geo === undefined) return null;
+  return {
+    kind: "geo",
+    message: `inference ran in "${geo}", not "global": the workspace's default inference geo applies to every request (US-only inference bills 1.1× every token, and the prediction assumes global routing); in the Claude Console, set the workspace's default inference geo to global (Settings → Workspaces → Data residency, with "global" among its allowed geos), then run again`,
+  };
 }
 
 /**
@@ -168,7 +217,7 @@ export async function preflight(
     let status: number | null = null;
     try {
       // oxlint-disable-next-line no-await-in-loop -- one group at a time: a failure stops the rest
-      report = await g.adapter.preflight(sampleRequest(g));
+      report = await g.adapter.preflight(sampleRequest(g, g.adapter.capabilities.operatorChannel));
       usage = report.usage;
     } catch (e) {
       if (!(e instanceof ModelError)) throw e;
@@ -180,9 +229,10 @@ export async function preflight(
     const cost = o.price?.(g, usage) ?? costOf(usage);
     nanoUsd += cost.nanoUsd;
     if (failure === null && report !== null) {
-      const problem = fallbackProblem(g, report);
-      if (problem !== null)
-        failure = new PreflightError("price", `preflight of ${label}: ${problem}`);
+      const problem = geoProblem(usage) ?? unpricedProblem(g, cost) ?? fallbackProblem(g, report);
+      if (problem !== null) {
+        failure = new PreflightError(problem.kind, `preflight of ${label}: ${problem.message}`);
+      }
     }
     const outcome: GroupOutcome = {
       group: g,

@@ -233,3 +233,115 @@ describe("MatchBudget and the kill switch (phase 4 §5.2)", () => {
     expect([l.wakeOver("p1", 1), l.wakeOver("p2", 1)]).toEqual([true, false]);
   });
 });
+
+describe("fail-safe accounting (phase-4 review)", () => {
+  test("a kill hook that throws neither leaves a seat running nor loses the charge", () => {
+    const errors: string[] = [];
+    const notes: HandoffNote[] = [];
+    const match = new MatchBudget({
+      budgetNanoUsd: 1_000_000_000,
+      reserveNanoUsd: 400_000_000,
+      onKill: () => {
+        throw new Error("ENOSPC: no space left on device, write");
+      },
+      onError: (what, e) => errors.push(`${what}: ${e instanceof Error ? e.message : String(e)}`),
+    });
+    const l = new BudgetLedger({
+      caps: new Map([
+        ["p1", 100_000_000_000],
+        ["p2", 100_000_000_000],
+      ]),
+      wakeCapNanoUsd: null,
+      handoffTo: () => ({ label: "bot:turtle@3", agent: bot("bot:turtle@3") }),
+      onHandoff: (n) => {
+        notes.push(n);
+        // The hand-off line of p1 cannot be written either.
+        if (n.seat === "p1") throw new Error("EIO: i/o error, write");
+      },
+      onError: (what, e) => errors.push(`${what}: ${e instanceof Error ? e.message : String(e)}`),
+      match,
+    });
+    const c = l.charge("p1", 1, 200, [sonnet(60_000)]); // $0.60 = K
+    expect(c.costNanoUsd).toBe(600_000_000);
+    expect([match.killed, match.spentNanoUsd]).toEqual([true, 600_000_000]);
+    // Every seat is halted (and its hand-off queued) although both hooks threw.
+    expect([l.over("p1"), l.over("p2"), l.overReason("p2"), l.halted]).toEqual([
+      true,
+      true,
+      "match_budget",
+      "match_budget",
+    ]);
+    expect(notes.map((n) => [n.seat, n.reason])).toEqual([
+      ["p1", "match_budget"],
+      ["p2", "match_budget"],
+    ]);
+    expect(l.allHandedOff()).toBe(true);
+    expect(errors).toEqual([
+      "the hand-off hook: EIO: i/o error, write",
+      "the kill hook: ENOSPC: no space left on device, write",
+    ]);
+  });
+
+  test("without onError the first hook error is rethrown, after the kill state and every hook", () => {
+    const ran: string[] = [];
+    const match = new MatchBudget({
+      budgetNanoUsd: 10,
+      reserveNanoUsd: 5,
+      onKill: () => {
+        ran.push("onKill");
+        throw new Error("full disk");
+      },
+    });
+    match.onKilled(() => {
+      ran.push("listener");
+      throw new Error("listener failed");
+    });
+    expect(() => match.add(5, 7)).toThrow("listener failed");
+    expect([match.killed, match.spentNanoUsd, ran]).toEqual([true, 5, ["listener", "onKill"]]);
+    // A ledger built on a killed budget whose listener cannot run still reports the kill.
+    const l = new BudgetLedger({
+      caps: new Map([["p1", 1_000]]),
+      wakeCapNanoUsd: null,
+      handoffTo: () => {
+        throw new Error("no bot");
+      },
+      match: new MatchBudget({
+        budgetNanoUsd: 10,
+        reserveNanoUsd: 5,
+        carryNanoUsd: 5,
+        onError: () => undefined,
+      }),
+    });
+    expect([l.halted, l.overReason("p1")]).toEqual(["match_budget", "match_budget"]);
+  });
+
+  test("a usage the pricer cannot price is charged the seat's attempt bound (the attempt was billed)", () => {
+    const match = new MatchBudget({ budgetNanoUsd: 10_000_000_000, reserveNanoUsd: 1_000 });
+    const l = new BudgetLedger({
+      caps: new Map([
+        ["p1", 100_000_000_000],
+        ["p2", 100_000_000_000],
+      ]),
+      wakeCapNanoUsd: null,
+      handoffTo: () => ({ label: "bot:turtle@3", agent: bot("bot:turtle@3") }),
+      match,
+      attemptBounds: new Map([["p1", 960_000_000]]),
+    });
+    const bad: UsageEntry = {
+      model: "claude-sonnet-5-5",
+      kind: "message",
+      tokens: { input: Number.NaN, cacheWrite5m: 0, cacheWrite1h: 0, cacheRead: 0, output: 1e300 },
+      estimated: false,
+    };
+    const c = l.charge("p1", 1, 0, [bad]);
+    expect([c.costNanoUsd, c.invalidUsage, l.spent("p1"), match.spentNanoUsd]).toEqual([
+      960_000_000,
+      true,
+      960_000_000,
+      960_000_000,
+    ]);
+    expect(l.charge("p1", 1, 0, [sonnet(1_000)]).invalidUsage).toBe(false);
+    // A seat without a bound keeps phase 2's behaviour: the charge throws.
+    expect(() => l.charge("p2", 1, 0, [bad])).toThrow("not a safe integer");
+  });
+});

@@ -181,6 +181,8 @@ function routed(
   model: string,
   o: {
     readonly advertised: readonly Effort[];
+    /** The models list's `reasoning.default_effort`: what an effort OpenRouter drops falls to. */
+    readonly defaultEffort: Effort;
     /** Reasoning cannot be turned off (`reasoning.mandatory`): `none` is refused. */
     readonly mandatory: boolean;
     readonly endpoint: Omit<EndpointInfo, "source" | "checked">;
@@ -203,7 +205,7 @@ function routed(
       minAttemptTimeoutMs: 0,
       supportedParams: o.endpoint.supportedParams,
     },
-    defaultEffort: o.advertised[0] ?? "medium",
+    defaultEffort: o.defaultEffort,
     seat: true,
     fallbackTargets: null,
     reasoningContext: null,
@@ -263,6 +265,7 @@ export const MODELS: readonly ModelInfo[] = Object.freeze([
   gemini("gemini-3.8-flash", 0),
   routed("z-ai/glm-5.3", {
     advertised: ["max", "high", "low"],
+    defaultEffort: "max",
     mandatory: true,
     endpoint: {
       tag: "z-ai/fp8",
@@ -323,6 +326,7 @@ export const MODELS: readonly ModelInfo[] = Object.freeze([
   }),
   routed("z-ai/glm-5.3-flash", {
     advertised: ["max", "high", "low"],
+    defaultEffort: "max",
     mandatory: true,
     endpoint: {
       tag: "z-ai/fp8",
@@ -371,6 +375,7 @@ export const MODELS: readonly ModelInfo[] = Object.freeze([
   }),
   routed("moonshotai/kimi-k3", {
     advertised: ["max", "high", "low", "none"],
+    defaultEffort: "max",
     mandatory: false,
     endpoint: {
       tag: "moonshotai/mxfp4",
@@ -424,6 +429,7 @@ export const MODELS: readonly ModelInfo[] = Object.freeze([
   }),
   routed("deepseek/deepseek-v4.1-flash-1017", {
     advertised: ["max", "high", "low", "none"],
+    defaultEffort: "high",
     mandatory: false,
     endpoint: {
       tag: "together",

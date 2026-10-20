@@ -11,6 +11,7 @@ import {
   MAX_PRICE,
   MAX_PRICE_ID,
   PRICES,
+  cardById,
   cardsOf,
   costOf,
   entryCost,
@@ -19,6 +20,15 @@ import {
   requirePrice,
   usdToNano,
 } from "./prices.ts";
+
+/** 1,000 tokens of every kind on Sonnet 5.5, run in `geo` when given. */
+const sonnet = (geo?: string): UsageEntry => ({
+  model: "claude-sonnet-5-5",
+  kind: "message",
+  tokens: { input: 1000, cacheWrite5m: 1000, cacheWrite1h: 1000, cacheRead: 1000, output: 1000 },
+  estimated: false,
+  ...(geo === undefined ? {} : { geo }),
+});
 
 const tokens = (t: Partial<TokenUsage>): TokenUsage => ({
   input: 0,
@@ -156,11 +166,41 @@ describe("prices", () => {
       for (const t of targets) expect(CARDS[t]).toBeDefined();
     }
     expect(FALLBACK_TARGETS["claude-haiku-5-5"]).toBeUndefined();
+    // Every card and tier also at its US-only inference prices (1.1×, data residency pricing).
     expect(cardsOf("claude-haiku-5-5").map((c) => c.id)).toEqual([
       "anthropic:claude-haiku-5-5@2026-10-20",
+      "anthropic:claude-haiku-5-5@2026-10-20+us",
       "anthropic:claude-haiku-5-5@2026-10-20#over100k",
+      "anthropic:claude-haiku-5-5@2026-10-20#over100k+us",
     ]);
-    expect(cardsOf("claude-sonnet-5-5")).toHaveLength(1);
+    expect(cardsOf("claude-sonnet-5-5")).toHaveLength(2);
+  });
+
+  test("US-only inference (usage.inference_geo us) bills 1.1× every kind; an unknown geography the max", () => {
+    const global = costOf([sonnet()]);
+    const us = costOf([sonnet("us")]);
+    // ($2 + $2.50 + $4 + $0.10 + $10) per MTok × 1000 tokens = $0.0186; × 1.1 = $0.02046.
+    expect([global.nanoUsd, us.nanoUsd]).toEqual([18_600_000, 20_460_000]);
+    expect(us.cards).toEqual(["anthropic:claude-sonnet-5-5@2026-10-20+us"]);
+    expect(costOf([sonnet("global")]).nanoUsd).toBe(18_600_000);
+    // A geography no card lists is charged at the max, flagged unpriced.
+    expect(costOf([sonnet("eu")]).unpriced).toEqual(["claude-sonnet-5-5"]);
+    // Haiku 5.5's long tier is scaled too (the page: "also applies to the higher prices").
+    const long: UsageEntry = {
+      model: "claude-haiku-5-5",
+      kind: "message",
+      tokens: { input: 200_000, cacheWrite5m: 0, cacheWrite1h: 0, cacheRead: 0, output: 0 },
+      estimated: false,
+      geo: "us",
+    };
+    expect(costOf([long])).toMatchObject({
+      nanoUsd: 110_000_000,
+      cards: ["anthropic:claude-haiku-5-5@2026-10-20#over100k+us"],
+    });
+    // A logged geography card id resolves (arena cost --reprice, reconcile).
+    expect(cardById("anthropic:claude-sonnet-5-5@2026-10-20+us")?.output).toBe(11_000_000);
+    expect(cardById("anthropic:claude-haiku-5-5@2026-10-20#over100k+us")?.input).toBe(550_000);
+    expect(cardById("anthropic:claude-sonnet-5-5@2026-10-20+eu")).toBeNull();
   });
 
   test("an unpriced model is charged under the max card's id; costOf lists the cards used", () => {

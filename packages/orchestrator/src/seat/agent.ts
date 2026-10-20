@@ -107,18 +107,27 @@ export interface SeatPolicy {
   readonly cacheMissShare?: number;
 }
 
-/** One usage entry as an `llm_call` line logs it (reasoning tokens when the provider reports them). */
-function usageLine(u: UsageEntry): LlmCallLine["usage"][number] {
+/** A token count as a line can hold it: a non-finite or unsafe count (an invalid usage) logs as 0. */
+const count = (n: number): number => (Number.isSafeInteger(n) && n >= 0 ? n : 0);
+
+/**
+ * One usage entry as an `llm_call` line logs it (reasoning tokens when the provider reports them).
+ * `invalid`: the ledger could not price the usage and charged the attempt bound; the entry is
+ * logged with its unusable counts as 0 and flagged `estimated`, so the line stays valid.
+ */
+function usageLine(u: UsageEntry, invalid = false): LlmCallLine["usage"][number] {
+  const reasoning = u.tokens.reasoning;
   return {
     model: u.model,
     kind: u.kind,
-    input: u.tokens.input,
-    cacheWrite5m: u.tokens.cacheWrite5m,
-    cacheWrite1h: u.tokens.cacheWrite1h,
-    cacheRead: u.tokens.cacheRead,
-    output: u.tokens.output,
-    ...(u.tokens.reasoning === undefined ? {} : { reasoning: u.tokens.reasoning }),
-    estimated: u.estimated,
+    input: count(u.tokens.input),
+    cacheWrite5m: count(u.tokens.cacheWrite5m),
+    cacheWrite1h: count(u.tokens.cacheWrite1h),
+    cacheRead: count(u.tokens.cacheRead),
+    output: count(u.tokens.output),
+    ...(reasoning === undefined ? {} : { reasoning: count(reasoning) }),
+    ...(u.geo === undefined ? {} : { geo: u.geo }),
+    estimated: u.estimated || invalid,
   };
 }
 
@@ -405,7 +414,7 @@ export class LlmSeatAgent implements SeatAgent {
         turn: input.turn,
         entries: [
           userOf([{ kind: "text", text: canonicalJson(input.briefing) }]),
-          operatorOf(turnHeader(input)),
+          operatorOf(turnHeader(input, this.o.promptVariant ?? "system")),
         ],
         pending: [],
         lastPrompt: 0,
@@ -802,7 +811,7 @@ export class LlmSeatAgent implements SeatAgent {
       refusal: res?.refusal ?? null,
       fallback: res?.fallback ?? false,
       cacheMiss: r.cacheMiss,
-      usage: usage.map(usageLine),
+      usage: usage.map((u) => usageLine(u, r.charge.invalidUsage)),
       costNanoUsd: r.charge.costNanoUsd,
       seatSpentNanoUsd: r.charge.seatSpentNanoUsd,
       capNanoUsd: r.charge.capNanoUsd,

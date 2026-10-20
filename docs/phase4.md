@@ -15,6 +15,9 @@
 >   the tool transform hook, the fake path mirroring each seat's intended provider, and the
 >   `budget-mix`, `mid-tier`, `mid-tier-flash` and `frontier` presets. Seats of every provider plan
 >   and run on `--fake`; only `anthropic` seats run for real (this build has no other adapter).
+> - **The review's fixes** (§25): a fail-safe kill switch, US-only inference in every Claude bound,
+>   the in-flight reserve of a crashed run's carry, key redaction, and the other findings of the
+>   Pass 1 review, each with its regression test. The figures of §1–§24 are this build's.
 > - **Not built yet:** Pass 2 (the OpenAI, Gemini and OpenAI-compatible adapters, calibration
 >   profiles, `arena calibrate`), Pass 3 (per-model stats and their spectator pages).
 > - This document describes what was built. The reviewed phase-4 design (with its `[critic]`
@@ -50,6 +53,7 @@
 22. The run directory and the spectator (Pass 1b)
 23. Tests and measurements (Pass 1b)
 24. Deviations and open items (Pass 1b)
+25. The review's fixes
 
 ---
 
@@ -94,21 +98,25 @@ One run directory meets it when all of these hold (design §5.1). `arena.json` c
    `budget.estimate`.
 4. **No hand-off** of any reason (`noHandoff`), and the kill switch never fired. Wake caps are
    allowed (counted per seat).
-5. **Inside the prediction** (`withinPrediction`, `under`): the run's total (attempts, start
-   preflight and probes, from the logged line costs) lies in [low, high] of the stored estimate,
-   and total + carry ≤ budget.
-6. **Reconciled** (`reconciled`): `null` until `arena reconcile` runs, then its verdict.
+5. **Inside the prediction** (`withinPrediction`, `under`): the run's attempt spend (from the
+   logged line costs) lies in [low, high] of the stored estimate, which predicts attempts only;
+   the start preflight and probes are reported apart (`preflightNanoUsd`, `probeNanoUsd`). The
+   total (attempts, preflight and probes) + carry ≤ budget.
+6. **Reconciled** (`reconciled`): `null` until `arena reconcile` runs at least 48 hours after the
+   run (or with `--force`), then its verdict.
 
-`met` is the conjunction, `reconciled` included: a run is never "met" before reconciliation. The
+`met` is the conjunction, `reconciled` included, and needs a real run: a run is never "met" before
+reconciliation, and a `--fake` run never is (no model served it and nothing was spent). The
 **Claude form** of the exit is met by `claude-duo` (M1, §10); the **cross-provider form** by
 `budget-mix` after Pass 2.
 
 On fake models the whole path runs at $0 of real money: a 7-day
-`arena run --fake --lineup claude-duo --seed 1 --id-key seed` spends a ledger $5.14 (fake brains
-are bots priced as Claude), inside the predicted [$3.47, $44.28], and after
-`arena reconcile <dir> --usd fake=5.144326470` its `exit4.met` is `true`. A 2-day fake run spends
-less than the 2-day low ($0.84 < $0.99), so its `withinPrediction` is `false`: fake wake counts and
-tokens are bot-shaped, never a prediction source.
+`arena run --fake --lineup claude-duo --seed 1 --id-key seed` spends a ledger $5.15
+($5.150819930; fake brains are bots priced as Claude), inside the predicted [$3.47, $44.28], and
+after `arena reconcile <dir> --usd fake=5.150819930` every part of `exit4` holds, `reconciled`
+included, while `met` stays `false` (a rehearsal). A 2-day fake run spends less than the 2-day low
+($0.85 < $0.99), so its `withinPrediction` is `false`: fake wake counts and tokens are bot-shaped,
+never a prediction source.
 
 ## 3. Lineups
 
@@ -125,8 +133,8 @@ seats (`llm`: provider, model, optional endpoint, effort, profile, `capUsd`, `wa
 
 | Preset          | Seats                                                                                | `maxTokens` | Low / central / high      | Reserve | Budget | K       |
 | --------------- | ------------------------------------------------------------------------------------ | ----------- | ------------------------- | ------- | ------ | ------- |
-| `claude-duo`    | p1 Sonnet 5.5 (fallbacks off), p2–p4 Haiku 5.5; p5 `opportunist@3`, p6 `conqueror@3` | 16,000      | $3.47 / $12.05 / $44.28   | $2.00   | $55    | $53.00  |
-| `claude-family` | Opus 5.5, Sonnet 5.5 (off), Haiku 5.5, Opus 5.5 at `low`; the same bots              | 16,000      | $13.54 / $46.38 / $168.92 | $18.48  | $180   | $161.52 |
+| `claude-duo`    | p1 Sonnet 5.5 (fallbacks off), p2–p4 Haiku 5.5; p5 `opportunist@3`, p6 `conqueror@3` | 16,000      | $3.47 / $12.05 / $44.28   | $2.20   | $55    | $52.80  |
+| `claude-family` | Opus 5.5, Sonnet 5.5 (off), Haiku 5.5, Opus 5.5 at `low`; the same bots              | 16,000      | $13.54 / $46.38 / $168.92 | $20.33  | $190   | $169.67 |
 
 Both keep phase 2's request shape: `every-round` reminders, 16,000 output tokens, a 10-minute
 attempt timeout (§12). One calibration day of `claude-duo` (`--stop-after 1`) is
@@ -136,13 +144,15 @@ $0.50 / $1.72 / $6.33.
 predicted high, at least $5 (the sum of caps may exceed the budget: the match budget is the
 guarantee); wake cap = 20 × the model's central wake cost, at least $0.10 (Sonnet 5.5 $1.92, Haiku
 5.5 $0.10); fallbacks `off` for Sonnet 5.5 (its fallback, Sonnet 5, rejects the operator entries),
-`default` for Opus 5.5, `off` for models without server-side fallbacks. Without a lineup, phase 2's
-defaults stay ($100 cap, $2 wake cap, no budget).
+`default` for Opus 5.5, `off` for models without server-side fallbacks. A `--seat` override of a
+lineup seat takes the lineup's `defaults` too (its fallbacks included); only the lineup seat's own
+values are dropped. Without a lineup, phase 2's defaults stay ($100 cap, $2 wake cap, no budget).
 
 **Validation** (exit 3, nothing written, the message names the seat or field and the fix): an
 unparseable file (`not a perfidia-lineup/1 file: budgetUsd …`), a missing seat, `fallbacks:
-"default"` on a model without them, a repeated model in a `comparison: true` lineup (a warning), the
-budget checks of §5, and from Pass 1b the seat checks of §18 (endpoint slugs, ZDR, efforts, output
+"default"` on a model without them, a seat with server-side fallbacks on in a `comparison: true`
+lineup (another model could serve its turns, design §3.5), a repeated model in a comparison lineup
+(a warning), the budget checks of §5, and from Pass 1b the seat checks of §18 (endpoint slugs, ZDR, efforts, output
 limits, price cards). Pass 1a refused other providers and `last-round` reminders; Pass 1b plans both
 (§18, §19), and a real run of a provider without an adapter is refused
 (`p2: openai has no adapter in this build (phase 4 Pass 2 adds it): rehearse the lineup with --fake, which mirrors openai at $0`).
@@ -155,14 +165,14 @@ limits, price cards). Pass 1a refused other providers and `last-round` reminders
 ```
 estimate for claude-duo: perfidia-1@1.1.0 · 6 players · 7 game day(s) · lockstep · cache 5m · max_tokens 16000 · prompt cap 160000
 seat  model              effort  fallbacks  cap        wake cap   low        central    high       attempt bound  source
-p1    claude-sonnet-5-5  medium  off        $76.65     $1.92      $2.99      $10.41     $38.33     $0.96          scenario
-p2    claude-haiku-5-5   medium  off        $5.00      $0.10      $0.16      $0.55      $1.99      $0.24          scenario
-p3    claude-haiku-5-5   medium  off        $5.00      $0.10      $0.16      $0.55      $1.99      $0.24          scenario
-p4    claude-haiku-5-5   medium  off        $5.00      $0.10      $0.16      $0.55      $1.99      $0.24          scenario
+p1    claude-sonnet-5-5  medium  off        $76.65     $1.92      $2.99      $10.41     $38.33     $1.06          scenario
+p2    claude-haiku-5-5   medium  off        $5.00      $0.10      $0.16      $0.55      $1.99      $0.26          scenario
+p3    claude-haiku-5-5   medium  off        $5.00      $0.10      $0.16      $0.55      $1.99      $0.26          scenario
+p4    claude-haiku-5-5   medium  off        $5.00      $0.10      $0.16      $0.55      $1.99      $0.26          scenario
 match (scenario, the sum of the seat bounds): $3.47 low · $12.05 central · $44.28 high
-reserve $2.00 = attempt bounds $1.68 + one probe $0.16 + start preflight $0.16
-budget $55.00 · kill threshold K = $53.00 (budget − reserve) · on budget: handoff
-price cards: anthropic:claude-sonnet-5-5@2026-10-20, anthropic:claude-haiku-5-5@2026-10-20, anthropic:claude-haiku-5-5@2026-10-20#over100k
+reserve $2.20 = attempt bounds $1.85 + one probe $0.17 + start preflight $0.17
+budget $55.00 · kill threshold K = $52.80 (budget − reserve) · on budget: handoff
+price cards: anthropic:claude-sonnet-5-5@2026-10-20, anthropic:claude-sonnet-5-5@2026-10-20+us, anthropic:claude-haiku-5-5@2026-10-20, anthropic:claude-haiku-5-5@2026-10-20+us, anthropic:claude-haiku-5-5@2026-10-20#over100k, anthropic:claude-haiku-5-5@2026-10-20#over100k+us
 assumption: …
 ```
 
@@ -173,7 +183,8 @@ assumption: …
   (conservative).
 - **Days.** The game days the run plays: `--stop-after N` predicts N days of the full-length match.
 - **Price cards.** `model/prices.ts`: every Claude card has an id
-  (`anthropic:<model>@2026-10-20`, Haiku 5.5's long-prompt tier `#over100k`), its source
+  (`anthropic:<model>@2026-10-20`, Haiku 5.5's long-prompt tier `#over100k`, and `+us` for the
+  same card at US-only inference prices, 1.1× every kind, §25), its source
   (`https://platform.claude.com/docs/en/about-claude/pricing.md`) and its check date
   (2026-10-20). Opus 5 and Opus 4.8 stay as fallback-target cards. Every `llm_call` and
   `preflight` line logs its cost; logged costs are the source of truth (`arena cost` sums them;
@@ -192,40 +203,48 @@ assumption: …
 
 - **`attemptBound`** (`model/adapter.ts`, `arena/estimate.ts`): the prompt cap (default 160,000
   tokens) at the highest input-side price of every card the seat can be billed at (cache writes
-  included, the 1-hour write too; Haiku 5.5's long-prompt tier), plus the retry limit's output
-  (2 × `maxTokens`, the `max_tokens` retry) at the highest output price; plus one iteration per
-  fallback target at that target's cards when fallbacks are on. `claude-duo`: Sonnet 5.5 $0.96,
-  Haiku 5.5 $0.24; Opus 5.5 with fallbacks on: $6.72.
+  included, the 1-hour write too; Haiku 5.5's long-prompt tier; each Claude card also at its
+  US-only inference price, 1.1×), plus the retry limit's output (2 × `maxTokens`, the
+  `max_tokens` retry) at the highest output price; plus one iteration per fallback target at that
+  target's cards when fallbacks are on. `claude-duo`: Sonnet 5.5 $1.06, Haiku 5.5 $0.26; Opus 5.5
+  with fallbacks on: $7.39 (the design's $0.96, $0.24 and $6.72 at global prices, × 1.1).
 - **Probe and start-preflight bounds:** one check of every preflight group, cold: the group's
   sample prompt (one token per UTF-8 byte, an upper bound) at the highest input-side price plus the
   check's output, on the model and on each fallback target when fallbacks are on. `claude-duo`:
-  $0.16 each.
+  $0.17 each.
 
 **Refusal and warning** (design §4.2, exit 3, nothing written): a K below the predicted low (the
 carry counted) is refused:
 
 ```
-budget $5.00 leaves K = $3.00 after the reserve ($2.00 = attempt bounds $1.68 + one probe $0.16 + start preflight $0.16), below the predicted low $3.47: raise --budget-usd
+budget $5.00 leaves K = $2.80 after the reserve ($2.20 = attempt bounds $1.85 + one probe $0.17 + start preflight $0.17), below the predicted low $3.47: raise --budget-usd
 ```
 
 (`raise the lineup's budgetUsd` when the budget came from the lineup). A K below the predicted
 high is a warning: the kill switch might fire, and the exit criterion would then fail
-(`claude-family` at $180).
+(`claude-family` at $180; its preset is $190, the design's rule of high + reserve rounded up).
 
 **What counts.** Every charge: seat attempts (retries, failed and estimated ones), thought calls,
 the start preflight and every probe (failed groups too, with their partial spend), and the carry of
-a crashed run (`--budget-carry <dir>` sums that run's logged cost lines, its own carry included).
+a crashed run (`--budget-carry <dir>` sums that run's logged cost lines, its own carry included,
+plus, when its `arena.json` does not say `ended`, `stopped` or `degraded`, its `estimate.json`
+reserve: what it may have had in flight when it died, billed without a line). A usage the ledger
+cannot price (a non-finite or absurd count) is charged the seat's attempt bound, flagged
+`estimated`, on a valid line.
 
-**The kill.** The charge that brings spend to K or above fires the switch once: a `kill_switch`
-line, an alert, every LLM seat's hand-off queued with reason `match_budget` (taken at its next
-turn: the match plays on with bots to its end, so it ends and verifies), and from then on:
+**The kill.** The charge that brings spend to K or above fires the switch once: the kill flag and
+every LLM seat's halt first, its hand-off queued with reason `match_budget` (taken at its next
+turn: the match plays on with bots to its end, so it ends and verifies), then the alert and a
+`kill_switch` line. The accounting never depends on a hook: a line that cannot be written (a full
+disk) is reported on stderr, and the halt, the charge and the hand-offs stand (`over()` reads the
+kill flag itself). From then on:
 
 - `ledger.over(seat)` is true for every seat. It is checked right before every attempt and every
   thought call, **after** the pause gate and the model's rate-gate slot: an attempt that was
   queued for a slot when the switch fired never starts. Each seat's attempt in flight at the kill
   is therefore its last.
-- Probes stop: the pause gate's probe returns without calling the API once the seats are halted,
-  and the start preflight stops between groups.
+- Probes stop: the pause gate's probe returns without calling the API once the seats are halted
+  (or the kill flag is up), and both the probe and the start preflight stop between groups.
 - `--on-budget abort` aborts the run instead (status `aborted`, exit 2).
 
 **Why it holds.** At most one attempt per LLM seat and one probe can be in flight when spend
@@ -239,12 +258,21 @@ rules keep each charge within its bound:
   retry of the same request costs its measured prompt. Over the cap, nothing is sent: a
   `prompt_cap` line, and the turn closes (not systemic, counted per seat in `arena.json`).
 - **Broken streams** (`model/anthropic.ts`): a stream that broke after `message_start` is charged
-  its prompt and the full `max_tokens` of output (`estimated: true`); a stream that never started
-  is charged nothing.
+  its prompt and the full `max_tokens` of output (`estimated: true`), plus, for every server-side
+  fallback switch seen before the break, the target's cold iteration (the whole prompt written to
+  the cache and the full `max_tokens`); a stream that never started is charged nothing.
+- **Geography** (`usage.inference_geo`): a request runs where the workspace's default inference
+  geo says (ours send none). US-only inference bills 1.1× every kind: every attempt is priced at
+  the geography its usage reports, the bounds take the 1.1× prices, the start preflight refuses a
+  workspace that is not global (exit 3, the Console setting named) and a mid-run `us` attempt is an
+  alert.
 
-**Operator signals.** SIGINT or SIGTERM once: an `operator` line, every LLM seat handed to its bot
-(reason `operator`), no attempt after it, the match plays to its end. Twice: the run aborts (exit
-2).
+**Operator signals.** SIGINT, SIGTERM or SIGHUP (a closed terminal or session), taken from before
+the start preflight. Once: an `operator` line, every LLM seat handed to its bot (reason
+`operator`), no attempt after it, the match plays to its end; during the start preflight it stops
+the checks between groups and the run writes nothing (exit 3, the preflight's spend printed).
+Twice: the run aborts (exit 2). A third time: an `operator` line (`exit`), then the CLI exits at
+once (130).
 
 **Provider backstops** stay owner steps: an Anthropic Console spend limit on a dedicated workspace
 (phase 2).
@@ -265,8 +293,11 @@ New or changed in a run directory (`docs/phase2.md` §7 has the rest):
     one per group, failed ones too (start lines are buffered until the directory exists);
   - `prompt_cap`: `{seat, turn, round, kind, t, estimateTokens, capTokens}`;
   - `kill_switch`: `{t, wall?, spentNanoUsd, killAtNanoUsd, budgetNanoUsd, action}`;
-  - `operator`: `{signal, action, t, wall?}`;
-  - `carry` (first line, with `--budget-carry`): `{from, lines, costNanoUsd}`;
+  - `operator`: `{signal, action, t, wall?}` (`action`: `handoff`, `abort`, or `exit` before the
+    CLI exits at a third signal);
+  - `carry` (first line, with `--budget-carry`): `{from, lines, costNanoUsd, inFlightNanoUsd?}`
+    (the carried run's reserve when it did not end);
+  - usage entries: `geo` when the provider reports an inference geography other than global;
   - `handoff.reason`: `cap | match_budget | outage | operator`.
 - **`arena.json`** (`perfidia-arena/2`): per seat `promptCaps` and `handoff.reason`; `totals`
   include the start preflight and probes; the `budget` block (`budgetNanoUsd`, `reserveNanoUsd`,
@@ -285,14 +316,19 @@ New or changed in a run directory (`docs/phase2.md` §7 has the rest):
   dedicated workspace, and, in a `perfidia-reconcile-input/1` file, the token counts per model
   where the page shows them (`input`, `cacheWrite`, `cacheRead`, `output`) and fees apart.
 - **Check, in order:** tokens first, ±2% per model and kind (an accounting bug and a wrong card
-  separate here); then dollars: the reported figure must lie in
-  `[ledger − estimatedExcess − tol, ledger + tol]`, `tol = max(3%, $0.25)`, where
-  `estimatedExcess` is the conservative part of estimated (broken-stream) lines.
+  separate here), an output count down to `ledger − estimated − 2%` accepted, `estimated` being
+  the output of broken-stream entries that may never have run; then dollars: the reported figure
+  must lie in `[ledger − estimatedExcess − tol, ledger + tol]`, `tol = max(3%, $0.25)`, where
+  `estimatedExcess` is the conservative part of the ledger: the output of estimated
+  (broken-stream) lines, and what lines priced at a dated card inside its uncertain change window
+  (Gemini's "through November 30" has no timezone, §17) cost over the card before it.
 - **Output:** `reconcile.json`, `arena.json`'s `exit4.reconciled` (and `met`) rewritten, exit 0
-  within tolerance, **4** outside it.
+  within tolerance, **4** outside it. Under 48 hours after the run, `exit4.reconciled` stays `null`
+  (the usage page may still lag, and the lower tolerance would accept its shortfall) unless
+  `--force`.
 
 ```
-fake: ledger $0.84 (estimated excess $0.00), reported $2.00, accepted $0.59–$1.09: OUTSIDE
+fake: ledger $0.85 (estimated excess $0.00), reported $2.00, accepted $0.60–$1.10: OUTSIDE
 reconciled: OUTSIDE tolerance (exit 4)
 ```
 
@@ -303,6 +339,11 @@ reconciled: OUTSIDE tolerance (exit 4)
   `redirect: "error"`: a redirecting base URL fails as a connection error, the second origin gets
   nothing, and no error message carries the key (`model/redirect.test.ts`, and the whole CLI in
   `arena/phase4.test.ts`).
+- **Error bodies.** The SDK's messages embed the error body: the client redacts its key (raw and
+  URL-encoded) from every error message before it reaches a log line, a transcript, an alert or
+  stderr, so a proxy or an upstream that echoes the key leaks nothing (`arena/review.test.ts`, a
+  loopback stub that answers 401 with the key, through the whole CLI). `arena smoke` checks the
+  base URL as `arena run` does (http:// on loopback only, exit 3).
 - **Environment.** Pass 1a: only `PERFIDIA_ANTHROPIC_API_KEY` and `PERFIDIA_ANTHROPIC_BASE_URL`
   (and `PERFIDIA_LIVE` for the live test), read in `arena/` only; nothing reads `ANTHROPIC_*`.
   Pass 1b adds `PERFIDIA_<PROVIDER>_API_KEY` and `_BASE_URL` for the other providers (§16).
@@ -317,7 +358,7 @@ reconciled: OUTSIDE tolerance (exit 4)
 | -------------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
 | `bun run arena -- estimate [--lineup <x>] …`             | The prediction, reserve and K of a run, without running it (same flags as `run`, no `--out`).       |
 | `bun run arena -- run --out <dir> --lineup <x> …`        | A match under the lineup's budget; prints the estimate first; writes `estimate.json` before turn 1. |
-| `bun run arena -- reconcile <dir> --usd anthropic=<usd>` | Reconciles the ledger with the provider's usage page (§7).                                          |
+| `bun run arena -- reconcile <dir> --usd anthropic=<usd>` | Reconciles the ledger with the provider's usage page (§7); `--force` fills `exit4` under 48 h.      |
 | `bun run arena -- cost <dir> [--reprice]`                | Spend per seat and billed model from the logged costs (or at today's cards).                        |
 
 New flags of `run` and `estimate`: `--lineup <preset | file>`, `--budget-usd <usd>`,
@@ -335,17 +376,19 @@ defaults (OpenRouter pinned to `z-ai/fp8` with `data_collection: "deny"` and `zd
 the native operator channel, `last-round` reminders, 32,768 output tokens and a 15-minute timeout
 for comparison lineups; budgets $8/$40 for `budget-mix` and $40/$200 for `mid-tier`) apply from
 Pass 1b and Pass 2. Each run is bounded by its budget: M0 + M1 spend at most
-$0.23 + $0.11 + $10 + $55.
+$0.011 + $1.54 + $0.22 + $10 + $55 (the three smokes' bounds, §25, then the two budgets).
 
 1. **Key and backstop.** On the owner's machine (the cloud container's egress proxy may block
    `api.anthropic.com`): `export PERFIDIA_ANTHROPIC_API_KEY=…`, a dedicated Anthropic workspace
-   with a Console spend limit (e.g. $100).
-2. **M0, the phase-2 smokes** (≤ $0.0054 and ≤ $0.2175, printed before sending):
+   with a Console spend limit (e.g. $100) and its default inference geo set to global (Console,
+   the workspace's data residency settings: US-only bills 1.1×, and the preflight refuses it).
+2. **M0, the phase-2 smokes** (≤ $0.011 and ≤ $1.54, printed before sending: the bound of the
+   real requests, Opus 5.5's two fallback targets included; a smoke costs a fraction of it):
    ```
    bun run arena -- smoke
    bun run arena -- smoke --model opus-5-5 --effort low
    ```
-   Recommended before M1, since `claude-duo`'s p1 is Sonnet 5.5 without fallbacks (≤ $0.11):
+   Recommended before M1, since `claude-duo`'s p1 is Sonnet 5.5 without fallbacks (≤ $0.22):
    ```
    bun run arena -- smoke --model sonnet-5-5 --effort medium
    ```
@@ -353,21 +396,21 @@ $0.23 + $0.11 + $10 + $55.
    ```
    bun run arena -- run --fake --lineup claude-duo --stop-after 1 --budget-usd 10 --out runs/rehearsal
    ```
-4. **M1, the calibration day** (central $1.72, high $6.33, budget $10, K $8.00):
+4. **M1, the calibration day** (central $1.72, high $6.33, budget $10, K $7.81):
    ```
    bun run arena -- estimate --lineup claude-duo --stop-after 1 --budget-usd 10
    bun run arena -- run --lineup claude-duo --stop-after 1 --budget-usd 10 --out runs/claude-duo-cal --watch
    ```
    Read `arena.json`: `budget.actualNanoUsd` against the estimate, per-seat cost, cache reads,
    `promptCaps`, hand-offs (there should be none), refusals.
-5. **M1, the 7-day match** (central $12.05, high $44.28, budget $55, K $53.00):
+5. **M1, the 7-day match** (central $12.05, high $44.28, budget $55, K $52.80):
    ```
    bun run arena -- estimate --lineup claude-duo --budget-usd 55
    bun run arena -- run --lineup claude-duo --budget-usd 55 --out runs/claude-duo-1 --watch
    ```
    Lockstep takes about 10–15 hours of wall time. If it crashes, rerun with
    `--budget-carry runs/claude-duo-1` into a new directory: the crashed run's spend counts toward
-   the same $55.
+   the same $55, its reserve ($2.20) too, for what it may have had in flight.
 6. **After 48 hours,** read the pre-tax usage cost of the run's wall window (`arena.json`
    `budget.wall`) on the workspace's usage page, then:
    ```
@@ -405,8 +448,8 @@ No test touches the network (loopback servers only). Run under `bun test` (defau
   3 wrote it are both listed, ended, with the same seats and annotations.
 
 Measured on the shared 4-vCPU container: `arena estimate` 0.4 s; a 2-day fake `claude-duo` run
-3.6 s ($0.84 ledger); a 7-day one 12.5 s ($5.14, inside the prediction, `exit4.met` after
-reconcile); the orchestrator suite 29 s.
+2.4 s ($0.846 ledger); a 7-day one 12.5 s ($5.150819930, inside the prediction, every `exit4` part
+true after reconcile, `met` false because it is fake); the orchestrator suite in §25.
 
 ## 12. Deviations
 
@@ -418,8 +461,9 @@ reconcile); the orchestrator suite 29 s.
   moves from $43.80 to $41.65 for the same reason.
 - **Reserve.** The design's formula is Σ attempt bounds + one probe; the code adds the start
   preflight (design §4.2's message already does) and bounds a probe from above with one token per
-  byte of the sample prompt at the 1-hour cache-write price: $0.16 per probe for `claude-duo`
-  instead of about $0.05, a reserve of $2.00 instead of about $1.8, K $53.00 instead of about $53.2.
+  byte of the sample prompt at the 1-hour cache-write price, and (§25) every Claude price at its
+  US-only 1.1×: $0.17 per probe for `claude-duo` instead of about $0.05, a reserve of $2.20 instead
+  of about $1.8, K $52.80 instead of about $53.2.
 - **Prompt estimate.** One token per UTF-8 byte and 32 tokens per part instead of the design's
   `ceil(bytes ÷ 2)`: an upper bound for any byte-level tokenizer, so the cap and the attempt bound
   hold whatever the text. Each round starts from a measured prompt, so the overestimate does not
@@ -440,7 +484,9 @@ reconcile); the orchestrator suite 29 s.
   fields or lines) are still served: the server reads `arena.json` leniently (status and `fake`)
   and parses `seats.json` and `llm_calls.jsonl` with the widened schemas (new fields optional, new
   line kinds additive). The spectator annotations accept the widened hand-off reasons and ignore
-  the new lines.
+  the new lines. The protocol exports a reader for the old reports too (§25):
+  `ArenaReportV1Schema` (`perfidia-arena/1`, ec8e2ad's schema) and `ArenaReportAnySchema` (either);
+  the writer still writes `perfidia-arena/2`.
 - Goldens, fingerprints and fixtures are unchanged; engine, gateway, bots and sim are untouched.
 
 ## 14. Open items
@@ -450,7 +496,8 @@ reconcile); the orchestrator suite 29 s.
   `max_tokens`; the usage page's token breakdown (reconciliation falls back to dollars).
 - **Pass 2 and later:** `calibrated` and `measured-point` prediction sources; the other adapters;
   `arena calibrate`, `arena series`, per-model stats (Pass 1b's open items are in §24).
-- **Crash resume** is still not built (phase 2): a crashed match is rerun with `--budget-carry`.
+- **Crash resume** is still not built (phase 2): a crashed match is rerun with `--budget-carry`,
+  which carries the crashed run's reserve when it did not end (§5).
 
 ---
 
@@ -516,9 +563,9 @@ enforces it, and the Anthropic SDK client goes through it):
   with the caller's headers filtered by an allowlist, the provider's auth header and fixed headers,
   and `redirect: "error"` (Bun 1.4.3 forwards `x-api-key` and `x-goog-api-key` across a
   cross-origin 307). A URL carrying the key is refused.
-- `readSse` reads server-sent events (`\r\n`, comments, multi-line `data:`); a body that ends
-  before the provider's terminal event is a retryable `connection` error that carries the spend so
-  far.
+- `readSse` reads server-sent events (`\r\n`, comments, multi-line `data:`); an event the body
+  ends inside (no blank line after it) is discarded, so a body that ends before (or inside) the
+  provider's terminal event is a retryable `connection` error that carries the spend so far.
 - `classifyHttpError` reads the provider's code before the HTTP status: OpenAI spend and quota
   limits (429 with `insufficient_quota`, `*_spend_limit_exceeded`, …) pause for the operator
   (`billing`), other 429s retry, a 403 `misalignment_policy_violation` closes the turn as a refusal;
@@ -553,8 +600,15 @@ is charged at `MAX_CARD`, the highest price per kind over all cards (`unpriced`)
 **Dated windows.** Gemini 4 Argon is $2/$10 through 2026-11-30 and $4/$20 after; Gemini 3.8 Flash
 $0.75/$3.75 through 2026-12-31 and $1.50/$7.50 after. The page gives no timezone, so the dearer
 card applies from 00:00 UTC of the last listed day (2026-11-30 and 2026-12-31), the conservative
-side. Haiku 5.5 (prompts over 100,000 tokens) and OpenAI's models over 272,000 have long-context
-tiers.
+side, and records the latest instant the change can mean (`uncertainUntil`: the next day 12:00
+UTC); `arena reconcile` counts what a line inside that window was charged over the earlier card as
+conservative excess (§7). Haiku 5.5 (prompts over 100,000 tokens) and OpenAI's models over 272,000
+have long-context tiers.
+
+**Geographies** (§25): every Claude card lists US-only inference at 1.1× every kind
+(`geo: { us: 1100 }`, Anthropic's pricing page, data residency, checked 2026-10-20); an entry
+whose usage reports `us` is charged at those prices under the card's id plus `+us`; a geography no
+card lists is charged at `MAX_CARD`.
 
 **Bounds.** A seat's attempt bound (§5) is taken over **every** card valid from the run's start on,
 later windows and long tiers included, with the model's own output limit for the retry and the fee
@@ -610,10 +664,13 @@ orchestrator's parser).
 fix):
 
 - an unknown model of the provider (`gpt-7 is not a seat model; a seat runs on gpt-6.1-sol, …`);
+  a `compat` seat until its card is in `model/prices/compat.ts` (no compat card ships: what a
+  compatible endpoint bills is the owner's to state);
   an effort the model does not take (`effort must be one of low, medium, high, got "max"` for
   Gemini);
 - OpenRouter: a seat without an endpoint (`openrouter seats need a full endpoint slug (e.g. "z-ai/fp8") so routing cannot change the model`),
-  an endpoint not in the model's list, a slug that matches several endpoints, an endpoint that does
+  an endpoint not in the model's list, a slug that matches several endpoints (a provider slug such
+  as `z-ai` names the endpoints it matches: `z-ai is not a full endpoint slug: it matches z-ai/fp8`), an endpoint that does
   not list `tools`, `tool_choice`, `max_tokens` and `reasoning`, an endpoint outside the
   zero-data-retention list while the lineup asks `zdr`; an endpoint on another provider;
 - no price card valid at the start; a context under the minimum; a model whose output limit is
@@ -622,7 +679,10 @@ fix):
 
 Warnings (printed, and `ALERT:` lines on stderr): an OpenRouter endpoint without
 `parallel_tool_calls`; OpenRouter's models list advertising other efforts than the one sent (GLM-5.3
-lists max, high, low: medium is sent as is and its effect stays unverified until a smoke); a price
+lists max, high, low, default max: medium is sent as is, and if OpenRouter drops it the seat
+reasons at max, three times the output the prediction assumes, while the others run at medium; the
+warning says so, and the mapping is decided with Pass 2's adapter before the first comparison); a
+price
 change within two days of the start; Fable 5.1's 30-day retention; GPT-6 Astra's misalignment
 monitoring.
 
@@ -647,8 +707,13 @@ default of the Pass 1b presets.
 **Tools.** Every provider gets the same neutral list (phase 2's Anthropic list, hash
 `214b14ba…`); a provider with a narrower schema dialect gets it through a named `ToolTransform`,
 whose output is frozen and may not rename or reorder the tools. `seats.json` records per seat the
-sha256 of its shared block (`sharedHash`), its tools (`toolsHash`) and its operator templates
-(`operatorHash`), so any per-provider difference shows.
+sha256 of its shared block (`sharedHash`), its own tools (`toolsHash`: the neutral list through its
+provider's transform, `arena/providers.ts` `toolsFor`; the identity for every provider of this
+build) and its operator templates as its channel renders them (`operatorHash`: `system` keeps
+phase 2's hash, `developer` and `envelope` hash their channel and rendering, `[harness] ` prefix
+included), so any per-provider difference shows. The turn header names where the briefing is per
+channel: "The user turn above" (`system`, `developer`), "The text part above" (`envelope`, where
+the header is a part of that same user turn).
 
 ## 20. The fake path
 
@@ -671,10 +736,10 @@ p1–p4, `opportunist@3` and `conqueror@3` on p5–p6. Estimates printed by `are
 
 | Preset           | Seats                                                               | Low / central / high       | Reserve | Budget | K       |
 | ---------------- | ------------------------------------------------------------------- | -------------------------- | ------- | ------ | ------- |
-| `budget-mix`     | Haiku 5.5, GPT-6 Luna, Gemini 3.8 Flash, GLM-5.3 Flash @`z-ai/fp8`  | $1.68 / $6.97 / $31.73     | $1.35   | $40    | $38.65  |
-| `mid-tier`       | Sonnet 5.5, GPT-6.1 Sol, Gemini 4 Argon, GLM-5.3 @`z-ai/fp8`        | $10.79 / $42.06 / $178.53  | $5.76   | $200   | $194.24 |
-| `mid-tier-flash` | `mid-tier` with Gemini 3.8 Flash for Argon                          | $9.13 / $34.19 / $139.42   | $4.38   | $150   | $145.62 |
-| `frontier`       | Fable 5.1, GPT-6 Astra, Gemini 4 Argon, Kimi K3 @`moonshotai/mxfp4` | $37.99 / $139.13 / $548.36 | $18.54  | $570   | $551.46 |
+| `budget-mix`     | Haiku 5.5, GPT-6 Luna, Gemini 3.8 Flash, GLM-5.3 Flash @`z-ai/fp8`  | $1.68 / $6.97 / $31.73     | $1.39   | $40    | $38.61  |
+| `mid-tier`       | Sonnet 5.5, GPT-6.1 Sol, Gemini 4 Argon, GLM-5.3 @`z-ai/fp8`        | $10.79 / $42.06 / $178.53  | $5.91   | $200   | $194.09 |
+| `mid-tier-flash` | `mid-tier` with Gemini 3.8 Flash for Argon                          | $9.13 / $34.19 / $139.42   | $4.53   | $150   | $145.47 |
+| `frontier`       | Fable 5.1, GPT-6 Astra, Gemini 4 Argon, Kimi K3 @`moonshotai/mxfp4` | $37.99 / $139.13 / $548.36 | $19.31  | $570   | $550.69 |
 
 `budget-mix` ($8 calibration day, $40 match) is the cross-provider form of the exit and `mid-tier`
 ($40 / $200) the first comparison, both owner defaults; they run for real once Pass 2's adapters
@@ -739,21 +804,23 @@ Measured on the shared 4-vCPU container: `arena estimate --lineup mid-tier` 0.4 
 
 - **Bounds over future windows.** The design bounds an attempt at the cards valid at the start
   (Argon $0.98); the code takes every card valid from the start on, so a run that crosses a price
-  change stays under its budget: Argon's bound is $1.95, `mid-tier`'s reserve $5.76.
+  change stays under its budget: Argon's bound is $1.95, `mid-tier`'s reserve $5.91.
 - **Argon's and 3.8 Flash's change at 00:00 UTC of the last listed day** (the page has no
   timezone), one day earlier than the design's "from 2026-12-01".
 - **`frontier`'s budget is $570**, not $560: with the fee in the prediction its high is $548.36 and
-  its reserve $18.54, and the design's own rule (high + reserve, rounded up) gives $570.
+  its reserve $19.31, and the design's own rule (high + reserve, rounded up) gives $570.
+  `claude-family`'s is $190 by the same rule (§25).
 - **Fees in predictions.** `arena estimate` and `estimate.json` include OpenRouter's fee in each
   seat's figures; the §5.4 table shows it apart.
 - **OpenRouter efforts.** OpenRouter's models list advertises max, high and low for GLM-5.3 and
   GLM-5.3 Flash (max, high, low, none for Kimi K3 and DeepSeek). The owner default (medium) is kept
   and sent as is, with a plan warning; whether it maps to a reasoning level is unverified until a
   smoke.
-- **The probe bound** keeps every long-context tier, as in Pass 1a, so `claude-duo`'s reserve stays
-  $2.00.
-- **The tool transform** is a hook only: Gemini's schema transform comes with its adapter (Pass 2),
-  so every seat's `toolsHash` is the neutral list's today.
+- **The probe bound** keeps every long-context tier, as in Pass 1a (`claude-duo`'s reserve is
+  $2.20 with the US-only prices of §25).
+- **The tool transform** is wired per seat (§19, §25), but only the identity exists: Gemini's
+  schema transform comes with its adapter (Pass 2), so every seat's `toolsHash` is the neutral
+  list's today.
 - **`byProvider`** in a fake run's report groups by `fake` and endpoint; the intended provider of
   each line is in `seats.json` and its `priceCard`.
 
@@ -765,3 +832,50 @@ Measured on the shared 4-vCPU container: `arena estimate --lineup mid-tier` 0.4 
 - Pass 2: the OpenAI, Gemini, OpenRouter and compat adapters on `model/http.ts`, Gemini's tool
   transform, calibration profiles (`perfidia-profile/1`) and `arena calibrate`, smokes per model,
   then `budget-mix` (the cross-provider exit) and `mid-tier`.
+
+## 25. The review's fixes
+
+The Pass 1 review (money and correctness lenses, 25 findings) was checked finding by finding
+against this code; every one held. Each fix has a regression test (most in
+`arena/review.test.ts`; the file names otherwise), and the money ones were checked against a
+mutant of the old code where the test is new. Verdicts: **fixed** unless stated.
+
+| #   | Finding (severity)                                                                          | What changed                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          | Test                                                                                                                                         |
+| --- | ------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| M1  | The kill switch was not fail-safe: a throwing `onKill` left every seat running (major)      | `MatchBudget.add` sets the flag, runs the ledger's halt, then `onKill`, each hook guarded (`onError` reports, nothing is skipped); `over()`/`halted` read the kill flag itself; a charge counts toward the match before the cap's hand-off hook; preflight checks are counted before their line is written; the arena's `onKill` aborts and alerts before writing                                                                                                                                                     | `budget/ledger.test.ts` (fail-safe); the ENOSPC run; the scheduler property with failing hooks (100 runs, seed 1919; the old order fails it) |
+| M2  | US-only inference (1.1×) was not modelled (major)                                           | `usage.inference_geo` is read on every response (`UsageEntry.geo`, logged as `usage[].geo`); Claude cards list `geo: { us: 1100 }` (pricing page, data residency, checked 2026-10-20); attempts are priced at the reported geography (`+us` card ids); every bound takes the 1.1× prices; the start preflight refuses a non-global workspace (exit 3, the Console setting named); a mid-run `us` attempt is an alert. The request bytes are unchanged (no `inference_geo` sent: a Pass 2 decision)                    | `model/prices.test.ts`, `model/bound.test.ts` (the worst US attempt is the bound), the geo preflight refusal                                 |
+| M3  | `--budget-carry` lost a crashed run's in-flight attempts (major)                            | The carry adds the carried run's `estimate.json` reserve unless its `arena.json` says `ended`, `stopped` or `degraded` (`carry.inFlightNanoUsd`; refused without a readable estimate; no "attempt started" line was added: the reserve bounds what a dead run had in flight, with or without transcripts); signals are subscribed before the start preflight (a signal there stops it between groups, nothing written, exit 3); SIGHUP counts; a third signal writes an `operator` line (`exit`) before the CLI exits | carry of a run left `running`; the start-preflight signal; three signals; the process source with SIGHUP                                     |
+| M4  | A key echoed by the upstream reached logs (minor)                                           | The Anthropic client redacts its key (raw and URL-encoded) from every `ModelError` message; `http.ts`'s `transportError` and `httpModelError` take the same secrets                                                                                                                                                                                                                                                                                                                                                   | adapter errors (401, 500) and the whole CLI against a loopback stub echoing the key (mutant without redaction: both fail)                    |
+| M5  | The token check ignored estimated output (minor)                                            | An output count down to `ledger − estimated − 2%` is accepted; `reconcile.json` token rows carry `estimated`                                                                                                                                                                                                                                                                                                                                                                                                          | the reviewer's 651K + broken 16K case; `tokensWithin` boundaries                                                                             |
+| M6  | A stream broken after a fallback switch missed the target's iteration (minor, plausible)    | The adapter records each `fallback` block's `to.model`; a broken stream adds one estimated cold iteration per switch (whole prompt written at the request's TTL, full `max_tokens`), and charges the refused iteration on the requested model (the SDK's snapshot takes the target's id)                                                                                                                                                                                                                              | an SSE stub that switches to Claude Opus 5 then ends: +$1.35, within Opus 5.5's bound                                                        |
+| M7  | A served id without a card bills at `MAX_CARD`, ~27× the bound (minor)                      | The preflight refuses a check served under an unpriced id; a mid-run unpriced attempt is an alert                                                                                                                                                                                                                                                                                                                                                                                                                     | a shape check served as `claude-haiku-5-5-20261101`                                                                                          |
+| M8  | The smoke's "at most" was not a bound for Opus 5.5 (minor)                                  | `smokeBoundNano` is the bound of the real requests (one token per byte of the shape check and the call, cold, 4,000 output tokens, no retry, both fallback targets of Opus 5.5, US prices, 5-minute writes): Haiku 5.5 $0.010969, Sonnet 5.5 $0.219392, Opus 5.5 $1.535745 (was $0.0054 and $0.2175)                                                                                                                                                                                                                  | `arena/smoke.test.ts`: the worst Opus requests cost the bound to 10 nUSD                                                                     |
+| M9  | `withinPrediction` compared preflight and probes with an attempts-only prediction (nit)     | It compares the attempt spend; the preflight and probes are reported apart and still count in `under`                                                                                                                                                                                                                                                                                                                                                                                                                 | `arena/phase4.test.ts` (the 2-day run)                                                                                                       |
+| M10 | An early reconcile filled `exit4.reconciled` (nit)                                          | Under 48 hours, `reconciled` stays `null` unless `--force` (the CLI says so)                                                                                                                                                                                                                                                                                                                                                                                                                                          | a run 24 hours old, with and without `force`                                                                                                 |
+| M11 | A charge that threw lost a billed attempt (nit)                                             | A usage the pricer cannot price is charged the seat's attempt bound (`Charge.invalidUsage`); its line logs the unusable counts as 0, `estimated: true`                                                                                                                                                                                                                                                                                                                                                                | `budget/ledger.test.ts`; a fake run whose p2 reports NaN and 1e300 tokens                                                                    |
+| C1  | A `--seat` override ignored `defaults.fallbacks` (major)                                    | Overrides take the lineup's defaults; a `comparison: true` lineup with any seat's fallbacks on is refused                                                                                                                                                                                                                                                                                                                                                                                                             | `mid-tier` with `--seat p1=claude:opus-5-5:…`; the refusal                                                                                   |
+| C2  | `exit4.met` could be true on a `--fake` run (minor)                                         | `met` needs a real run; the docs say a fake run rehearses the path                                                                                                                                                                                                                                                                                                                                                                                                                                                    | `exit4Met` part by part                                                                                                                      |
+| C3  | OpenRouter refusals untested; a provider-only slug got the wrong message (minor)            | Tests through the `endpoints` hook (ZDR, `tool_choice`, `x` with sibling `x/y`); an unresolved pin that prefixes known endpoints names them                                                                                                                                                                                                                                                                                                                                                                           | the four cases                                                                                                                               |
+| C4  | Reconcile's excess band, `exit4Met`'s parts and the SSE lone-CR guard were unpinned (minor) | Tests: a report between `ledger − excess − tol` and `ledger − tol`; every part of `exit4Met` flipped alone; a CRLF split inside a multi-line `data:` event                                                                                                                                                                                                                                                                                                                                                            | `arena/review.test.ts`, `model/http.test.ts`                                                                                                 |
+| C5  | `readSse` dispatched an event cut at the end of the body (minor)                            | An event the body ends inside is discarded (the SSE rule): a body cut inside its terminal event is a broken stream                                                                                                                                                                                                                                                                                                                                                                                                    | `model/http.test.ts` (the reviewer's probe)                                                                                                  |
+| C6  | Per-seat `toolsHash`/`operatorHash` were constants (minor)                                  | Each seat's tools go through its provider's transform (`toolsFor`, the `TOOL_TRANSFORMS` registry: the identity only) to the agent, the preflight and the hash; `operatorHash` hashes the channel's rendering (`system` keeps phase 2's)                                                                                                                                                                                                                                                                              | a fake `mid-tier` run's `seats.json`                                                                                                         |
+| C7  | Gemini's dearer card on the whole last listed day failed reconciliation (minor)             | Kept conservative in the ledger (the money side); cards carry `uncertainUntil` (the next day 12:00 UTC) and reconcile counts the difference with the earlier card as excess                                                                                                                                                                                                                                                                                                                                           | an Argon line inside the window, reported at $2                                                                                              |
+| C8  | `ArenaReportSchema` rejected `perfidia-arena/1` (minor)                                     | `ArenaReportV1Schema` (ec8e2ad's) and `ArenaReportAnySchema` (the reader's union); ec8e2ad's invalid case (`/2` under the `/1` schema) restored there; `arena reconcile` names an old report's version                                                                                                                                                                                                                                                                                                                | `protocol` fixtures                                                                                                                          |
+| C9  | GLM-5.3's default effort is max while presets send medium (minor)                           | **Deferred** (the mapping is chosen with Pass 2's OpenRouter adapter and its smoke, before the first comparison: no OpenRouter request exists in this build). The warning now says the default is max and what it does to parity and the prediction; the catalog records each routed model's `default_effort` (DeepSeek's is high)                                                                                                                                                                                    | the warning's text                                                                                                                           |
+| C10 | `compat` seats pointed at a missing card file (minor)                                       | `model/prices/compat.ts` exists (no card: the owner states an endpoint's prices) and is part of `ALL_CARDS`; §18 says a compat seat needs its card                                                                                                                                                                                                                                                                                                                                                                    | the refusal names the file, which exists                                                                                                     |
+| C11 | `claude-family`'s $180 broke the design's rule (nit)                                        | $190 (high $168.92 + reserve $20.33, rounded up): K $169.67, no warning; $180 still plans with the warning                                                                                                                                                                                                                                                                                                                                                                                                            | `arena/phase4.test.ts`                                                                                                                       |
+| C12 | Stale figures; the start preflight did not stop (nit)                                       | Figures refreshed (§2, §4, §7, §10, §11); the start preflight stops between groups on a signal or a kill (a carry at K)                                                                                                                                                                                                                                                                                                                                                                                               | the start-preflight signal test                                                                                                              |
+| C13 | The turn header's "user turn above" for envelope seats (nit)                                | "The text part above" for `envelope`; `system` bytes (and ec8e2ad's hash) unchanged; no envelope seat has run for real, so `PROMPT_VERSION` stays 2                                                                                                                                                                                                                                                                                                                                                                   | the per-seat hash test                                                                                                                       |
+| C14 | `arena smoke` crashed on a non-loopback `http:` base URL (nit)                              | The plan's check (`checkedBaseUrl`) runs first: exit 3, no stack                                                                                                                                                                                                                                                                                                                                                                                                                                                      | `arena/smoke.test.ts`                                                                                                                        |
+
+**Measured** on the shared 4-vCPU container: the orchestrator suite (290 tests in 37 files, 6 of
+them skipped without the live key) in 44 s; `arena/review.test.ts` (22 tests) takes 12 s alone. The fake runs
+of §2, §11 and §23 spend what they spent before the review ($5.150819930 for the 7-day
+`claude-duo`, $14.42 for `mid-tier`, $1.86 for `budget-mix`): fake usage reports no geography, and
+the predictions moved only by their reserves.
+
+**What did not change.** The engine, gateway, bots and sim; goldens, fingerprints and fixtures
+(the protocol fixtures only gained cases); the Anthropic request bytes and labels (ec8e2ad's,
+`arena/pins.test.ts`); no dependency. Every new field (`usage[].geo`, `carry.inFlightNanoUsd`,
+`operator.action: exit`, reconcile token `estimated`) is optional or a new enum value, so the
+spectator and the server read old and new run directories alike.

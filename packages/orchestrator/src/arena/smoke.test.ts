@@ -5,7 +5,40 @@
 import { describe, expect, test } from "bun:test";
 import { memoryIo } from "@perfidia/sim";
 import type { HttpFetch } from "../model/anthropic.ts";
-import { SMOKE_MAX_TOKENS, smokeBoundNano, smokeCommand } from "./smoke.ts";
+import { costOf, formatUsd } from "../model/prices.ts";
+import { ENTRY_OVERHEAD_TOKENS, entryTokensUpper } from "../seat/agent.ts";
+import { turnHeader } from "../seat/prompt.ts";
+import { canonicalJson } from "@perfidia/engine/core";
+import { main } from "./cli.ts";
+import { sampleTokensUpper } from "./preflight.ts";
+import { SMOKE_MAX_TOKENS, smokeBoundNano, smokeCommand, smokePlan } from "./smoke.ts";
+
+const bytes = (text: string): number => new TextEncoder().encode(text).length;
+
+/** A cold request in the US: its whole prompt written to the cache, `output` tokens. */
+const cold = (model: string, prompt: number, output: number, kind: "message" | "fallback") => ({
+  model,
+  kind,
+  tokens: { input: 0, cacheWrite5m: prompt, cacheWrite1h: 0, cacheRead: 0, output },
+  estimated: false,
+  geo: "us",
+});
+
+/** The call's prompt at one token per byte, as `smokePlan` bounds it. */
+function callTokensOf(p: Awaited<ReturnType<typeof smokePlan>> | undefined): number {
+  if (p === undefined) return 0;
+  return (
+    bytes(p.prompt.shared) +
+    bytes(p.prompt.seat) +
+    bytes(JSON.stringify(p.tools)) +
+    3 * ENTRY_OVERHEAD_TOKENS +
+    entryTokensUpper({
+      role: "user",
+      parts: [{ kind: "text", text: canonicalJson(p.input.briefing) }],
+    }) +
+    entryTokensUpper({ role: "operator", text: turnHeader(p.input) })
+  );
+}
 
 const BASE = "https://api.test.invalid";
 
@@ -138,7 +171,7 @@ describe("arena smoke", () => {
     expect(code).toBe(0);
     const out = io.stdout();
     expect(out).toContain(
-      "smoke: anthropic/claude-haiku-5-5/low on https://api.test.invalid, at most $0.005437",
+      "smoke: anthropic/claude-haiku-5-5/low on https://api.test.invalid, at most $0.010969",
     );
     expect(out).toContain("1. preflight: ok; allowed fallbacks: none");
     expect(out).toContain("2. count_tokens: 10250 input tokens");
@@ -185,9 +218,40 @@ describe("arena smoke", () => {
     ]);
   }, 60_000);
 
-  test("the bound: about $0.22 on Opus 5.5, half a cent on Haiku 5.5; said before anything is sent", async () => {
-    expect(smokeBoundNano("claude-opus-5-5")).toBe(217_500_000);
-    expect(smokeBoundNano("claude-haiku-5-5")).toBe(5_437_500);
+  test("the bound of the real requests: $1.54 on Opus 5.5 (fallbacks on), $0.22 on Sonnet 5.5, $0.011 on Haiku 5.5; said before anything is sent", async () => {
+    // Phase-4 review: the bound is the real requests' (one token per byte of the shape check and of
+    // the call's prompt, cold, the call's 4,000 output tokens, every fallback hop of Opus 5.5, US-only
+    // inference), not the scenario's prefix: $0.2175 on Opus 5.5 was not one.
+    const plans = await Promise.all(
+      ["claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5"].map((m) => smokePlan(m, "low")),
+    );
+    expect(plans.map((p) => formatUsd(p.boundNano))).toEqual([
+      "$1.535745",
+      "$0.219392",
+      "$0.010969",
+    ]);
+    // The worst the requests of Opus 5.5 can bill is the bound, to rounding: the shape check and
+    // the call each refused and served by both fallback targets, cold, in the US, the output full.
+    const opus = plans[0];
+    const sample = sampleTokensUpper({
+      seat: "p1",
+      prompt: opus?.prompt ?? { shared: "", seat: "" },
+      tools: opus?.tools ?? [],
+    });
+    expect(sample).toBeGreaterThan(30_000);
+    expect(smokeBoundNano("claude-opus-5-5", "off", { sample: 0, call: 0 })).toBeGreaterThan(0);
+    const callTokens = callTokensOf(opus);
+    const worst = costOf([
+      // The shape check's bound allows 16 output tokens (other providers'); Anthropic's is 0.
+      cold("claude-opus-5-5", sample, 16, "message"),
+      cold("claude-opus-5", sample, 16, "fallback"),
+      cold("claude-opus-4-8", sample, 16, "fallback"),
+      cold("claude-opus-5-5", callTokens, SMOKE_MAX_TOKENS, "message"),
+      cold("claude-opus-5", callTokens, SMOKE_MAX_TOKENS, "fallback"),
+      cold("claude-opus-4-8", callTokens, SMOKE_MAX_TOKENS, "fallback"),
+    ]).nanoUsd;
+    expect(worst).toBeLessThanOrEqual(opus?.boundNano ?? 0);
+    expect((opus?.boundNano ?? 0) - worst).toBeLessThan(10);
     let message = "";
     try {
       await smokeCommand({
@@ -198,8 +262,21 @@ describe("arena smoke", () => {
     } catch (e) {
       message = e instanceof Error ? e.message : String(e);
     }
-    expect(message).toContain("at most $0.217500 on claude-opus-5-5");
+    expect(message).toContain("at most $1.535745 on claude-opus-5-5");
     expect(message).toContain("Nothing was sent");
+  });
+
+  test("a non-loopback http:// base URL is refused like arena run's (exit 3), nothing sent", async () => {
+    const io = memoryIo();
+    const code = await main(["smoke"], io, {
+      PERFIDIA_ANTHROPIC_API_KEY: "sk-smoke",
+      PERFIDIA_ANTHROPIC_BASE_URL: "http://10.0.0.1:9",
+    });
+    expect(code).toBe(3);
+    expect(io.stderr()).toContain(
+      "arena smoke: PERFIDIA_ANTHROPIC_BASE_URL is http:// on 10.0.0.1: the API key would cross the network in cleartext",
+    );
+    expect(io.stderr()).not.toContain("    at ");
   });
 
   test("an unpriced model is refused before anything is sent", async () => {

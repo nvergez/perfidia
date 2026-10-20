@@ -356,6 +356,7 @@ describe("arena plan: lineups and the match budget (phase 4 Pass 1a)", () => {
       carryNanoUsd: 0,
       carryFrom: null,
       carryLines: 0,
+      carryInFlightNanoUsd: 0,
     });
     expect(p.estimate.budget?.killAtNanoUsd).toBe(
       55_000_000_000 - p.prediction.reserve.reserveNanoUsd,

@@ -322,6 +322,52 @@ const arenaReport: ArenaReport = {
   exit4,
 };
 
+/** `arena.json` as phases 2 and 3 wrote it (`perfidia-arena/1`): ec8e2ad's fixture. */
+const arenaReportV1 = {
+  format: "perfidia-arena/1",
+  status: "ended",
+  reason: null,
+  fake: true,
+  ruleset: "perfidia-1@1.1.0",
+  seed: 1,
+  players: 6,
+  days: 1,
+  clock: "lockstep",
+  promptVersion: 2,
+  harness: "orchestrator/1",
+  lastT: 86400,
+  endedAt: 86400,
+  result: { reason: "time", winners: ["p4"] },
+  seats: [
+    {
+      ...Object.fromEntries(Object.entries(seatReport).filter(([k]) => k !== "promptCaps")),
+      handoff: { t: 3600, time: "D1 01:00", label: "bot:turtle@3", spentNanoUsd: 100000000 },
+    },
+  ],
+  bots: [{ seat: "p5", controllers: "bot:opportunist@3" }],
+  totals: {
+    costNanoUsd: 2836708800,
+    attempts: 193,
+    tokens: { input: 0, cacheWrite5m: 234624, cacheWrite1h: 0, cacheRead: 1732544, output: 65854 },
+    cacheReadPct: 88,
+    fallbackPermille: 0,
+    preflightNanoUsd: 0,
+  },
+  estimate: { low: 3416200000, central: 11899040000, high: 43800000000 },
+  projection: { fromDays: 1, toDays: 7, costNanoUsd: 26291324231 },
+  recommendedSpeed: null,
+  pauses: [],
+  alerts: [],
+  daily: [],
+  llmToBotWarCalls: 0,
+  levelE: { ok: true, actions: 174, checkpoints: 23, divergence: null },
+  exit: {
+    ...exitCriterion,
+    llm: { ...exitCriterion.llm },
+    events: [{ ...exitEvent, seats: ["p1", "p4"], llm: ["p1", "p4"] }],
+  },
+};
+
 const preflightLine = {
   k: "preflight",
   phase: "start",
@@ -513,7 +559,7 @@ export const ARENA_CASES: Record<string, SchemaCase> = {
   },
   UsageLineSchema: {
     schema: protocol.UsageLineSchema,
-    valid: [usageLine, { ...usageLine, reasoning: 900 }],
+    valid: [usageLine, { ...usageLine, reasoning: 900 }, { ...usageLine, geo: "us" }],
     invalid: [
       bad(usageLine, ["kind"], "batch"),
       bad(usageLine, ["model"], ""),
@@ -596,13 +642,17 @@ export const ARENA_CASES: Record<string, SchemaCase> = {
   },
   OperatorLineSchema: {
     schema: protocol.OperatorLineSchema,
-    valid: [operatorLine, { ...operatorLine, action: "abort", signal: "SIGTERM" }],
+    valid: [
+      operatorLine,
+      { ...operatorLine, action: "abort", signal: "SIGTERM" },
+      { ...operatorLine, action: "exit", signal: "SIGHUP" },
+    ],
     invalid: [bad(operatorLine, ["signal"], "")],
   },
   CarryLineSchema: {
     schema: protocol.CarryLineSchema,
-    valid: [carryLine],
-    invalid: [bad(carryLine, ["costNanoUsd"], -1)],
+    valid: [carryLine, { ...carryLine, inFlightNanoUsd: 2200000000 }],
+    invalid: [bad(carryLine, ["costNanoUsd"], -1), bad(carryLine, ["inFlightNanoUsd"], -1)],
   },
   PauseLineSchema: {
     schema: protocol.PauseLineSchema,
@@ -750,6 +800,34 @@ export const ARENA_CASES: Record<string, SchemaCase> = {
       bad(arenaReport, ["exit4", "ended"], "yes"),
     ],
   },
+  ArenaSeatReportV1Schema: {
+    schema: protocol.ArenaSeatReportV1Schema,
+    valid: [arenaReportV1.seats[0], { ...arenaReportV1.seats[0], handoff: null }],
+    invalid: [
+      extra(arenaReportV1.seats[0], []),
+      // A phase-4 hand-off (with its reason) is not a phase-2 one.
+      { value: withAt(arenaReportV1.seats[0], ["handoff", "reason"], "cap"), path: ["handoff"] },
+    ],
+  },
+  // The phase-2 and phase-3 cases of `ArenaReportSchema` (ec8e2ad), now this schema's.
+  ArenaReportV1Schema: {
+    schema: protocol.ArenaReportV1Schema,
+    valid: [arenaReportV1],
+    invalid: [
+      bad(arenaReportV1, ["format"], "perfidia-arena/2"),
+      bad(arenaReportV1, ["status"], "loading"),
+      bad(arenaReportV1, ["seats", 0, "seat"], "x1"),
+      { value: { ...arenaReportV1, budget: arenaBudget }, path: [] },
+    ],
+  },
+  ArenaReportAnySchema: {
+    schema: protocol.ArenaReportAnySchema,
+    valid: [arenaReport, arenaReportV1],
+    invalid: [
+      bad(arenaReport, ["format"], "perfidia-arena/3"),
+      bad(arenaReportV1, ["status"], "loading"),
+    ],
+  },
   PredictionSourceSchema: {
     schema: protocol.PredictionSourceSchema,
     valid: ["calibrated", "measured-point", "scenario"],
@@ -802,8 +880,14 @@ export const ARENA_CASES: Record<string, SchemaCase> = {
   },
   ReconcileFileSchema: {
     schema: protocol.ReconcileFileSchema,
-    valid: [reconcileFile],
-    invalid: [bad(reconcileFile, ["providers", 0, "tokens", 0, "kind"], "thinking")],
+    valid: [
+      reconcileFile,
+      withAt(reconcileFile, ["providers", 0, "tokens", 0, "estimated"], 15000),
+    ],
+    invalid: [
+      bad(reconcileFile, ["providers", 0, "tokens", 0, "kind"], "thinking"),
+      bad(reconcileFile, ["providers", 0, "tokens", 0, "estimated"], -1),
+    ],
   },
   ProviderSchema: {
     schema: protocol.ProviderSchema,

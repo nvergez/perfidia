@@ -3,7 +3,7 @@
   "id": "claude-family",
   "title": "The Claude 5.5 family: Opus, Sonnet, Haiku and Opus at low effort",
   "comparison": false,
-  "budgetUsd": "180",
+  "budgetUsd": "190",
   "maxTokens": 16000,
   "attemptTimeoutMin": 10,
   "promptCapTokens": 160000,

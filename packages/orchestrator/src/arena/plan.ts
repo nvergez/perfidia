@@ -1,5 +1,5 @@
 import { existsSync, readFileSync, statSync } from "node:fs";
-import { basename, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { createMatch, type AnyRuleset, type InvariantLevel } from "@perfidia/engine";
 import { idKeyFromSeed } from "@perfidia/engine/core";
 import { rulesInfo } from "@perfidia/gateway/present";
@@ -36,7 +36,12 @@ import {
   lockstepRoundTimeoutMs,
   type SeatSpec,
 } from "../defaults.ts";
-import { LlmLogLineSchema, type EstimateFile, type Lineup } from "../log/schema.ts";
+import {
+  EstimateFileSchema,
+  LlmLogLineSchema,
+  type EstimateFile,
+  type Lineup,
+} from "../log/schema.ts";
 import { DEFAULT_BASE_URL } from "../model/anthropic.ts";
 import {
   DEFAULT_PROMPT_CAP_TOKENS,
@@ -58,7 +63,7 @@ import { modelTools } from "../model/tools.ts";
 import type { SeatPolicy } from "../seat/agent.ts";
 import { PROFILES, findProfile, profileRef, type Profile } from "../seat/personalities.ts";
 import { seatPrompt, sharedPrompt } from "../seat/prompt.ts";
-import { centralWakeNanoOf, loggedSpend, scenarioCard } from "./cost.ts";
+import { EFFORT_FACTOR_PCT, centralWakeNanoOf, loggedSpend, scenarioCard } from "./cost.ts";
 import {
   budgetCheck,
   estimateFile,
@@ -73,6 +78,7 @@ import {
   REQUIRED_PARAMS,
   SNAPSHOT_ENDPOINTS,
   providerInfo,
+  toolsFor,
   type EndpointSource,
   type ProviderInfo,
 } from "./providers.ts";
@@ -389,6 +395,26 @@ export function parseUsd(text: string, flag: string): number {
 /** Hosts an `http:` base URL may name: the key never leaves the machine in cleartext. */
 const LOOPBACK = new Set(["localhost", "127.0.0.1", "[::1]"]);
 
+/**
+ * The Anthropic base URL, checked (exit 3 otherwise): an http(s) URL, `http:` on loopback only
+ * (the key never crosses the network in cleartext). `arena run`, `estimate` and `smoke` share it.
+ */
+export function checkedBaseUrl(baseURL: string, variable: string = BASE_VAR): string {
+  let url: URL;
+  try {
+    url = new URL(baseURL);
+    if (url.protocol !== "https:" && url.protocol !== "http:") throw new Error(url.protocol);
+  } catch {
+    throw new UsageError(`${variable} is not an http(s) URL: "${baseURL}"`);
+  }
+  if (url.protocol === "http:" && !LOOPBACK.has(url.hostname)) {
+    throw new UsageError(
+      `${variable} is http:// on ${url.hostname}: the API key would cross the network in cleartext; use https:// (http:// is for a local proxy on localhost, 127.0.0.1 or [::1])`,
+    );
+  }
+  return baseURL;
+}
+
 function botLabelOf(text: string, what: string): string {
   const raw = text.startsWith("bot:") ? text.slice(4) : text;
   try {
@@ -636,6 +662,18 @@ function checkSeat(
     }
     const e = o.endpoints(d.model, d.endpoint);
     if (e === undefined) {
+      // A provider slug (`z-ai`) routes to any of its endpoints (phase-4 review): name them.
+      const tags = new Set<string>();
+      for (const x of modelInfo("openrouter", d.model)?.endpoints ?? []) {
+        tags.add(x.tag);
+        for (const t of x.siblings) tags.add(t);
+      }
+      const wider = [...tags].filter((t) => t.startsWith(`${d.endpoint}/`));
+      if (wider.length > 0) {
+        throw new UsageError(
+          `${d.seat}: ${d.endpoint} is not a full endpoint slug: it matches ${wider.join(", ")}, so routing could change the model's endpoint; pin one of them (e.g. ${d.model}@${wider[0] ?? ""})`,
+        );
+      }
       throw new UsageError(
         `${d.seat}: ${d.endpoint} is not an endpoint of ${d.model} on OpenRouter (its /endpoints list)`,
       );
@@ -696,9 +734,13 @@ function checkSeat(
   }
   const info = modelInfo(d.provider, d.model);
   const advertised = info?.advertisedEfforts ?? null;
-  if (advertised !== null && !advertised.includes(d.effort)) {
+  if (advertised !== null && info !== undefined && !advertised.includes(d.effort)) {
+    // Phase-4 review: what an unsupported effort becomes is the model's default (max for GLM-5.3),
+    // which would break effort parity and the prediction; the mapping is decided with Pass 2's
+    // adapter and its smoke, before the first comparison.
+    const f = effortFactorText;
     warnings.push(
-      `${d.seat}: OpenRouter lists ${d.model}'s efforts as ${advertised.join(", ")} (models list, ${CATALOG_CHECKED}): ${d.effort} is sent as is and its effect is unverified until a smoke records it`,
+      `${d.seat}: OpenRouter lists ${d.model}'s efforts as ${advertised.join(", ")}, default ${info.defaultEffort} (models list, ${CATALOG_CHECKED}): ${d.effort} is sent as is, unverified until a smoke records what OpenRouter does with it; if it is dropped, the seat reasons at ${info.defaultEffort} while the others run at ${d.effort} and the prediction assumes ${d.effort} (output factor ${f(d.effort)}, against ${f(info.defaultEffort)}): map the effort before the first comparison`,
     );
   }
   for (const n of info?.notes ?? []) warnings.push(`${d.seat}: ${n}`);
@@ -714,6 +756,9 @@ function checkSeat(
   }
   return { quantization, warnings };
 }
+
+/** An effort's output factor as the warnings print it (`1`, `3`). */
+const effortFactorText = (e: Effort): string => `${EFFORT_FACTOR_PCT[e] / 100}`;
 
 /** What a lineup file adds to one of its LLM seats. */
 interface LineupExtras {
@@ -784,12 +829,49 @@ function nonAnthropicFallbacks(seat: string, model: string, own: "default" | "of
   return "off" as const;
 }
 
+/** The `arena.json` statuses of a run that ended normally: every attempt of it was logged. */
+const SETTLED: ReadonlySet<string> = new Set(["ended", "stopped", "degraded"]);
+
 /**
- * The logged spend of a crashed run (`--budget-carry <dir>`): every cost line of its
- * `llm_calls.jsonl`, its own carry line included.
+ * What a carried run may have had in flight when it died (phase-4 review): nothing when its
+ * `arena.json` says it ended normally; otherwise its reserve from `estimate.json` (one attempt per
+ * LLM seat, a probe, the start preflight), the most that can have been billed without a line.
  */
-function carryOf(dir: string): { readonly nanoUsd: number; readonly lines: number } {
-  const path = existsSync(dir) && statSync(dir).isDirectory() ? join(dir, "llm_calls.jsonl") : dir;
+function inFlightOf(dir: string): number {
+  const read = (name: string): unknown => {
+    const path = join(dir, name);
+    if (!existsSync(path)) return undefined;
+    try {
+      const value: unknown = JSON.parse(readFileSync(path, "utf8"));
+      return value;
+    } catch {
+      return undefined;
+    }
+  };
+  const arena = read("arena.json");
+  const status: unknown =
+    arena !== null && typeof arena === "object" ? Reflect.get(arena, "status") : undefined;
+  if (typeof status === "string" && SETTLED.has(status)) return 0;
+  const estimate = EstimateFileSchema.safeParse(read("estimate.json"));
+  if (!estimate.success) {
+    throw new UsageError(
+      `--budget-carry ${dir}: the run did not end (arena.json status ${typeof status === "string" ? status : "missing"}) and has no readable estimate.json to bound the attempts it may have had in flight`,
+    );
+  }
+  return estimate.data.reserve.reserveNanoUsd;
+}
+
+/**
+ * The spend of a crashed run (`--budget-carry <dir>`): every cost line of its `llm_calls.jsonl`,
+ * its own carry line included, plus what it may have had in flight (`inFlightOf`).
+ */
+function carryOf(dir: string): {
+  readonly nanoUsd: number;
+  readonly lines: number;
+  readonly inFlightNanoUsd: number;
+} {
+  const isDir = existsSync(dir) && statSync(dir).isDirectory();
+  const path = isDir ? join(dir, "llm_calls.jsonl") : dir;
   if (!existsSync(path)) {
     throw new UsageError(`--budget-carry ${dir}: no llm_calls.jsonl (not an arena run directory)`);
   }
@@ -811,7 +893,13 @@ function carryOf(dir: string): { readonly nanoUsd: number; readonly lines: numbe
     }
     return [parsed.data];
   });
-  return loggedSpend(lines);
+  const logged = loggedSpend(lines);
+  const inFlightNanoUsd = inFlightOf(isDir ? dir : dirname(path));
+  return {
+    nanoUsd: logged.nanoUsd + inFlightNanoUsd,
+    lines: logged.lines,
+    inFlightNanoUsd,
+  };
 }
 
 /**
@@ -942,9 +1030,13 @@ export function planArena(req: ArenaRequest, env: ArenaEnv, o: PlanOptions = {})
       profile,
       handoffBot,
       brain: brains.get(s.seat) ?? handoffBot,
+      // A `--seat` override takes the lineup's defaults too (phase-4 review): only its own
+      // per-seat values are the lineup seat's.
       fallbacks:
         extras?.fallbacks ??
-        (provider.id === "anthropic" ? fallbacksFor(s.seat, s.model, undefined, undefined) : "off"),
+        (provider.id === "anthropic"
+          ? fallbacksFor(s.seat, s.model, undefined, lineup?.defaults.fallbacks)
+          : "off"),
     };
   });
   if (!fake && brains.size > 0) throw new UsageError("--brain applies to --fake runs only");
@@ -1068,19 +1160,7 @@ export function planArena(req: ArenaRequest, env: ArenaEnv, o: PlanOptions = {})
       }
     }
   }
-  const baseURL = env.baseURL ?? DEFAULT_BASE_URL;
-  let url: URL;
-  try {
-    url = new URL(baseURL);
-    if (url.protocol !== "https:" && url.protocol !== "http:") throw new Error(url.protocol);
-  } catch {
-    throw new UsageError(`${BASE_VAR} is not an http(s) URL: "${baseURL}"`);
-  }
-  if (url.protocol === "http:" && !LOOPBACK.has(url.hostname)) {
-    throw new UsageError(
-      `${BASE_VAR} is http:// on ${url.hostname}: the API key would cross the network in cleartext; use https:// (http:// is for a local proxy on localhost, 127.0.0.1 or [::1])`,
-    );
-  }
+  const baseURL = checkedBaseUrl(env.baseURL ?? DEFAULT_BASE_URL);
 
   const matchEnd = overrides["time.matchEnd"];
   const matchDays = typeof matchEnd === "number" ? matchEnd / 86_400 : DEFAULT_ARENA_DAYS;
@@ -1126,14 +1206,17 @@ export function planArena(req: ArenaRequest, env: ArenaEnv, o: PlanOptions = {})
       effort: s.effort,
       fallbacks: s.fallbacks,
       profile: profileRef(s.profile),
-      sampleTokens: sampleTokensUpper({
-        seat: s.seat,
-        prompt: {
-          shared: sharedByVariant[s.promptVariant] ?? texts.shared,
-          seat: seatPrompt(s.seat, s.profile),
+      sampleTokens: sampleTokensUpper(
+        {
+          seat: s.seat,
+          prompt: {
+            shared: sharedByVariant[s.promptVariant] ?? texts.shared,
+            seat: seatPrompt(s.seat, s.profile),
+          },
+          tools: toolsFor(s.provider, texts.tools),
         },
-        tools: texts.tools,
-      }),
+        s.promptVariant,
+      ),
     })),
     { days, clock: clockKind, cacheTtl, maxTokens, promptCapTokens, priceAt },
   );
@@ -1184,19 +1267,29 @@ export function planArena(req: ArenaRequest, env: ArenaEnv, o: PlanOptions = {})
       req.budgetUsd !== undefined ? "--budget-usd" : `--lineup ${lineup?.id ?? ""}: budgetUsd`,
     );
     const carry =
-      req.budgetCarry === undefined ? { nanoUsd: 0, lines: 0 } : carryOf(req.budgetCarry);
+      req.budgetCarry === undefined
+        ? { nanoUsd: 0, lines: 0, inFlightNanoUsd: 0 }
+        : carryOf(req.budgetCarry);
     budget = {
       budgetNanoUsd,
       onBudget,
       carryNanoUsd: carry.nanoUsd,
       carryFrom: req.budgetCarry === undefined ? null : basename(req.budgetCarry),
       carryLines: carry.lines,
+      carryInFlightNanoUsd: carry.inFlightNanoUsd,
     };
     const check = budgetCheck(budget, prediction, budgetField);
     if (check.refusal !== null) throw new UsageError(check.refusal);
     warnings.push(...check.warnings);
   }
   if (lineup?.comparison === true) {
+    // No other model may serve a turn in a comparison (design §3.5).
+    const on = llmSeats.filter((s) => s.fallbacks !== "off");
+    if (on.length > 0) {
+      throw new UsageError(
+        `--lineup ${lineup.id} is a comparison lineup, but ${on.map((s) => `${s.seat} (${s.model})`).join(", ")} would run with server-side fallbacks on: another model could serve its turns (design §3.5); set the seat's fallbacks, or the lineup's defaults.fallbacks, to "off"`,
+      );
+    }
     const models = llmSeats.map((s) => s.model);
     const repeated = [...new Set(models.filter((m, i) => models.indexOf(m) !== i))];
     if (repeated.length > 0) {

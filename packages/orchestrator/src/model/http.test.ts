@@ -262,10 +262,8 @@ describe("readSse", () => {
     } catch (e) {
       error = e;
     }
-    expect(out).toEqual([
-      { event: "message", data: '{"x":1}' },
-      { event: "message", data: "partial" },
-    ]);
+    // The event the body ended inside is discarded (phase-4 review: the SSE rule).
+    expect(out).toEqual([{ event: "message", data: '{"x":1}' }]);
     expect(error).toBeInstanceOf(ModelError);
     const m = error instanceof ModelError ? error : null;
     expect([m?.kind, m?.retryable, m?.spent]).toEqual(["connection", true, spent]);
@@ -273,6 +271,42 @@ describe("readSse", () => {
     expect(await events(["data: a\n\ndata: [DONE]\n\n"], (e) => e.data === "[DONE]")).toHaveLength(
       2,
     );
+  });
+
+  test("a body cut inside its terminal event is a broken stream, not a complete one (review)", async () => {
+    const out: SseEvent[] = [];
+    let error: unknown;
+    try {
+      for await (const e of readSse(
+        body([
+          'event: message_delta\ndata: {"a":1}\n\n',
+          'event: message_stop\ndata: {"type":"mess',
+        ]),
+        { terminal: (ev) => ev.event === "message_stop" },
+      )) {
+        out.push(e);
+      }
+    } catch (e) {
+      error = e;
+    }
+    expect(out).toEqual([{ event: "message_delta", data: '{"a":1}' }]);
+    expect(error instanceof ModelError ? [error.kind, error.retryable] : null).toEqual([
+      "connection",
+      true,
+    ]);
+    // Complete, but without a blank line at the very end: still cut (the event never closed).
+    const unclosed = await events(["event: message_stop\ndata: {}\n"], () => true).catch(
+      (e: unknown) => e,
+    );
+    expect(unclosed).toBeInstanceOf(ModelError);
+  });
+
+  test("a CRLF split inside a multi-line data event is one line break, not an event end (review)", async () => {
+    // Without the lone-CR guard, "a\r" | "\n" would end a line and the "\n" alone a blank line:
+    // two events "a" and "b" instead of one "a\nb".
+    expect(await events(["data: a\r", "\ndata: b\r\n\r\n"], () => true)).toEqual([
+      { event: "message", data: "a\nb" },
+    ]);
   });
 });
 

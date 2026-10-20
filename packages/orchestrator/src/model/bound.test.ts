@@ -49,18 +49,24 @@ function usage(
 const weights = fc.tuple(fc.nat(100), fc.nat(100), fc.nat(100), fc.nat(100));
 
 describe("attemptBoundNano", () => {
-  test("the design's §5.2 figures: Sonnet 5.5 $0.96, Haiku 5.5 $0.24 at 16,000 tokens", () => {
-    expect(formatCents(seatAttemptBound("claude-sonnet-5-5", "off", 16_000, CAP))).toBe("$0.96");
-    expect(formatCents(seatAttemptBound("claude-haiku-5-5", "off", 16_000, CAP))).toBe("$0.24");
-    // claude-duo: Sonnet + 3 Haiku = $1.68.
+  test("the design's §5.2 figures × 1.1 (US-only inference): Sonnet 5.5 $1.06, Haiku 5.5 $0.26 at 16,000 tokens", () => {
+    // The design's figures are at global prices (Sonnet $0.96, Haiku $0.24, claude-duo $1.68);
+    // the review added US-only inference (1.1× every kind, a workspace setting) to every Claude
+    // bound, so a mid-run change of the workspace's default geography stays within the reserve.
+    expect(formatCents(seatAttemptBound("claude-sonnet-5-5", "off", 16_000, CAP))).toBe("$1.06");
+    expect(formatCents(seatAttemptBound("claude-haiku-5-5", "off", 16_000, CAP))).toBe("$0.26");
+    expect(seatAttemptBound("claude-sonnet-5-5", "off", 16_000, CAP)).toBe(
+      Math.ceil((960_000_000 * 11) / 10),
+    );
+    // claude-duo: Sonnet + 3 Haiku = $1.85 ($1.68 × 1.1).
     const duo =
       seatAttemptBound("claude-sonnet-5-5", "off", 16_000, CAP) +
       3 * seatAttemptBound("claude-haiku-5-5", "off", 16_000, CAP);
-    expect(formatCents(duo)).toBe("$1.68");
-    // Opus 5.5 at 32,768 output tokens without fallbacks: $2.59 (the design's comparison figure);
-    // with them, one iteration per target (Opus 5, Opus 4.8) at the highest target prices.
-    expect(formatCents(seatAttemptBound("claude-opus-5-5", "off", 32_768, CAP))).toBe("$2.59");
-    expect(formatCents(seatAttemptBound("claude-opus-5-5", "default", 16_000, CAP))).toBe("$6.72");
+    expect(formatCents(duo)).toBe("$1.85");
+    // Opus 5.5 at 32,768 output tokens without fallbacks: $2.85 ($2.59, the design's comparison
+    // figure, × 1.1); with them, one iteration per target (Opus 5, Opus 4.8) at the highest prices.
+    expect(formatCents(seatAttemptBound("claude-opus-5-5", "off", 32_768, CAP))).toBe("$2.85");
+    expect(formatCents(seatAttemptBound("claude-opus-5-5", "default", 16_000, CAP))).toBe("$7.39");
     expect(maxAttemptOutput({ maxOutputTokens: 16_000 })).toBe(32_000);
     expect(maxAttemptOutput({ maxOutputTokens: 128_000 })).toBe(128_000);
     expect(() =>
@@ -115,9 +121,14 @@ describe("attemptBoundNano", () => {
             );
           }
           expect(costOf(entries).nanoUsd).toBeLessThanOrEqual(bound);
+          // The same attempt run in the US (1.1×, every entry) stays within the bound.
+          const us: UsageEntry[] = [];
+          for (const e of entries) us.push({ ...e, geo: "us" });
+          expect(costOf(us).nanoUsd).toBeLessThanOrEqual(bound);
           // A broken stream at the retry limit is charged its full max_tokens: within the bound.
           const broken = usage(model, cap, w, brokenStreamOutput(out));
           expect(costOf([broken]).nanoUsd).toBeLessThanOrEqual(bound);
+          expect(costOf([{ ...broken, geo: "us" }]).nanoUsd).toBeLessThanOrEqual(bound);
         },
       ),
       { numRuns: 400, seed: 7 },
@@ -128,7 +139,9 @@ describe("attemptBoundNano", () => {
     const bound = seatAttemptBound("claude-haiku-5-5", "off", 16_000, CAP);
     const long = usage("claude-haiku-5-5", CAP, [0, 0, 1, 0], 32_000);
     expect(costOf([long]).longPrompt).toBe(true);
-    expect(costOf([long]).nanoUsd).toBe(bound);
+    // At global prices, 1/1.1 of the bound; run in the US, exactly the bound.
+    expect(costOf([long]).nanoUsd).toBe(240_000_000);
+    expect(costOf([{ ...long, geo: "us" }]).nanoUsd).toBe(bound);
   });
 });
 
@@ -157,10 +170,18 @@ describe("the attempt bound of every seat model (Pass 1b)", () => {
         let worst = 0;
         for (const card of cardsFrom(m.provider, m.model, endpoint, from)) {
           const at = card.validFrom > from ? card.validFrom : from;
-          for (const w of kinds) {
-            const c = costOf([usage(m.model, CAP, w, out)], { provider: m.provider, endpoint, at });
-            expect(c.nanoUsd).toBeLessThanOrEqual(bound);
-            worst = Math.max(worst, c.nanoUsd);
+          // Every geography the card lists (Claude's US-only inference) next to the global price.
+          for (const geo of [undefined, ...Object.keys(card.geo ?? {})]) {
+            for (const w of kinds) {
+              const u = usage(m.model, CAP, w, out);
+              const c = costOf([geo === undefined ? u : { ...u, geo }], {
+                provider: m.provider,
+                endpoint,
+                at,
+              });
+              expect(c.nanoUsd).toBeLessThanOrEqual(bound);
+              worst = Math.max(worst, c.nanoUsd);
+            }
           }
         }
         expect([m.model, from, bound - worst <= 1]).toEqual([m.model, from, true]);

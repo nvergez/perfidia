@@ -1,6 +1,6 @@
 import type { GameTime, HandoffReason, PlayerId, SeatAgent } from "@perfidia/protocol";
 import type { UsageEntry } from "../model/adapter.ts";
-import { costOf, type Pricer } from "../model/prices.ts";
+import { costOf, type Cost, type Pricer } from "../model/prices.ts";
 
 // The budget ledger (phase-2 design §5.3; phase-4 design §5.2): what each LLM seat has spent, in
 // integer nano-dollars, against its safety cap and its per-wake soft cap, and what the whole match
@@ -21,6 +21,13 @@ import { costOf, type Pricer } from "../model/prices.ts";
 // Pass 1b: each seat has its pricer (its provider's cards, its pinned endpoint, the card valid at
 // the attempt's wall-clock start or the run's pinned price date, the platform fee included);
 // without one, phase 2's Claude pricing applies.
+//
+// Fail-safe (phase-4 review): the accounting never depends on a hook. A charge updates the seat's
+// and the match's spend before any hook runs; the kill switch halts every seat (`over()` reads the
+// kill flag itself) before the arena's `onKill` (which writes a line and can fail on a full disk);
+// and a hook that throws is reported through `onError`, never left to skip what follows it. A usage
+// the pricer cannot price (a non-finite or absurd count) is charged the seat's attempt bound, flagged
+// `invalidUsage`, instead of throwing away an attempt that was billed.
 
 /** The new controller of a seat over its cap. */
 export interface HandoffTarget {
@@ -55,8 +62,30 @@ export interface MatchBudgetOptions {
   readonly reserveNanoUsd: number;
   /** Logged spend of a crashed earlier run (`--budget-carry`), counted from the start. */
   readonly carryNanoUsd?: number;
-  /** Called once, by the charge that reaches the kill threshold. */
+  /** Called once, by the charge that reaches the kill threshold, after every seat is halted. */
   readonly onKill?: (note: KillNote) => void;
+  /**
+   * A kill hook (a listener or `onKill`) threw: reported here, and the other hooks still run.
+   * Absent: the first error is rethrown once every hook ran (the kill state is already set).
+   */
+  readonly onError?: (what: string, error: unknown) => void;
+}
+
+/** Runs `hooks` in order; a throw is reported (or rethrown after the last hook), never skips one. */
+function runHooks(
+  hooks: readonly (readonly [string, () => void])[],
+  onError: ((what: string, error: unknown) => void) | undefined,
+): void {
+  let first: { readonly error: unknown } | null = null;
+  for (const [what, hook] of hooks) {
+    try {
+      hook();
+    } catch (error) {
+      if (onError === undefined) first ??= { error };
+      else onError(what, error);
+    }
+  }
+  if (first !== null) throw first.error;
 }
 
 const checkNano = (n: number, what: string): number => {
@@ -79,6 +108,7 @@ export class MatchBudget {
   private spentNano: number;
   private kill: KillNote | null = null;
   private readonly onKill: ((note: KillNote) => void) | undefined;
+  private readonly onError: ((what: string, error: unknown) => void) | undefined;
   private readonly listeners: ((note: KillNote) => void)[] = [];
 
   constructor(o: MatchBudgetOptions) {
@@ -93,6 +123,7 @@ export class MatchBudget {
     this.killAtNanoUsd = this.budgetNanoUsd - this.reserveNanoUsd;
     this.spentNano = 0;
     this.onKill = o.onKill;
+    this.onError = o.onError;
     this.add(this.carryNanoUsd, 0);
   }
 
@@ -109,13 +140,20 @@ export class MatchBudget {
     return this.kill;
   }
 
-  /** Also called once when the kill switch fires (the ledger halts its seats through this). */
+  /**
+   * Also called once when the kill switch fires, before `onKill` (the ledger halts its seats
+   * through this, so a failing `onKill` cannot leave them running).
+   */
   onKilled(listener: (note: KillNote) => void): void {
     this.listeners.push(listener);
-    if (this.kill !== null) listener(this.kill);
+    const kill = this.kill;
+    if (kill !== null) runHooks([["a kill listener", () => listener(kill)]], this.onError);
   }
 
-  /** Adds one charge at game time `t`; the one that reaches the threshold fires the kill switch. */
+  /**
+   * Adds one charge at game time `t`; the one that reaches the threshold fires the kill switch:
+   * the flag first, then the listeners (the halt), then `onKill`, each hook guarded.
+   */
   add(nanoUsd: number, t: GameTime): void {
     this.spentNano += checkNano(nanoUsd, "a charge");
     if (this.kill === null && this.spentNano >= this.killAtNanoUsd) {
@@ -126,8 +164,14 @@ export class MatchBudget {
         budgetNanoUsd: this.budgetNanoUsd,
       };
       this.kill = note;
-      this.onKill?.(note);
-      for (const l of this.listeners) l(note);
+      const onKill = this.onKill;
+      runHooks(
+        [
+          ...this.listeners.map((l) => ["a kill listener", () => l(note)] as const),
+          ...(onKill === undefined ? [] : [["the kill hook", () => onKill(note)] as const]),
+        ],
+        this.onError,
+      );
     }
   }
 }
@@ -147,6 +191,13 @@ export interface LedgerOptions {
   readonly match?: MatchBudget;
   /** Per seat, how an attempt's usage is priced (Pass 1b); absent: the Claude cards. */
   readonly pricers?: ReadonlyMap<PlayerId, Pricer>;
+  /**
+   * Per seat, the most one attempt can cost (`attemptBoundNano`): what a usage the pricer cannot
+   * price is charged. Absent for a seat: such a usage throws (phase 2).
+   */
+  readonly attemptBounds?: ReadonlyMap<PlayerId, number>;
+  /** A hand-off hook (`onHandoff`) threw: reported here. Absent: rethrown once the state is set. */
+  readonly onError?: (what: string, error: unknown) => void;
 }
 
 /** What a charge did: its cost and the spends after it. */
@@ -165,6 +216,8 @@ export interface Charge {
   readonly longPrompt: boolean;
   /** This charge took the seat to or over its cap. */
   readonly crossedCap: boolean;
+  /** The usage could not be priced (a non-finite or unsafe count): the seat's attempt bound was charged. */
+  readonly invalidUsage: boolean;
 }
 
 interface SeatBook {
@@ -185,6 +238,8 @@ export class BudgetLedger {
   private readonly handoffTo: (seat: PlayerId) => HandoffTarget;
   private readonly onHandoff: ((note: HandoffNote) => void) | undefined;
   private readonly pricers: ReadonlyMap<PlayerId, Pricer>;
+  private readonly bounds: ReadonlyMap<PlayerId, number>;
+  private readonly onError: ((what: string, error: unknown) => void) | undefined;
   /** Why every seat stopped calling its model (the kill switch, the operator); null: running. */
   private haltedBy: HandoffReason | null = null;
 
@@ -208,6 +263,8 @@ export class BudgetLedger {
     this.onHandoff = o.onHandoff;
     this.match = o.match ?? null;
     this.pricers = o.pricers ?? new Map();
+    this.bounds = o.attemptBounds ?? new Map();
+    this.onError = o.onError;
     this.match?.onKilled((k) => this.halt("match_budget", k.t));
   }
 
@@ -229,8 +286,7 @@ export class BudgetLedger {
     at?: string,
   ): Charge {
     const b = this.book(seat);
-    const pricer = this.pricers.get(seat);
-    const cost = pricer === undefined ? costOf(usage) : pricer(usage, at);
+    const { cost, invalidUsage } = this.price(seat, usage, at);
     const before = b.spent;
     b.spent += cost.nanoUsd;
     if (b.wakeTurn !== turn) {
@@ -239,8 +295,9 @@ export class BudgetLedger {
     }
     b.wakeSpent += cost.nanoUsd;
     const crossedCap = before < b.cap && b.spent >= b.cap;
-    if (crossedCap) this.requestHandoff(seat, "cap", t);
+    // The match counts the charge before any hook can fail (the cap's hand-off line below).
     this.match?.add(cost.nanoUsd, t);
+    if (crossedCap) this.requestHandoff(seat, "cap", t);
     return {
       costNanoUsd: cost.nanoUsd,
       feeNanoUsd: cost.feeNanoUsd,
@@ -251,7 +308,30 @@ export class BudgetLedger {
       unpriced: cost.unpriced,
       longPrompt: cost.longPrompt,
       crossedCap,
+      invalidUsage,
     };
+  }
+
+  /** The cost of a usage; one the pricer cannot price costs the seat's attempt bound. */
+  private price(
+    seat: PlayerId,
+    usage: readonly UsageEntry[],
+    at: string | undefined,
+  ): { readonly cost: Cost; readonly invalidUsage: boolean } {
+    const pricer = this.pricers.get(seat);
+    try {
+      const cost = pricer === undefined ? costOf(usage) : pricer(usage, at);
+      checkNano(cost.nanoUsd, "a cost");
+      checkNano(cost.feeNanoUsd, "a fee");
+      return { cost, invalidUsage: false };
+    } catch (error) {
+      const bound = this.bounds.get(seat);
+      if (bound === undefined) throw error;
+      return {
+        cost: { nanoUsd: bound, feeNanoUsd: 0, unpriced: [], longPrompt: false, cards: [] },
+        invalidUsage: true,
+      };
+    }
   }
 
   spent(seat: PlayerId): number {
@@ -281,16 +361,20 @@ export class BudgetLedger {
     return this.overReason(seat) !== null;
   }
 
-  /** Why `over(seat)` holds: the halt's reason, then the seat's own cap; `null` when it does not. */
+  /**
+   * Why `over(seat)` holds: the halt's reason (the kill flag counts by itself, whatever its hooks
+   * did), then the seat's own cap; `null` when it does not.
+   */
   overReason(seat: PlayerId): HandoffReason | null {
     const b = this.book(seat);
-    if (this.haltedBy !== null) return this.haltedBy;
+    const halted = this.halted;
+    if (halted !== null) return halted;
     return b.spent >= b.cap ? "cap" : null;
   }
 
-  /** Why every seat was halted; `null` while the ledger runs. */
+  /** Why every seat was halted (the first halt, or the kill flag itself); `null` while the ledger runs. */
   get halted(): HandoffReason | null {
-    return this.haltedBy;
+    return this.haltedBy ?? (this.match?.killed === true ? "match_budget" : null);
   }
 
   /**
@@ -309,20 +393,26 @@ export class BudgetLedger {
     return cap !== null && this.wakeSpent(seat, turn) >= cap;
   }
 
-  /** Queues the seat's hand-off; a second request for the same seat does nothing. */
+  /**
+   * Queues the seat's hand-off; a second request for the same seat does nothing. The hand-off is
+   * queued before `onHandoff` runs, and a throwing `onHandoff` is reported through `onError`.
+   */
   requestHandoff(seat: PlayerId, reason: HandoffReason, t: GameTime): void {
     const b = this.book(seat);
     if (b.pending !== null || b.handedOff) return;
     const target = this.handoffTo(seat);
     b.pending = target;
-    this.onHandoff?.({
+    const onHandoff = this.onHandoff;
+    if (onHandoff === undefined) return;
+    const note: HandoffNote = {
       seat,
       t,
       reason,
       label: target.label,
       spentNanoUsd: b.spent,
       capNanoUsd: b.cap,
-    });
+    };
+    runHooks([["the hand-off hook", () => onHandoff(note)]], this.onError);
   }
 
   handedOff(seat: PlayerId): boolean {

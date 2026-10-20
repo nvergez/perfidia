@@ -17,6 +17,7 @@ function gemini(
   from: string,
   to: string | null,
   suffix: string,
+  uncertainUntil?: string,
 ): PriceCard {
   return Object.freeze({
     id: cardId("google", model, null, GOOGLE_CHECKED, suffix),
@@ -27,6 +28,7 @@ function gemini(
     region: "global",
     validFrom: from,
     validTo: to,
+    ...(uncertainUntil === undefined ? {} : { uncertainUntil }),
     ...prices([r[0], r[1], r[2], r[0], r[0]]),
     longContext: null,
     overrides: [],
@@ -41,10 +43,31 @@ function gemini(
 export const ARGON_CHANGE = "2026-11-30T00:00:00Z";
 /** Gemini 3.8 Flash's price doubles here (the page: "through December 31, 2026"). */
 export const FLASH_CHANGE = "2026-12-31T00:00:00Z";
+/**
+ * The latest instants those last days can end (UTC−12: the next day at 12:00 UTC): until then,
+ * Google may still bill the earlier card, and `arena reconcile` counts the difference as
+ * conservative excess (phase-4 review).
+ */
+export const ARGON_UNCERTAIN_UNTIL = "2026-12-01T12:00:00Z";
+export const FLASH_UNCERTAIN_UNTIL = "2027-01-01T12:00:00Z";
 
 export const GOOGLE_CARDS: readonly PriceCard[] = Object.freeze([
   gemini("gemini-4-argon", ["2", "10", "0.10"], FIRST_READ, ARGON_CHANGE, ""),
-  gemini("gemini-4-argon", ["4", "20", "0.20"], ARGON_CHANGE, null, "#from2026-11-30"),
+  gemini(
+    "gemini-4-argon",
+    ["4", "20", "0.20"],
+    ARGON_CHANGE,
+    null,
+    "#from2026-11-30",
+    ARGON_UNCERTAIN_UNTIL,
+  ),
   gemini("gemini-3.8-flash", ["0.75", "3.75", "0.075"], FIRST_READ, FLASH_CHANGE, ""),
-  gemini("gemini-3.8-flash", ["1.50", "7.50", "0.15"], FLASH_CHANGE, null, "#from2026-12-31"),
+  gemini(
+    "gemini-3.8-flash",
+    ["1.50", "7.50", "0.15"],
+    FLASH_CHANGE,
+    null,
+    "#from2026-12-31",
+    FLASH_UNCERTAIN_UNTIL,
+  ),
 ]);

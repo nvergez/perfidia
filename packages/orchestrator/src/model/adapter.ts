@@ -339,6 +339,11 @@ export interface UsageEntry {
   readonly tokens: TokenUsage;
   /** An aborted or broken stream: charged conservatively (the full `max_tokens`, `brokenStreamOutput`). */
   readonly estimated: boolean;
+  /**
+   * The inference geography the provider reported when it is not the global default (Anthropic's
+   * `usage.inference_geo: "us"`, billed 1.1×); absent: global, or not reported.
+   */
+  readonly geo?: string;
 }
 
 export interface Refusal {

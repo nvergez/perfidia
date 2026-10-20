@@ -1,7 +1,8 @@
 import { promptTokens, type UsageEntry } from "./adapter.ts";
 import { FALLBACK_TARGETS, modelInfo } from "./catalog.ts";
 import { ANTHROPIC_CARDS, HAIKU_LONG_PROMPT_TOKENS } from "./prices/anthropic.ts";
-import type { PicoPrices, PriceCard } from "./prices/card.ts";
+import { COMPAT_CARDS } from "./prices/compat.ts";
+import { scalePrices, type PicoPrices, type PriceCard } from "./prices/card.ts";
 import { GOOGLE_CARDS } from "./prices/google.ts";
 import { OPENAI_CARDS } from "./prices/openai.ts";
 import { OPENROUTER_CARDS } from "./prices/openrouter.ts";
@@ -29,6 +30,7 @@ export const ALL_CARDS: readonly PriceCard[] = Object.freeze([
   ...OPENAI_CARDS,
   ...GOOGLE_CARDS,
   ...OPENROUTER_CARDS,
+  ...COMPAT_CARDS,
 ]);
 
 /** Where an attempt is billed: the provider, the pinned endpoint, and when (a UTC instant). */
@@ -86,8 +88,23 @@ export function cardsFrom(
   );
 }
 
-/** A card by its id (a logged `priceCard`), long-context tiers included; null when unknown. */
+/** The id of a card charged in a geography (`<card id>+us`). */
+export const geoCardId = (id: string, geo: string): string => `${id}+${geo}`;
+
+/**
+ * A card by its id (a logged `priceCard`), long-context tiers and geography-scaled ids (`+us`)
+ * included; null when unknown.
+ */
 export function cardById(id: string): (PicoPrices & { readonly id: string }) | null {
+  const plus = id.lastIndexOf("+");
+  if (plus > 0) {
+    const baseId = id.slice(0, plus);
+    const owner = ALL_CARDS.find((c) => c.id === baseId || c.longContext?.card.id === baseId);
+    const base = cardById(baseId);
+    const permille = owner?.geo?.[id.slice(plus + 1)];
+    if (base === null || permille === undefined) return null;
+    return { ...scalePrices(base, permille), id };
+  }
   for (const c of ALL_CARDS) {
     if (c.id === id) return c;
     if (c.longContext?.card.id === id) return c.longContext.card;
@@ -113,15 +130,27 @@ export function effectivePrices(c: PicoPrices & { readonly overrides?: PriceCard
   return out;
 }
 
+/** A card or a long-context tier, at its highest prices: what an attempt can be billed at. */
+export type BillableCard = PicoPrices & { readonly id: string };
+
 /** The id of `MAX_CARD`, what an unpriced served model is charged at. */
 export const MAX_PRICE_ID = "max";
 
-/** Per token kind, the highest price of every card and tier: an unpriced model's charge. */
+/** A card's prices and its long tier's, each also scaled by every geography the card lists. */
+function withGeo(c: PriceCard, p: PicoPrices, id: string): BillableCard[] {
+  const out: BillableCard[] = [{ ...p, id }];
+  for (const [geo, permille] of Object.entries(c.geo ?? {})) {
+    out.push({ ...scalePrices(p, permille), id: geoCardId(id, geo) });
+  }
+  return out;
+}
+
+/** Per token kind, the highest price of every card, tier and geography: an unpriced model's charge. */
 export const MAX_CARD: PicoPrices = (() => {
   const all: PicoPrices[] = [];
   for (const c of ALL_CARDS) {
-    all.push(effectivePrices(c));
-    if (c.longContext !== null) all.push(c.longContext.card);
+    all.push(...withGeo(c, effectivePrices(c), c.id));
+    if (c.longContext !== null) all.push(...withGeo(c, c.longContext.card, c.longContext.card.id));
   }
   const max = (k: keyof PicoPrices): number => Math.max(...all.map((p) => p[k]));
   return Object.freeze({
@@ -166,8 +195,24 @@ export function priceOf(
   readonly longPrompt: boolean;
   readonly card: string;
 } {
-  const own = cardAt(ctx.provider, e.model, ctx.endpoint, ctx.at);
-  if (own === null) {
+  return priceAtCard(e, cardAt(ctx.provider, e.model, ctx.endpoint, ctx.at));
+}
+
+/** `priceOf` at a given card (null: unpriced, the max). */
+function priceAtCard(
+  e: UsageEntry,
+  own: PriceCard | null,
+): {
+  readonly prices: PicoPrices;
+  readonly feePermille: number;
+  readonly unpriced: boolean;
+  readonly longPrompt: boolean;
+  readonly card: string;
+} {
+  // A geography the card does not list (or a card that lists none) is not priced: the max.
+  const geo = e.geo === undefined || e.geo === "global" ? null : e.geo;
+  const permille = geo === null ? null : own?.geo?.[geo];
+  if (own === null || permille === undefined) {
     return {
       prices: MAX_CARD,
       feePermille: 0,
@@ -178,12 +223,14 @@ export function priceOf(
   }
   const long = own.longContext;
   const longPrompt = long !== null && promptTokens(e.tokens) > long.aboveTokens;
+  const prices = longPrompt && long !== null ? long.card : effectivePrices(own);
+  const id = longPrompt && long !== null ? long.card.id : own.id;
   return {
-    prices: longPrompt && long !== null ? long.card : effectivePrices(own),
+    prices: permille === null ? prices : scalePrices(prices, permille),
     feePermille: own.platformFeePermille,
     unpriced: false,
     longPrompt,
-    card: longPrompt && long !== null ? long.card.id : own.id,
+    card: geo === null ? id : geoCardId(id, geo),
   };
 }
 
@@ -201,7 +248,10 @@ export function picoByKind(e: UsageEntry, p: PicoPrices) {
 
 /** The cost of one usage entry in `ctx` (default: Anthropic), in nano-dollars. Never a crash. */
 export function entryCost(e: UsageEntry, ctx: PriceContext = ANTHROPIC_CONTEXT): EntryCost {
-  const sel = priceOf(e, ctx);
+  return costAtSelection(e, priceOf(e, ctx));
+}
+
+function costAtSelection(e: UsageEntry, sel: ReturnType<typeof priceAtCard>): EntryCost {
   const k = picoByKind(e, sel.prices);
   const pico = k.input + k.cacheWrite5m + k.cacheWrite1h + k.cacheRead + k.output;
   if (!Number.isSafeInteger(pico) || pico < 0) {
@@ -227,6 +277,27 @@ export interface Cost {
   readonly longPrompt: boolean;
   /** The cards charged, in order of first use. */
   readonly cards: readonly string[];
+}
+
+/**
+ * What one entry was charged over what the provider may have billed (phase-4 review): when its
+ * card dates a change without a timezone and `ctx.at` falls before the latest instant that date
+ * can mean (`uncertainUntil`), the difference with the card before the change; else 0.
+ */
+export function uncertainExcess(e: UsageEntry, ctx: PriceContext): number {
+  const own = cardAt(ctx.provider, e.model, ctx.endpoint, ctx.at);
+  if (own?.uncertainUntil === undefined || ms(ctx.at) >= ms(own.uncertainUntil)) return 0;
+  // The card the change replaces: the same model's window that ends where this one starts.
+  const before = ALL_CARDS.find(
+    (c) =>
+      c.provider === own.provider &&
+      c.model === own.model &&
+      c.endpoint === own.endpoint &&
+      c.validTo === own.validFrom,
+  );
+  if (before === undefined) return 0;
+  const charged = costAtSelection(e, priceAtCard(e, own)).nanoUsd;
+  return Math.max(0, charged - costAtSelection(e, priceAtCard(e, before)).nanoUsd);
 }
 
 /** The cost of an attempt's usage entries in `ctx` (default: Anthropic, phase 2's pricing). */
@@ -366,9 +437,6 @@ export function requirePrice(model: string): NanoCard {
   return p;
 }
 
-/** A card or a long-context tier, at its highest prices: what an attempt can be billed at. */
-export type BillableCard = PicoPrices & { readonly id: string };
-
 /**
  * Every card and tier an attempt can be billed at: each card at its highest override, and its
  * long-context tier when a prompt of up to `promptCap` tokens can exceed its threshold.
@@ -379,9 +447,9 @@ export function billable(
 ): BillableCard[] {
   const out: BillableCard[] = [];
   for (const c of cards) {
-    out.push({ ...effectivePrices(c), id: c.id });
+    out.push(...withGeo(c, effectivePrices(c), c.id));
     if (c.longContext !== null && promptCap > c.longContext.aboveTokens)
-      out.push(c.longContext.card);
+      out.push(...withGeo(c, c.longContext.card, c.longContext.card.id));
   }
   return out;
 }

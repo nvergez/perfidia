@@ -6,6 +6,7 @@
 export {
   ARENA_REPORT_FORMAT,
   ArenaBudgetSchema,
+  ArenaReportAnySchema,
   ArenaReportSchema,
   ArenaSeatReportSchema,
   ArenaStatusSchema,

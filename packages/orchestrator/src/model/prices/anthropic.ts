@@ -6,11 +6,18 @@ import { FIRST_READ, cardId, prices, type PriceCard, type Row } from "./card.ts"
 // Claude Fable 5.1 (the `frontier` preset; cache hits 0.025× input) from the same page, same day.
 // Columns: base input, output, cache hits, 5-minute writes (1.25×), 1-hour writes (2×). Claude Haiku
 // 5.5 bills a prompt over 100 000 tokens (cache reads and writes included) at its long-prompt card.
+// Data residency (the same page, "Data residency pricing", checked 2026-10-20): for Claude 4.6 and
+// later models, every card here, US-only inference (`inference_geo: "us"`, also a workspace's
+// `default_inference_geo` when a request omits it) bills 1.1× on every token kind, Haiku 5.5's long
+// tier included; global routing (the default) bills the card. `usage.inference_geo` says which.
 
 /** Anthropic's pricing page, the source of every Claude card (fetched as Markdown). */
 export const ANTHROPIC_PRICING_URL = "https://platform.claude.com/docs/en/about-claude/pricing.md";
 /** The date the Claude cards were last checked against `ANTHROPIC_PRICING_URL`. */
 export const ANTHROPIC_CHECKED = "2026-10-20";
+
+/** US-only inference on Claude 4.6 and later: 1.1× every price (pricing page, data residency). */
+export const ANTHROPIC_GEO: Readonly<Record<string, number>> = Object.freeze({ us: 1100 });
 
 /** Claude Haiku 5.5 bills prompts over this many tokens at its long-prompt card. */
 export const HAIKU_LONG_PROMPT_TOKENS = 100_000;
@@ -38,6 +45,7 @@ function claude(model: string, r: Row, long: Row | null = null): PriceCard {
           },
     overrides: [],
     platformFeePermille: 0,
+    geo: ANTHROPIC_GEO,
     cache: "explicit",
     source: ANTHROPIC_PRICING_URL,
     checked: ANTHROPIC_CHECKED,

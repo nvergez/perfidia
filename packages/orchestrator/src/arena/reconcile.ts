@@ -2,6 +2,7 @@ import { existsSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { UsageError, writeFileAtomic } from "@perfidia/sim";
 import {
+  ArenaReportAnySchema,
   ArenaReportSchema,
   LlmLogLineSchema,
   ReconcileFileSchema,
@@ -11,7 +12,7 @@ import {
   type ReconcileFile,
   type ReconcileInput,
 } from "../log/schema.ts";
-import { LEGACY_AT, formatCents, priceOf, usdToNano } from "../model/prices.ts";
+import { LEGACY_AT, formatCents, priceOf, uncertainExcess, usdToNano } from "../model/prices.ts";
 import { repriceContext } from "./cost.ts";
 import { exit4Met } from "./report.ts";
 
@@ -22,15 +23,19 @@ import { exit4Met } from "./report.ts";
 // `--usd provider=12.34`). The check, per provider:
 //
 // 1. tokens first, within ±2% per model and kind: this separates an accounting bug from a wrong
-//    price card;
+//    price card; the output of estimated (broken-stream) entries may never have been generated,
+//    so a reported count down to `ledger − estimated − 2%` is accepted (phase-4 review);
 // 2. then dollars: the provider's figure must lie in `[ledger − estimatedExcess − tol, ledger +
-//    tol]`, `tol = max(3%, $0.25)`, where `estimatedExcess` is the conservative part of estimated
-//    (broken-stream) lines, their output, which may never have been generated.
+//    tol]`, `tol = max(3%, $0.25)`, where `estimatedExcess` is the conservative part of the
+//    ledger: the output of estimated (broken-stream) lines, which may never have been generated,
+//    and what lines priced at a dated card inside its uncertain change window (a date without a
+//    timezone) cost over the card before it.
 //
 // Platform fees and taxes are reported apart and left out of the comparison. The ledger is every
 // `llm_call` and `preflight` line of the run (a carried earlier run is reconciled on its own).
 // It writes `reconcile.json`, fills `exit4.reconciled` in `arena.json`, and exits 0 within tolerance
-// or 4 outside it.
+// or 4 outside it. Under 48 hours after the run, usage pages may lag (they under-report, which the
+// lower bound accepts): `exit4.reconciled` stays null unless `--force` (phase-4 review).
 
 export const RECONCILE_FILE = "reconcile.json";
 /** The exit code of a reconciliation outside tolerance. */
@@ -50,13 +55,20 @@ interface ProviderLedger {
   nanoUsd: number;
   excess: number;
   readonly tokens: Map<string, Record<Kind, number>>;
+  /** Per model, the output tokens of estimated entries (part of `tokens`). */
+  readonly estimatedOutput: Map<string, number>;
 }
 
 function emptyLedger(): ProviderLedger {
-  return { nanoUsd: 0, excess: 0, tokens: new Map<string, Record<Kind, number>>() };
+  return {
+    nanoUsd: 0,
+    excess: 0,
+    tokens: new Map<string, Record<Kind, number>>(),
+    estimatedOutput: new Map<string, number>(),
+  };
 }
 
-/** The ledger of a run per provider: logged costs, the estimated excess, tokens per model. */
+/** The ledger of a run per provider: logged costs, the conservative excess, tokens per model. */
 export function ledgerOf(lines: readonly LlmLogLine[]): Map<string, ProviderLedger> {
   const out = new Map<string, ProviderLedger>();
   for (const l of lines) {
@@ -72,14 +84,34 @@ export function ledgerOf(lines: readonly LlmLogLine[]): Map<string, ProviderLedg
       t.cacheRead += u.cacheRead;
       t.output += u.output;
       p.tokens.set(u.model, t);
+      const e = {
+        model: u.model,
+        kind: u.kind,
+        tokens: u,
+        estimated: u.estimated,
+        ...(u.geo === undefined ? {} : { geo: u.geo }),
+      };
       if (u.estimated) {
-        const price = priceOf({ model: u.model, kind: u.kind, tokens: u, estimated: true }, ctx);
+        const price = priceOf(e, ctx);
         p.excess += Math.ceil((u.output * price.prices.output) / 1000);
+        p.estimatedOutput.set(u.model, (p.estimatedOutput.get(u.model) ?? 0) + u.output);
       }
+      p.excess += uncertainExcess(e, ctx);
     }
     out.set(l.provider, p);
   }
   return out;
+}
+
+/**
+ * A reported token count against the ledger's, ±2% of the ledger's; `estimated` tokens of the
+ * ledger's may never have been generated, so the count may fall short by that much more.
+ */
+export function tokensWithin(ledger: number, reported: number, estimated = 0): boolean {
+  const tol = TOKEN_TOLERANCE_PERMILLE * ledger;
+  return (
+    reported * 1000 <= ledger * 1000 + tol && reported * 1000 >= (ledger - estimated) * 1000 - tol
+  );
 }
 
 /** The reconciliation of `lines` against `input` (pure). */
@@ -113,12 +145,14 @@ export function reconcileRun(
         const r = t[kind];
         if (r === undefined) continue;
         const mine = own[kind];
+        const estimated = kind === "output" ? (l.estimatedOutput.get(t.model) ?? 0) : 0;
         tokens.push({
           model: t.model,
           kind,
           ledger: mine,
           reported: r,
-          ok: Math.abs(r - mine) * 1000 <= TOKEN_TOLERANCE_PERMILLE * mine,
+          ...(estimated > 0 ? { estimated } : {}),
+          ok: tokensWithin(mine, r, estimated),
         });
       }
     }
@@ -207,10 +241,14 @@ function runFiles(dir: string): { lines: LlmLogLine[]; arena: ArenaReport; arena
       return parsed.data;
     });
   const raw: unknown = JSON.parse(readFileSync(arenaPath, "utf8"));
-  const parsed = ArenaReportSchema.safeParse(raw);
+  // Read with every version's schema, so an old report says what it is (phase-4 review).
+  const parsed = ArenaReportAnySchema.safeParse(raw);
   if (!parsed.success) {
+    throw new UsageError(`${arenaPath}: not an arena.json of any known version`);
+  }
+  if (parsed.data.format !== "perfidia-arena/2") {
     throw new UsageError(
-      `${arenaPath}: not a perfidia-arena/2 report (a run from before phase 4 has no budget to reconcile)`,
+      `${arenaPath}: a ${parsed.data.format} report: a run from before phase 4 has no budget to reconcile`,
     );
   }
   return { lines, arena: parsed.data, arenaPath };
@@ -235,16 +273,22 @@ export function formatReconcile(r: ReconcileFile): string {
 
 /**
  * Reconciles the run in `dir`: writes `reconcile.json`, fills `exit4.reconciled` (and `met`) in
- * `arena.json`, and returns the file. `nowMs`: the wall clock (the 48-hour check).
+ * `arena.json`, and returns the file. `nowMs`: the wall clock (the 48-hour check). Earlier than 48
+ * hours after the run, `exit4.reconciled` is left null (usage pages may still lag) unless `force`.
  */
-export function reconcileDir(dir: string, input: ReconcileInput, nowMs: number): ReconcileFile {
+export function reconcileDir(
+  dir: string,
+  input: ReconcileInput,
+  nowMs: number,
+  o: { readonly force?: boolean } = {},
+): ReconcileFile {
   const { lines, arena, arenaPath } = runFiles(dir);
   const file = reconcileRun(lines, input, arena.budget.wall, nowMs);
   writeFileAtomic(join(dir, RECONCILE_FILE), `${JSON.stringify(file, null, 2)}\n`);
-  const parts = { ...arena.exit4, reconciled: file.ok };
+  const parts = { ...arena.exit4, reconciled: file.early && o.force !== true ? null : file.ok };
   const updated: ArenaReport = ArenaReportSchema.parse({
     ...arena,
-    exit4: { ...parts, met: exit4Met(parts) },
+    exit4: { ...parts, met: exit4Met(parts, { fake: arena.fake }) },
   });
   writeFileAtomic(arenaPath, `${JSON.stringify(updated, null, 2)}\n`);
   return file;

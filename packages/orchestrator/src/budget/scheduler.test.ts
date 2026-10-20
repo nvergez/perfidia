@@ -159,6 +159,8 @@ interface Seen {
   /** Attempts sent with the larger max_tokens of the retry. */
   retries: number;
   feesNanoUsd: number;
+  /** Hook failures reported (the review's failing-hooks runs). */
+  hookErrors: number;
 }
 
 const newSeen = (): Seen => ({
@@ -171,6 +173,7 @@ const newSeen = (): Seen => ({
   cards: new Map(),
   retries: 0,
   feesNanoUsd: 0,
+  hookErrors: 0,
 });
 
 interface Pending {
@@ -189,6 +192,11 @@ interface Scenario {
   readonly choices: readonly number[];
   /** Mixed lineups: the attempt start (counted over all seats) from which the clock reads `after`. */
   readonly switchAt?: number;
+  /**
+   * Phase-4 review: the arena's hooks fail (a full disk): the kill hook throws, and so does the
+   * hand-off hook of p2. The accounting must not depend on them.
+   */
+  readonly failingHooks?: boolean;
 }
 
 /** A few macrotask turns: every seat reaches its next attempt (or its next await). */
@@ -242,6 +250,10 @@ async function play(s: Scenario, seen: Seen, cfg: Config = CLAUDE): Promise<void
       // The pending replies at this moment, the one being charged excluded.
       seen.inFlightAtKill = Math.max(seen.inFlightAtKill, inFlight);
       if (inFlight > 0) seen.killedMidFlight += 1;
+      if (s.failingHooks === true) throw new Error("ENOSPC: no space left on device, write");
+    },
+    onError: () => {
+      seen.hookErrors += 1;
     },
   });
   const handoffs: HandoffNote[] = [];
@@ -249,7 +261,13 @@ async function play(s: Scenario, seen: Seen, cfg: Config = CLAUDE): Promise<void
     caps: new Map(SEATS.map((x) => [x.seat, 10 ** 12])),
     wakeCapNanoUsd: null,
     handoffTo: (seat) => ({ label: "bot:turtle@3", agent: idle(`bot:turtle@3 ${seat}`) }),
-    onHandoff: (n) => handoffs.push(n),
+    onHandoff: (n) => {
+      handoffs.push(n);
+      if (s.failingHooks === true && n.seat === "p2") throw new Error("EIO: i/o error, write");
+    },
+    onError: () => {
+      seen.hookErrors += 1;
+    },
     match: budget,
     pricers,
   });
@@ -508,6 +526,29 @@ describe("the match budget under every interleaving (fast-check scheduler)", () 
     expect(seen.inFlightAtKill).toBeGreaterThanOrEqual(3);
     expect(seen.attempts).toBeGreaterThan(1000);
     expect(seen.probes).toBeGreaterThan(50);
+  }, 120_000);
+
+  test("the same, with the arena's kill and hand-off hooks failing (review: a full disk)", async () => {
+    const seen = newSeen();
+    await fc.assert(
+      fc.asyncProperty(
+        fc.record({
+          maxInflight: fc.constantFrom(1, 2, 4),
+          killPermille: fc.integer({ min: 0, max: 1000 }),
+          carryPermille: fc.integer({ min: 0, max: 1000 }),
+          turns: fc.integer({ min: 1, max: 4 }),
+          outcomes: fc.array(outcome, { minLength: 1, maxLength: 24 }),
+          probeCosts: fc.array(fc.nat({ max: 400_000_000 }), { minLength: 1, maxLength: 6 }),
+          choices: fc.array(fc.nat({ max: 1000 }), { minLength: 1, maxLength: 64 }),
+          failingHooks: fc.constant(true),
+        }),
+        (sc) => play(sc, seen),
+      ),
+      { numRuns: 100, seed: 1919 },
+    );
+    expect(seen.killed).toBeGreaterThan(10);
+    expect(seen.killedMidFlight).toBeGreaterThan(5);
+    expect(seen.hookErrors).toBeGreaterThan(10);
   }, 120_000);
 
   test("a kill threshold of 0 stops every seat before its first attempt", async () => {

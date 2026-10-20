@@ -347,6 +347,7 @@ const entryOf = (u: LlmCallLine["usage"][number]): UsageEntry => ({
   kind: u.kind,
   tokens: u,
   estimated: u.estimated,
+  ...(u.geo === undefined ? {} : { geo: u.geo }),
 });
 
 /**

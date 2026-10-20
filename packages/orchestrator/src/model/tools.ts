@@ -123,6 +123,21 @@ export const IDENTITY_TRANSFORM: ToolTransform = Object.freeze({
   apply: (tools: readonly ModelTool[]) => tools,
 });
 
+/**
+ * The transforms by the id a provider names (`arena/providers.ts`'s `toolTransform`): only the
+ * identity in this build (Gemini's arrives with its adapter, Pass 2).
+ */
+export const TOOL_TRANSFORMS: Readonly<Record<string, ToolTransform>> = Object.freeze({
+  none: IDENTITY_TRANSFORM,
+});
+
+/** The transform named `id`; an unknown name is a build error. */
+export function toolTransformOf(id: string): ToolTransform {
+  const t = Object.hasOwn(TOOL_TRANSFORMS, id) ? TOOL_TRANSFORMS[id] : undefined;
+  if (t === undefined) throw new Error(`no tool transform named ${JSON.stringify(id)}`);
+  return t;
+}
+
 /** `tools` through `t`, deeply frozen (the identity returns the same list). */
 export function transformTools(
   tools: readonly ModelTool[],

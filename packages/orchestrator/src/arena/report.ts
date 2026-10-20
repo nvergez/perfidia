@@ -150,6 +150,7 @@ const entryOf = (u: LlmCallLine["usage"][number]): UsageEntry => ({
     output: u.output,
   },
   estimated: u.estimated,
+  ...(u.geo === undefined ? {} : { geo: u.geo }),
 });
 
 const gcd = (a: number, b: number): number => (b === 0 ? a : gcd(b, a % b));
@@ -566,7 +567,10 @@ export function budgetBlock(r: ReportInput, llmCalls: readonly LlmCallLine[]): A
     estimatedNanoUsd,
     feesNanoUsd,
     under: budgetNanoUsd === null ? null : actual + carry <= budgetNanoUsd,
-    withinPrediction: low === null || high === null ? null : actual >= low && actual <= high,
+    // The prediction covers the seats' attempts (the scenario has no preflight): the attempts are
+    // compared with it, the start preflight and probes are reported apart (phase-4 review).
+    withinPrediction:
+      low === null || high === null ? null : attemptsNanoUsd >= low && attemptsNanoUsd <= high,
     killSwitch:
       killLine?.k === "kill_switch"
         ? {
@@ -593,8 +597,9 @@ export function budgetBlock(r: ReportInput, llmCalls: readonly LlmCallLine[]): A
 /**
  * The `exit4` block (phase 4 §5.1): a lockstep match that ended, at least 2 distinct served models
  * among the LLM seats' attempts, its prediction stored before turn 1, no hand-off of any reason and
- * no kill switch, its actual cost inside the stored [low, high] and under the budget, Level E, and
- * reconciled (null until `arena reconcile` fills it, so `met` is false until then).
+ * no kill switch, its attempt spend inside the stored [low, high] and its total under the budget,
+ * Level E, and reconciled (null until `arena reconcile` fills it, so `met` is false until then). A
+ * `--fake` run computes every part but is never `met`: no model served it and nothing was spent.
  */
 export function exit4Of(
   r: ReportInput,
@@ -614,12 +619,16 @@ export function exit4Of(
     levelE: r.levelE?.ok === true,
     reconciled: null,
   };
-  return { ...parts, met: exit4Met(parts) };
+  return { ...parts, met: exit4Met(parts, { fake: r.plan.fake }) };
 }
 
-/** `exit4.met`: every part holds, with at least two served models and a reconciled run. */
-export function exit4Met(e: Omit<Exit4, "met">): boolean {
+/**
+ * `exit4.met`: every part holds, with at least two served models and a reconciled run, and the
+ * run was real (a `--fake` run rehearses the path at $0: it never meets the criterion).
+ */
+export function exit4Met(e: Omit<Exit4, "met">, o: { readonly fake: boolean }): boolean {
   return (
+    !o.fake &&
     e.models >= 2 &&
     e.ended &&
     e.estimateStored &&

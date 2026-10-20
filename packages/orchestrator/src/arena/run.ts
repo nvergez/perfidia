@@ -8,7 +8,14 @@ import {
   type RunMatchOptions,
   type RunResult,
 } from "@perfidia/gateway/runtime";
-import type { LogLine, PlayerId, RoundInput, SeatAgent, TimeSource } from "@perfidia/protocol";
+import type {
+  LogLine,
+  PlayerId,
+  PromptVariant,
+  RoundInput,
+  SeatAgent,
+  TimeSource,
+} from "@perfidia/protocol";
 import {
   EXIT,
   RunDirSink,
@@ -34,13 +41,14 @@ import { watchFold } from "../log/watch.ts";
 import { promptTokens, type ModelAdapter, type ModelSpec } from "../model/adapter.ts";
 import { AnthropicAdapter, AnthropicClient, type HttpFetch } from "../model/anthropic.ts";
 import { seededRandom, type HarnessClock } from "../model/clock.ts";
-import { FakeAdapter } from "../model/fake.ts";
+import { FakeAdapter, HARNESS_PREFIX } from "../model/fake.ts";
 import { formatCents, formatUsd, pricerFor, type Pricer } from "../model/prices.ts";
 import { RateGates } from "../model/rate.ts";
 import { LlmSeatAgent } from "../seat/agent.ts";
 import { ArenaPauseGate, type ArenaAborted, type PauseReason } from "../seat/pause.ts";
 import { PROMPT_VERSION, operatorTemplates, seatPrompt } from "../seat/prompt.ts";
 import { botBrain } from "./brain.ts";
+import { toolsFor } from "./providers.ts";
 import { estimateCard, projectSpend, scenarioCard } from "./cost.ts";
 import { reserveText } from "./estimate.ts";
 import {
@@ -236,8 +244,57 @@ function abortForBudget(g: ArenaPauseGate, k: KillNote): void {
   );
 }
 
+/**
+ * The operator signals of one run, subscribed before the start preflight (phase-4 review): a
+ * signal that arrives before the run's handler is set waits in `pending`; `on` sets the handler
+ * and hands it what waited.
+ */
+class RunSignals {
+  private count = 0;
+  private readonly pending: { readonly signal: string; readonly n: number }[] = [];
+  private handler: ((signal: string, n: number) => void) | null = null;
+  private readonly unsubscribe: (() => void) | undefined;
+
+  constructor(source: SignalSource | undefined) {
+    this.unsubscribe = source?.subscribe((signal) => {
+      this.count += 1;
+      if (this.handler === null) this.pending.push({ signal, n: this.count });
+      else this.handler(signal, this.count);
+    });
+  }
+
+  /** The first signal not yet handed to a handler (one during the start preflight). */
+  get waiting(): string | null {
+    return this.pending[0]?.signal ?? null;
+  }
+
+  on(handler: (signal: string, n: number) => void): void {
+    this.handler = handler;
+    for (const p of this.pending.splice(0)) handler(p.signal, p.n);
+  }
+
+  close(): void {
+    this.unsubscribe?.();
+  }
+}
+
 /** Runs a planned arena match into `o.dir` (which must not hold a run). */
 export async function runArena(plan: ArenaPlan, o: RunArenaOptions): Promise<ArenaOutcome> {
+  // Subscribed first: a signal during the start preflight stops it between groups, and the run
+  // writes nothing (instead of the process dying with a check in flight and no record of it).
+  const signals = new RunSignals(o.signals);
+  try {
+    return await runArenaWith(plan, o, signals);
+  } finally {
+    signals.close();
+  }
+}
+
+async function runArenaWith(
+  plan: ArenaPlan,
+  o: RunArenaOptions,
+  signals: RunSignals,
+): Promise<ArenaOutcome> {
   const io = o.io;
   const say = (text: string): void => {
     if (o.quiet !== true) io.out(text);
@@ -276,12 +333,27 @@ export async function runArena(plan: ArenaPlan, o: RunArenaOptions): Promise<Are
     alerts.push(text);
     io.err(`ALERT: ${text}\n`);
   };
+  let geoAlerted = false;
+  let unpricedAlerted = false;
   const log: CallLog = {
     write(line) {
       if (calls === null) early.push(line);
       else calls.write(line);
       llmLines.push(line);
       if (line.k === "llm_call") {
+        if (line.unpriced.length > 0 && !unpricedAlerted) {
+          unpricedAlerted = true;
+          alert(
+            `${line.seat} turn ${line.turn}: served by ${line.unpriced.join(", ")}, which no price card lists: charged at the highest price of any card (over the attempt bound, so the kill switch may fire on spend the provider did not bill); add its card`,
+          );
+        }
+        const geo = line.usage.find((u) => u.geo !== undefined)?.geo;
+        if (geo !== undefined && !geoAlerted) {
+          geoAlerted = true;
+          alert(
+            `${line.seat} turn ${line.turn}: inference ran in "${geo}", not "global" (the workspace's default inference geo changed during the run?): such attempts are charged at the card's ${geo} prices (1.1× for US-only), which the attempt bounds cover; the prediction assumed global routing`,
+          );
+        }
         if (line.fallback) {
           io.err(
             `${line.seat} turn ${line.turn}: served by the fallback model ${line.servedBy ?? "?"} (requested ${line.model})\n`,
@@ -339,8 +411,27 @@ export async function runArena(plan: ArenaPlan, o: RunArenaOptions): Promise<Are
   // on when it is built.
   let gateRef: ArenaPauseGate | null = null;
   let killAbort = false;
+  /** A budget or hand-off hook failed (a full disk): said on stderr; the accounting stands. */
+  const hookError = (what: string, e: unknown): void => {
+    try {
+      io.err(
+        `ALERT: ${what} failed (${errorText(e)}); the match budget's accounting is unaffected\n`,
+      );
+    } catch {
+      // Nothing left to report to.
+    }
+  };
+  // The kill switch has already halted every seat when this runs (the ledger listens first): the
+  // abort and the alert come before the line, whose write can fail.
   const onKill = (k: KillNote): void => {
     const action = plan.budget?.onBudget ?? "handoff";
+    if (action === "abort") {
+      if (gateRef === null) killAbort = true;
+      else abortForBudget(gateRef, k);
+    }
+    alert(
+      `the match budget's kill switch fired: ${formatUsd(k.spentNanoUsd)} spent reached K = ${formatUsd(k.killAtNanoUsd)} (budget ${formatUsd(k.budgetNanoUsd)}); no model attempt starts from now on, ${action === "abort" ? "and the run aborts (--on-budget abort)" : "every LLM seat is handed to its bot at its next turn and the match plays on"}`,
+    );
     log.write({
       k: "kill_switch",
       t: k.t,
@@ -350,13 +441,6 @@ export async function runArena(plan: ArenaPlan, o: RunArenaOptions): Promise<Are
       budgetNanoUsd: k.budgetNanoUsd,
       action,
     });
-    alert(
-      `the match budget's kill switch fired: ${formatUsd(k.spentNanoUsd)} spent reached K = ${formatUsd(k.killAtNanoUsd)} (budget ${formatUsd(k.budgetNanoUsd)}); no model attempt starts from now on, ${action === "abort" ? "and the run aborts (--on-budget abort)" : "every LLM seat is handed to its bot at its next turn and the match plays on"}`,
-    );
-    if (action === "abort") {
-      if (gateRef === null) killAbort = true;
-      else abortForBudget(gateRef, k);
-    }
   };
   const budget =
     plan.budget === null
@@ -366,6 +450,7 @@ export async function runArena(plan: ArenaPlan, o: RunArenaOptions): Promise<Are
           reserveNanoUsd: plan.prediction.reserve.reserveNanoUsd,
           carryNanoUsd: plan.budget.carryNanoUsd,
           onKill,
+          onError: hookError,
         });
   if (plan.budget !== null && plan.budget.carryFrom !== null) {
     log.write({
@@ -373,6 +458,9 @@ export async function runArena(plan: ArenaPlan, o: RunArenaOptions): Promise<Are
       from: plan.budget.carryFrom,
       lines: plan.budget.carryLines,
       costNanoUsd: plan.budget.carryNanoUsd,
+      ...(plan.budget.carryInFlightNanoUsd > 0
+        ? { inFlightNanoUsd: plan.budget.carryInFlightNanoUsd }
+        : {}),
     });
   }
 
@@ -402,6 +490,9 @@ export async function runArena(plan: ArenaPlan, o: RunArenaOptions): Promise<Are
       }),
     ]),
   );
+  /** Each seat's tools: the neutral list through its provider's transform (design §3.1). */
+  const toolsOf = new Map(llm.map((s) => [s.seat, toolsFor(s.provider, tools)]));
+  const seatTools = (seat: PlayerId) => toolsOf.get(seat) ?? missing(seat);
   for (const s of llm) {
     prompts.set(s.seat, seatPrompt(s.seat, s.profile));
     const spec: ModelSpec = {
@@ -433,7 +524,7 @@ export async function runArena(plan: ArenaPlan, o: RunArenaOptions): Promise<Are
                 prefixChars:
                   sharedOf(s).length +
                   (prompts.get(s.seat) ?? "").length +
-                  JSON.stringify(tools).length,
+                  JSON.stringify(seatTools(s.seat)).length,
                 ...(latency === undefined ? {} : { latency }),
               }),
               { intended: { provider: s.provider, model: s.model, endpoint: s.endpoint } },
@@ -446,7 +537,7 @@ export async function runArena(plan: ArenaPlan, o: RunArenaOptions): Promise<Are
       seat: s.seat,
       adapter: adapters.get(s.seat) ?? missing(s.seat),
       prompt: { shared: sharedOf(s), seat: prompts.get(s.seat) ?? "" },
-      tools,
+      tools: seatTools(s.seat),
     })),
   );
   /** A preflight group's usage priced at its seat's cards, now (or at the pinned instant). */
@@ -458,6 +549,8 @@ export async function runArena(plan: ArenaPlan, o: RunArenaOptions): Promise<Are
     (g: GroupOutcome): void => {
       const spec = g.group.adapter.spec;
       const t = phase === "start" ? 0 : lastT;
+      // Counted first: a line that cannot be written never drops a billed check from the budget.
+      budget?.add(g.nanoUsd, t);
       log.write({
         k: "preflight",
         phase,
@@ -475,6 +568,7 @@ export async function runArena(plan: ArenaPlan, o: RunArenaOptions): Promise<Are
           cacheWrite1h: u.tokens.cacheWrite1h,
           cacheRead: u.tokens.cacheRead,
           output: u.tokens.output,
+          ...(u.geo === undefined ? {} : { geo: u.geo }),
           estimated: u.estimated,
         })),
         costNanoUsd: g.nanoUsd,
@@ -483,13 +577,16 @@ export async function runArena(plan: ArenaPlan, o: RunArenaOptions): Promise<Are
         ...(virtual === null ? { wallStart: iso() } : {}),
         ...(g.feeNanoUsd > 0 ? { feeNanoUsd: g.feeNanoUsd } : {}),
       });
-      budget?.add(g.nanoUsd, t);
     };
+  const startSpent = (): number =>
+    early.reduce((n, l) => n + (l.k === "preflight" ? l.costNanoUsd : 0), 0);
   const pre = await preflight(groups, {
     onGroup: preflightLine("start"),
+    // An operator signal or a carry already at K: no further check is sent.
+    stop: () => signals.waiting !== null || budget?.killed === true,
     price: priceGroup,
   }).catch((e: unknown) => {
-    const spent = early.reduce((n, l) => n + (l.k === "preflight" ? l.costNanoUsd : 0), 0);
+    const spent = startSpent();
     if (e instanceof PreflightError && spent > 0) {
       io.err(
         `the start preflight spent ${formatUsd(spent)} before it failed (nothing is written: this is its only record)\n`,
@@ -497,6 +594,14 @@ export async function runArena(plan: ArenaPlan, o: RunArenaOptions): Promise<Are
     }
     throw e;
   });
+  const interrupted = signals.waiting;
+  if (interrupted !== null) {
+    const spent = startSpent();
+    throw new PreflightError(
+      "operator",
+      `${interrupted} during the start preflight: the run stops before anything is written${spent > 0 ? ` (the preflight spent ${formatUsd(spent)}: this is its only record)` : ""}`,
+    );
+  }
   /** Per preflight group, the measured prompt of its shape check: an upper bound of its prefix. */
   const measured = new Map<string, { tokens: number; seatBytes: number }>();
   for (const g of pre.groups) {
@@ -595,14 +700,17 @@ export async function runArena(plan: ArenaPlan, o: RunArenaOptions): Promise<Are
       }),
     ...(budget === null ? {} : { match: budget }),
     pricers,
+    attemptBounds: new Map(plan.prediction.seats.map((p) => [p.seat, p.attemptBoundNanoUsd])),
+    onError: hookError,
   });
 
   const gate = new ArenaPauseGate({
     clock,
     mode: plan.clock.kind === "lockstep" ? "wait" : "abort",
     probe: async () => {
-      // No LLM seat can call its model any more (the kill switch, the operator, every seat over
-      // its cap): reopen without probing, so the waiting seats reach their hand-offs.
+      // No LLM seat can call its model any more (the kill switch, whatever its hooks did; the
+      // operator; every seat over its cap): reopen without probing, so the waiting seats reach
+      // their hand-offs.
       if (ledger.halted !== null || ledger.allHandedOff()) return true;
       try {
         // Charged and logged group by group; it stops between groups once the seats are halted.
@@ -680,7 +788,7 @@ export async function runArena(plan: ArenaPlan, o: RunArenaOptions): Promise<Are
       seat: s.seat,
       adapter,
       prompt: { shared: sharedOf(s), seat: seatText },
-      tools,
+      tools: seatTools(s.seat),
       profile: s.profile,
       ledger,
       log,
@@ -733,8 +841,8 @@ export async function runArena(plan: ArenaPlan, o: RunArenaOptions): Promise<Are
             promptVariant: s.promptVariant,
             reminders: plan.reminders,
             sharedHash: sha256Hex(sharedOf(s)),
-            toolsHash: sha256Hex(canonicalJson(tools)),
-            operatorHash: sha256Hex(canonicalJson(operator)),
+            toolsHash: sha256Hex(canonicalJson(seatTools(s.seat))),
+            operatorHash: operatorHashOf(s.promptVariant),
             ...(s.reasoningContext === null ? {} : { reasoningContext: s.reasoningContext }),
           },
     ),
@@ -764,11 +872,21 @@ export async function runArena(plan: ArenaPlan, o: RunArenaOptions): Promise<Are
   for (const w of plan.warnings) alert(w);
   writeReport(report(null));
 
-  // Operator signals: once hands every LLM seat to its bot, twice aborts.
-  let signals = 0;
-  const unsubscribe = o.signals?.subscribe((signal) => {
-    signals += 1;
-    if (signals === 1) {
+  // Operator signals: once hands every LLM seat to its bot, twice aborts; a third time the CLI
+  // exits at once, after this line.
+  signals.on((signal, n) => {
+    if (n >= 3) {
+      log.write({
+        k: "operator",
+        signal,
+        action: "exit",
+        t: lastT,
+        ...(virtual === null ? { wall: iso() } : {}),
+      });
+      files.flush();
+      return;
+    }
+    if (n === 1) {
       log.write({
         k: "operator",
         signal,
@@ -782,7 +900,7 @@ export async function runArena(plan: ArenaPlan, o: RunArenaOptions): Promise<Are
       ledger.halt("operator", lastT);
       return;
     }
-    if (signals === 2) {
+    if (n === 2) {
       log.write({
         k: "operator",
         signal,
@@ -906,9 +1024,9 @@ export async function runArena(plan: ArenaPlan, o: RunArenaOptions): Promise<Are
     result = await (virtual === null ? go() : virtual.run(go));
   } catch (err) {
     error = errorText(err);
-  } finally {
-    unsubscribe?.();
   }
+  // The match is over: a signal from now on has nothing to stop (a third still exits the CLI).
+  signals.on(() => undefined);
   const elapsedMs = Math.round(performance.now() - t0);
   wall.end = iso();
   files.flush();
@@ -963,6 +1081,21 @@ export async function runArena(plan: ArenaPlan, o: RunArenaOptions): Promise<Are
   else if (status === "degraded") code = levelE.ok ? EXIT.fatal : EXIT.divergence;
   else code = EXIT.fatal;
   return { code, status, report: final, paths, error, result };
+}
+
+/**
+ * The hash of the operator texts as a seat's channel renders them (phase-4 review): `system` is
+ * phase 2's (the templates' own hash, as `prompts.operator`); `developer` the same templates as
+ * developer messages; `envelope` each one as a `[harness] ` text part of the user turn.
+ */
+export function operatorHashOf(variant: PromptVariant): string {
+  if (variant === "system") return sha256Hex(canonicalJson(operatorTemplates()));
+  const templates = operatorTemplates(variant);
+  const rendered =
+    variant === "envelope"
+      ? Object.fromEntries(Object.entries(templates).map(([k, v]) => [k, `${HARNESS_PREFIX}${v}`]))
+      : templates;
+  return sha256Hex(canonicalJson({ channel: variant, templates: rendered }));
 }
 
 function missing(seat: PlayerId): never {

@@ -112,12 +112,19 @@ export async function fetchWithTimeout(
   }
 }
 
-/** A failure below HTTP (DNS, reset, a refused redirect, an abort) as a `ModelError`. */
-export function transportError(e: unknown, signal?: AbortSignal): ModelError {
+/**
+ * A failure below HTTP (DNS, reset, a refused redirect, an abort) as a `ModelError`; `secrets`
+ * (the key) are redacted from the message.
+ */
+export function transportError(
+  e: unknown,
+  signal?: AbortSignal,
+  secrets: readonly string[] = [],
+): ModelError {
   if (e instanceof ModelError) return e;
   if (signal?.aborted === true) return new ModelError("aborted", "request aborted");
   const what = e instanceof Error ? `${e.name}: ${e.message}` : String(e);
-  return new ModelError("connection", oneLine(`connection failed: ${what}`));
+  return new ModelError("connection", oneLine(redact(`connection failed: ${what}`, secrets)));
 }
 
 /** One line of at most 300 characters. */
@@ -144,8 +151,9 @@ export interface SseEvent {
 
 /**
  * The events of a server-sent-event body, in order. Lines end with `\n`, `\r\n` or `\r`; `:` lines
- * are comments; consecutive `data:` lines join with `\n`; an event without data is skipped. When
- * the body ends before an event for which `terminal` is true, the stream broke: a retryable
+ * are comments; consecutive `data:` lines join with `\n`; an event without data is skipped; an
+ * event the body ends inside (no blank line after it) is discarded, as the SSE rule says. When the
+ * body ends before an event for which `terminal` is true, the stream broke: a retryable
  * `connection` error (with `spent()`, what the caller says the attempt cost so far).
  */
 export async function* readSse(
@@ -208,17 +216,9 @@ export async function* readSse(
         if (field === "event") event = text;
         else if (field === "data") data.push(text);
       }
-      if (done) {
-        const e = dispatch();
-        if (e !== null) {
-          yield e;
-          if (o.terminal(e)) {
-            ended = true;
-            return;
-          }
-        }
-        break;
-      }
+      // At the end of the body, an event not closed by a blank line was cut in transit: it is
+      // discarded (the SSE rule), so a body cut inside its terminal event is a broken stream.
+      if (done) break;
     }
   } catch (e) {
     throw new ModelError(
@@ -369,15 +369,24 @@ export function httpModelError(
   provider: string,
   status: number,
   c: Classified,
-  o: { readonly requestId?: string | null; readonly spent?: readonly UsageEntry[] } = {},
+  o: {
+    readonly requestId?: string | null;
+    readonly spent?: readonly UsageEntry[];
+    /** The key (raw and URL-encoded): redacted from the message (a code an upstream echoed). */
+    readonly secrets?: readonly string[];
+  } = {},
 ): ModelError {
   const code = c.code === null ? "" : ` ${c.code}`;
   // A refusal reaching here (the caller did not close the turn) is not retried.
   const kind: ModelErrorKind = c.kind === "refusal" ? "bad_request" : c.kind;
-  return new ModelError(kind, oneLine(`${provider} HTTP ${status}${code}`), {
-    status,
-    requestId: o.requestId ?? null,
-    retryAfterMs: c.retryAfterMs,
-    spent: o.spent ?? [],
-  });
+  return new ModelError(
+    kind,
+    oneLine(redact(`${provider} HTTP ${status}${code}`, o.secrets ?? [])),
+    {
+      status,
+      requestId: o.requestId ?? null,
+      retryAfterMs: c.retryAfterMs,
+      spent: o.spent ?? [],
+    },
+  );
 }

@@ -196,15 +196,40 @@ export function groupCheckBound(
   sampleTokens: number,
   k: BillingKey = {},
 ): number {
+  return callBound(model, fallbacks, sampleTokens, PREFLIGHT_OUTPUT_TOKENS, k, {
+    tierCap: Number.POSITIVE_INFINITY,
+  });
+}
+
+/**
+ * The most one call of `promptTokens` (an upper bound) and at most `outputTokens` of output can
+ * cost, cold, without a retry: the prompt at the highest input-side price of every card, tier and
+ * geography it can be billed at, and the output at the highest output price, once on the model and
+ * once per fallback target when its fallbacks are on; the platform fee on top (the preflight
+ * checks, `arena smoke`). `tierCap`: the longest prompt the long-context tiers are checked against
+ * (default `promptTokens`: a shorter prompt cannot reach a tier above it; the preflight bounds keep
+ * every tier, as in Pass 1a). `ttl`: a request that marks only 5-minute writes is never billed a
+ * 1-hour write.
+ */
+export function callBound(
+  model: string,
+  fallbacks: "default" | "off",
+  promptTokens: number,
+  outputTokens: number,
+  k: BillingKey = {},
+  o: { readonly tierCap?: number; readonly ttl?: CacheTtl } = {},
+): number {
+  const tierCap = o.tierCap ?? promptTokens;
+  const at = (c: readonly TokenPrices[]): TokenPrices[] =>
+    o.ttl === "5m" ? c.map((p) => ({ ...p, write1h: p.write5m })) : [...c];
   const one = (c: readonly TokenPrices[], permille: number): number => {
     const nano = Math.ceil(
-      (sampleTokens * maxInputSide(c) + PREFLIGHT_OUTPUT_TOKENS * maxOutputPrice(c)) / 1000,
+      (promptTokens * maxInputSide(at(c)) + outputTokens * maxOutputPrice(c)) / 1000,
     );
     return nano + (permille === 0 ? 0 : Math.ceil((nano * permille) / 1000));
   };
-  const all = Number.POSITIVE_INFINITY;
-  let n = one(servedCards(model, k, all), feeOfCards(model, k));
-  for (const f of fallbackCards(model, fallbacks, k, all)) n += one(f, 0);
+  let n = one(servedCards(model, k, tierCap), feeOfCards(model, k));
+  for (const f of fallbackCards(model, fallbacks, k, tierCap)) n += one(f, 0);
   return n;
 }
 
@@ -304,6 +329,8 @@ export interface PlanBudget {
   /** The carried run directory and how many cost lines it had (`--budget-carry`). */
   readonly carryFrom: string | null;
   readonly carryLines: number;
+  /** The part of the carry for attempts the carried run may have had in flight (its reserve). */
+  readonly carryInFlightNanoUsd: number;
 }
 
 /** The kill threshold `K = budget − reserve` (may be ≤ 0 for a budget the plan refuses). */

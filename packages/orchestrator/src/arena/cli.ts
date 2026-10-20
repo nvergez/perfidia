@@ -42,8 +42,9 @@ const UINT32_MAX = 4_294_967_295;
 // and the signal source as arguments, so tests run it in-process; the environment is read once,
 // here, and only for `PERFIDIA_ANTHROPIC_API_KEY`, `PERFIDIA_ANTHROPIC_BASE_URL` and
 // `PERFIDIA_LIVE` (Pass 1b: `PERFIDIA_<PROVIDER>_API_KEY` and `_BASE_URL` for openai, google,
-// openrouter and compat too). `arena run` takes over SIGINT and SIGTERM: the first hands every LLM
-// seat to its bot, the second aborts the run, a third exits at once.
+// openrouter and compat too). `arena run` takes over SIGINT, SIGTERM and SIGHUP from before its start
+// preflight: the first hands every LLM seat to its bot (or stops the start preflight, nothing
+// written), the second aborts the run, a third exits at once (after an `operator` line).
 
 export const USAGE = [
   "usage: bun run arena -- <command> [flags]",
@@ -262,9 +263,13 @@ const RECONCILE_FLAGS: FlagSpecs = {
     value: "<provider=usd>",
     help: "the pre-tax usage cost of one provider, without token counts (e.g. anthropic=12.34)",
   },
+  force: {
+    type: "boolean",
+    help: "fill exit4.reconciled even under 48 hours after the run (usage pages may still lag)",
+  },
 };
 const RECONCILE_USAGE = usageText(
-  "arena reconcile <run-dir> (--input <file> | --usd <provider=usd> ...)",
+  "arena reconcile <run-dir> (--input <file> | --usd <provider=usd> ...) [--force]",
   RECONCILE_FLAGS,
 );
 const PERSONALITIES_USAGE = usageText("arena personalities", {});
@@ -429,16 +434,18 @@ function reconcileCommand(argv: readonly string[], io: CliIo, nowMs: number): nu
     );
   }
   const input = file === undefined ? inputFromFlags(usd) : readInput(file);
-  const r = reconcileDir(dir, input, nowMs);
+  const force = f.bool("force");
+  const r = reconcileDir(dir, input, nowMs, { force });
   if (r.hoursAfterEnd === null) {
     io.err("warning: the run's wall-clock times are virtual (a --fake run): no 48-hour check\n");
   } else if (r.early) {
     io.err(
-      `warning: only ${r.hoursAfterEnd} h since the run's wall-clock end: usage pages can lag up to a day; reconcile again after ${RECONCILE_AFTER_HOURS} h\n`,
+      `warning: only ${r.hoursAfterEnd} h since the run's wall-clock end: usage pages can lag up to a day; reconcile again after ${RECONCILE_AFTER_HOURS} h${force ? " (--force: exit4.reconciled is filled anyway)" : " (exit4.reconciled stays null until then; --force fills it now)"}\n`,
     );
   }
   io.out(formatReconcile(r));
-  io.out(`wrote ${dir}/reconcile.json; arena.json exit4.reconciled = ${r.ok}\n`);
+  const filled = r.early && !force ? null : r.ok;
+  io.out(`wrote ${dir}/reconcile.json; arena.json exit4.reconciled = ${filled}\n`);
   return r.ok ? EXIT.ok : EXIT_RECONCILE;
 }
 
@@ -543,26 +550,40 @@ export async function main(
   }
 }
 
+/** The signals `arena run` takes over: an interrupt, a termination, a closed terminal or session. */
+export const OPERATOR_SIGNALS: readonly NodeJS.Signals[] = Object.freeze([
+  "SIGINT",
+  "SIGTERM",
+  "SIGHUP",
+]);
+
 /**
- * SIGINT and SIGTERM for `arena run`: the first two go to the run (hand off, then abort); a third
- * exits at once (code 130), whatever the run is doing.
+ * SIGINT, SIGTERM and SIGHUP for `arena run` (subscribed before its start preflight): the first two
+ * go to the run (hand off, then abort); a third is handed to the run (it writes an `operator` line)
+ * and then exits at once (code 130), whatever the run is doing.
  */
-export const processSignals: SignalSource = {
-  subscribe(handler) {
-    let count = 0;
-    const on = (signal: NodeJS.Signals): void => {
-      count += 1;
-      if (count >= 3) process.exit(130);
-      handler(signal);
-    };
-    process.on("SIGINT", on);
-    process.on("SIGTERM", on);
-    return () => {
-      process.off("SIGINT", on);
-      process.off("SIGTERM", on);
-    };
-  },
-};
+export function processSignalsOf(exit: (code: number) => void = (c) => process.exit(c)) {
+  const source: SignalSource = {
+    subscribe(handler) {
+      let count = 0;
+      const on = (signal: NodeJS.Signals): void => {
+        count += 1;
+        try {
+          handler(signal);
+        } finally {
+          if (count >= 3) exit(130);
+        }
+      };
+      for (const s of OPERATOR_SIGNALS) process.on(s, on);
+      return () => {
+        for (const s of OPERATOR_SIGNALS) process.off(s, on);
+      };
+    },
+  };
+  return source;
+}
+
+export const processSignals: SignalSource = processSignalsOf();
 
 if (import.meta.main) {
   const code = await main(

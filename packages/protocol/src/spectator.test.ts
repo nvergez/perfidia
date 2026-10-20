@@ -161,8 +161,9 @@ describe("spectator schemas", () => {
   test("every schema of the spectator and arena modules converts to JSON Schema", () => {
     const all = [...schemasOf(spectator), ...schemasOf(arena)];
     // 63 through phase 4 Pass 1a; Pass 1b adds Provider, PromptVariant, ReminderCadence,
-    // ReasoningContext and TokenProfile.
-    expect(all.length).toBe(68);
+    // ReasoningContext and TokenProfile; the review the `perfidia-arena/1` readers (ArenaSeatReportV1,
+    // ArenaReportV1, ArenaReportAny).
+    expect(all.length).toBe(71);
     for (const [name, schema] of all) {
       const json = z.toJSONSchema(schema, { io: "output", unrepresentable: "any" });
       expect([name, typeof json]).toEqual([name, "object"]);
