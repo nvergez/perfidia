@@ -10,11 +10,15 @@
 //    is written, and Level E holds.
 // 2. One Claude Opus 5.5 call at `low` (`arena smoke --model opus-5-5`): the `fallbacks` and
 //    `betas` shape, and the operator entries as mid-conversation system messages.
+// 3. Phase 4 Pass 2, Gemini (its own opt-in: PERFIDIA_LIVE=1 and PERFIDIA_GOOGLE_API_KEY): `arena
+//    smoke --provider google` on Gemini 3.8 Flash at `low` with a 1,024-token output limit (the
+//    preflight, a count and one streamed call; under $0.05 at the card of the day, asserted).
 
 import { describe, expect, test } from "bun:test";
 import { verifyLog } from "@perfidia/engine";
 import { memoryIo } from "@perfidia/sim";
 import { arenaEnv, planArena, providerEnv } from "./arena/plan.ts";
+import { runGeminiSmoke } from "./arena/providers/gemini-smoke.ts";
 import { smokeCommand } from "./arena/smoke.ts";
 import { play, runDir } from "./arena/rig.test.ts";
 
@@ -95,6 +99,35 @@ describe("live: the real OpenAI API (opt-in)", () => {
       const bound = /at most \$(\d+\.\d+)/.exec(io.stdout());
       expect(Number(bound?.[1] ?? "1")).toBeLessThan(0.05);
       expect(code).toBe(0);
+    },
+    FIVE_MINUTES,
+  );
+});
+
+// Phase 4 Pass 2: the Gemini adapter, behind PERFIDIA_LIVE=1 and PERFIDIA_GOOGLE_API_KEY: one
+// `arena smoke --provider google` on Gemini 3.8 Flash at low effort, under $0.05.
+const GEMINI_LIVE = env.live && providerEnv(env, "google").apiKey !== null;
+if (!GEMINI_LIVE) {
+  console.log(
+    "live Gemini test skipped: it needs PERFIDIA_LIVE=1 (bun run test:live) and PERFIDIA_GOOGLE_API_KEY",
+  );
+}
+
+describe.skipIf(!GEMINI_LIVE)("live: the real Gemini API (opt-in)", () => {
+  test(
+    "arena smoke --provider google on Gemini 3.8 Flash at low: ok, under $0.05",
+    async () => {
+      const io = memoryIo();
+      const r = await runGeminiSmoke({
+        env,
+        io,
+        model: "gemini-3.8-flash",
+        effort: "low",
+        maxTokens: 1024,
+      });
+      console.log(io.stdout(), io.stderr());
+      expect(r.code).toBe(0);
+      expect(r.spentNanoUsd).toBeLessThan(50_000_000);
     },
     FIVE_MINUTES,
   );

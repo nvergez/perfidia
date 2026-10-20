@@ -1,5 +1,6 @@
 import type { Json, JsonObject } from "@perfidia/protocol";
 import type { ModelTool } from "./adapter.ts";
+import { GEMINI_TOOL_TRANSFORM } from "./gemini-tools.ts";
 
 // The tool schemas every model gets (phase-2 design §2.4; phase-4 design §3.1): the gateway's
 // `toolDefinitions` with the root `$schema` dropped and Zod's safe-integer noise
@@ -124,11 +125,12 @@ export const IDENTITY_TRANSFORM: ToolTransform = Object.freeze({
 });
 
 /**
- * The transforms by the id a provider names (`arena/providers.ts`'s `toolTransform`): only the
- * identity in this build (Gemini's arrives with its adapter, Pass 2).
+ * The transforms by the id a provider names (`arena/providers.ts`'s `toolTransform`): the identity,
+ * and Gemini's schema subset (`gemini@1`, Pass 2, `model/gemini-tools.ts`).
  */
 export const TOOL_TRANSFORMS: Readonly<Record<string, ToolTransform>> = Object.freeze({
   none: IDENTITY_TRANSFORM,
+  [GEMINI_TOOL_TRANSFORM.id]: GEMINI_TOOL_TRANSFORM,
 });
 
 /** The transform named `id`; an unknown name is a build error. */

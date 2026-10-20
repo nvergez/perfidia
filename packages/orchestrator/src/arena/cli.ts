@@ -31,6 +31,7 @@ import {
 } from "./reconcile.ts";
 import { formatCost } from "./report.ts";
 import { CALLS_FILE, runArena, type SignalSource } from "./run.ts";
+import { geminiSmokeCommand } from "./providers/gemini-smoke.ts";
 import { smokeCommand } from "./smoke.ts";
 
 /** The largest seed. */
@@ -276,21 +277,23 @@ const RECONCILE_USAGE = usageText(
 const PERSONALITIES_USAGE = usageText("arena personalities", {});
 /** The efforts a Claude smoke takes. */
 const CLAUDE_EFFORTS = capabilitiesFor("anthropic", "claude-haiku-5-5").efforts;
+/** The providers `arena smoke` checks (`gemini` is an alias of `google`). */
+const SMOKE_PROVIDERS: ReadonlySet<string> = new Set(["anthropic", "openai", "google", "gemini"]);
 const SMOKE_FLAGS: FlagSpecs = {
+  provider: {
+    type: "string",
+    value: "<provider>",
+    help: "anthropic (default), openai or google (alias gemini): needs PERFIDIA_<PROVIDER>_API_KEY",
+  },
   model: {
     type: "string",
     value: "<alias | id>",
-    help: "opus-5-5, sonnet-5-5, haiku-5-5, fable-5-1 or a full id (default haiku-5-5); with --provider, one of its seat models (OpenAI: default gpt-6-luna)",
+    help: "anthropic: opus-5-5, sonnet-5-5, haiku-5-5, fable-5-1 or a full id (default haiku-5-5); another provider: one of its seat models (openai: default gpt-6-luna; google: default gemini-3.8-flash)",
   },
   effort: {
     type: "string",
     value: "<effort>",
-    help: `${CLAUDE_EFFORTS.join("|")} (default low); with --provider, one the model accepts`,
-  },
-  provider: {
-    type: "string",
-    value: "<provider>",
-    help: "anthropic (default) or a provider with an adapter in this build (openai): needs PERFIDIA_<PROVIDER>_API_KEY",
+    help: `anthropic: ${CLAUDE_EFFORTS.join("|")}; another provider: one the model accepts; default low`,
   },
 };
 const SMOKE_USAGE = usageText(
@@ -499,21 +502,34 @@ function dispatch(
       return personalities(io);
     case "smoke": {
       const f = parseFlags(argv, SMOKE_FLAGS, SMOKE_USAGE, { min: 0, max: 0, name: "positional" });
+      const provider = f.string("provider") ?? "anthropic";
+      if (!SMOKE_PROVIDERS.has(provider)) {
+        throw new UsageError(
+          `--provider must be anthropic, openai or google (gemini), got "${provider}"`,
+        );
+      }
       const effort = f.string("effort");
-      const provider = f.string("provider");
-      // Another provider's efforts are checked against its model (Pass 2).
-      const efforts = provider === undefined || provider === "anthropic" ? CLAUDE_EFFORTS : EFFORTS;
+      // Another provider's efforts are checked against its model by its smoke (Pass 2).
+      const efforts = provider === "anthropic" ? CLAUDE_EFFORTS : EFFORTS;
       const e = effort === undefined ? undefined : efforts.find((x) => x === effort);
       if (effort !== undefined && e === undefined) {
         throw new UsageError(`--effort must be one of ${efforts.join(", ")}, got "${effort}"`);
       }
       const model = f.string("model");
+      if (provider === "google" || provider === "gemini") {
+        return geminiSmokeCommand({
+          env,
+          io,
+          ...(model === undefined ? {} : { model }),
+          ...(e === undefined ? {} : { effort: e }),
+        });
+      }
       return smokeCommand({
         env,
         io,
         ...(model === undefined ? {} : { model }),
         ...(e === undefined ? {} : { effort: e }),
-        ...(provider === undefined ? {} : { provider }),
+        ...(provider === "anthropic" ? {} : { provider }),
       });
     }
     default:

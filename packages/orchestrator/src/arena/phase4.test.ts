@@ -143,8 +143,8 @@ describe("arena estimate (phase 4 §5.3, §5.4)", () => {
       );
     }
     expect(existsSync(dir)).toBe(false);
-    // A lineup with a non-Anthropic seat plans (Pass 1b) but runs only on the fake path while this
-    // build has no adapter for its provider (Pass 2: OpenAI has one; Google not in this build).
+    // A lineup with a non-Anthropic seat plans (Pass 1b); a real run of it needs that provider's
+    // key too (Pass 2: every provider has an adapter).
     const bad = join(runDir("lineup"), "..", "mixed.json");
     const mixed = LineupSchema.parse(
       JSON.parse(
@@ -166,10 +166,10 @@ describe("arena estimate (phase 4 §5.3, §5.4)", () => {
       PERFIDIA_ANTHROPIC_API_KEY: "k",
       // Loopback, a closed port: were the refusal to fail, nothing would leave the machine.
       PERFIDIA_ANTHROPIC_BASE_URL: "http://127.0.0.1:9",
-      PERFIDIA_GOOGLE_API_KEY: "k",
+      PERFIDIA_GOOGLE_BASE_URL: "http://127.0.0.1:9",
     });
     expect(refused.code).toBe(3);
-    expect(refused.err).toContain("p2: google has no adapter in this build");
+    expect(refused.err).toContain("PERFIDIA_GOOGLE_API_KEY is not set: the LLM seats (p2) need it");
     expect(existsSync(dir)).toBe(false);
   });
 });

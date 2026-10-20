@@ -12,6 +12,9 @@ export const OPENAI_SMOKE = Object.freeze({ model: "gpt-6-luna", effort: "low" a
 
 /** An OpenAI seat's adapter: its own client (the guarded transport) on the plan's key and URL. */
 export function createOpenAIAdapter(spec: ModelSpec, env: AdapterEnv): ModelAdapter {
+  if (env.apiKey === null) {
+    throw new Error("PERFIDIA_OPENAI_API_KEY is not set: the plan should have refused the run");
+  }
   return new OpenAIAdapter(
     spec,
     new OpenAIClient({

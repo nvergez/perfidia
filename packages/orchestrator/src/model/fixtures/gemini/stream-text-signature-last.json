@@ -1,0 +1,46 @@
+{
+  "synthetic": true,
+  "checked": "2026-10-20",
+  "sources": [
+    "https://ai.google.dev/api/generate-content.md.txt (GenerateContentResponse, Part, UsageMetadata)",
+    "https://ai.google.dev/gemini-api/docs/generate-content/thought-signatures.md.txt (FAQ 3: without a function call, the signature may come in a part with empty text; Gemini 4 puts it on the last part)"
+  ],
+  "note": "Written from the docs, not recorded: a text reply streamed in two deltas, the signature on a last part with empty text, the finish and the final usage in the last event, which also reports the standard service tier.",
+  "events": [
+    {
+      "candidates": [
+        { "content": { "role": "model", "parts": [{ "text": "I hold the strait " }] }, "index": 0 }
+      ],
+      "modelVersion": "gemini-3.8-flash",
+      "responseId": "resp-text-1"
+    },
+    {
+      "candidates": [
+        { "content": { "role": "model", "parts": [{ "text": "and wait." }] }, "index": 0 }
+      ],
+      "modelVersion": "gemini-3.8-flash",
+      "responseId": "resp-text-1"
+    },
+    {
+      "candidates": [
+        {
+          "content": {
+            "role": "model",
+            "parts": [{ "text": "", "thoughtSignature": "U2lnbmF0dXJlX0M=" }]
+          },
+          "finishReason": "STOP",
+          "index": 0
+        }
+      ],
+      "usageMetadata": {
+        "promptTokenCount": 9000,
+        "candidatesTokenCount": 12,
+        "thoughtsTokenCount": 200,
+        "totalTokenCount": 9212,
+        "serviceTier": "standard"
+      },
+      "modelVersion": "gemini-3.8-flash",
+      "responseId": "resp-text-1"
+    }
+  ]
+}

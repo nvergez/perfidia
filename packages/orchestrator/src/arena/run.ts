@@ -171,7 +171,7 @@ export interface RunArenaOptions {
   readonly io: CliIo;
   /** Builds an LLM seat's adapter instead of the plan's (tests: scripted brains, failures). */
   readonly adapterFor?: (seat: LlmSeatPlan, spec: ModelSpec, ctx: AdapterContext) => ModelAdapter;
-  /** The Anthropic client's `fetch` (tests: a stub). */
+  /** The `fetch` of every real adapter (Anthropic's client, Pass 2's providers; tests: a stub). */
   readonly fetch?: HttpFetch;
   /** How often a closed pause gate re-runs the preflight; default 2 minutes. */
   readonly probeEveryMs?: number;
@@ -477,14 +477,14 @@ async function runArenaWith(
     });
     return client;
   };
-  /** A seat of a provider whose adapter the registry builds (Pass 2: OpenAI), on the plan's key. */
+  /** A real seat of a provider other than Anthropic: its registry factory (Pass 2), the plan's key. */
   const registered = (s: LlmSeatPlan, spec: ModelSpec): ModelAdapter => {
     const p = providerInfo(s.provider);
     const pe = providerEnv(plan.env, s.provider);
     const baseURL = pe.baseURL ?? p?.defaultBaseUrl ?? null;
-    if (p?.create === undefined || pe.apiKey === null || baseURL === null) {
+    if (p?.create === undefined || baseURL === null) {
       throw new Error(
-        `${s.seat}: no ${s.provider} adapter, key or base URL: the plan should have refused`,
+        `${s.seat}: no ${s.provider} adapter or base URL: the plan should have refused`,
       );
     }
     return p.create(spec, {
@@ -492,6 +492,7 @@ async function runArenaWith(
       baseURL,
       time,
       timeoutMs: plan.policy.attemptTimeoutMs,
+      ...(o.fetch === undefined ? {} : { fetch: o.fetch }),
     });
   };
   const prompts = new Map<PlayerId, string>();

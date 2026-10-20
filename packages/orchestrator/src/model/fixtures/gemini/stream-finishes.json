@@ -1,0 +1,90 @@
+{
+  "synthetic": true,
+  "checked": "2026-10-20",
+  "sources": [
+    "https://ai.google.dev/api/generate-content.md.txt (FinishReason, PromptFeedback, BlockReason, Candidate.finishMessage)",
+    "https://ai.google.dev/gemini-api/docs/generate-content/thinking.md.txt (max_output_tokens counts thinking: MAX_TOKENS while reasoning bills the thoughts and returns empty output)"
+  ],
+  "note": "Written from the docs, not recorded: one-event streams ending each way the adapter handles (truncation, refusals, malformed call, a blocked prompt).",
+  "streams": {
+    "max-tokens": [
+      {
+        "candidates": [
+          {
+            "content": {
+              "role": "model",
+              "parts": [{ "text": "Weighing the attack", "thought": true }]
+            },
+            "finishReason": "MAX_TOKENS",
+            "index": 0
+          }
+        ],
+        "usageMetadata": {
+          "promptTokenCount": 10000,
+          "cachedContentTokenCount": 6000,
+          "candidatesTokenCount": 0,
+          "thoughtsTokenCount": 32768,
+          "totalTokenCount": 42768
+        },
+        "modelVersion": "gemini-4-argon"
+      }
+    ],
+    "safety": [
+      {
+        "candidates": [
+          {
+            "content": { "role": "model", "parts": [{ "text": "partial" }] },
+            "finishReason": "SAFETY",
+            "finishMessage": "The response was blocked for safety.",
+            "index": 0
+          }
+        ],
+        "usageMetadata": {
+          "promptTokenCount": 10000,
+          "candidatesTokenCount": 3,
+          "thoughtsTokenCount": 120,
+          "totalTokenCount": 10123
+        },
+        "modelVersion": "gemini-4-argon"
+      }
+    ],
+    "malformed-function-call": [
+      {
+        "candidates": [
+          {
+            "content": { "role": "model", "parts": [] },
+            "finishReason": "MALFORMED_FUNCTION_CALL",
+            "index": 0
+          }
+        ],
+        "usageMetadata": {
+          "promptTokenCount": 10000,
+          "candidatesTokenCount": 0,
+          "thoughtsTokenCount": 400,
+          "totalTokenCount": 10400
+        },
+        "modelVersion": "gemini-4-argon"
+      }
+    ],
+    "blocked-prompt": [
+      {
+        "promptFeedback": { "blockReason": "PROHIBITED_CONTENT" },
+        "usageMetadata": { "promptTokenCount": 10000, "totalTokenCount": 10000 },
+        "modelVersion": "gemini-4-argon"
+      }
+    ],
+    "missing-thought-signature": [
+      {
+        "candidates": [
+          {
+            "content": { "role": "model", "parts": [] },
+            "finishReason": "MISSING_THOUGHT_SIGNATURE",
+            "index": 0
+          }
+        ],
+        "usageMetadata": { "promptTokenCount": 10000, "totalTokenCount": 10000 },
+        "modelVersion": "gemini-4-argon"
+      }
+    ]
+  }
+}
