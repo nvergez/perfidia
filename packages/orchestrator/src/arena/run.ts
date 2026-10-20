@@ -35,13 +35,13 @@ import { promptTokens, type ModelAdapter, type ModelSpec } from "../model/adapte
 import { AnthropicAdapter, AnthropicClient, type HttpFetch } from "../model/anthropic.ts";
 import { seededRandom, type HarnessClock } from "../model/clock.ts";
 import { FakeAdapter } from "../model/fake.ts";
-import { formatCents, formatUsd } from "../model/prices.ts";
+import { formatCents, formatUsd, pricerFor, type Pricer } from "../model/prices.ts";
 import { RateGates } from "../model/rate.ts";
 import { LlmSeatAgent } from "../seat/agent.ts";
 import { ArenaPauseGate, type ArenaAborted, type PauseReason } from "../seat/pause.ts";
 import { PROMPT_VERSION, operatorTemplates, seatPrompt } from "../seat/prompt.ts";
 import { botBrain } from "./brain.ts";
-import { estimateSeat, projectSpend } from "./cost.ts";
+import { estimateCard, projectSpend, scenarioCard } from "./cost.ts";
 import { reserveText } from "./estimate.ts";
 import {
   PreflightError,
@@ -105,6 +105,12 @@ import {
 // each seat is handed to its bot (`match_budget`) and the match plays on to its end, or, with
 // `--on-budget abort`, the run aborts. Probes stop once no LLM seat can call its model. An operator
 // signal (SIGINT or SIGTERM) once hands every LLM seat to its bot (`operator`); twice aborts.
+//
+// Pass 1b: a seat's shared block is its operator channel's variant, its reminders the lineup's
+// cadence, and every attempt, check and probe is priced at its provider's card (the intended one
+// for a fake seat), at the attempt's wall-clock start or the run's pinned price instant, with the
+// platform fee. `seats.json` records per seat the intended model, the endpoint, the prompt
+// variant, the cadence and the hashes of the shared block, the tools and the operator templates.
 
 export const ARENA_FILE = "arena.json";
 export const SEATS_FILE = "seats.json";
@@ -240,6 +246,8 @@ export async function runArena(plan: ArenaPlan, o: RunArenaOptions): Promise<Are
   const seed = setup.seed;
   const llm = llmSeatsOf(plan);
   const { shared, tools } = plan.texts;
+  const sharedOf = (s: LlmSeatPlan): string =>
+    plan.texts.sharedByVariant[s.promptVariant] ?? shared;
 
   const virtual = plan.time === "virtual" ? harness.createVirtualTime() : null;
   const time: TimeSource = virtual ?? new harness.SystemTime();
@@ -382,15 +390,29 @@ export async function runArena(plan: ArenaPlan, o: RunArenaOptions): Promise<Are
   };
   const prompts = new Map<PlayerId, string>();
   const adapters = new Map<PlayerId, ModelAdapter>();
+  /** Each seat's pricer: its provider's cards, its endpoint, at the attempt's start or the pin. */
+  const pricers = new Map<PlayerId, Pricer>(
+    llm.map((s) => [
+      s.seat,
+      pricerFor({
+        provider: s.provider,
+        endpoint: s.endpoint,
+        fixedAt: plan.priceFixed,
+        fallbackAt: plan.priceAt,
+      }),
+    ]),
+  );
   for (const s of llm) {
     prompts.set(s.seat, seatPrompt(s.seat, s.profile));
     const spec: ModelSpec = {
       provider: plan.fake ? "fake" : s.provider,
       model: s.model,
+      ...(s.endpoint === null ? {} : { endpoint: s.endpoint }),
       effort: s.effort,
       maxOutputTokens: plan.maxTokens,
       cacheTtl: plan.cacheTtl,
       fallbacks: s.fallbacks,
+      ...(s.reasoningContext === null ? {} : { reasoningContext: s.reasoningContext }),
     };
     const latency =
       plan.clock.kind === "realtime"
@@ -409,9 +431,12 @@ export async function runArena(plan: ArenaPlan, o: RunArenaOptions): Promise<Are
                 model: s.model,
                 maxOutputTokens: plan.maxTokens,
                 prefixChars:
-                  shared.length + (prompts.get(s.seat) ?? "").length + JSON.stringify(tools).length,
+                  sharedOf(s).length +
+                  (prompts.get(s.seat) ?? "").length +
+                  JSON.stringify(tools).length,
                 ...(latency === undefined ? {} : { latency }),
               }),
+              { intended: { provider: s.provider, model: s.model, endpoint: s.endpoint } },
             )
           : new AnthropicAdapter(spec, anthropic())),
     );
@@ -420,10 +445,13 @@ export async function runArena(plan: ArenaPlan, o: RunArenaOptions): Promise<Are
     llm.map((s): PreflightGroup => ({
       seat: s.seat,
       adapter: adapters.get(s.seat) ?? missing(s.seat),
-      prompt: { shared, seat: prompts.get(s.seat) ?? "" },
+      prompt: { shared: sharedOf(s), seat: prompts.get(s.seat) ?? "" },
       tools,
     })),
   );
+  /** A preflight group's usage priced at its seat's cards, now (or at the pinned instant). */
+  const priceGroup = (g: PreflightGroup, usage: Parameters<Pricer>[0]) =>
+    (pricers.get(g.seat) ?? missing(g.seat))(usage, virtual === null ? iso() : undefined);
   /** Charges one group's check to the budget and writes its `preflight` line. */
   const preflightLine =
     (phase: "start" | "probe") =>
@@ -436,7 +464,7 @@ export async function runArena(plan: ArenaPlan, o: RunArenaOptions): Promise<Are
         group: g.group.adapter.label,
         provider: spec.provider,
         model: spec.model,
-        endpoint: null,
+        endpoint: spec.endpoint ?? null,
         t,
         ok: g.ok,
         usage: g.usage.map((u) => ({
@@ -453,10 +481,14 @@ export async function runArena(plan: ArenaPlan, o: RunArenaOptions): Promise<Are
         priceCard: g.cards[0] ?? null,
         error: g.error,
         ...(virtual === null ? { wallStart: iso() } : {}),
+        ...(g.feeNanoUsd > 0 ? { feeNanoUsd: g.feeNanoUsd } : {}),
       });
       budget?.add(g.nanoUsd, t);
     };
-  const pre = await preflight(groups, { onGroup: preflightLine("start") }).catch((e: unknown) => {
+  const pre = await preflight(groups, {
+    onGroup: preflightLine("start"),
+    price: priceGroup,
+  }).catch((e: unknown) => {
     const spent = early.reduce((n, l) => n + (l.k === "preflight" ? l.costNanoUsd : 0), 0);
     if (e instanceof PreflightError && spent > 0) {
       io.err(
@@ -493,6 +525,9 @@ export async function runArena(plan: ArenaPlan, o: RunArenaOptions): Promise<Are
     seats: Object.fromEntries(prompts),
     operator,
     tools,
+    variants: Object.fromEntries(
+      Object.entries(plan.texts.sharedByVariant).filter(([v]) => v !== "system"),
+    ),
   });
   // The prediction, once, before turn 1 (§5.1): its sha256 goes into seats.json.
   const estimateText = `${JSON.stringify(EstimateFileSchema.parse(plan.estimate), null, 2)}\n`;
@@ -559,6 +594,7 @@ export async function runArena(plan: ArenaPlan, o: RunArenaOptions): Promise<Are
         capNanoUsd: n.capNanoUsd,
       }),
     ...(budget === null ? {} : { match: budget }),
+    pricers,
   });
 
   const gate = new ArenaPauseGate({
@@ -573,6 +609,7 @@ export async function runArena(plan: ArenaPlan, o: RunArenaOptions): Promise<Are
         await preflight(groups, {
           onGroup: preflightLine("probe"),
           stop: () => ledger.halted !== null,
+          price: priceGroup,
         });
         return true;
       } catch {
@@ -642,7 +679,7 @@ export async function runArena(plan: ArenaPlan, o: RunArenaOptions): Promise<Are
     const agent = new LlmSeatAgent({
       seat: s.seat,
       adapter,
-      prompt: { shared, seat: seatText },
+      prompt: { shared: sharedOf(s), seat: seatText },
       tools,
       profile: s.profile,
       ledger,
@@ -652,6 +689,8 @@ export async function runArena(plan: ArenaPlan, o: RunArenaOptions): Promise<Are
       rate: rates.gate(adapter.spec.provider, adapter.spec.model),
       policy: plan.policy,
       ...(prefixTokens === undefined ? {} : { prefixTokens }),
+      promptVariant: s.promptVariant,
+      reminders: plan.reminders,
     });
     agents.set(s.seat, stopping(agent, plan.stopAt));
     agentLabels.set(s.seat, agent.label);
@@ -669,6 +708,7 @@ export async function runArena(plan: ArenaPlan, o: RunArenaOptions): Promise<Are
     estimateSha256,
     promptCapTokens: plan.promptCapTokens,
     ...(plan.budget === null ? {} : { budgetNanoUsd: plan.budget.budgetNanoUsd }),
+    ...(plan.priceFixed === null ? {} : { priceDate: plan.priceFixed.slice(0, 10) }),
     seats: plan.seats.map((s) =>
       s.kind === "bot"
         ? { seat: s.seat, kind: "bot", label: s.label }
@@ -685,6 +725,17 @@ export async function runArena(plan: ArenaPlan, o: RunArenaOptions): Promise<Are
             handoffBot: s.handoffBot,
             prompt: sha256Hex(prompts.get(s.seat) ?? ""),
             fallbacks: s.fallbacks,
+            ...(plan.fake
+              ? { intended: { provider: s.provider, model: s.model, endpoint: s.endpoint } }
+              : {}),
+            ...(s.endpoint === null ? {} : { endpoint: s.endpoint }),
+            ...(s.quantization === null ? {} : { quantization: s.quantization }),
+            promptVariant: s.promptVariant,
+            reminders: plan.reminders,
+            sharedHash: sha256Hex(sharedOf(s)),
+            toolsHash: sha256Hex(canonicalJson(tools)),
+            operatorHash: sha256Hex(canonicalJson(operator)),
+            ...(s.reasoningContext === null ? {} : { reasoningContext: s.reasoningContext }),
           },
     ),
   });
@@ -768,7 +819,13 @@ export async function runArena(plan: ArenaPlan, o: RunArenaOptions): Promise<Are
       );
       const calibrated =
         plan.calibratedNanoUsdPerDay ??
-        estimateSeat(s.model, 1, plan.clock.kind, plan.cacheTtl, s.effort).central;
+        estimateCard(
+          scenarioCard(s.model, { provider: s.provider, endpoint: s.endpoint, at: plan.priceAt }),
+          1,
+          plan.clock.kind,
+          plan.cacheTtl,
+          s.effort,
+        ).central;
       if (dayNano > 2 * calibrated) {
         alert(
           `${s.seat} spent ${formatUsd(dayNano)} on day ${day}, over twice the calibrated ${formatUsd(calibrated)} per day`,

@@ -1,12 +1,15 @@
 import type { Json, JsonObject } from "@perfidia/protocol";
 import type { ModelTool } from "./adapter.ts";
 
-// The tool schemas as Anthropic's `input_schema` takes them (phase-2 design §2.4): the gateway's
+// The tool schemas every model gets (phase-2 design §2.4; phase-4 design §3.1): the gateway's
 // `toolDefinitions` with the root `$schema` dropped and Zod's safe-integer noise
 // (`maximum: 9007199254740991`) removed. `strict` stays off for every tool: the gateway's Zod check
 // is authoritative and answers bad arguments with `INVALID_ARGS` and a hint. The output is
 // deterministic (the gateway's keys are already canonical, `TOOL_NAMES` order is kept) and deeply
-// frozen, so the tools bytes of every request of a match are identical (§4.1).
+// frozen, so the tools bytes of every request of a match are identical (§4.1). Phase 4: the same
+// neutral list goes to every provider; a provider whose schema dialect is narrower (Gemini's
+// `parametersJsonSchema`, Pass 2) gets it through a named `ToolTransform`, whose output's hash is
+// recorded per seat (`toolsHash` in `seats.json`), so a transformed list shows.
 
 /** Zod's bound for `z.int()`: not a game rule, just noise in the prompt. */
 export const SAFE_INT_MAX = Number.MAX_SAFE_INTEGER;
@@ -68,8 +71,8 @@ function deepFreeze<T>(value: T): T {
   return value;
 }
 
-/** The transform of every tool, in the given order; computed once per match. */
-export function anthropicTools(defs: readonly ToolSource[]): readonly ModelTool[] {
+/** The neutral tool list, in the given order; computed once per match. */
+export function modelTools(defs: readonly ToolSource[]): readonly ModelTool[] {
   const seen = new Set<string>();
   const out = defs.map((d) => {
     if (!TOOL_NAME.test(d.name)) throw new Error(`tool name ${JSON.stringify(d.name)} is invalid`);
@@ -100,4 +103,36 @@ export function schemaKeywords(schema: Json, into: Set<string> = new Set()): Set
     }
   }
   return into;
+}
+
+/** Phase 2's name of `modelTools` (Anthropic's `input_schema` takes the neutral list as is). */
+export const anthropicTools = modelTools;
+
+/**
+ * A provider's rewrite of the neutral tool list (phase-4 design §2.4): `id` names it with its
+ * version, and `apply` is pure and deterministic. The identity is the default of every provider.
+ */
+export interface ToolTransform {
+  readonly id: string;
+  apply(tools: readonly ModelTool[]): readonly ModelTool[];
+}
+
+/** No rewrite: the neutral list (Anthropic, OpenAI, OpenRouter, compat). */
+export const IDENTITY_TRANSFORM: ToolTransform = Object.freeze({
+  id: "none",
+  apply: (tools: readonly ModelTool[]) => tools,
+});
+
+/** `tools` through `t`, deeply frozen (the identity returns the same list). */
+export function transformTools(
+  tools: readonly ModelTool[],
+  t: ToolTransform,
+): readonly ModelTool[] {
+  if (t === IDENTITY_TRANSFORM) return tools;
+  const out = t.apply(tools);
+  const names = out.map((x) => x.name).join(",");
+  if (names !== tools.map((x) => x.name).join(",")) {
+    throw new Error(`tool transform ${t.id} changed the tools' names or order`);
+  }
+  return deepFreeze([...out]);
 }

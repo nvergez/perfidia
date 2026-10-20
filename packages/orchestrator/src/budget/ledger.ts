@@ -1,6 +1,6 @@
 import type { GameTime, HandoffReason, PlayerId, SeatAgent } from "@perfidia/protocol";
 import type { UsageEntry } from "../model/adapter.ts";
-import { costOf } from "../model/prices.ts";
+import { costOf, type Pricer } from "../model/prices.ts";
 
 // The budget ledger (phase-2 design §5.3; phase-4 design §5.2): what each LLM seat has spent, in
 // integer nano-dollars, against its safety cap and its per-wake soft cap, and what the whole match
@@ -17,6 +17,10 @@ import { costOf } from "../model/prices.ts";
 // right before each attempt and thought call), and every LLM seat's hand-off is queued with reason
 // `match_budget`. The match goes on with bots to its end. `halt(reason)` does the same for the
 // operator (SIGINT or SIGTERM once).
+//
+// Pass 1b: each seat has its pricer (its provider's cards, its pinned endpoint, the card valid at
+// the attempt's wall-clock start or the run's pinned price date, the platform fee included);
+// without one, phase 2's Claude pricing applies.
 
 /** The new controller of a seat over its cap. */
 export interface HandoffTarget {
@@ -141,11 +145,18 @@ export interface LedgerOptions {
   readonly onHandoff?: (note: HandoffNote) => void;
   /** The match budget every charge counts toward (phase 4); none: per-seat caps only. */
   readonly match?: MatchBudget;
+  /** Per seat, how an attempt's usage is priced (Pass 1b); absent: the Claude cards. */
+  readonly pricers?: ReadonlyMap<PlayerId, Pricer>;
 }
 
 /** What a charge did: its cost and the spends after it. */
 export interface Charge {
+  /** Token cost and platform fee. */
   readonly costNanoUsd: number;
+  /** The platform fee part of `costNanoUsd`. */
+  readonly feeNanoUsd: number;
+  /** The card the requested model's usage was charged at; null when nothing was billed. */
+  readonly card: string | null;
   readonly seatSpentNanoUsd: number;
   readonly wakeSpentNanoUsd: number;
   readonly capNanoUsd: number;
@@ -173,6 +184,7 @@ export class BudgetLedger {
   private readonly seats = new Map<PlayerId, SeatBook>();
   private readonly handoffTo: (seat: PlayerId) => HandoffTarget;
   private readonly onHandoff: ((note: HandoffNote) => void) | undefined;
+  private readonly pricers: ReadonlyMap<PlayerId, Pricer>;
   /** Why every seat stopped calling its model (the kill switch, the operator); null: running. */
   private haltedBy: HandoffReason | null = null;
 
@@ -195,6 +207,7 @@ export class BudgetLedger {
     this.handoffTo = o.handoffTo;
     this.onHandoff = o.onHandoff;
     this.match = o.match ?? null;
+    this.pricers = o.pricers ?? new Map();
     this.match?.onKilled((k) => this.halt("match_budget", k.t));
   }
 
@@ -204,10 +217,20 @@ export class BudgetLedger {
     return b;
   }
 
-  /** Adds the cost of one attempt (refused, truncated, failed and estimated ones included). */
-  charge(seat: PlayerId, turn: number, t: GameTime, usage: readonly UsageEntry[]): Charge {
+  /**
+   * Adds the cost of one attempt (refused, truncated, failed and estimated ones included); `at`:
+   * the attempt's wall-clock start (ISO), which picks the card.
+   */
+  charge(
+    seat: PlayerId,
+    turn: number,
+    t: GameTime,
+    usage: readonly UsageEntry[],
+    at?: string,
+  ): Charge {
     const b = this.book(seat);
-    const cost = costOf(usage);
+    const pricer = this.pricers.get(seat);
+    const cost = pricer === undefined ? costOf(usage) : pricer(usage, at);
     const before = b.spent;
     b.spent += cost.nanoUsd;
     if (b.wakeTurn !== turn) {
@@ -220,6 +243,8 @@ export class BudgetLedger {
     this.match?.add(cost.nanoUsd, t);
     return {
       costNanoUsd: cost.nanoUsd,
+      feeNanoUsd: cost.feeNanoUsd,
+      card: usage.length === 0 ? null : (cost.cards[0] ?? null),
       seatSpentNanoUsd: b.spent,
       wakeSpentNanoUsd: b.wakeSpent,
       capNanoUsd: b.cap,

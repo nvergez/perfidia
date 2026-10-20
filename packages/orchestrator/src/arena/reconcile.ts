@@ -11,7 +11,8 @@ import {
   type ReconcileFile,
   type ReconcileInput,
 } from "../log/schema.ts";
-import { formatCents, priceFor, usdToNano } from "../model/prices.ts";
+import { LEGACY_AT, formatCents, priceOf, usdToNano } from "../model/prices.ts";
+import { repriceContext } from "./cost.ts";
 import { exit4Met } from "./report.ts";
 
 // `arena reconcile <run-dir>` (phase-4 design §5.6): the ledger against the provider's usage pages.
@@ -61,7 +62,9 @@ export function ledgerOf(lines: readonly LlmLogLine[]): Map<string, ProviderLedg
   for (const l of lines) {
     if (l.k !== "llm_call" && l.k !== "preflight") continue;
     const p = out.get(l.provider) ?? emptyLedger();
-    p.nanoUsd += l.costNanoUsd;
+    // Platform fees (OpenRouter's credits) are reported apart and left out of the comparison.
+    p.nanoUsd += l.costNanoUsd - (l.feeNanoUsd ?? 0);
+    const ctx = repriceContext(l, l.wallStart ?? LEGACY_AT);
     for (const u of l.usage) {
       const t = p.tokens.get(u.model) ?? { input: 0, cacheWrite: 0, cacheRead: 0, output: 0 };
       t.input += u.input;
@@ -70,13 +73,8 @@ export function ledgerOf(lines: readonly LlmLogLine[]): Map<string, ProviderLedg
       t.output += u.output;
       p.tokens.set(u.model, t);
       if (u.estimated) {
-        const price = priceFor({
-          model: u.model,
-          kind: u.kind,
-          tokens: u,
-          estimated: true,
-        }).price;
-        p.excess += u.output * price.output;
+        const price = priceOf({ model: u.model, kind: u.kind, tokens: u, estimated: true }, ctx);
+        p.excess += Math.ceil((u.output * price.prices.output) / 1000);
       }
     }
     out.set(l.provider, p);

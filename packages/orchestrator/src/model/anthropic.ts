@@ -15,9 +15,11 @@ import {
   type CacheTtl,
   type ChatRequest,
   type ChatResult,
+  type Effort,
   type Entry,
   type ModelAdapter,
   type ModelCall,
+  type ModelCapabilities,
   type ModelErrorKind,
   type ModelReply,
   type ModelSpec,
@@ -27,16 +29,20 @@ import {
   type TokenUsage,
   type UsageEntry,
 } from "./adapter.ts";
+import { FALLBACK_TARGETS, capabilitiesFor } from "./catalog.ts";
+import { guardedFetch, type HttpFetch } from "./http.ts";
 
 // The Anthropic adapter (phase-2 design §2.2–§2.6): the only module that imports the SDK.
 //
 // - The client gets an explicit API key and base URL and reads no `ANTHROPIC_*` variable that
-//   matters: `authToken`, `webhookKey` and `logLevel` are explicit too, and a guarded `fetch` sends
-//   only to the configured origin, with our `x-api-key`, no `authorization` header and only the
-//   SDK's own headers, and never follows a redirect (`redirect: "error"`, phase 4: Bun forwards
-//   `x-api-key` to another origin on a 307, so a redirect would hand the key to its target). `ANTHROPIC_CUSTOM_HEADERS`, which the SDK reads itself, is neutralised: the
-//   allowlist drops its other headers, our `defaultHeaders` override its `anthropic-beta` (each
-//   request sends only its own betas) and the guarded fetch pins `anthropic-version`.
+//   matters: `authToken`, `webhookKey` and `logLevel` are explicit too, and the shared guarded
+//   `fetch` (`http.ts`) sends only to the configured origin, with our `x-api-key`, no
+//   `authorization` header and only the SDK's own headers, and never follows a redirect
+//   (`redirect: "error"`, phase 4: Bun forwards `x-api-key` to another origin on a 307, so a
+//   redirect would hand the key to its target). `ANTHROPIC_CUSTOM_HEADERS`, which the SDK reads
+//   itself, is neutralised: the allowlist drops its other headers, our `defaultHeaders` override its
+//   `anthropic-beta` (each request sends only its own betas) and the guarded fetch pins
+//   `anthropic-version`.
 // - `maxRetries: 0`: the harness owns every retry (seat/retry.ts), so each attempt is visible,
 //   logged, priced and jittered.
 // - Every call streams (`.stream().finalMessage()`): no idle connection while the model thinks, a
@@ -56,11 +62,11 @@ import {
 //   `stop_details`; the assistant content is echoed back verbatim except for the fallback rule
 //   (declined thinking and tool calls before the last `fallback` block are dropped).
 
-/** The models with server-side refusal fallbacks (Claude API); Haiku 5.5 has none. */
-export const FALLBACK_CAPABLE: ReadonlySet<string> = new Set([
-  "claude-opus-5-5",
-  "claude-sonnet-5-5",
-]);
+/**
+ * The models whose server-side refusal fallbacks this build plans (the catalog's targets): Claude
+ * Opus 5.5 and Claude Sonnet 5.5. Claude Haiku 5.5 has none; Claude Fable 5.1's are not planned.
+ */
+export const FALLBACK_CAPABLE: ReadonlySet<string> = new Set(Object.keys(FALLBACK_TARGETS));
 /** The beta of the `fallbacks: "default"` scalar form. */
 export const FALLBACK_BETA = "server-side-fallback-2026-07-01";
 /** The beta that makes `allowed_fallback_models` visible on `/v1/models`. */
@@ -75,7 +81,7 @@ export const DEFAULT_BASE_URL = "https://api.anthropic.com";
 /** The API version the SDK sends; pinned by the guarded fetch. */
 export const ANTHROPIC_VERSION = "2023-06-01";
 
-export type HttpFetch = (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
+export type { HttpFetch };
 
 export interface AnthropicClientOptions {
   /** `PERFIDIA_ANTHROPIC_API_KEY`, read once by the arena plan. */
@@ -92,25 +98,15 @@ export interface AnthropicClientOptions {
 const ALLOWED_HEADER =
   /^(?:accept|content-type|user-agent|anthropic-version|anthropic-beta|x-stainless-[a-z0-9-]+)$/;
 
-function guardedFetch(inner: HttpFetch, origin: string, apiKey: string): HttpFetch {
-  return (input, init) => {
-    const url = new URL(input instanceof Request ? input.url : input);
-    if (url.origin !== origin) {
-      return Promise.reject(
-        new Error(`refusing a request to ${url.origin}: the client is configured for ${origin}`),
-      );
-    }
-    const headers = new Headers();
-    const given = new Headers(input instanceof Request ? input.headers : undefined);
-    new Headers(init?.headers).forEach((value, name) => given.set(name, value));
-    given.forEach((value, name) => {
-      if (ALLOWED_HEADER.test(name)) headers.set(name, value);
-    });
-    headers.set("anthropic-version", ANTHROPIC_VERSION);
-    headers.set("x-api-key", apiKey);
-    // Never follow a redirect: the key would go to wherever it points (phase-4 design §2.6).
-    return inner(url.toString(), { ...init, headers, redirect: "error" });
-  };
+/** The efforts a Claude request takes (`output_config.effort`). */
+type ClaudeEffort = "low" | "medium" | "high" | "xhigh" | "max";
+
+/** `effort` as a Claude effort; `none` and `minimal` are other vendors' (the plan refuses them). */
+function claudeEffort(effort: Effort): ClaudeEffort {
+  if (effort === "none" || effort === "minimal") {
+    throw new Error(`Claude models take effort low, medium, high, xhigh or max, not ${effort}`);
+  }
+  return effort;
 }
 
 /** One SDK client per process, shared by every adapter (one connection pool). */
@@ -122,7 +118,6 @@ export class AnthropicClient {
     if (o.apiKey.trim() === "") {
       throw new Error("the Anthropic API key is empty: set PERFIDIA_ANTHROPIC_API_KEY");
     }
-    const origin = new URL(o.baseURL).origin;
     this.baseURL = o.baseURL;
     this.sdk = new Anthropic({
       apiKey: o.apiKey,
@@ -134,7 +129,13 @@ export class AnthropicClient {
       logLevel: "warn",
       // Over `ANTHROPIC_CUSTOM_HEADERS`: no default beta (a request's own `betas` still apply).
       defaultHeaders: { "anthropic-beta": null, "anthropic-version": ANTHROPIC_VERSION },
-      fetch: guardedFetch(o.fetch ?? ((input, init) => fetch(input, init)), origin, o.apiKey),
+      fetch: guardedFetch({
+        baseURL: o.baseURL,
+        auth: { header: "x-api-key", value: o.apiKey },
+        allowHeaders: ALLOWED_HEADER,
+        fixedHeaders: { "anthropic-version": ANTHROPIC_VERSION },
+        ...(o.fetch === undefined ? {} : { fetch: o.fetch }),
+      }),
     });
   }
 }
@@ -459,6 +460,7 @@ export interface AnthropicAdapterOptions {
 export class AnthropicAdapter implements ModelAdapter {
   readonly spec: ModelSpec;
   readonly label: string;
+  readonly capabilities: ModelCapabilities;
   private readonly client: AnthropicClient;
   private readonly nowMs: () => number;
   private readonly toolCache = new WeakMap<readonly ModelTool[], readonly BetaTool[]>();
@@ -467,6 +469,7 @@ export class AnthropicAdapter implements ModelAdapter {
     if (spec.provider !== "anthropic") throw new Error(`not an Anthropic spec: ${spec.provider}`);
     this.spec = spec;
     this.label = adapterLabel(spec);
+    this.capabilities = capabilitiesFor("anthropic", spec.model);
     this.client = client;
     this.nowMs = o.nowMs ?? (() => Math.floor(performance.now()));
   }
@@ -498,7 +501,7 @@ export class AnthropicAdapter implements ModelAdapter {
       model: s.model,
       max_tokens: req.maxOutputTokens ?? s.maxOutputTokens,
       thinking: { type: "adaptive", display: "summarized" },
-      output_config: { effort: s.effort },
+      output_config: { effort: claudeEffort(s.effort) },
       tools: this.toolsOf(req.tools),
       system: [
         { type: "text", text: req.prompt.shared, cache_control: ttl },

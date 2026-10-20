@@ -11,7 +11,7 @@ import { LABEL_MAX_CHARS, TOOL_NAME_MAX_CHARS, cleanText, cutText } from "../cle
 // `llm_calls.jsonl` and `replies.jsonl`, keyed by `(seat, turn)`, never part of the steps (side
 // lines can land after the `turn` line, and steps depend on `match.jsonl` alone). Per round (and
 // thought call): the attempts, the last stop, the refusal category, the error kinds, the reply's
-// reasoning summaries, text and tool names, cost, tokens and latency; per turn, the seat's spend
+// reasoning summaries (and, phase 4, their kind), text and tool names, cost, tokens and latency; per turn, the seat's spend
 // after it and its cap. A turn is `complete` once a side line of a later turn of the same seat
 // exists, or the run is over (`final`). What is never kept: request ids, error messages, refusal
 // explanations, wall times. Text is cleaned (`cleanText`), tool names and labels cut to 64
@@ -59,6 +59,8 @@ interface RoundAcc {
   refusal: string | null;
   readonly errors: string[];
   reasoning: string[];
+  /** Phase 4: what the reasoning is, from the round's last `llm_call` line that says. */
+  reasoningKind: "summary" | "raw" | "none" | null;
   text: string[];
   calls: string[];
   costNanoUsd: number;
@@ -86,6 +88,27 @@ function labelOf(label: string | null, none: string): string {
   return out === "" ? none : out;
 }
 
+/** A round as served under the policy's `costs` and `reasoning`. */
+function roundOut(r: RoundAcc, costs: boolean, reasoning: boolean): AnnotationRound {
+  return {
+    round: r.round,
+    kind: r.kind,
+    attempts: r.attempts,
+    stop: r.stop,
+    refusal: r.refusal,
+    errors: [...r.errors],
+    reasoning: reasoning ? [...r.reasoning] : [],
+    ...(reasoning && r.reasoningKind !== null ? { reasoningKind: r.reasoningKind } : {}),
+    text: reasoning ? [...r.text] : [],
+    calls: [...r.calls],
+    costNanoUsd: costs ? r.costNanoUsd : 0,
+    tokens: costs
+      ? { ...r.tokens }
+      : { input: 0, cacheWrite5m: 0, cacheWrite1h: 0, cacheRead: 0, output: 0 },
+    latencyMs: costs ? r.latencyMs : 0,
+  };
+}
+
 class Annotations implements AnnotationFold {
   private readonly policy: AnnotationPolicy;
   private readonly bySeat = new Map<PlayerId, Map<number, TurnAcc>>();
@@ -110,6 +133,7 @@ class Annotations implements AnnotationFold {
     if (line.stop === "refusal")
       r.refusal = labelOf(line.refusal?.category ?? null, "uncategorised");
     if (line.error !== null) r.errors.push(labelOf(line.error.kind, "unknown"));
+    if (line.reasoningKind !== undefined) r.reasoningKind = line.reasoningKind;
     r.costNanoUsd += line.costNanoUsd;
     for (const u of line.usage) {
       r.tokens.input += u.input;
@@ -138,22 +162,7 @@ class Annotations implements AnnotationFold {
     const reasoning = this.policy.reasoning;
     const rounds: AnnotationRound[] = [...acc.rounds.values()]
       .toSorted((a, b) => a.round - b.round || (a.kind < b.kind ? -1 : a.kind > b.kind ? 1 : 0))
-      .map((r) => ({
-        round: r.round,
-        kind: r.kind,
-        attempts: r.attempts,
-        stop: r.stop,
-        refusal: r.refusal,
-        errors: [...r.errors],
-        reasoning: reasoning ? [...r.reasoning] : [],
-        text: reasoning ? [...r.text] : [],
-        calls: [...r.calls],
-        costNanoUsd: costs ? r.costNanoUsd : 0,
-        tokens: costs
-          ? { ...r.tokens }
-          : { input: 0, cacheWrite5m: 0, cacheWrite1h: 0, cacheRead: 0, output: 0 },
-        latencyMs: costs ? r.latencyMs : 0,
-      }));
+      .map((r) => roundOut(r, costs, reasoning));
     const later = (this.lastTurn.get(seat) ?? 0) > turn;
     return {
       seat,
@@ -205,6 +214,7 @@ class Annotations implements AnnotationFold {
         refusal: null,
         errors: [],
         reasoning: [],
+        reasoningKind: null,
         text: [],
         calls: [],
         costNanoUsd: 0,

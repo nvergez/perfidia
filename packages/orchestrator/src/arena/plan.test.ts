@@ -167,21 +167,47 @@ describe("arena plan", () => {
     );
   });
 
-  test("the environment: only PERFIDIA_ANTHROPIC_API_KEY, PERFIDIA_ANTHROPIC_BASE_URL and PERFIDIA_LIVE", () => {
+  test("the environment: only PERFIDIA_<PROVIDER>_API_KEY, _BASE_URL and PERFIDIA_LIVE", () => {
     const junk = {
       ANTHROPIC_API_KEY: "sk-junk",
       ANTHROPIC_BASE_URL: "https://junk.invalid",
       ANTHROPIC_AUTH_TOKEN: "junk",
+      OPENAI_API_KEY: "sk-junk",
+      GEMINI_API_KEY: "junk",
+      GOOGLE_API_KEY: "junk",
+      OPENROUTER_API_KEY: "junk",
+      OPENAI_BASE_URL: "https://junk.invalid",
     };
-    expect(arenaEnv(junk)).toEqual({ apiKey: null, baseURL: null, live: false });
+    const none = { apiKey: null, baseURL: null };
+    const empty = {
+      openai: none,
+      google: none,
+      openrouter: none,
+      compat: none,
+    };
+    expect(arenaEnv(junk)).toEqual({ apiKey: null, baseURL: null, live: false, providers: empty });
     expect(
       arenaEnv({
         ...junk,
         PERFIDIA_ANTHROPIC_API_KEY: " sk-a ",
         PERFIDIA_ANTHROPIC_BASE_URL: "",
         PERFIDIA_LIVE: "1",
+        PERFIDIA_OPENAI_API_KEY: "sk-o",
+        PERFIDIA_GOOGLE_BASE_URL: "https://g.example",
+        PERFIDIA_OPENROUTER_API_KEY: "sk-or",
+        PERFIDIA_COMPAT_BASE_URL: "http://127.0.0.1:8000/v1",
       }),
-    ).toEqual({ apiKey: "sk-a", baseURL: null, live: true });
+    ).toEqual({
+      apiKey: "sk-a",
+      baseURL: null,
+      live: true,
+      providers: {
+        openai: { apiKey: "sk-o", baseURL: null },
+        google: { apiKey: null, baseURL: "https://g.example" },
+        openrouter: { apiKey: "sk-or", baseURL: null },
+        compat: { apiKey: null, baseURL: "http://127.0.0.1:8000/v1" },
+      },
+    });
   });
 
   test("real time: --speed required with real models; deadlines and budgets derived; TTL 1 h", () => {
@@ -389,9 +415,10 @@ describe("arena plan: lineups and the match budget (phase 4 Pass 1a)", () => {
         writeFileSync(p, JSON.stringify(value));
         return p;
       };
+      // Pass 1b: the last-round cadence is planned (Pass 1a refused it).
       expect(
-        usage({ lineup: write("late", { ...duo, reminders: "last-round" }), fake: true }),
-      ).toContain('reminders "last-round" arrive with the non-Anthropic seats');
+        plan({ lineup: write("late", { ...duo, reminders: "last-round" }), fake: true }).reminders,
+      ).toBe("last-round");
       const haiku = {
         ...duo,
         seats: duo.seats.map((s, i) => (i === 1 ? { ...s, fallbacks: "default" } : s)),

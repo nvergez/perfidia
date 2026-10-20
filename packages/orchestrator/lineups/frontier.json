@@ -1,0 +1,57 @@
+{
+  "format": "perfidia-lineup/1",
+  "id": "frontier",
+  "title": "Frontier models (later): Claude Fable 5.1, GPT-6 Astra, Gemini 4 Argon and Kimi K3 on Moonshot AI",
+  "comparison": true,
+  "budgetUsd": "570",
+  "maxTokens": 32768,
+  "attemptTimeoutMin": 15,
+  "promptCapTokens": 160000,
+  "reminders": "last-round",
+  "defaults": {
+    "effort": "medium",
+    "fallbacks": "off",
+    "zdr": true
+  },
+  "seats": [
+    {
+      "seat": "p1",
+      "kind": "llm",
+      "provider": "anthropic",
+      "model": "claude-fable-5-1",
+      "profile": "odysseus@1"
+    },
+    {
+      "seat": "p2",
+      "kind": "llm",
+      "provider": "openai",
+      "model": "gpt-6-astra",
+      "profile": "achilles@1"
+    },
+    {
+      "seat": "p3",
+      "kind": "llm",
+      "provider": "google",
+      "model": "gemini-4-argon",
+      "profile": "penelope@1"
+    },
+    {
+      "seat": "p4",
+      "kind": "llm",
+      "provider": "openrouter",
+      "model": "moonshotai/kimi-k3",
+      "endpoint": "moonshotai/mxfp4",
+      "profile": "agamemnon@1"
+    },
+    {
+      "seat": "p5",
+      "kind": "bot",
+      "label": "bot:opportunist@3"
+    },
+    {
+      "seat": "p6",
+      "kind": "bot",
+      "label": "bot:conqueror@3"
+    }
+  ]
+}

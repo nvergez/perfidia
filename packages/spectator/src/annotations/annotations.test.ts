@@ -179,3 +179,48 @@ describe("phase-4 side lines (additive)", () => {
     expect(a.handoff("p2")?.reason).toBe("cap");
   });
 });
+
+describe("Pass 1b's llm_call fields (additive)", () => {
+  test("a round's reasoning kind comes from its lines; none without it; never under reasoning: false", () => {
+    const a = createAnnotationFold();
+    a.call(
+      LlmLogLineSchema.parse(
+        call({
+          provider: "openrouter",
+          model: "z-ai/glm-5.3",
+          endpoint: "z-ai/fp8",
+          priceCard: "openrouter:z-ai/glm-5.3(z-ai/fp8)@2026-10-20",
+          feeNanoUsd: 260_000,
+          reasoningKind: "raw",
+          usage: [
+            {
+              model: "z-ai/glm-5.3",
+              kind: "message",
+              estimated: false,
+              input: 10,
+              cacheWrite5m: 0,
+              cacheWrite1h: 0,
+              cacheRead: 0,
+              output: 5,
+              reasoning: 3,
+            },
+          ],
+        }),
+      ),
+    );
+    a.call(call({ round: 1 }));
+    const rounds = a.turn("p1", 1)?.rounds ?? [];
+    expect(rounds.map((r) => r.reasoningKind)).toEqual(["raw", undefined]);
+    expect(rounds.map((r) => Object.hasOwn(r, "reasoningKind"))).toEqual([true, false]);
+    expect(rounds[0]?.tokens).toEqual({
+      input: 10,
+      cacheWrite5m: 0,
+      cacheWrite1h: 0,
+      cacheRead: 0,
+      output: 5,
+    });
+    const hidden = createAnnotationFold({ costs: true, reasoning: false });
+    hidden.call(call({ reasoningKind: "summary" }));
+    expect(Object.hasOwn(hidden.turn("p1", 1)?.rounds[0] ?? {}, "reasoningKind")).toBe(false);
+  });
+});

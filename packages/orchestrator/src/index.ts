@@ -5,6 +5,7 @@
 
 export * from "./model/adapter.ts";
 export * from "./model/anthropic.ts";
+export * from "./model/catalog.ts";
 export * from "./model/clock.ts";
 export * from "./model/fake.ts";
 export * from "./model/prices.ts";
@@ -26,6 +27,7 @@ export * from "./arena/cost.ts";
 export * from "./arena/estimate.ts";
 export * from "./arena/lineup.ts";
 export * from "./arena/plan.ts";
+export * from "./arena/providers.ts";
 export * from "./arena/preflight.ts";
 export * from "./arena/reconcile.ts";
 export * from "./arena/report.ts";

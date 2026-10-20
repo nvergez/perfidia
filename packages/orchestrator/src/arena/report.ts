@@ -18,15 +18,16 @@ import {
   type PreflightLine,
 } from "../log/schema.ts";
 import { ZERO_TOKENS, type TokenUsage, type UsageEntry } from "../model/adapter.ts";
-import { formatCents, formatUsd, priceFor } from "../model/prices.ts";
+import { formatCents, formatUsd, picoByKind, priceOf, type PriceContext } from "../model/prices.ts";
 import { PROMPT_VERSION } from "../seat/prompt.ts";
 import {
   costRows,
   daysCovered,
-  estimateSeat,
+  estimateCard,
   preflightSpend,
   projectSpend,
   repricePreflight,
+  scenarioCard,
 } from "./cost.ts";
 import { DEFAULT_ARENA_DAYS, llmSeatsOf, matchEndOf, type ArenaPlan } from "./plan.ts";
 
@@ -41,6 +42,8 @@ import { DEFAULT_ARENA_DAYS, llmSeatsOf, matchEndOf, type ArenaPlan } from "./pl
 // stored prediction, the actual spend split into attempts, start preflight and probes, the kill
 // switch, the wall window, spend by provider), every figure a sum of logged line costs, and the
 // `exit4` block, roadmap step 4's criterion (`reconciled` stays null until `arena reconcile`).
+// Pass 1b: costs by kind at each seat's provider card (the one the ledger charged), spend by
+// provider and endpoint, platform fees and the providers' own reported costs.
 
 export const HARNESS_VERSION = "orchestrator/1";
 
@@ -293,15 +296,21 @@ export function buildReport(r: ReportInput): ArenaReport {
       if (l.cacheMiss) cacheMisses += 1;
       for (const m of l.unpriced) unpriced.add(m);
       thinkByTurn.set(l.turn, (thinkByTurn.get(l.turn) ?? 0) + l.latencyMs);
+      // The card the ledger charged: the seat's provider, at the attempt's start or the pin.
+      const ctx: PriceContext = {
+        provider: s.provider,
+        endpoint: s.endpoint,
+        at: plan.priceFixed ?? l.wallStart ?? plan.priceAt,
+      };
       for (const u of l.usage) {
         const e = entryOf(u);
-        const p = priceFor(e).price;
+        const k = picoByKind(e, priceOf(e, ctx).prices);
         tokens = addTokens(tokens, e.tokens);
-        costByKind.input += u.input * p.input;
-        costByKind.cacheWrite5m += u.cacheWrite5m * p.write5m;
-        costByKind.cacheWrite1h += u.cacheWrite1h * p.write1h;
-        costByKind.cacheRead += u.cacheRead * p.cacheRead;
-        costByKind.output += u.output * p.output;
+        costByKind.input += Math.ceil(k.input / 1000);
+        costByKind.cacheWrite5m += Math.ceil(k.cacheWrite5m / 1000);
+        costByKind.cacheWrite1h += Math.ceil(k.cacheWrite1h / 1000);
+        costByKind.cacheRead += Math.ceil(k.cacheRead / 1000);
+        costByKind.output += Math.ceil(k.output / 1000);
       }
     }
     const llmTurn = (seat: string, t: number): boolean =>
@@ -332,7 +341,13 @@ export function buildReport(r: ReportInput): ArenaReport {
       (l): l is Extract<LogLine, { k: "controller" }> =>
         l.k === "controller" && l.seat === s.seat && !isLlm(l.label),
     );
-    const est = estimateSeat(s.model, days, clockKind, plan.cacheTtl, s.effort);
+    const est = estimateCard(
+      scenarioCard(s.model, { provider: s.provider, endpoint: s.endpoint, at: plan.priceAt }),
+      days,
+      clockKind,
+      plan.cacheTtl,
+      s.effort,
+    );
     return {
       seat: s.seat,
       label: header?.controllers[s.seat] ?? "",
@@ -477,17 +492,48 @@ export function budgetBlock(r: ReportInput, llmCalls: readonly LlmCallLine[]): A
     preflights.reduce((n, l) => n + (isEstimated(l) ? l.costNanoUsd : 0), 0);
   const byProvider = new Map<
     string,
-    { attempts: number; nanoUsd: number; estimatedNanoUsd: number }
+    {
+      provider: string;
+      endpoint: string | null;
+      attempts: number;
+      nanoUsd: number;
+      estimatedNanoUsd: number;
+      reportedNanoUsd: number | null;
+    }
   >();
-  const add = (provider: string, nano: number, estimated: boolean, attempt: boolean): void => {
-    const row = byProvider.get(provider) ?? { attempts: 0, nanoUsd: 0, estimatedNanoUsd: 0 };
-    row.nanoUsd += nano;
-    if (estimated) row.estimatedNanoUsd += nano;
+  let feesNanoUsd = 0;
+  const add = (
+    l: {
+      readonly provider: string;
+      readonly endpoint?: string | null | undefined;
+      readonly costNanoUsd: number;
+      readonly feeNanoUsd?: number | undefined;
+      readonly reportedCostNanoUsd?: number | undefined;
+    },
+    estimated: boolean,
+    attempt: boolean,
+  ): void => {
+    const endpoint = l.endpoint ?? null;
+    const key = `${l.provider}\u0000${endpoint ?? ""}`;
+    const row = byProvider.get(key) ?? {
+      provider: l.provider,
+      endpoint,
+      attempts: 0,
+      nanoUsd: 0,
+      estimatedNanoUsd: 0,
+      reportedNanoUsd: null,
+    };
+    row.nanoUsd += l.costNanoUsd;
+    if (estimated) row.estimatedNanoUsd += l.costNanoUsd;
     if (attempt) row.attempts += 1;
-    byProvider.set(provider, row);
+    if (l.reportedCostNanoUsd !== undefined) {
+      row.reportedNanoUsd = (row.reportedNanoUsd ?? 0) + l.reportedCostNanoUsd;
+    }
+    feesNanoUsd += l.feeNanoUsd ?? 0;
+    byProvider.set(key, row);
   };
-  for (const l of llmCalls) add(l.provider, l.costNanoUsd, isEstimated(l), true);
-  for (const l of preflights) add(l.provider, l.costNanoUsd, isEstimated(l), false);
+  for (const l of llmCalls) add(l, isEstimated(l), true);
+  for (const l of preflights) add(l, isEstimated(l), false);
   const killLine = r.calls.find((l) => l.k === "kill_switch");
   const carry = plan.budget?.carryNanoUsd ?? 0;
   const budgetNanoUsd = plan.budget?.budgetNanoUsd ?? null;
@@ -518,7 +564,7 @@ export function budgetBlock(r: ReportInput, llmCalls: readonly LlmCallLine[]): A
     preflightNanoUsd: pre.start,
     probeNanoUsd: pre.probes,
     estimatedNanoUsd,
-    feesNanoUsd: 0,
+    feesNanoUsd,
     under: budgetNanoUsd === null ? null : actual + carry <= budgetNanoUsd,
     withinPrediction: low === null || high === null ? null : actual >= low && actual <= high,
     killSwitch:
@@ -533,12 +579,12 @@ export function budgetBlock(r: ReportInput, llmCalls: readonly LlmCallLine[]): A
     wall: { start: r.wall.start, end: r.wall.end },
     byProvider: [...byProvider.entries()]
       .toSorted(([a], [b]) => byText(a, b))
-      .map(([provider, row]) => ({
-        provider,
-        endpoint: null,
+      .map(([, row]) => ({
+        provider: row.provider,
+        endpoint: row.endpoint,
         attempts: row.attempts,
         nanoUsd: row.nanoUsd,
-        reportedNanoUsd: null,
+        reportedNanoUsd: row.reportedNanoUsd,
         estimatedNanoUsd: row.estimatedNanoUsd,
       })),
   };
@@ -674,7 +720,10 @@ export function formatReport(r: ArenaReport): string {
  * costs (phase 4: a card changed since the run never rewrites what it cost). `reprice`: every line
  * at today's cards, with the difference.
  */
-export function formatCost(lines: readonly LlmLogLine[], o: { reprice?: boolean } = {}): string {
+export function formatCost(
+  lines: readonly LlmLogLine[],
+  o: { reprice?: boolean; at?: string } = {},
+): string {
   const llmCalls = lines.filter((l): l is LlmCallLine => l.k === "llm_call");
   const rows = costRows(llmCalls);
   const out = [
@@ -707,8 +756,10 @@ export function formatCost(lines: readonly LlmLogLine[], o: { reprice?: boolean 
   );
   if (o.reprice === true) {
     const again =
-      costRows(llmCalls, { reprice: true }).reduce((n, r) => n + r.nanoUsd, 0) +
-      lines.reduce((n, l) => n + (l.k === "preflight" ? repricePreflight(l) : 0), 0);
+      costRows(llmCalls, { reprice: true, ...(o.at === undefined ? {} : { at: o.at }) }).reduce(
+        (n, r) => n + r.nanoUsd,
+        0,
+      ) + lines.reduce((n, l) => n + (l.k === "preflight" ? repricePreflight(l, o.at) : 0), 0);
     out.push(
       `repriced at today's cards: ${usd(again)} (${again >= total ? "+" : "-"}${usd(Math.abs(again - total))})`,
     );

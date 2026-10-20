@@ -15,9 +15,20 @@ import { JsonSchema } from "./json.ts";
 // prediction stored before turn 1), the lineup file (`perfidia-lineup/1`) and `reconcile.json`
 // (`perfidia-reconcile/1`, with its input `perfidia-reconcile-input/1`). `arena.json` becomes
 // `perfidia-arena/2` (a `budget` and an `exit4` block); the server reads only its status.
+//
+// Pass 1b widens them again, additively: the efforts of every provider; on `llm_call` lines the
+// routing endpoint, the price card, the platform fee, the provider's own cost, the reasoning kind
+// and the reasoning tokens; per LLM seat of `seats.json` the intended model of a fake seat, the
+// endpoint, the prompt variant, the reminder cadence and the prompt hashes; and the calibration
+// profile (`perfidia-profile/1`).
 
-/** Reasoning efforts, as the model spec and `seats.json` name them. */
-export const EFFORTS = ["low", "medium", "high", "xhigh", "max"] as const;
+/**
+ * Reasoning efforts, as the model spec and `seats.json` name them: the union of every provider's
+ * ladder (OpenAI's `none`, Gemini's and OpenRouter's `minimal`, Anthropic's `low`…`max`). Each
+ * model accepts its own subset (the orchestrator's model catalog); the labels are vendor terms,
+ * never comparable across vendors.
+ */
+export const EFFORTS = ["none", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
 export const EffortSchema = z.enum(EFFORTS);
 export type Effort = z.infer<typeof EffortSchema>;
 
@@ -40,6 +51,8 @@ export const UsageLineSchema = z.strictObject({
   cacheWrite1h: Int,
   cacheRead: Int,
   output: Int,
+  /** Pass 1b: reasoning tokens, a part of `output`, where the provider reports them. */
+  reasoning: Int.optional(),
   estimated: z.boolean(),
 });
 export type UsageLine = z.infer<typeof UsageLineSchema>;
@@ -102,6 +115,16 @@ export const LlmCallLineSchema = z.strictObject({
     .nullable(),
   /** A refusal: the ids of the turn's inbox messages (a refusal-DoS suspect, §3.8). */
   inbox: z.array(z.string()).optional(),
+  /** Pass 1b: the routing endpoint the attempt was pinned to (OpenRouter); absent elsewhere. */
+  endpoint: z.string().min(1).optional(),
+  /** Pass 1b: the price card the requested model's usage was charged at. */
+  priceCard: z.string().min(1).optional(),
+  /** Pass 1b: the platform fee charged with the attempt (OpenRouter credits), included in `costNanoUsd`. */
+  feeNanoUsd: Nano.optional(),
+  /** Pass 1b: the provider's own cost of the attempt (OpenRouter `usage.cost`), fee excluded. */
+  reportedCostNanoUsd: Nano.optional(),
+  /** Pass 1b: what the reply's reasoning is: a provider's summary, raw text, or none. */
+  reasoningKind: z.enum(["summary", "raw", "none"]).optional(),
 });
 export type LlmCallLine = z.infer<typeof LlmCallLineSchema>;
 
@@ -175,6 +198,8 @@ export const PreflightLineSchema = z.strictObject({
   error: ErrorFieldSchema,
   /** Informational, left out of determinism comparisons. */
   wallStart: z.string().optional(),
+  /** Pass 1b: the platform fee charged with the check, included in `costNanoUsd`. */
+  feeNanoUsd: Nano.optional(),
 });
 export type PreflightLine = z.infer<typeof PreflightLineSchema>;
 
@@ -284,6 +309,31 @@ export const ProfileSchema = z.strictObject({
 export const FallbacksSchema = z.enum(["default", "off"]);
 export type Fallbacks = z.infer<typeof FallbacksSchema>;
 
+/**
+ * The model providers of the arena (phase 4): `openrouter` routes to a pinned endpoint, `compat` is
+ * any OpenAI-compatible base URL (a local vLLM), `fake` a bot-backed model with no network.
+ */
+export const PROVIDERS = ["anthropic", "openai", "google", "openrouter", "compat", "fake"] as const;
+export const ProviderSchema = z.enum(PROVIDERS);
+export type Provider = z.infer<typeof ProviderSchema>;
+
+/**
+ * How harness text reaches a model (phase 4 §3.2): mid-conversation `system` messages (Anthropic),
+ * `developer` messages (OpenAI), or `[harness]` text inside a user turn (Gemini, open models). The
+ * shared block's "WHO SPEAKS" sentence names the channel; it is the only per-seat prompt difference.
+ */
+export const PROMPT_VARIANTS = ["system", "developer", "envelope"] as const;
+export const PromptVariantSchema = z.enum(PROMPT_VARIANTS);
+export type PromptVariant = z.infer<typeof PromptVariantSchema>;
+
+/** When the round reminders are sent (phase 4 §3.2): after every round's results, or only the last. */
+export const REMINDER_CADENCES = ["every-round", "last-round"] as const;
+export const ReminderCadenceSchema = z.enum(REMINDER_CADENCES);
+export type ReminderCadence = z.infer<typeof ReminderCadenceSchema>;
+
+/** OpenAI's `reasoning.context` (pinned to `all_turns` on GPT-6.1 Sol); null on other providers. */
+export const ReasoningContextSchema = z.enum(["auto", "current_turn", "all_turns"]);
+
 export const SeatsFileSchema = z.strictObject({
   harness: z.string().min(1),
   promptVersion: z.int().positive(),
@@ -300,6 +350,8 @@ export const SeatsFileSchema = z.strictObject({
   promptCapTokens: z.int().positive().optional(),
   /** Phase 4: the match budget (absent without one). */
   budgetNanoUsd: Nano.optional(),
+  /** Pass 1b: the UTC date every attempt is priced at (`--price-date`, `--fake` runs); absent: wall time. */
+  priceDate: z.string().optional(),
   seats: z.array(
     z.discriminatedUnion("kind", [
       z.strictObject({
@@ -322,6 +374,30 @@ export const SeatsFileSchema = z.strictObject({
         prompt: z.string(),
         /** Phase 4: server-side refusal fallbacks (Anthropic). */
         fallbacks: FallbacksSchema.optional(),
+        /** Pass 1b: a fake seat's intended model, whose cards price it and whose channel it mirrors. */
+        intended: z
+          .strictObject({
+            provider: z.string().min(1),
+            model: z.string().min(1),
+            endpoint: z.string().min(1).nullable(),
+          })
+          .optional(),
+        /** Pass 1b: the pinned routing endpoint (OpenRouter), e.g. `z-ai/fp8`. */
+        endpoint: z.string().min(1).optional(),
+        /** Pass 1b: the endpoint's quantization (OpenRouter metadata). */
+        quantization: z.string().min(1).optional(),
+        /** Pass 1b: the operator channel of the seat's shared block. */
+        promptVariant: PromptVariantSchema.optional(),
+        /** Pass 1b: the reminder cadence (one per lineup). */
+        reminders: ReminderCadenceSchema.optional(),
+        /** Pass 1b: sha256 of the seat's shared block (its channel variant). */
+        sharedHash: z.string().optional(),
+        /** Pass 1b: sha256 of the tools as the seat's provider receives them (after its transform). */
+        toolsHash: z.string().optional(),
+        /** Pass 1b: sha256 of the operator templates. */
+        operatorHash: z.string().optional(),
+        /** Pass 1b: OpenAI's `reasoning.context` of the seat. */
+        reasoningContext: ReasoningContextSchema.optional(),
       }),
     ]),
   ),
@@ -611,11 +687,15 @@ export const EstimateFileSchema = z.strictObject({
   cacheTtl: z.enum(["5m", "1h"]),
   maxTokens: z.int().positive(),
   promptCapTokens: z.int().positive(),
+  /** Pass 1b: the UTC instant the cards were chosen at (the run's start, or `--price-date`). */
+  priceAt: z.string().optional(),
   seats: z.array(
     z.strictObject({
       seat: PlayerIdSchema,
       provider: z.string().min(1),
       model: z.string().min(1),
+      /** Pass 1b: the pinned routing endpoint (OpenRouter). */
+      endpoint: z.string().min(1).optional(),
       effort: EffortSchema,
       fallbacks: FallbacksSchema,
       profile: z.string().min(1),
@@ -652,8 +732,9 @@ export const EstimateFileSchema = z.strictObject({
 export type EstimateFile = z.infer<typeof EstimateFileSchema>;
 
 // The lineup file (`perfidia-lineup/1`, phase 4 §4.1): who plays which seat, with the lineup-wide
-// limits and the budget. Amounts in USD are strings, parsed exactly. Pass 1a plans `anthropic`
-// seats only; the other providers arrive with their adapters.
+// limits and the budget. Amounts in USD are strings, parsed exactly. Every provider is planned
+// (Pass 1b); a provider without an adapter in this build runs only on the fake path (`--fake`),
+// which mirrors it.
 
 export const LINEUP_FORMAT = "perfidia-lineup/1";
 export const LINEUP_PROVIDERS = ["anthropic", "openai", "google", "openrouter", "compat"] as const;
@@ -691,7 +772,7 @@ export const LineupSchema = z.strictObject({
   maxTokens: z.int().positive(),
   attemptTimeoutMin: z.int().positive(),
   promptCapTokens: z.int().positive(),
-  reminders: z.enum(["every-round", "last-round"]),
+  reminders: ReminderCadenceSchema,
   defaults: z.strictObject({
     effort: EffortSchema.optional(),
     fallbacks: FallbacksSchema.optional(),
@@ -775,3 +856,48 @@ export const ReconcileFileSchema = z.strictObject({
   ok: z.boolean(),
 });
 export type ReconcileFile = z.infer<typeof ReconcileFileSchema>;
+
+// Calibration profiles (`perfidia-profile/1`, phase 4 §5.3; built by `arena calibrate` in Pass 2):
+// what one (provider, model, endpoint, effort, prompt variant, cadence, `maxTokens`, prompt
+// version, ruleset major) measured, wake by wake and game day by game day, so a prediction can
+// bootstrap whole wakes. Fake runs contribute only the briefing growth: their wakes are bot-shaped.
+
+export const TOKEN_PROFILE_FORMAT = "perfidia-profile/1";
+
+/** One round trip of a measured wake: its prompt, output and cache-read tokens. */
+const ProfileRoundSchema = z.strictObject({
+  promptTokens: Int,
+  outputTokens: Int,
+  cacheReadTokens: Int,
+});
+
+export const TokenProfileSchema = z.strictObject({
+  format: z.literal(TOKEN_PROFILE_FORMAT),
+  key: z.strictObject({
+    provider: z.string().min(1),
+    model: z.string().min(1),
+    endpoint: z.string().min(1).nullable(),
+    effort: EffortSchema,
+    promptVariant: PromptVariantSchema,
+    reminders: ReminderCadenceSchema,
+    maxTokens: z.int().positive(),
+    promptVersion: z.int().positive(),
+    /** `perfidia-1@1`: a ruleset id and its major version. */
+    rulesetMajor: z.string().regex(/^[a-z][a-z0-9-]*@[0-9]+$/),
+  }),
+  /** The run directories measured (by name), real runs only. */
+  runs: z.array(z.strictObject({ run: z.string().min(1), seed: z.int().nonnegative() })),
+  /** One entry per seat and game day measured. */
+  seatDays: z.array(
+    z.strictObject({
+      run: z.string().min(1),
+      seat: PlayerIdSchema,
+      /** The game day, from 0. */
+      day: Int,
+      wakes: z.array(z.strictObject({ rounds: z.array(ProfileRoundSchema).min(1) })),
+    }),
+  ),
+  /** Briefing tokens per game day, measured on 7-day fake runs (real gateway output). */
+  briefingGrowth: z.array(z.strictObject({ day: Int, briefingTokens: Int })),
+});
+export type TokenProfile = z.infer<typeof TokenProfileSchema>;

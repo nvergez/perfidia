@@ -106,6 +106,8 @@ export interface FakeRunOptions {
   readonly days: number;
   readonly seed: number;
   readonly secrets?: boolean;
+  /** A lineup preset (phase 4), priced on a pinned date so the run is reproducible. */
+  readonly lineup?: string;
 }
 
 /** The texts `secrets` plants in `llm_calls.jsonl`. */
@@ -141,7 +143,7 @@ const runs = new Map<string, Promise<FakeRun>>();
 
 /** A fake arena run (perfidia-1@1.1.0, default lineup, `--id-key seed`), once per process and key. */
 export function fakeRun(o: FakeRunOptions): Promise<FakeRun> {
-  const key = `${o.days}:${o.seed}:${o.secrets === true ? 1 : 0}`;
+  const key = `${o.days}:${o.seed}:${o.secrets === true ? 1 : 0}:${o.lineup ?? ""}`;
   let run = runs.get(key);
   if (run === undefined) {
     run = generate(o);
@@ -153,7 +155,14 @@ export function fakeRun(o: FakeRunOptions): Promise<FakeRun> {
 async function generate(o: FakeRunOptions): Promise<FakeRun> {
   const dir = join(tempDir("fake"), "run");
   const plan = planArena(
-    { ruleset: "perfidia-1@1.1.0", fake: true, seed: o.seed, idKey: "seed", days: o.days },
+    {
+      ruleset: "perfidia-1@1.1.0",
+      fake: true,
+      seed: o.seed,
+      idKey: "seed",
+      days: o.days,
+      ...(o.lineup === undefined ? {} : { lineup: o.lineup, priceDate: "2026-10-19" }),
+    },
     arenaEnv({}),
   );
   await runArena(plan, {

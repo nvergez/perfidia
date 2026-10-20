@@ -48,6 +48,8 @@ export type SeatSpec =
       readonly effort: Effort;
       /** A profile `id@n` (seat/personalities.ts). */
       readonly profile: string;
+      /** OpenRouter: the pinned endpoint's full slug (phase 4). */
+      readonly endpoint?: string;
     }
   | { readonly seat: PlayerId; readonly kind: "bot"; readonly label: string };
 

@@ -1,10 +1,19 @@
 import { canonicalJson, sha256Hex } from "@perfidia/engine/core";
-import type { GameTime, PlayerId, RoundInput, RoundOutput, SeatAgent } from "@perfidia/protocol";
+import type {
+  GameTime,
+  PlayerId,
+  PromptVariant,
+  ReminderCadence,
+  RoundInput,
+  RoundOutput,
+  SeatAgent,
+} from "@perfidia/protocol";
 import type { BudgetLedger, Charge } from "../budget/ledger.ts";
 import { replyLine, type CallLog } from "../log/calls.ts";
 import type { LlmCallLine } from "../log/schema.ts";
 import {
   ModelError,
+  VARIANT_SUFFIX,
   isOperatorKind,
   retryOutputTokens,
   promptTokens,
@@ -54,6 +63,10 @@ import { thoughtOf } from "./thought.ts";
 //   is the wake's last (a `wake_cap` line; when it starts a round, that round's reminder tells the
 //   model this reply is its last, so it can end with `end_turn` and keep a self-wake); any later
 //   attempt of the wake is not made (`{calls: []}`).
+// - Phase 4 (Pass 1b): the reminder cadence (`last-round` sends no plain round reminder, only the
+//   turn header and the last-round and wake-end notes) and the prompt variant (the label suffix:
+//   none for `system`, `-dev`, `-env`). Each attempt is charged at the card of its wall-clock start
+//   (the ledger's pricer), and its line names the card, the fee and the reasoning kind.
 // - The prompt cap (phase 4, `policy.promptCapTokens`): before each attempt and thought call, the
 //   prompt is estimated from above (`promptEstimate`: the last measured prompt of the turn, its
 //   reply's output and the bytes appended since, or the stable prefix and the bytes of the turn);
@@ -94,6 +107,21 @@ export interface SeatPolicy {
   readonly cacheMissShare?: number;
 }
 
+/** One usage entry as an `llm_call` line logs it (reasoning tokens when the provider reports them). */
+function usageLine(u: UsageEntry): LlmCallLine["usage"][number] {
+  return {
+    model: u.model,
+    kind: u.kind,
+    input: u.tokens.input,
+    cacheWrite5m: u.tokens.cacheWrite5m,
+    cacheWrite1h: u.tokens.cacheWrite1h,
+    cacheRead: u.tokens.cacheRead,
+    output: u.tokens.output,
+    ...(u.tokens.reasoning === undefined ? {} : { reasoning: u.tokens.reasoning }),
+    estimated: u.estimated,
+  };
+}
+
 export const LOCKSTEP_POLICY: SeatPolicy = Object.freeze({
   retryBudgetMs: 60 * 60_000,
   attemptTimeoutMs: 10 * 60_000,
@@ -122,6 +150,10 @@ export interface LlmSeatOptions {
    * the prefix, an upper bound for byte-level tokenizers.
    */
   readonly prefixTokens?: number;
+  /** The operator channel of the seat's shared block (phase 4): the label suffix. Default `system`. */
+  readonly promptVariant?: PromptVariant;
+  /** When round reminders are sent (phase 4). Default `every-round` (phase 2). */
+  readonly reminders?: ReminderCadence;
 }
 
 /** What one part of a conversation entry may add to a prompt besides its bytes (role, ids, wrappers). */
@@ -235,7 +267,7 @@ export class LlmSeatAgent implements SeatAgent {
   constructor(o: LlmSeatOptions) {
     this.o = o;
     this.seat = o.seat;
-    this.label = `llm:${o.adapter.label}:${profileRef(o.profile)}:p${PROMPT_VERSION}`;
+    this.label = `llm:${o.adapter.label}:${profileRef(o.profile)}:p${PROMPT_VERSION}${VARIANT_SUFFIX[o.promptVariant ?? "system"]}`;
     this.prefixTokens =
       o.prefixTokens ??
       bytesOf(o.prompt.shared) +
@@ -401,7 +433,8 @@ export class LlmSeatAgent implements SeatAgent {
     }));
     // The soft cap reached and not yet used: this round's reply is the wake's last; say so.
     const wakeEnds = s.capGrant === "none" && this.o.ledger.wakeOver(this.seat, input.turn);
-    s.entries.push(userOf(parts), operatorOf(roundReminder(input, wakeEnds)));
+    const reminder = roundReminder(input, wakeEnds, this.o.reminders ?? "every-round");
+    s.entries.push(userOf(parts), ...(reminder === null ? [] : [operatorOf(reminder)]));
     s.pending = [];
     return s;
   }
@@ -506,7 +539,7 @@ export class LlmSeatAgent implements SeatAgent {
             },
           );
         }
-        const charge = o.ledger.charge(this.seat, w.input.turn, w.t, err.spent);
+        const charge = o.ledger.charge(this.seat, w.input.turn, w.t, err.spent, wallStart);
         this.writeCall(w, attempt, req, {
           wallStart,
           latencyMs: o.clock.time.nowMs() - started,
@@ -551,7 +584,7 @@ export class LlmSeatAgent implements SeatAgent {
       }
       release();
       attemptTimer.cancel();
-      const charge = o.ledger.charge(this.seat, w.input.turn, w.t, res.usage);
+      const charge = o.ledger.charge(this.seat, w.input.turn, w.t, res.usage, wallStart);
       o.gate.record({ k: "attempt_ok", model: spec.model });
       const served = servedTokens(res.usage);
       const share = o.policy.cacheMissShare ?? 0.8;
@@ -586,7 +619,10 @@ export class LlmSeatAgent implements SeatAgent {
             throw new AgentError(`${where}: max_tokens twice`, false);
           }
           // One retry with a larger limit; none when the limit is already the model's.
-          const next = retryOutputTokens(spec.maxOutputTokens);
+          const next = retryOutputTokens(
+            spec.maxOutputTokens,
+            o.adapter.capabilities.maxOutputTokens,
+          );
           if (next === null) {
             throw new AgentError(`${where}: max_tokens at the model's limit`, false);
           }
@@ -652,7 +688,7 @@ export class LlmSeatAgent implements SeatAgent {
       if (o.ledger.over(this.seat)) return undefined;
       this.logRequest(s, w, 1, req);
       const res = await o.adapter.chat(req);
-      const charge = o.ledger.charge(this.seat, input.turn, t, res.usage);
+      const charge = o.ledger.charge(this.seat, input.turn, t, res.usage, wallStart);
       this.writeCall(w, 1, req, {
         wallStart,
         latencyMs: res.latencyMs,
@@ -666,7 +702,7 @@ export class LlmSeatAgent implements SeatAgent {
     } catch (e) {
       if (e instanceof ArenaAborted) throw e;
       const err = asModelError(e);
-      const charge = o.ledger.charge(this.seat, input.turn, t, err.spent);
+      const charge = o.ledger.charge(this.seat, input.turn, t, err.spent, wallStart);
       this.writeCall(w, 1, req, {
         wallStart,
         latencyMs: o.clock.time.nowMs() - started,
@@ -766,16 +802,7 @@ export class LlmSeatAgent implements SeatAgent {
       refusal: res?.refusal ?? null,
       fallback: res?.fallback ?? false,
       cacheMiss: r.cacheMiss,
-      usage: usage.map((u) => ({
-        model: u.model,
-        kind: u.kind,
-        input: u.tokens.input,
-        cacheWrite5m: u.tokens.cacheWrite5m,
-        cacheWrite1h: u.tokens.cacheWrite1h,
-        cacheRead: u.tokens.cacheRead,
-        output: u.tokens.output,
-        estimated: u.estimated,
-      })),
+      usage: usage.map(usageLine),
       costNanoUsd: r.charge.costNanoUsd,
       seatSpentNanoUsd: r.charge.seatSpentNanoUsd,
       capNanoUsd: r.charge.capNanoUsd,
@@ -789,6 +816,15 @@ export class LlmSeatAgent implements SeatAgent {
         r.err === null ? null : { kind: r.err.kind, status: r.err.status, message: r.err.message },
       // A refusal names the turn's inbox: a player's message can be what tripped it (§3.8).
       ...(res?.stop === "refusal" ? { inbox: w.input.briefing.msgs.map((m) => m.id) } : {}),
+      ...(spec.endpoint === undefined || spec.endpoint === null ? {} : { endpoint: spec.endpoint }),
+      ...(r.charge.card === null ? {} : { priceCard: r.charge.card }),
+      ...(r.charge.feeNanoUsd > 0 ? { feeNanoUsd: r.charge.feeNanoUsd } : {}),
+      ...(res?.reportedCostNanoUsd === undefined || res.reportedCostNanoUsd === null
+        ? {}
+        : { reportedCostNanoUsd: res.reportedCostNanoUsd }),
+      ...(res === null
+        ? {}
+        : { reasoningKind: res.reply.reasoningKind ?? this.o.adapter.capabilities.reasoning }),
     };
     this.o.log.write(line);
     if (r.err !== null) {

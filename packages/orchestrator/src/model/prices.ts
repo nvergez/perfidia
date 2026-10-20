@@ -1,92 +1,129 @@
 import { promptTokens, type UsageEntry } from "./adapter.ts";
+import { FALLBACK_TARGETS, modelInfo } from "./catalog.ts";
+import { ANTHROPIC_CARDS, HAIKU_LONG_PROMPT_TOKENS } from "./prices/anthropic.ts";
+import type { PicoPrices, PriceCard } from "./prices/card.ts";
+import { GOOGLE_CARDS } from "./prices/google.ts";
+import { OPENAI_CARDS } from "./prices/openai.ts";
+import { OPENROUTER_CARDS } from "./prices/openrouter.ts";
 
-// Prices (phase-2 design §5.2; phase-4 design §2.9) in integer mUSD per million tokens, so one token
-// costs exactly that many nano-dollars and every cost is an integer sum. A $100 cap is 10^11 nUSD, a
-// safe integer. Every card has an id (logged on `preflight` lines and in `estimate.json`), its
-// source and the date it was checked against that source. Phase 4 (Pass 1a) checked every Claude
-// card against Anthropic's pricing page on 2026-10-20: Claude Sonnet 5.5's cache hits are $0.10 per
-// million tokens (0.05× input; phase 2 had $0.20 from the claude-api skill's cached table). Pass 1b
-// moves the cards to pico-dollars with validity windows for the other providers.
+// Prices (phase-2 design §5.2; phase-4 design §2.9). The cards (`model/prices/<provider>.ts`) are
+// integer pico-dollars per token, keyed by provider, model, endpoint, service tier and region, with
+// UTC validity windows, long-context tiers, time-of-day overrides and platform fees; each has an id,
+// its source and the date it was checked. An attempt is priced at the card valid at its wall-clock
+// start (`PriceContext.at`; a `--fake` run pins one date so it stays byte-identical): each usage
+// entry costs Σ tokens × pUSD, rounded UP to whole nano-dollars (the ledger never undercounts), plus
+// the card's platform fee, also rounded up. An unpriced model is charged at the highest price of
+// every card (`MAX_CARD`). The match budget, logs and reports stay in integer nano-dollars.
+//
+// Phase 2 and Pass 1a's API stays: `costOf(usage)` without a context prices Claude usage at the
+// Anthropic cards, and `CARDS`, `PRICES`, `HAIKU_LONG` and `MAX_PRICE` are the nano-dollar views
+// (whole nano-dollars per token: mUSD per million tokens).
 
-export interface Price {
-  readonly input: number;
-  readonly output: number;
-  readonly cacheRead: number;
-  readonly write5m: number;
-  readonly write1h: number;
+export type { PicoPrices, PriceCard } from "./prices/card.ts";
+export { ANTHROPIC_CHECKED, ANTHROPIC_PRICING_URL } from "./prices/anthropic.ts";
+export { FALLBACK_TARGETS, HAIKU_LONG_PROMPT_TOKENS };
+
+/** Every card of this build, all providers. */
+export const ALL_CARDS: readonly PriceCard[] = Object.freeze([
+  ...ANTHROPIC_CARDS,
+  ...OPENAI_CARDS,
+  ...GOOGLE_CARDS,
+  ...OPENROUTER_CARDS,
+]);
+
+/** Where an attempt is billed: the provider, the pinned endpoint, and when (a UTC instant). */
+export interface PriceContext {
+  readonly provider: string;
+  readonly endpoint: string | null;
+  /** ISO 8601 UTC instant: the attempt's wall-clock start, or the run's pinned price date. */
+  readonly at: string;
 }
 
-/** A price with where it comes from (phase 4 §2.9; Pass 1b adds endpoints and validity windows). */
-export interface PriceCard extends Price {
-  /** `provider:model@checked`, plus `#over100k` for Claude Haiku 5.5's long-prompt card. */
-  readonly id: string;
-  readonly provider: "anthropic";
-  readonly model: string;
-  readonly source: string;
-  /** The UTC date the card was checked against its source. */
-  readonly checked: string;
-}
-
-/** Anthropic's pricing page, the source of every Claude card (fetched as Markdown). */
-export const ANTHROPIC_PRICING_URL = "https://platform.claude.com/docs/en/about-claude/pricing.md";
-/** The date the Claude cards were last checked against `ANTHROPIC_PRICING_URL`. */
-export const ANTHROPIC_CHECKED = "2026-10-20";
-
-const card = (
-  model: string,
-  input: number,
-  output: number,
-  cacheRead: number,
-  write5m: number,
-  write1h: number,
-  suffix = "",
-): PriceCard =>
-  Object.freeze({
-    id: `anthropic:${model}@${ANTHROPIC_CHECKED}${suffix}`,
-    provider: "anthropic",
-    model,
-    input,
-    output,
-    cacheRead,
-    write5m,
-    write1h,
-    source: ANTHROPIC_PRICING_URL,
-    checked: ANTHROPIC_CHECKED,
-  });
-
-/** The cards by model: the 5.5 seat models, then the fallback targets (Opus 5, Opus 4.8, Sonnet 5). */
-export const CARDS: Readonly<Record<string, PriceCard>> = Object.freeze({
-  "claude-opus-5-5": card("claude-opus-5-5", 4_000, 20_000, 200, 5_000, 8_000),
-  "claude-sonnet-5-5": card("claude-sonnet-5-5", 2_000, 10_000, 100, 2_500, 4_000),
-  "claude-haiku-5-5": card("claude-haiku-5-5", 100, 500, 10, 125, 200),
-  "claude-opus-5": card("claude-opus-5", 5_000, 25_000, 500, 6_250, 10_000),
-  "claude-opus-4-8": card("claude-opus-4-8", 5_000, 25_000, 500, 6_250, 10_000),
-  "claude-sonnet-5": card("claude-sonnet-5", 2_000, 10_000, 200, 2_500, 4_000),
+/** The instant the legacy, context-free API prices at (every Claude card is valid then). */
+export const LEGACY_AT = "2026-10-20T00:00:00Z";
+/** Phase 2's pricing: Anthropic, no endpoint. */
+export const ANTHROPIC_CONTEXT: PriceContext = Object.freeze({
+  provider: "anthropic",
+  endpoint: null,
+  at: LEGACY_AT,
 });
 
-/** The price table by model (the cards without their provenance). */
-export const PRICES: Readonly<Record<string, Price>> = CARDS;
+const ms = (iso: string): number => {
+  const t = Date.parse(iso);
+  if (Number.isNaN(t)) throw new Error(`not a UTC instant: ${JSON.stringify(iso)}`);
+  return t;
+};
 
-/** Claude Haiku 5.5 bills prompts over this many tokens at its long-prompt card. */
-export const HAIKU_LONG_PROMPT_TOKENS = 100_000;
-/** Claude Haiku 5.5 for prompts over 100,000 tokens (all input tokens count, cache reads included). */
-export const HAIKU_LONG: PriceCard = card(
-  "claude-haiku-5-5",
-  500,
-  2_500,
-  50,
-  625,
-  1_000,
-  "#over100k",
-);
+/** The card valid for (provider, model, endpoint) at `at`, or null. */
+export function cardAt(
+  provider: string,
+  model: string,
+  endpoint: string | null,
+  at: string,
+): PriceCard | null {
+  const t = ms(at);
+  for (const c of ALL_CARDS) {
+    if (c.provider !== provider || c.model !== model || c.endpoint !== endpoint) continue;
+    if (ms(c.validFrom) <= t && (c.validTo === null || t < ms(c.validTo))) return c;
+  }
+  return null;
+}
 
-/** The id of `MAX_PRICE`, what an unpriced served model is charged at. */
+/** Every card of (provider, model, endpoint) valid at `from` or later: what a run can be billed. */
+export function cardsFrom(
+  provider: string,
+  model: string,
+  endpoint: string | null,
+  from: string,
+): PriceCard[] {
+  const t = ms(from);
+  return ALL_CARDS.filter(
+    (c) =>
+      c.provider === provider &&
+      c.model === model &&
+      c.endpoint === endpoint &&
+      (c.validTo === null || t < ms(c.validTo)),
+  );
+}
+
+/** A card by its id (a logged `priceCard`), long-context tiers included; null when unknown. */
+export function cardById(id: string): (PicoPrices & { readonly id: string }) | null {
+  for (const c of ALL_CARDS) {
+    if (c.id === id) return c;
+    if (c.longContext?.card.id === id) return c.longContext.card;
+  }
+  return null;
+}
+
+/** Per kind, the highest of the card's own price and its overrides' (an upper bound). */
+export function effectivePrices(c: PicoPrices & { readonly overrides?: PriceCard["overrides"] }) {
+  const out = {
+    input: c.input,
+    output: c.output,
+    cacheRead: c.cacheRead,
+    write5m: c.write5m,
+    write1h: c.write1h,
+  };
+  for (const o of c.overrides ?? []) {
+    for (const k of ["input", "output", "cacheRead", "write5m", "write1h"] as const) {
+      const v = o.prices[k];
+      if (v !== undefined && v > out[k]) out[k] = v;
+    }
+  }
+  return out;
+}
+
+/** The id of `MAX_CARD`, what an unpriced served model is charged at. */
 export const MAX_PRICE_ID = "max";
 
-/** Per token kind, the highest price of the table: what an unpriced served model is charged. */
-export const MAX_PRICE: Price = (() => {
-  const all = [...Object.values(CARDS), HAIKU_LONG];
-  const max = (k: keyof Price): number => Math.max(...all.map((p) => p[k]));
+/** Per token kind, the highest price of every card and tier: an unpriced model's charge. */
+export const MAX_CARD: PicoPrices = (() => {
+  const all: PicoPrices[] = [];
+  for (const c of ALL_CARDS) {
+    all.push(effectivePrices(c));
+    if (c.longContext !== null) all.push(c.longContext.card);
+  }
+  const max = (k: keyof PicoPrices): number => Math.max(...all.map((p) => p[k]));
   return Object.freeze({
     input: max("input"),
     output: max("output"),
@@ -96,104 +133,281 @@ export const MAX_PRICE: Price = (() => {
   });
 })();
 
-/**
- * The models Anthropic's server-side refusal fallback may run an attempt of a seat model on (the
- * claude-api skill and the models' `allowed_fallback_models`): Claude Opus 5.5 → Claude Opus 5 or
- * Claude Opus 4.8; Claude Sonnet 5.5 → Claude Sonnet 5 (`cyber`, `frontier_llm`); Claude Haiku 5.5
- * has none. The attempt bound counts one iteration per target; the preflight refuses a model whose
- * `allowed_fallback_models` holds anything else while its fallbacks are on.
- */
-export const FALLBACK_TARGETS: Readonly<Record<string, readonly string[]>> = Object.freeze({
-  "claude-opus-5-5": Object.freeze(["claude-opus-5", "claude-opus-4-8"]),
-  "claude-sonnet-5-5": Object.freeze(["claude-sonnet-5"]),
-});
+const ceilDiv = (n: number, d: number): number => Math.ceil(n / d);
 
-export const isPriced = (model: string): boolean => Object.hasOwn(CARDS, model);
+/** Pico-dollars to nano-dollars, rounded up. */
+export const picoToNano = (pico: number): number => ceilDiv(pico, 1000);
 
-/** A configured model must be priced: an unknown one is refused at plan time (exit code 3). */
-export function requirePrice(model: string): PriceCard {
-  const p = Object.hasOwn(CARDS, model) ? CARDS[model] : undefined;
-  if (p === undefined) {
-    throw new Error(
-      `no price for model ${model}: add it to CARDS (packages/orchestrator/src/model/prices.ts) before using it`,
-    );
-  }
-  return p;
-}
-
-/** Every card an attempt on `model` can be billed at without a fallback (its long-prompt card too). */
-export function cardsOf(model: string): PriceCard[] {
-  const own = requirePrice(model);
-  return model === "claude-haiku-5-5" ? [own, HAIKU_LONG] : [own];
-}
+/** The fee on `nanoUsd` at `permille`, rounded up. */
+export const feeOf = (nanoUsd: number, permille: number): number =>
+  permille === 0 ? 0 : ceilDiv(nanoUsd * permille, 1000);
 
 export interface EntryCost {
+  /** Token cost plus the platform fee, in nano-dollars (each rounded up). */
   readonly nanoUsd: number;
-  /** The served model has no price: charged at `MAX_PRICE`. */
+  /** The platform fee part of `nanoUsd`. */
+  readonly feeNanoUsd: number;
+  /** The served model has no card for the context: charged at `MAX_CARD`. */
   readonly unpriced: boolean;
-  /** A Haiku 5.5 prompt over 100 K tokens, charged at the long-prompt card. */
+  /** Priced at the card's long-context tier (a prompt over its threshold). */
   readonly longPrompt: boolean;
   /** The card's id (`MAX_PRICE_ID` for an unpriced model). */
   readonly card: string;
 }
 
-/** The card one usage entry is billed at: its model's, the long-prompt card, or `MAX_PRICE`. */
-export function priceFor(e: UsageEntry): {
-  readonly price: Price;
+/** The card one usage entry is billed at in `ctx`: its model's, its long-context tier, or the max. */
+export function priceOf(
+  e: UsageEntry,
+  ctx: PriceContext,
+): {
+  readonly prices: PicoPrices;
+  readonly feePermille: number;
   readonly unpriced: boolean;
   readonly longPrompt: boolean;
   readonly card: string;
 } {
-  const known = Object.hasOwn(CARDS, e.model) ? CARDS[e.model] : undefined;
-  const longPrompt =
-    e.model === "claude-haiku-5-5" && promptTokens(e.tokens) > HAIKU_LONG_PROMPT_TOKENS;
-  const price = longPrompt ? HAIKU_LONG : (known ?? MAX_PRICE);
+  const own = cardAt(ctx.provider, e.model, ctx.endpoint, ctx.at);
+  if (own === null) {
+    return {
+      prices: MAX_CARD,
+      feePermille: 0,
+      unpriced: true,
+      longPrompt: false,
+      card: MAX_PRICE_ID,
+    };
+  }
+  const long = own.longContext;
+  const longPrompt = long !== null && promptTokens(e.tokens) > long.aboveTokens;
   return {
-    price,
-    unpriced: known === undefined,
+    prices: longPrompt && long !== null ? long.card : effectivePrices(own),
+    feePermille: own.platformFeePermille,
+    unpriced: false,
     longPrompt,
-    card: longPrompt ? HAIKU_LONG.id : (known?.id ?? MAX_PRICE_ID),
+    card: longPrompt && long !== null ? long.card.id : own.id,
   };
 }
 
-/** The cost of one usage entry, in nano-dollars. Never zero for an unknown model, never a crash. */
-export function entryCost(e: UsageEntry): EntryCost {
-  const { price: p, unpriced, longPrompt, card: id } = priceFor(e);
+/** The pico-dollar cost of `tokens` at `p`, per kind. */
+export function picoByKind(e: UsageEntry, p: PicoPrices) {
   const t = e.tokens;
-  const nanoUsd =
-    t.input * p.input +
-    t.output * p.output +
-    t.cacheRead * p.cacheRead +
-    t.cacheWrite5m * p.write5m +
-    t.cacheWrite1h * p.write1h;
-  if (!Number.isSafeInteger(nanoUsd) || nanoUsd < 0) {
-    throw new Error(`cost of ${e.model} usage is not a safe integer: ${nanoUsd}`);
+  return {
+    input: t.input * p.input,
+    cacheWrite5m: t.cacheWrite5m * p.write5m,
+    cacheWrite1h: t.cacheWrite1h * p.write1h,
+    cacheRead: t.cacheRead * p.cacheRead,
+    output: t.output * p.output,
+  };
+}
+
+/** The cost of one usage entry in `ctx` (default: Anthropic), in nano-dollars. Never a crash. */
+export function entryCost(e: UsageEntry, ctx: PriceContext = ANTHROPIC_CONTEXT): EntryCost {
+  const sel = priceOf(e, ctx);
+  const k = picoByKind(e, sel.prices);
+  const pico = k.input + k.cacheWrite5m + k.cacheWrite1h + k.cacheRead + k.output;
+  if (!Number.isSafeInteger(pico) || pico < 0) {
+    throw new Error(`cost of ${e.model} usage is not a safe integer: ${pico}`);
   }
-  return { nanoUsd, unpriced, longPrompt, card: id };
+  const tokens = picoToNano(pico);
+  const fee = feeOf(tokens, sel.feePermille);
+  return {
+    nanoUsd: tokens + fee,
+    feeNanoUsd: fee,
+    unpriced: sel.unpriced,
+    longPrompt: sel.longPrompt,
+    card: sel.card,
+  };
 }
 
 export interface Cost {
   readonly nanoUsd: number;
-  /** Served models without a price (charged at `MAX_PRICE`). */
+  /** The platform fee part of `nanoUsd`. */
+  readonly feeNanoUsd: number;
+  /** Served models without a price (charged at `MAX_CARD`). */
   readonly unpriced: readonly string[];
   readonly longPrompt: boolean;
   /** The cards charged, in order of first use. */
   readonly cards: readonly string[];
 }
 
-export function costOf(usage: readonly UsageEntry[]): Cost {
+/** The cost of an attempt's usage entries in `ctx` (default: Anthropic, phase 2's pricing). */
+export function costOf(usage: readonly UsageEntry[], ctx: PriceContext = ANTHROPIC_CONTEXT): Cost {
   let nanoUsd = 0;
+  let feeNanoUsd = 0;
   const unpriced: string[] = [];
   const cards: string[] = [];
   let longPrompt = false;
   for (const e of usage) {
-    const c = entryCost(e);
+    const c = entryCost(e, ctx);
     nanoUsd += c.nanoUsd;
+    feeNanoUsd += c.feeNanoUsd;
     if (c.unpriced && !unpriced.includes(e.model)) unpriced.push(e.model);
     if (!cards.includes(c.card)) cards.push(c.card);
     longPrompt ||= c.longPrompt;
   }
-  return { nanoUsd, unpriced, longPrompt, cards };
+  return { nanoUsd, feeNanoUsd, unpriced, longPrompt, cards };
+}
+
+/** Prices one attempt's usage at its wall-clock start (or the run's pinned date). */
+export type Pricer = (usage: readonly UsageEntry[], at: string | undefined) => Cost;
+
+/**
+ * The pricer of a seat billed by `provider` (at `endpoint`): `fixedAt` pins every attempt to one
+ * instant (`--price-date`, `--fake` runs); otherwise each attempt is priced at its wall start, or
+ * at `fallbackAt` when it has none.
+ */
+export function pricerFor(o: {
+  readonly provider: string;
+  readonly endpoint: string | null;
+  readonly fixedAt: string | null;
+  readonly fallbackAt: string;
+}): Pricer {
+  return (usage, at) =>
+    costOf(usage, {
+      provider: o.provider,
+      endpoint: o.endpoint,
+      at: o.fixedAt ?? at ?? o.fallbackAt,
+    });
+}
+
+// The nano-dollar views of phase 2 and Pass 1a (Claude only) -------------------------------------
+
+/** Per-token prices in whole nano-dollars (mUSD per million tokens). */
+export interface Price {
+  readonly input: number;
+  readonly output: number;
+  readonly cacheRead: number;
+  readonly write5m: number;
+  readonly write1h: number;
+}
+
+/** A Claude card in nano-dollars, with its provenance. */
+export interface NanoCard extends Price {
+  readonly id: string;
+  readonly provider: "anthropic";
+  readonly model: string;
+  readonly source: string;
+  readonly checked: string;
+}
+
+/** A whole nano-dollar price from pico-dollars (every Claude price is one). */
+const wholeNano = (v: number): number => {
+  if (v % 1000 !== 0) throw new Error(`a Claude price is not whole nano-dollars: ${v} pUSD`);
+  return v / 1000;
+};
+
+const nanoOf = (p: PicoPrices): Price => {
+  const n = wholeNano;
+  return {
+    input: n(p.input),
+    output: n(p.output),
+    cacheRead: n(p.cacheRead),
+    write5m: n(p.write5m),
+    write1h: n(p.write1h),
+  };
+};
+
+/** The Claude cards by model, in nano-dollars (the 5.5 family, Fable 5.1, the fallback targets). */
+export const CARDS: Readonly<Record<string, NanoCard>> = Object.freeze(
+  Object.fromEntries(
+    ANTHROPIC_CARDS.map((c) => [
+      c.model,
+      Object.freeze({
+        ...nanoOf(c),
+        id: c.id,
+        provider: "anthropic" as const,
+        model: c.model,
+        source: c.source,
+        checked: c.checked,
+      }),
+    ]),
+  ),
+);
+
+/** The Claude price table by model (the cards without their provenance). */
+export const PRICES: Readonly<Record<string, Price>> = CARDS;
+
+/** Claude Haiku 5.5 for prompts over 100,000 tokens, in nano-dollars. */
+export const HAIKU_LONG: NanoCard = (() => {
+  const haiku = ANTHROPIC_CARDS.find((c) => c.model === "claude-haiku-5-5");
+  const long = haiku?.longContext;
+  if (haiku === undefined || long === null || long === undefined) {
+    throw new Error("no Claude Haiku 5.5 long-prompt card");
+  }
+  return Object.freeze({
+    ...nanoOf(long.card),
+    id: long.card.id,
+    provider: "anthropic" as const,
+    model: haiku.model,
+    source: haiku.source,
+    checked: haiku.checked,
+  });
+})();
+
+/** `MAX_CARD` in nano-dollars, rounded up. */
+export const MAX_PRICE: Price = Object.freeze({
+  input: picoToNano(MAX_CARD.input),
+  output: picoToNano(MAX_CARD.output),
+  cacheRead: picoToNano(MAX_CARD.cacheRead),
+  write5m: picoToNano(MAX_CARD.write5m),
+  write1h: picoToNano(MAX_CARD.write1h),
+});
+
+/** A Claude model has a card. */
+export const isPriced = (model: string): boolean => Object.hasOwn(CARDS, model);
+
+/** A configured Claude model must be priced: an unknown one is refused at plan time (exit 3). */
+export function requirePrice(model: string): NanoCard {
+  const p = Object.hasOwn(CARDS, model) ? CARDS[model] : undefined;
+  if (p === undefined) {
+    throw new Error(
+      `no price for model ${model}: add it to packages/orchestrator/src/model/prices/anthropic.ts before using it`,
+    );
+  }
+  return p;
+}
+
+/** A card or a long-context tier, at its highest prices: what an attempt can be billed at. */
+export type BillableCard = PicoPrices & { readonly id: string };
+
+/**
+ * Every card and tier an attempt can be billed at: each card at its highest override, and its
+ * long-context tier when a prompt of up to `promptCap` tokens can exceed its threshold.
+ */
+export function billable(
+  cards: readonly PriceCard[],
+  promptCap: number = Number.POSITIVE_INFINITY,
+): BillableCard[] {
+  const out: BillableCard[] = [];
+  for (const c of cards) {
+    out.push({ ...effectivePrices(c), id: c.id });
+    if (c.longContext !== null && promptCap > c.longContext.aboveTokens)
+      out.push(c.longContext.card);
+  }
+  return out;
+}
+
+/** Every Claude card and tier an attempt on `model` can be billed at, without a fallback (pUSD). */
+export function cardsOf(model: string): BillableCard[] {
+  const own = ANTHROPIC_CARDS.filter((c) => c.model === model);
+  if (own.length === 0) requirePrice(model);
+  return billable(own);
+}
+
+/** The card a Claude usage entry is billed at, in nano-dollars (phase 2's view). */
+export function priceFor(e: UsageEntry): {
+  readonly price: Price;
+  readonly unpriced: boolean;
+  readonly longPrompt: boolean;
+  readonly card: string;
+} {
+  const sel = priceOf(e, ANTHROPIC_CONTEXT);
+  const price = sel.unpriced ? MAX_PRICE : nanoOf(sel.prices);
+  return { price, unpriced: sel.unpriced, longPrompt: sel.longPrompt, card: sel.card };
+}
+
+/** Whether `model` (of `provider`) has server-side fallbacks planned by this build. */
+export function fallbackTargetsOf(provider: string, model: string): readonly string[] {
+  return modelInfo(provider, model)?.fallbackTargets ?? [];
 }
 
 /** Whole US dollars to nano-dollars (`--cap-usd 100`), exact for decimal inputs up to 9 places. */

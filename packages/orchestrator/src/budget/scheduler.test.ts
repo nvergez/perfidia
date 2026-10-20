@@ -10,14 +10,18 @@
 //   even one that was waiting for its model's rate-gate slot when it fired, and no probe either;
 // - once it fired, every seat not already handed off for its own cap is handed off `match_budget`;
 // - every charge stays within its attempt bound (the premise of the guarantee).
+// Pass 1b runs the same property on a mixed lineup (Sonnet 5.5, GPT-6.1 Sol, Gemini 4 Argon, GLM-5.3
+// on OpenRouter with its 5.5% fee) at 32 768 output tokens (65 536 on the max_tokens retry), each
+// seat billed at its provider's card for the attempt's wall-clock start, the clock crossing Argon's
+// price change mid-run: the bounds, computed at the start over every card valid from then on, hold.
 
 import { describe, expect, test } from "bun:test";
 import fc from "fast-check";
 import type { PlayerId, RoundInput, SeatAgent, Sleep, TimeSource } from "@perfidia/protocol";
 import { MemoryCallLog } from "../log/calls.ts";
 import { ModelError, type ChatRequest, type ModelSpec, type UsageEntry } from "../model/adapter.ts";
-import { FakeAdapter, type FakeReply } from "../model/fake.ts";
-import { costOf } from "../model/prices.ts";
+import { FakeAdapter, type FakeReply, type IntendedModel } from "../model/fake.ts";
+import { costOf, pricerFor, type Pricer } from "../model/prices.ts";
 import { RateGates } from "../model/rate.ts";
 import { AgentError, LOCKSTEP_POLICY, LlmSeatAgent } from "../seat/agent.ts";
 import { NoPauseGate } from "../seat/pause.ts";
@@ -39,13 +43,60 @@ class FrozenTime implements TimeSource {
 }
 
 const PROMPT_CAP = 160_000;
-const MAX_TOKENS = 16_000;
-const SEATS: readonly { seat: PlayerId; model: string }[] = [
-  { seat: "p1", model: "claude-sonnet-5-5" },
-  { seat: "p2", model: "claude-haiku-5-5" },
-  { seat: "p3", model: "claude-haiku-5-5" },
-  { seat: "p4", model: "claude-haiku-5-5" },
-];
+const byText = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
+
+interface SeatConfig {
+  readonly seat: PlayerId;
+  readonly model: string;
+  /** Pass 1b: the provider and endpoint the seat is billed by; absent: phase 2's Claude pricing. */
+  readonly billed?: IntendedModel;
+}
+
+interface Config {
+  readonly seats: readonly SeatConfig[];
+  readonly maxTokens: number;
+  /** The run's start (the bounds take every card valid from then on) and the instant after it. */
+  readonly clock?: { readonly before: string; readonly after: string };
+}
+
+/** Phase 2's and Pass 1a's lineup: Claude pricing, 16 000 output tokens, no wall clock. */
+const CLAUDE: Config = {
+  seats: [
+    { seat: "p1", model: "claude-sonnet-5-5" },
+    { seat: "p2", model: "claude-haiku-5-5" },
+    { seat: "p3", model: "claude-haiku-5-5" },
+    { seat: "p4", model: "claude-haiku-5-5" },
+  ],
+  maxTokens: 16_000,
+};
+
+/** Pass 1b's mid-tier lineup, the clock crossing Gemini 4 Argon's price change (2026-11-30). */
+const MIXED: Config = {
+  seats: [
+    {
+      seat: "p1",
+      model: "claude-sonnet-5-5",
+      billed: { provider: "anthropic", model: "claude-sonnet-5-5", endpoint: null },
+    },
+    {
+      seat: "p2",
+      model: "gpt-6.1-sol",
+      billed: { provider: "openai", model: "gpt-6.1-sol", endpoint: null },
+    },
+    {
+      seat: "p3",
+      model: "gemini-4-argon",
+      billed: { provider: "google", model: "gemini-4-argon", endpoint: null },
+    },
+    {
+      seat: "p4",
+      model: "z-ai/glm-5.3",
+      billed: { provider: "openrouter", model: "z-ai/glm-5.3", endpoint: "z-ai/fp8" },
+    },
+  ],
+  maxTokens: 32_768,
+  clock: { before: "2026-11-29T23:59:00.000Z", after: "2026-11-30T00:01:00.000Z" },
+};
 const idle = (label: string): SeatAgent => ({ label, round: () => Promise.resolve({ calls: [] }) });
 
 /** What one model attempt does. */
@@ -96,7 +147,31 @@ function usageOf(model: string, o: Outcome, maxTokens: number, estimated: boolea
 }
 
 /** What the runs covered (checked once the property has run). */
-const seen = { runs: 0, killed: 0, killedMidFlight: 0, attempts: 0, probes: 0, inFlightAtKill: 0 };
+interface Seen {
+  runs: number;
+  killed: number;
+  killedMidFlight: number;
+  attempts: number;
+  probes: number;
+  inFlightAtKill: number;
+  /** Logged attempts by the card they were charged at. */
+  readonly cards: Map<string, number>;
+  /** Attempts sent with the larger max_tokens of the retry. */
+  retries: number;
+  feesNanoUsd: number;
+}
+
+const newSeen = (): Seen => ({
+  runs: 0,
+  killed: 0,
+  killedMidFlight: 0,
+  attempts: 0,
+  probes: 0,
+  inFlightAtKill: 0,
+  cards: new Map(),
+  retries: 0,
+  feesNanoUsd: 0,
+});
 
 interface Pending {
   readonly what: string;
@@ -112,6 +187,8 @@ interface Scenario {
   readonly outcomes: readonly Outcome[];
   readonly probeCosts: readonly number[];
   readonly choices: readonly number[];
+  /** Mixed lineups: the attempt start (counted over all seats) from which the clock reads `after`. */
+  readonly switchAt?: number;
 }
 
 /** A few macrotask turns: every seat reaches its next attempt (or its next await). */
@@ -122,14 +199,36 @@ async function settle(): Promise<void> {
   }
 }
 
-async function play(s: Scenario): Promise<void> {
+async function play(s: Scenario, seen: Seen, cfg: Config = CLAUDE): Promise<void> {
+  const SEATS = cfg.seats;
+  const MAX_TOKENS = cfg.maxTokens;
+  const keyOf = (x: SeatConfig) =>
+    x.billed === undefined || cfg.clock === undefined
+      ? {}
+      : { provider: x.billed.provider, endpoint: x.billed.endpoint, from: cfg.clock.before };
   const bounds = new Map(
-    SEATS.map((x) => [x.seat, seatAttemptBound(x.model, "off", MAX_TOKENS, PROMPT_CAP)]),
+    SEATS.map((x) => [x.seat, seatAttemptBound(x.model, "off", MAX_TOKENS, PROMPT_CAP, keyOf(x))]),
   );
   const sample = 40_000;
-  const probeBound =
-    groupCheckBound("claude-sonnet-5-5", "off", sample) +
-    groupCheckBound("claude-haiku-5-5", "off", sample);
+  // One start check per distinct model (its group), as the arena's preflight.
+  const groups = new Map(SEATS.map((x) => [x.model, x]));
+  const probeBound = [...groups.values()].reduce(
+    (n, x) => n + groupCheckBound(x.model, "off", sample, keyOf(x)),
+    0,
+  );
+  const pricers = new Map<PlayerId, Pricer>();
+  for (const x of SEATS) {
+    if (x.billed === undefined || cfg.clock === undefined) continue;
+    pricers.set(
+      x.seat,
+      pricerFor({
+        provider: x.billed.provider,
+        endpoint: x.billed.endpoint,
+        fixedAt: null,
+        fallbackAt: cfg.clock.before,
+      }),
+    );
+  }
   const reserve = [...bounds.values()].reduce((a, b) => a + b, 0) + 2 * probeBound;
   // K anywhere from 0 to about twelve Sonnet attempt bounds.
   const killAt = Math.floor(((bounds.get("p1") ?? 0) * 12 * s.killPermille) / 1000);
@@ -152,6 +251,7 @@ async function play(s: Scenario): Promise<void> {
     handoffTo: (seat) => ({ label: "bot:turtle@3", agent: idle(`bot:turtle@3 ${seat}`) }),
     onHandoff: (n) => handoffs.push(n),
     match: budget,
+    pricers,
   });
   // The start preflight, charged before the match like the arena's.
   budget.add(Math.floor(probeBound / 2), 0);
@@ -166,12 +266,26 @@ async function play(s: Scenario): Promise<void> {
     return o;
   };
   const time = new FrozenTime();
-  const clock = { time, random: () => 0 };
+  // The wall clock of a mixed lineup: each attempt start reads it once; it crosses the price change.
+  let starts = 0;
+  const wall = cfg.clock;
+  const clock =
+    wall === undefined
+      ? { time, random: () => 0 }
+      : {
+          time,
+          random: () => 0,
+          iso: () => {
+            starts += 1;
+            return starts > (s.switchAt ?? 0) ? wall.after : wall.before;
+          },
+        };
   const rates = new RateGates({ clock, maxInflight: s.maxInflight, releaseJitterMs: 0 });
   const gate = new NoPauseGate();
   const log = new MemoryCallLog({ transcripts: false });
-  const charged: { seat: PlayerId; cost: number }[] = [];
-  const agents = SEATS.map(({ seat, model }) => {
+  /** What each attempt's reply carried, priced at the Claude cards when the seat has no pricer. */
+  const charged: { seat: PlayerId; usage: readonly UsageEntry[] }[] = [];
+  const agents = SEATS.map(({ seat, model, billed }) => {
     const spec: ModelSpec = {
       provider: "fake",
       model,
@@ -191,12 +305,12 @@ async function play(s: Scenario): Promise<void> {
           resolve: () => {
             if (o.kind === "error") {
               const spent = [usageOf(model, o, maxTokens, true)];
-              charged.push({ seat, cost: costOf(spent).nanoUsd });
+              charged.push({ seat, usage: spent });
               resolve(new ModelError("overloaded", "SSE overloaded", { spent, retryAfterMs: 0 }));
               return;
             }
             const usage = [usageOf(model, o, maxTokens, false)];
-            charged.push({ seat, cost: costOf(usage).nanoUsd });
+            charged.push({ seat, usage });
             resolve({
               usage,
               ...(o.kind === "max_tokens" ? { stop: "max_tokens" as const } : {}),
@@ -213,7 +327,7 @@ async function play(s: Scenario): Promise<void> {
     if (profile === undefined) throw new Error("no profile");
     const agent = new LlmSeatAgent({
       seat,
-      adapter: new FakeAdapter(spec, brain),
+      adapter: new FakeAdapter(spec, brain, billed === undefined ? {} : { intended: billed }),
       prompt: PROMPT,
       tools: TOOLS,
       profile,
@@ -298,10 +412,66 @@ async function play(s: Scenario): Promise<void> {
   if (budget.killed) seen.killed += 1;
   expect(violations).toEqual([]);
   expect(budget.spentNanoUsd).toBeLessThanOrEqual(budget.budgetNanoUsd);
-  for (const c of charged) expect(c.cost).toBeLessThanOrEqual(bounds.get(c.seat) ?? 0);
-  // The ledger and the call log agree: every charge is a logged line.
-  const logged = log.lines.reduce((n, l) => n + (l.k === "llm_call" ? l.costNanoUsd : 0), 0);
-  expect(logged).toBe(charged.reduce((n, c) => n + c.cost, 0));
+  // Every reply is a logged line, charged at its seat's card for the attempt's start, within its
+  // bound; the ledger and the call log agree.
+  const lines = log.lines.flatMap((l) => (l.k === "llm_call" ? [l] : []));
+  expect(lines.length).toBe(charged.length);
+  for (const l of lines) {
+    const x = SEATS.find((y) => y.seat === l.seat);
+    const usage: UsageEntry[] = l.usage.map((u) => ({
+      model: u.model,
+      kind: u.kind,
+      estimated: u.estimated,
+      tokens: {
+        input: u.input,
+        cacheWrite5m: u.cacheWrite5m,
+        cacheWrite1h: u.cacheWrite1h,
+        cacheRead: u.cacheRead,
+        output: u.output,
+      },
+    }));
+    const cost =
+      x?.billed === undefined || wall === undefined
+        ? costOf(usage)
+        : costOf(usage, {
+            provider: x.billed.provider,
+            endpoint: x.billed.endpoint,
+            at: l.wallStart ?? wall.before,
+          });
+    expect([l.seat, l.costNanoUsd, l.feeNanoUsd ?? 0]).toEqual([
+      l.seat,
+      cost.nanoUsd,
+      cost.feeNanoUsd,
+    ]);
+    expect(cost.unpriced).toEqual([]);
+    expect(l.costNanoUsd).toBeLessThanOrEqual(bounds.get(l.seat) ?? 0);
+    if (l.priceCard !== undefined)
+      seen.cards.set(l.priceCard, (seen.cards.get(l.priceCard) ?? 0) + 1);
+    if (l.maxTokens > MAX_TOKENS) seen.retries += 1;
+    seen.feesNanoUsd += l.feeNanoUsd ?? 0;
+  }
+  const brainUsage = (seat: PlayerId) =>
+    charged.filter((c) => c.seat === seat).map((c) => JSON.stringify(c.usage[0]?.tokens));
+  const loggedUsage = (seat: PlayerId) =>
+    lines
+      .filter((l) => l.seat === seat)
+      .map((l) => {
+        const u = l.usage[0];
+        return JSON.stringify(
+          u === undefined
+            ? undefined
+            : {
+                input: u.input,
+                cacheWrite5m: u.cacheWrite5m,
+                cacheWrite1h: u.cacheWrite1h,
+                cacheRead: u.cacheRead,
+                output: u.output,
+              },
+        );
+      });
+  for (const x of SEATS) {
+    expect(loggedUsage(x.seat).toSorted(byText)).toEqual(brainUsage(x.seat).toSorted(byText));
+  }
   if (budget.killed) {
     expect(ledger.halted).toBe("match_budget");
     expect(handoffs.map((h) => [h.seat, h.reason])).toEqual(
@@ -314,6 +484,7 @@ async function play(s: Scenario): Promise<void> {
 
 describe("the match budget under every interleaving (fast-check scheduler)", () => {
   test("spend never exceeds the budget; nothing starts after the kill switch; every seat is handed off", async () => {
+    const seen = newSeen();
     await fc.assert(
       fc.asyncProperty(
         fc.record({
@@ -325,7 +496,7 @@ describe("the match budget under every interleaving (fast-check scheduler)", () 
           probeCosts: fc.array(fc.nat({ max: 400_000_000 }), { minLength: 1, maxLength: 6 }),
           choices: fc.array(fc.nat({ max: 1000 }), { minLength: 1, maxLength: 64 }),
         }),
-        play,
+        (sc) => play(sc, seen),
       ),
       { numRuns: 200, seed: 4242 },
     );
@@ -340,16 +511,63 @@ describe("the match budget under every interleaving (fast-check scheduler)", () 
   }, 120_000);
 
   test("a kill threshold of 0 stops every seat before its first attempt", async () => {
-    await play({
-      maxInflight: 4,
-      killPermille: 0,
-      carryPermille: 0,
-      turns: 2,
-      outcomes: [
-        { kind: "reply", calls: 1, promptPermille: 500, split: [1, 1, 1, 1], outputPermille: 500 },
-      ],
-      probeCosts: [1],
-      choices: [0],
-    });
+    await play(
+      {
+        maxInflight: 4,
+        killPermille: 0,
+        carryPermille: 0,
+        turns: 2,
+        outcomes: [
+          {
+            kind: "reply",
+            calls: 1,
+            promptPermille: 500,
+            split: [1, 1, 1, 1],
+            outputPermille: 500,
+          },
+        ],
+        probeCosts: [1],
+        choices: [0],
+      },
+      newSeen(),
+    );
   });
+
+  test("Pass 1b: a mixed lineup, each seat at its provider's card for the attempt's start, across a price change", async () => {
+    const seen = newSeen();
+    await fc.assert(
+      fc.asyncProperty(
+        fc.record({
+          maxInflight: fc.constantFrom(1, 2, 4),
+          killPermille: fc.integer({ min: 0, max: 1000 }),
+          carryPermille: fc.integer({ min: 0, max: 1000 }),
+          turns: fc.integer({ min: 1, max: 4 }),
+          outcomes: fc.array(outcome, { minLength: 1, maxLength: 24 }),
+          probeCosts: fc.array(fc.nat({ max: 400_000_000 }), { minLength: 1, maxLength: 6 }),
+          choices: fc.array(fc.nat({ max: 1000 }), { minLength: 1, maxLength: 64 }),
+          switchAt: fc.integer({ min: 0, max: 40 }),
+        }),
+        (sc) => play(sc, seen, MIXED),
+      ),
+      { numRuns: 150, seed: 2626 },
+    );
+    expect(seen.killed).toBeGreaterThan(10);
+    expect(seen.runs - seen.killed).toBeGreaterThan(10);
+    expect(seen.killedMidFlight).toBeGreaterThan(10);
+    expect(seen.attempts).toBeGreaterThan(800);
+    // Both of Argon's cards were charged, the 65 536-token retry was sent, the fee was paid.
+    expect(seen.cards.get("google:gemini-4-argon@2026-10-20") ?? 0).toBeGreaterThan(10);
+    expect(seen.cards.get("google:gemini-4-argon@2026-10-20#from2026-11-30") ?? 0).toBeGreaterThan(
+      10,
+    );
+    expect([...seen.cards.keys()].toSorted(byText)).toEqual([
+      "anthropic:claude-sonnet-5-5@2026-10-20",
+      "google:gemini-4-argon@2026-10-20",
+      "google:gemini-4-argon@2026-10-20#from2026-11-30",
+      "openai:gpt-6.1-sol@2026-10-20",
+      "openrouter:z-ai/glm-5.3(z-ai/fp8)@2026-10-20",
+    ]);
+    expect(seen.retries).toBeGreaterThan(10);
+    expect(seen.feesNanoUsd).toBeGreaterThan(0);
+  }, 120_000);
 });

@@ -10,7 +10,7 @@ import {
   type UsageEntry,
 } from "../model/adapter.ts";
 import { fallbacksOn } from "../model/anthropic.ts";
-import { FALLBACK_TARGETS, costOf, formatUsd, isPriced } from "../model/prices.ts";
+import { FALLBACK_TARGETS, costOf, formatUsd, isPriced, type Cost } from "../model/prices.ts";
 import { operatorTemplates } from "../seat/prompt.ts";
 
 // The arena's preflight (phase-2 design §2.2, §8), before the run directory exists: for each
@@ -55,6 +55,8 @@ export interface GroupOutcome {
   /** Billed usage, failed checks included (zero when the API refused before inference). */
   readonly usage: readonly UsageEntry[];
   readonly nanoUsd: number;
+  /** The platform fee part of `nanoUsd`. */
+  readonly feeNanoUsd: number;
   /** The price cards charged (the requested model's first). */
   readonly cards: readonly string[];
   readonly error: {
@@ -78,6 +80,8 @@ export interface PreflightOptions {
   readonly onGroup?: (g: GroupOutcome) => void;
   /** Checked before each group: `true` ends the preflight there (a probe after the kill switch). */
   readonly stop?: () => boolean;
+  /** Prices a group's usage (its provider's cards, now); default the Claude cards. */
+  readonly price?: (group: PreflightGroup, usage: readonly UsageEntry[]) => Cost;
 }
 
 /** The placeholder conversation of the shape check: a user entry, then an operator entry. */
@@ -173,7 +177,7 @@ export async function preflight(
       const code = e.status === null ? "" : ` (${e.status})`;
       failure = new PreflightError(e.kind, `preflight of ${label}: ${e.kind}${code}: ${e.message}`);
     }
-    const cost = costOf(usage);
+    const cost = o.price?.(g, usage) ?? costOf(usage);
     nanoUsd += cost.nanoUsd;
     if (failure === null && report !== null) {
       const problem = fallbackProblem(g, report);
@@ -186,6 +190,7 @@ export async function preflight(
       report,
       usage,
       nanoUsd: cost.nanoUsd,
+      feeNanoUsd: cost.feeNanoUsd,
       cards: cost.cards,
       error: failure === null ? null : { kind: failure.kind, status, message: failure.message },
     };

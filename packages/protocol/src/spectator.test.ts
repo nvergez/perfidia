@@ -160,7 +160,9 @@ describe("spectator schemas", () => {
 
   test("every schema of the spectator and arena modules converts to JSON Schema", () => {
     const all = [...schemasOf(spectator), ...schemasOf(arena)];
-    expect(all.length).toBe(63);
+    // 63 through phase 4 Pass 1a; Pass 1b adds Provider, PromptVariant, ReminderCadence,
+    // ReasoningContext and TokenProfile.
+    expect(all.length).toBe(68);
     for (const [name, schema] of all) {
       const json = z.toJSONSchema(schema, { io: "output", unrepresentable: "any" });
       expect([name, typeof json]).toEqual([name, "object"]);

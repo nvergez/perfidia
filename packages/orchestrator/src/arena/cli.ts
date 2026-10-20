@@ -13,10 +13,10 @@ import {
   type FlagSpecs,
 } from "@perfidia/sim";
 import { LlmLogLineSchema, type LlmLogLine } from "../log/schema.ts";
-import { EFFORTS } from "../model/adapter.ts";
+import { capabilitiesFor } from "../model/catalog.ts";
 import { PROFILES, profileRef } from "../seat/personalities.ts";
 import { seatPrompt } from "../seat/prompt.ts";
-import { formatEstimate } from "./estimate.ts";
+import { formatCardTable, formatEstimate } from "./estimate.ts";
 import { PRESETS } from "./lineup.ts";
 import { PreflightError } from "./preflight.ts";
 import { arenaEnv, parseDuration, planArena, type ArenaEnv, type ArenaRequest } from "./plan.ts";
@@ -41,8 +41,9 @@ const UINT32_MAX = 4_294_967_295;
 // error; 4: `arena reconcile` outside tolerance. `main` takes its output streams, the environment
 // and the signal source as arguments, so tests run it in-process; the environment is read once,
 // here, and only for `PERFIDIA_ANTHROPIC_API_KEY`, `PERFIDIA_ANTHROPIC_BASE_URL` and
-// `PERFIDIA_LIVE`. `arena run` takes over SIGINT and SIGTERM: the first hands every LLM seat to its
-// bot, the second aborts the run, a third exits at once.
+// `PERFIDIA_LIVE` (Pass 1b: `PERFIDIA_<PROVIDER>_API_KEY` and `_BASE_URL` for openai, google,
+// openrouter and compat too). `arena run` takes over SIGINT and SIGTERM: the first hands every LLM
+// seat to its bot, the second aborts the run, a third exits at once.
 
 export const USAGE = [
   "usage: bun run arena -- <command> [flags]",
@@ -57,8 +58,10 @@ export const USAGE = [
   "",
   "`bun run arena -- <command> --help` lists a command's flags.",
   `lineup presets: ${PRESETS.join(", ")} (packages/orchestrator/lineups/)`,
-  "environment: PERFIDIA_ANTHROPIC_API_KEY (required for LLM seats unless --fake),",
-  "             PERFIDIA_ANTHROPIC_BASE_URL (optional); nothing else is read.",
+  "environment: PERFIDIA_<PROVIDER>_API_KEY for each provider a seat plays on, unless --fake",
+  "             (ANTHROPIC, OPENAI, GOOGLE, OPENROUTER; COMPAT: optional on loopback), and",
+  "             PERFIDIA_<PROVIDER>_BASE_URL (optional; required for COMPAT); nothing else is read.",
+  "             This build calls Anthropic only: the other providers run with --fake.",
   "exit codes: 0 ok, 1 replay divergence, 2 fatal error, abort or degraded run, 3 usage, config,",
   "            budget or preflight error, 4 reconciliation outside tolerance",
   "",
@@ -99,7 +102,12 @@ const RUN_FLAGS: FlagSpecs = {
     type: "string",
     repeat: true,
     value: "<pN=spec>",
-    help: "pN=claude:<model>:<effort>:<profile> or pN=bot:<strategy>@<n>, over the lineup (default: p1–p4 claude:opus-5-5:medium with the four profiles, p5 bot:opportunist@3, p6 bot:conqueror@3)",
+    help: "pN=claude:<model>:<effort>:<profile>, pN=<provider>:<model>[@<endpoint>]:<effort>:<profile> or pN=bot:<strategy>@<n>, over the lineup (default: p1–p4 claude:opus-5-5:medium with the four profiles, p5 bot:opportunist@3, p6 bot:conqueror@3)",
+  },
+  "price-date": {
+    type: "string",
+    value: "<YYYY-MM-DD>",
+    help: "--fake runs and estimates: price at the cards of that UTC day (default: today; a real run prices each attempt at its start)",
   },
   "budget-usd": {
     type: "string",
@@ -222,11 +230,17 @@ const RUN_FLAGS: FlagSpecs = {
 export const RUN_USAGE = usageText("arena run --out <dir> [flags]", RUN_FLAGS);
 
 /** `arena estimate` plans like `arena run` (same flags but the output ones) and prints the prediction. */
-const ESTIMATE_FLAGS: FlagSpecs = Object.fromEntries(
-  Object.entries(RUN_FLAGS).filter(
-    ([k]) => !["out", "watch", "quiet", "transcripts", "brain"].includes(k),
+const ESTIMATE_FLAGS: FlagSpecs = {
+  ...Object.fromEntries(
+    Object.entries(RUN_FLAGS).filter(
+      ([k]) => !["out", "watch", "quiet", "transcripts", "brain"].includes(k),
+    ),
   ),
-);
+  cards: {
+    type: "boolean",
+    help: "print every seat model's card with its scenario estimate (7-day lockstep, medium), instead of a run's",
+  },
+};
 export const ESTIMATE_USAGE = usageText(
   "arena estimate [--lineup <preset | file>] [flags]",
   ESTIMATE_FLAGS,
@@ -254,13 +268,15 @@ const RECONCILE_USAGE = usageText(
   RECONCILE_FLAGS,
 );
 const PERSONALITIES_USAGE = usageText("arena personalities", {});
+/** The efforts a Claude smoke takes. */
+const CLAUDE_EFFORTS = capabilitiesFor("anthropic", "claude-haiku-5-5").efforts;
 const SMOKE_FLAGS: FlagSpecs = {
   model: {
     type: "string",
     value: "<alias | id>",
-    help: "opus-5-5, sonnet-5-5, haiku-5-5 or a full id (default haiku-5-5)",
+    help: "opus-5-5, sonnet-5-5, haiku-5-5, fable-5-1 or a full id (default haiku-5-5)",
   },
-  effort: { type: "string", value: "<effort>", help: `${EFFORTS.join("|")} (default low)` },
+  effort: { type: "string", value: "<effort>", help: `${CLAUDE_EFFORTS.join("|")} (default low)` },
 };
 const SMOKE_USAGE = usageText("arena smoke [--model <alias>] [--effort <effort>]", SMOKE_FLAGS);
 
@@ -325,6 +341,7 @@ function requestOf(f: Flags): ArenaRequest {
     onBudget: f.string("on-budget"),
     budgetCarry: f.string("budget-carry"),
     promptCap: int(f.string("prompt-cap"), "--prompt-cap", 1_000, 1_000_000),
+    priceDate: f.string("price-date"),
   };
   return req;
 }
@@ -334,9 +351,10 @@ async function runCommand(
   io: CliIo,
   env: ArenaEnv,
   signals: SignalSource | undefined,
+  nowMs: () => number,
 ): Promise<number> {
   const { req, out, quiet } = runRequestOf(argv);
-  const plan = planArena(req, env);
+  const plan = planArena(req, env, { now: nowMs });
   assertFreeRunDir(out);
   try {
     const outcome = await runArena(plan, {
@@ -378,13 +396,22 @@ function personalities(io: CliIo): number {
 }
 
 /** `arena estimate`: plans like `arena run` (no key needed, nothing sent) and prints the prediction. */
-function estimateCommand(argv: readonly string[], io: CliIo, env: ArenaEnv): number {
+function estimateCommand(
+  argv: readonly string[],
+  io: CliIo,
+  env: ArenaEnv,
+  nowMs: () => number,
+): number {
   const f = parseFlags(argv, ESTIMATE_FLAGS, ESTIMATE_USAGE, {
     min: 0,
     max: 0,
     name: "positional",
   });
-  const plan = planArena(requestOf(f), env, { requireKey: false });
+  if (f.bool("cards")) {
+    io.out(formatCardTable());
+    return EXIT.ok;
+  }
+  const plan = planArena(requestOf(f), env, { requireKey: false, now: nowMs });
   io.out(formatEstimate(plan.estimate));
   for (const w of plan.warnings) io.out(`warning: ${w}\n`);
   return EXIT.ok;
@@ -432,14 +459,19 @@ function dispatch(
 ): Promise<number> | number {
   switch (command) {
     case "run":
-      return runCommand(argv, io, env, o.signals);
+      return runCommand(argv, io, env, o.signals, o.nowMs ?? Date.now);
     case "estimate":
-      return estimateCommand(argv, io, env);
+      return estimateCommand(argv, io, env, o.nowMs ?? Date.now);
     case "reconcile":
       return reconcileCommand(argv, io, (o.nowMs ?? Date.now)());
     case "cost": {
       const f = parseFlags(argv, COST_FLAGS, COST_USAGE, { min: 1, max: 1, name: "run" });
-      io.out(formatCost(readCalls(f.positionals[0] ?? ""), { reprice: f.bool("reprice") }));
+      io.out(
+        formatCost(readCalls(f.positionals[0] ?? ""), {
+          reprice: f.bool("reprice"),
+          at: new Date((o.nowMs ?? Date.now)()).toISOString(),
+        }),
+      );
       return EXIT.ok;
     }
     case "personalities":
@@ -448,9 +480,11 @@ function dispatch(
     case "smoke": {
       const f = parseFlags(argv, SMOKE_FLAGS, SMOKE_USAGE, { min: 0, max: 0, name: "positional" });
       const effort = f.string("effort");
-      const e = effort === undefined ? undefined : EFFORTS.find((x) => x === effort);
+      const e = effort === undefined ? undefined : CLAUDE_EFFORTS.find((x) => x === effort);
       if (effort !== undefined && e === undefined) {
-        throw new UsageError(`--effort must be one of ${EFFORTS.join(", ")}, got "${effort}"`);
+        throw new UsageError(
+          `--effort must be one of ${CLAUDE_EFFORTS.join(", ")}, got "${effort}"`,
+        );
       }
       const model = f.string("model");
       return smokeCommand({

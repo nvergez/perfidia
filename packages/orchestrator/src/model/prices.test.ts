@@ -45,6 +45,7 @@ describe("prices", () => {
     );
     expect(c).toEqual({
       nanoUsd: 412 * 4000 + 2930 * 5000 + 14820 * 200 + 1510 * 20000,
+      feeNanoUsd: 0,
       unpriced: false,
       longPrompt: false,
       card: "anthropic:claude-opus-5-5@2026-10-20",
@@ -66,13 +67,16 @@ describe("prices", () => {
     const c = costOf([entry("claude-mystery-9", { input: 10, output: 10, cacheRead: 10 })]);
     expect(c.unpriced).toEqual(["claude-mystery-9"]);
     expect(c.nanoUsd).toBe(10 * MAX_PRICE.input + 10 * MAX_PRICE.output + 10 * MAX_PRICE.cacheRead);
-    expect(MAX_PRICE.output).toBe(25_000);
+    // The highest output price of every card of every provider (Pass 1b): GPT-6 Astra over 272K
+    // prompt tokens, $75 per million (Pass 1a's Claude-only table had $25).
+    expect(MAX_PRICE.output).toBe(75_000);
   });
 
   test("Haiku 5.5 over 100 K prompt tokens uses the long-prompt card and is flagged", () => {
     const short = entryCost(entry("claude-haiku-5-5", { input: HAIKU_LONG_PROMPT_TOKENS }));
     expect(short).toEqual({
       nanoUsd: 100_000 * 100,
+      feeNanoUsd: 0,
       unpriced: false,
       longPrompt: false,
       card: "anthropic:claude-haiku-5-5@2026-10-20",
@@ -82,6 +86,7 @@ describe("prices", () => {
     );
     expect(long).toEqual({
       nanoUsd: 1 * 500 + HAIKU_LONG_PROMPT_TOKENS * 50 + 10 * 2500,
+      feeNanoUsd: 0,
       unpriced: false,
       longPrompt: true,
       card: "anthropic:claude-haiku-5-5@2026-10-20#over100k",
@@ -129,7 +134,9 @@ describe("prices", () => {
         "anthropic",
       ]);
     }
-    expect(new Set([...Object.values(CARDS), HAIKU_LONG].map((c) => c.id)).size).toBe(7);
+    // Seven Pass 1a cards, plus Claude Fable 5.1 (Pass 1b, the `frontier` preset).
+    expect(new Set([...Object.values(CARDS), HAIKU_LONG].map((c) => c.id)).size).toBe(8);
+    expect(row("claude-fable-5-1")).toEqual([10000, 12500, 20000, 250, 50000]);
     // The pricing page, read 2026-10-20 (mUSD per million tokens = nUSD per token).
     expect(row("claude-opus-5-5")).toEqual([4000, 5000, 8000, 200, 20000]);
     expect(row("claude-sonnet-5-5")).toEqual([2000, 2500, 4000, 100, 10000]);

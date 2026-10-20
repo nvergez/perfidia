@@ -8,7 +8,11 @@ import { FALLBACK_CAPABLE } from "../model/anthropic.ts";
 // profile, or bot) with the lineup-wide limits and the match budget. `--lineup <name>` reads a
 // preset from `packages/orchestrator/lineups/<name>.json`; anything with a `/` or a `.json` suffix
 // is a path. Pass 1a ships the Claude presets (`claude-duo`, the exit lineup of the Claude form, and
-// `claude-family`) and plans `anthropic` seats only.
+// `claude-family`); Pass 1b the cross-provider ones: `budget-mix` (the exit lineup of the
+// cross-provider form), `mid-tier` (the first comparison), `mid-tier-flash` and `frontier`, all
+// with the owner's comparison defaults (medium effort, fallbacks off, ZDR, 32,768 output tokens,
+// last-round reminders, a 15-minute attempt timeout). Their non-Anthropic seats run on `--fake`
+// until Pass 2's adapters.
 //
 // The defaults of §3.9, for lineup seats without their own values:
 // - seat cap = 2 × the seat's predicted high, at least $5 (the sum of the caps may exceed the
@@ -21,7 +25,14 @@ import { FALLBACK_CAPABLE } from "../model/anthropic.ts";
 export const LINEUPS_DIR = join(import.meta.dir, "..", "..", "lineups");
 
 /** The presets shipped with this build. */
-export const PRESETS: readonly string[] = Object.freeze(["claude-duo", "claude-family"]);
+export const PRESETS: readonly string[] = Object.freeze([
+  "claude-duo",
+  "claude-family",
+  "budget-mix",
+  "mid-tier",
+  "mid-tier-flash",
+  "frontier",
+]);
 
 /** The floor of a lineup seat's default cap: $5. */
 export const MIN_SEAT_CAP_NANO_USD = 5_000_000_000;

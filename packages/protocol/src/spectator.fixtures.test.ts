@@ -12,6 +12,7 @@ import type {
   Exit4,
   Lineup,
   ReconcileFile,
+  TokenProfile,
   ReconcileInput,
   CityEnt,
   FeedItem,
@@ -474,10 +475,35 @@ const reconcileFile: ReconcileFile = {
   ok: true,
 };
 
+const tokenProfile: TokenProfile = {
+  format: "perfidia-profile/1",
+  key: {
+    provider: "openai",
+    model: "gpt-6.1-sol",
+    endpoint: null,
+    effort: "medium",
+    promptVariant: "developer",
+    reminders: "last-round",
+    maxTokens: 32768,
+    promptVersion: 2,
+    rulesetMajor: "perfidia-1@1",
+  },
+  runs: [{ run: "mid-tier-cal", seed: 7 }],
+  seatDays: [
+    {
+      run: "mid-tier-cal",
+      seat: "p2",
+      day: 0,
+      wakes: [{ rounds: [{ promptTokens: 11000, outputTokens: 1400, cacheReadTokens: 9500 }] }],
+    },
+  ],
+  briefingGrowth: [{ day: 0, briefingTokens: 1500 }],
+};
+
 export const ARENA_CASES: Record<string, SchemaCase> = {
   EffortSchema: {
     schema: protocol.EffortSchema,
-    valid: ["low", "medium", "xhigh", "max"],
+    valid: ["low", "medium", "xhigh", "max", "none", "minimal"],
     invalid: [{ value: "huge", path: [] }],
   },
   TokenUsageSchema: {
@@ -487,8 +513,12 @@ export const ARENA_CASES: Record<string, SchemaCase> = {
   },
   UsageLineSchema: {
     schema: protocol.UsageLineSchema,
-    valid: [usageLine],
-    invalid: [bad(usageLine, ["kind"], "batch"), bad(usageLine, ["model"], "")],
+    valid: [usageLine, { ...usageLine, reasoning: 900 }],
+    invalid: [
+      bad(usageLine, ["kind"], "batch"),
+      bad(usageLine, ["model"], ""),
+      bad(usageLine, ["reasoning"], -1),
+    ],
   },
   StopSchema: {
     schema: protocol.StopSchema,
@@ -497,12 +527,29 @@ export const ARENA_CASES: Record<string, SchemaCase> = {
   },
   LlmCallLineSchema: {
     schema: protocol.LlmCallLineSchema,
-    valid: [llmCallLine, { ...llmCallLine, inbox: ["g0k4qz"] }],
+    valid: [
+      llmCallLine,
+      { ...llmCallLine, inbox: ["g0k4qz"] },
+      {
+        ...llmCallLine,
+        provider: "openrouter",
+        model: "z-ai/glm-5.3",
+        effort: "minimal",
+        endpoint: "z-ai/fp8",
+        priceCard: "openrouter:z-ai/glm-5.3(z-ai/fp8)@2026-10-20",
+        feeNanoUsd: 1200,
+        reportedCostNanoUsd: 21000,
+        reasoningKind: "raw",
+      },
+    ],
     invalid: [
       bad(llmCallLine, ["attempt"], 0),
       bad(llmCallLine, ["costNanoUsd"], -1),
       bad(llmCallLine, ["effort"], "huge"),
       extra(llmCallLine, []),
+      bad(llmCallLine, ["reasoningKind"], "hidden"),
+      bad(llmCallLine, ["endpoint"], ""),
+      bad(llmCallLine, ["feeNanoUsd"], -1),
     ],
   },
   HandoffReasonSchema: {
@@ -528,11 +575,13 @@ export const ARENA_CASES: Record<string, SchemaCase> = {
         priceCard: null,
         error: { kind: "billing", status: 402, message: "credit balance too low" },
       },
+      { ...preflightLine, provider: "openrouter", endpoint: "z-ai/fp8", feeNanoUsd: 55 },
     ],
     invalid: [
       bad(preflightLine, ["phase"], "middle"),
       bad(preflightLine, ["costNanoUsd"], -1),
       extra(preflightLine, []),
+      bad(preflightLine, ["feeNanoUsd"], -1),
     ],
   },
   PromptCapLineSchema: {
@@ -612,12 +661,43 @@ export const ARENA_CASES: Record<string, SchemaCase> = {
         budgetNanoUsd: 55000000000,
         seats: [{ ...seatsFile.seats[0], fallbacks: "off" }, seatsFile.seats[1]],
       },
+      {
+        ...seatsFile,
+        lineup: "mid-tier",
+        priceDate: "2026-10-19",
+        seats: [
+          {
+            ...seatsFile.seats[0],
+            provider: "fake",
+            model: "z-ai/glm-5.3",
+            intended: { provider: "openrouter", model: "z-ai/glm-5.3", endpoint: "z-ai/fp8" },
+            endpoint: "z-ai/fp8",
+            quantization: "fp8",
+            promptVariant: "envelope",
+            reminders: "last-round",
+            sharedHash: SHA,
+            toolsHash: SHA,
+            operatorHash: SHA,
+          },
+          { ...seatsFile.seats[0], seat: "p2", reasoningContext: "all_turns" },
+        ],
+      },
     ],
     invalid: [
       bad(seatsFile, ["seats", 0, "effort"], "huge"),
       bad(seatsFile, ["seats", 1, "kind"], "human"),
       bad(seatsFile, ["seats", 0, "fallbacks"], "on"),
       bad(seatsFile, ["promptCapTokens"], 0),
+      bad(seatsFile, ["seats", 0, "promptVariant"], "whisper"),
+      bad(seatsFile, ["seats", 0, "reminders"], "never"),
+      bad(seatsFile, ["seats", 0, "reasoningContext"], "some_turns"),
+      {
+        value: withAt(seatsFile, ["seats", 0, "intended"], {
+          provider: "openai",
+          model: "gpt-6-luna",
+        }),
+        path: ["seats", 0, "intended", "endpoint"],
+      },
     ],
   },
   ArenaStatusSchema: {
@@ -677,8 +757,17 @@ export const ARENA_CASES: Record<string, SchemaCase> = {
   },
   EstimateFileSchema: {
     schema: protocol.EstimateFileSchema,
-    valid: [estimateFile, { ...estimateFile, lineup: null, budget: null, days: 1 }],
+    valid: [
+      estimateFile,
+      { ...estimateFile, lineup: null, budget: null, days: 1 },
+      {
+        ...estimateFile,
+        priceAt: "2026-10-19T00:00:00.000Z",
+        seats: estimateFile.seats.map((x) => ({ ...x, endpoint: "z-ai/fp8" })),
+      },
+    ],
     invalid: [
+      bad(estimateFile, ["seats", 0, "endpoint"], ""),
       bad(estimateFile, ["format"], "perfidia-estimate/0"),
       bad(estimateFile, ["seats", 0, "source"], "guess"),
       bad(estimateFile, ["match", "high"], -1),
@@ -715,6 +804,37 @@ export const ARENA_CASES: Record<string, SchemaCase> = {
     schema: protocol.ReconcileFileSchema,
     valid: [reconcileFile],
     invalid: [bad(reconcileFile, ["providers", 0, "tokens", 0, "kind"], "thinking")],
+  },
+  ProviderSchema: {
+    schema: protocol.ProviderSchema,
+    valid: ["anthropic", "openai", "google", "openrouter", "compat", "fake"],
+    invalid: [{ value: "acme", path: [] }],
+  },
+  PromptVariantSchema: {
+    schema: protocol.PromptVariantSchema,
+    valid: ["system", "developer", "envelope"],
+    invalid: [{ value: "whisper", path: [] }],
+  },
+  ReminderCadenceSchema: {
+    schema: protocol.ReminderCadenceSchema,
+    valid: ["every-round", "last-round"],
+    invalid: [{ value: "never", path: [] }],
+  },
+  ReasoningContextSchema: {
+    schema: protocol.ReasoningContextSchema,
+    valid: ["auto", "current_turn", "all_turns"],
+    invalid: [{ value: "some_turns", path: [] }],
+  },
+  TokenProfileSchema: {
+    schema: protocol.TokenProfileSchema,
+    valid: [tokenProfile, { ...tokenProfile, seatDays: [], briefingGrowth: [] }],
+    invalid: [
+      bad(tokenProfile, ["format"], "perfidia-profile/0"),
+      bad(tokenProfile, ["key", "rulesetMajor"], "perfidia-1@1.1.0"),
+      bad(tokenProfile, ["seatDays", 0, "wakes", 0, "rounds"], []),
+      bad(tokenProfile, ["key", "promptVariant"], "whisper"),
+      extra(tokenProfile, []),
+    ],
   },
 };
 
@@ -1243,7 +1363,21 @@ export const SPECTATOR_CASES: Record<string, SchemaCase> = {
   },
   SeatInfoSchema: {
     schema: protocol.SeatInfoSchema,
-    valid: [seatInfo, { ...seatInfo, kind: "bot", model: null, profile: null, handoffBot: null }],
+    valid: [
+      seatInfo,
+      { ...seatInfo, kind: "bot", model: null, profile: null, handoffBot: null },
+      {
+        ...seatInfo,
+        label: "llm:openrouter/z-ai%2Fglm-5.3@z-ai%2Ffp8/medium:agamemnon@1:p2-env",
+        fake: false,
+        model: {
+          provider: "openrouter",
+          model: "z-ai/glm-5.3",
+          effort: "medium",
+          endpoint: "z-ai/fp8",
+        },
+      },
+    ],
     invalid: [
       bad(seatInfo, ["color"], 12),
       { value: withAt(seatInfo, ["profile", "handoffBot"], "bot:turtle@3"), path: ["profile"] },
@@ -1374,7 +1508,13 @@ export const SPECTATOR_CASES: Record<string, SchemaCase> = {
   },
   TurnAnnotationSchema: {
     schema: protocol.TurnAnnotationSchema,
-    valid: [annotation],
+    valid: [
+      annotation,
+      {
+        ...annotation,
+        rounds: annotation.rounds.map((r) => ({ ...r, reasoningKind: "raw" as const })),
+      },
+    ],
     invalid: [
       bad(annotation, ["rounds", 0, "kind"], "batch"),
       bad(annotation, ["rounds", 0, "tokens", "output"], -1),

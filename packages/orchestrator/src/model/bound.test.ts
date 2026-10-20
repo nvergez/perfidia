@@ -2,8 +2,9 @@
 // budget's guarantee. Any usage within an attempt's limits (a prompt of at most the prompt cap, in
 // any split between input, cache writes and cache reads, at any card the model can bill; output up
 // to the retry limit) costs no more than the bound, fallback iterations included when the spec's
-// fallbacks are on; a broken stream's charge (the full max_tokens) is within it too. Pinned values:
-// the design's §5.2 table.
+// fallbacks are on; a broken stream's charge (the full max_tokens) is within it too. Pass 1b: every
+// seat model of every provider, over every card valid from the run's start (later windows too), the
+// platform fee included, and tight to a nano-dollar. Pinned values: the design's §5.2 table.
 
 import { describe, expect, test } from "bun:test";
 import fc from "fast-check";
@@ -14,7 +15,8 @@ import {
   maxAttemptOutput,
   type UsageEntry,
 } from "./adapter.ts";
-import { FALLBACK_TARGETS, cardsOf, costOf, formatCents } from "./prices.ts";
+import { MODELS } from "./catalog.ts";
+import { FALLBACK_TARGETS, cardsFrom, cardsOf, costOf, formatCents } from "./prices.ts";
 
 const CAP = 160_000;
 
@@ -127,5 +129,47 @@ describe("attemptBoundNano", () => {
     const long = usage("claude-haiku-5-5", CAP, [0, 0, 1, 0], 32_000);
     expect(costOf([long]).longPrompt).toBe(true);
     expect(costOf([long]).nanoUsd).toBe(bound);
+  });
+});
+
+describe("the attempt bound of every seat model (Pass 1b)", () => {
+  // A run starting at each instant may be billed at every card valid from then on: the bound is
+  // the worst attempt over those cards (the whole prompt cap at the dearest prompt kind, the retry's
+  // output), the platform fee included, and no looser than a nano-dollar of rounding.
+  test("every provider's worst attempt is its bound: later price windows and fees included", () => {
+    const starts = ["2026-10-19T00:00:00Z", "2026-11-29T23:59:00Z", "2026-12-30T12:00:00Z"];
+    const kinds = [
+      [1, 0, 0, 0],
+      [0, 1, 0, 0],
+      [0, 0, 1, 0],
+      [0, 0, 0, 1],
+    ] as const;
+    const seen: string[] = [];
+    for (const m of MODELS.filter((x) => x.seat)) {
+      const endpoint = m.endpoints[0]?.tag ?? null;
+      const out = maxAttemptOutput({ maxOutputTokens: 32_768 }, m.capabilities.maxOutputTokens);
+      for (const from of starts) {
+        const bound = seatAttemptBound(m.model, "off", 32_768, CAP, {
+          provider: m.provider,
+          endpoint,
+          from,
+        });
+        let worst = 0;
+        for (const card of cardsFrom(m.provider, m.model, endpoint, from)) {
+          const at = card.validFrom > from ? card.validFrom : from;
+          for (const w of kinds) {
+            const c = costOf([usage(m.model, CAP, w, out)], { provider: m.provider, endpoint, at });
+            expect(c.nanoUsd).toBeLessThanOrEqual(bound);
+            worst = Math.max(worst, c.nanoUsd);
+          }
+        }
+        expect([m.model, from, bound - worst <= 1]).toEqual([m.model, from, true]);
+        seen.push(`${m.provider}:${m.model}@${from.slice(0, 10)} ${formatCents(bound)}`);
+      }
+    }
+    // Argon's bound doubles with its later card, whenever the run starts; GLM-5.3's carries the fee.
+    expect(seen).toContain("google:gemini-4-argon@2026-10-19 $1.95");
+    expect(seen).toContain("google:gemini-4-argon@2026-12-30 $1.95");
+    expect(seen).toContain("openrouter:z-ai/glm-5.3@2026-10-19 $0.54");
   });
 });

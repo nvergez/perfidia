@@ -104,7 +104,9 @@ describe("BudgetLedger", () => {
     const { l } = ledger([["p1", 100_000_000_000]]);
     const c = l.charge("p1", 1, 0, [{ ...opus(1), model: "claude-unknown-1" }]);
     expect(c.unpriced).toEqual(["claude-unknown-1"]);
-    expect(c.costNanoUsd).toBe(5_000);
+    // The highest input price of every card of every provider (Pass 1b): GPT-6 Astra over 272K
+    // prompt tokens, $20 per million (Pass 1a's Claude-only table had Opus 5's $5).
+    expect(c.costNanoUsd).toBe(20_000);
   });
 });
 

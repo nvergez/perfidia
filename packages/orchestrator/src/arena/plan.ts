@@ -4,7 +4,13 @@ import { createMatch, type AnyRuleset, type InvariantLevel } from "@perfidia/eng
 import { idKeyFromSeed } from "@perfidia/engine/core";
 import { rulesInfo } from "@perfidia/gateway/present";
 import { toolDefinitions } from "@perfidia/gateway/runtime";
-import { IdKeySchema, type MatchSetup, type PlayerId } from "@perfidia/protocol";
+import {
+  IdKeySchema,
+  type MatchSetup,
+  type PlayerId,
+  type PromptVariant,
+  type ReminderCadence,
+} from "@perfidia/protocol";
 import {
   INVARIANT_LEVELS,
   UsageError,
@@ -35,16 +41,24 @@ import { DEFAULT_BASE_URL } from "../model/anthropic.ts";
 import {
   DEFAULT_PROMPT_CAP_TOKENS,
   EFFORTS,
+  encodeLabelPart,
   type CacheTtl,
   type Effort,
   type ModelTool,
 } from "../model/adapter.ts";
-import { requirePrice, usdToNano } from "../model/prices.ts";
-import { anthropicTools } from "../model/tools.ts";
+import {
+  CATALOG_CHECKED,
+  capabilitiesFor,
+  modelInfo,
+  seatModels,
+  type ModelInfo,
+} from "../model/catalog.ts";
+import { cardAt, cardsFrom, formatCents, usdToNano } from "../model/prices.ts";
+import { modelTools } from "../model/tools.ts";
 import type { SeatPolicy } from "../seat/agent.ts";
 import { PROFILES, findProfile, profileRef, type Profile } from "../seat/personalities.ts";
 import { seatPrompt, sharedPrompt } from "../seat/prompt.ts";
-import { centralWakeNano, loggedSpend } from "./cost.ts";
+import { centralWakeNanoOf, loggedSpend, scenarioCard } from "./cost.ts";
 import {
   budgetCheck,
   estimateFile,
@@ -54,6 +68,14 @@ import {
 } from "./estimate.ts";
 import { defaultSeatCap, defaultWakeCap, fallbacksFor, loadLineup } from "./lineup.ts";
 import { sampleTokensUpper } from "./preflight.ts";
+import {
+  PROVIDERS,
+  REQUIRED_PARAMS,
+  SNAPSHOT_ENDPOINTS,
+  providerInfo,
+  type EndpointSource,
+  type ProviderInfo,
+} from "./providers.ts";
 
 /** The largest seed. */
 const UINT32_MAX = 4_294_967_295;
@@ -68,17 +90,39 @@ const UINT32_MAX = 4_294_967_295;
 // the prompt cap, each seat's fallbacks and wake cap, and the match budget: a budget whose kill
 // threshold `K = budget − reserve` (less any carry) falls below the predicted low is refused with
 // the design's §4.2 message; below the predicted high it is a warning.
+//
+// Pass 1b: every provider. The environment holds `PERFIDIA_<PROVIDER>_API_KEY` and `_BASE_URL` for
+// Anthropic, OpenAI, Google, OpenRouter and compat (nothing else); a key is required only for a
+// provider some seat plays on, and the error names those seats. A seat is
+// `pN=<provider>:<model>[@<endpoint>]:<effort>:<profile>` (`claude:` stays Anthropic's alias), or a
+// lineup seat. Each is checked against the model catalog and the price cards (design §4.2): a
+// known seat model, an effort it accepts, a card valid at the plan's price instant, an OpenRouter
+// pin that is a full endpoint slug listing every needed parameter (and ZDR-listed under `zdr`),
+// a context of at least 200K tokens and an output limit of twice `maxTokens`, an attempt timeout of
+// at least the provider's minimum. A provider without an adapter in this build runs only with
+// `--fake`, whose seats mirror it and are priced at its cards on one pinned date. A lineup with a
+// non-Anthropic seat defaults to 32,768 output tokens, `last-round` reminders and a 15-minute
+// attempt timeout (the owner's comparison defaults).
+
+/** One provider's key and base URL, as the environment gives them. */
+export interface ProviderEnv {
+  readonly apiKey: string | null;
+  readonly baseURL: string | null;
+}
 
 /** The environment of the harness: the only variables it reads. */
 export interface ArenaEnv {
+  /** Anthropic's (`PERFIDIA_ANTHROPIC_API_KEY`, phase 2). */
   readonly apiKey: string | null;
   readonly baseURL: string | null;
   /** `PERFIDIA_LIVE=1`: the opt-in live test only. */
   readonly live: boolean;
+  /** Pass 1b: the other providers' `PERFIDIA_<PROVIDER>_API_KEY` and `_BASE_URL`. */
+  readonly providers?: Readonly<Record<string, ProviderEnv>>;
 }
 
-const KEY_VAR = "PERFIDIA_ANTHROPIC_API_KEY";
-const BASE_VAR = "PERFIDIA_ANTHROPIC_BASE_URL";
+const KEY_VAR = PROVIDERS.anthropic.keyVar;
+const BASE_VAR = PROVIDERS.anthropic.baseUrlVar;
 
 /** Reads the harness's variables from `env` (the CLI passes the process environment). */
 export function arenaEnv(env: Readonly<Record<string, string | undefined>>): ArenaEnv {
@@ -86,7 +130,23 @@ export function arenaEnv(env: Readonly<Record<string, string | undefined>>): Are
     const v = Object.hasOwn(env, name) ? env[name] : undefined;
     return v === undefined || v.trim() === "" ? null : v.trim();
   };
-  return { apiKey: get(KEY_VAR), baseURL: get(BASE_VAR), live: get("PERFIDIA_LIVE") === "1" };
+  const providers: Record<string, ProviderEnv> = {};
+  for (const p of Object.values(PROVIDERS)) {
+    if (p.id !== "anthropic")
+      providers[p.id] = { apiKey: get(p.keyVar), baseURL: get(p.baseUrlVar) };
+  }
+  return {
+    apiKey: get(KEY_VAR),
+    baseURL: get(BASE_VAR),
+    live: get("PERFIDIA_LIVE") === "1",
+    providers,
+  };
+}
+
+/** One provider's key and base URL from a plan's environment. */
+export function providerEnv(env: ArenaEnv, provider: string): ProviderEnv {
+  if (provider === "anthropic") return { apiKey: env.apiKey, baseURL: env.baseURL };
+  return env.providers?.[provider] ?? { apiKey: null, baseURL: null };
 }
 
 /** Model aliases of `--seat` (a full `claude-…` id is taken as is). */
@@ -94,21 +154,46 @@ export const MODEL_ALIASES: Readonly<Record<string, string>> = Object.freeze({
   "opus-5-5": "claude-opus-5-5",
   "sonnet-5-5": "claude-sonnet-5-5",
   "haiku-5-5": "claude-haiku-5-5",
+  "fable-5-1": "claude-fable-5-1",
 });
 
 /**
- * The models a seat may run on: the 5.5 family the request shape is built for (mid-conversation
- * `system` messages, adaptive thinking with `effort`). The other priced models are fallback
- * targets only: Claude Sonnet 5, for one, rejects the operator entries with a 400.
+ * The Claude models a seat may run on: the 5.5 family and Claude Fable 5.1, which take the request
+ * shape (mid-conversation `system` messages, adaptive thinking with `effort`). The other priced
+ * Claude models are fallback targets only: Claude Sonnet 5, for one, rejects the operator entries.
  */
-export const SEAT_MODELS: readonly string[] = Object.freeze(Object.values(MODEL_ALIASES));
+export const SEAT_MODELS: readonly string[] = Object.freeze(
+  seatModels("anthropic").map((m) => m.model),
+);
+
+/** The providers seats are planned on (`claude` is Anthropic's alias in `--seat`). */
+const SEAT_PROVIDERS = Object.keys(PROVIDERS);
+
+/** The output limit of mixed lineups and the owner's comparison timeout (design §3.1, decision 7). */
+export const MIXED_MAX_TOKENS = 32_768;
+export const MIXED_ATTEMPT_TIMEOUT_MS = 15 * 60_000;
+/** A seat's model needs this much context (design §3.4). */
+export const MIN_CONTEXT_TOKENS = 200_000;
+/** Days within which a price change of a seat's card is a warning. */
+export const PRICE_CHANGE_WARN_MS = 2 * 86_400_000;
+/** Gemini Tier 1's monthly account cap (design §4.2, billing page). */
+export const GOOGLE_TIER1_MONTHLY_NANO_USD = 250_000_000_000;
 
 /** An LLM seat of the plan. */
 export interface LlmSeatPlan {
   readonly seat: PlayerId;
   readonly kind: "llm";
-  readonly provider: "anthropic";
+  /** The provider the seat plays on (on `--fake`: the one its fake model mirrors and is priced at). */
+  readonly provider: ProviderInfo["id"];
   readonly model: string;
+  /** OpenRouter's pinned endpoint; null elsewhere. */
+  readonly endpoint: string | null;
+  /** The endpoint's quantization (OpenRouter metadata); null elsewhere. */
+  readonly quantization: string | null;
+  /** The operator channel of the seat's shared block (its provider's). */
+  readonly promptVariant: PromptVariant;
+  /** OpenAI `reasoning.context` (`all_turns` on GPT-6.1 Sol); null elsewhere. */
+  readonly reasoningContext: "all_turns" | null;
   readonly effort: Effort;
   readonly profile: Profile;
   readonly capNanoUsd: number;
@@ -173,6 +258,12 @@ export interface ArenaPlan {
   readonly stopAt: number | null;
   /** The lineup id (`--lineup`); null for the default lineup and `--seat`. */
   readonly lineup: string | null;
+  /** The reminder cadence of every seat (one per lineup, design §3.2). */
+  readonly reminders: ReminderCadence;
+  /** The UTC instant the prediction's cards are chosen at (the plan's start or `--price-date`). */
+  readonly priceAt: string;
+  /** `--fake` or `--price-date`: every attempt is priced at this instant (byte-identical runs). */
+  readonly priceFixed: string | null;
   /** The prompt cap in tokens (phase 4 §5.2). */
   readonly promptCapTokens: number;
   /** The match budget (a lineup's `budgetUsd` or `--budget-usd`); null: none. */
@@ -181,8 +272,15 @@ export interface ArenaPlan {
   readonly prediction: Prediction;
   /** `estimate.json`, as `arena run` writes it before turn 1. */
   readonly estimate: EstimateFile;
-  /** The shared system block and the tools every seat gets (also the preflight bounds' input). */
-  readonly texts: { readonly shared: string; readonly tools: readonly ModelTool[] };
+  /**
+   * The shared system block (the `system` variant: phase 2's text) and the tools every seat gets
+   * (also the preflight bounds' input); `shared` per operator channel for the seats that use it.
+   */
+  readonly texts: {
+    readonly shared: string;
+    readonly tools: readonly ModelTool[];
+    readonly sharedByVariant: Readonly<Partial<Record<PromptVariant, string>>>;
+  };
   /** Plan warnings (the kill switch might fire, …), printed before the run starts. */
   readonly warnings: readonly string[];
 }
@@ -234,6 +332,8 @@ export interface ArenaRequest {
   readonly budgetCarry?: string | undefined;
   /** The prompt cap in tokens (default the lineup's, else 160 000). */
   readonly promptCap?: number | undefined;
+  /** `YYYY-MM-DD`: price at that UTC day's start (`--fake` and `arena estimate` only). */
+  readonly priceDate?: string | undefined;
 }
 
 export const DEFAULT_ARENA_DAYS = 7;
@@ -314,50 +414,79 @@ function seatOf(text: string, flag: string, players: number): { seat: PlayerId; 
 }
 
 const LLM_SPEC_HELP =
-  "write claude:<model>:<effort>:<profile>, such as claude:opus-5-5:medium:odysseus (models: opus-5-5, sonnet-5-5, haiku-5-5 or a full claude-… id)";
+  "write claude:<model>:<effort>:<profile>, such as claude:opus-5-5:medium:odysseus (models: opus-5-5, sonnet-5-5, haiku-5-5, fable-5-1 or a full claude-… id), or <provider>:<model>[@<endpoint>]:<effort>:<profile> with provider openai, google, openrouter or compat, such as openrouter:z-ai/glm-5.3@z-ai/fp8:medium:agamemnon";
 
-/** One `--seat` value: `claude:<model>:<effort>:<profile>` or `bot:<strategy>[@n]`. */
+/** A seat model of a provider, by alias or id; undefined when unknown. */
+function seatModelOf(provider: string, text: string): string {
+  if (provider === "anthropic") {
+    return Object.hasOwn(MODEL_ALIASES, text) ? (MODEL_ALIASES[text] ?? text) : text;
+  }
+  return text;
+}
+
+/**
+ * `pN=bot:<strategy>[@n]`, or an LLM seat: `claude:<model>:<effort>:<profile>` (Anthropic's alias)
+ * or `<provider>:<model>[@<endpoint>]:<effort>:<profile>`. The model and its effort are checked
+ * here; the plan checks the rest (cards, endpoints, limits).
+ */
 export function parseSeatSpec(seat: PlayerId, value: string): SeatSpec {
   if (value.startsWith("bot:")) {
     return { seat, kind: "bot", label: botLabelOf(value, `--seat ${seat}=${value}`) };
   }
   const parts = value.split(":");
-  if (parts[0] !== "claude") {
+  const head = parts[0] ?? "";
+  const provider = head === "claude" ? "anthropic" : head;
+  if (head !== "claude" && !SEAT_PROVIDERS.includes(head)) {
     throw new UsageError(
       `--seat ${seat}=${value}: a seat is claude:… (an LLM) or bot:… (a scripted bot); ${LLM_SPEC_HELP}`,
     );
   }
   if (parts.length !== 4) throw new UsageError(`--seat ${seat}=${value}: ${LLM_SPEC_HELP}`);
-  const [, alias = "", effort = "", profileText = ""] = parts;
-  const model = Object.hasOwn(MODEL_ALIASES, alias) ? (MODEL_ALIASES[alias] ?? alias) : alias;
-  if (!model.startsWith("claude-")) {
-    throw new UsageError(`--seat ${seat}=${value}: unknown model "${alias}"; ${LLM_SPEC_HELP}`);
+  const [, modelText = "", effort = "", profileText = ""] = parts;
+  const at = provider === "openrouter" ? modelText.indexOf("@") : -1;
+  const model = seatModelOf(provider, at < 0 ? modelText : modelText.slice(0, at));
+  const endpoint = at < 0 ? undefined : modelText.slice(at + 1);
+  const where = `--seat ${seat}=${value}`;
+  if (provider === "anthropic" && !model.startsWith("claude-")) {
+    throw new UsageError(`${where}: unknown model "${modelText}"; ${LLM_SPEC_HELP}`);
   }
-  if (!SEAT_MODELS.includes(model)) {
-    throw new UsageError(
-      `--seat ${seat}=${value}: ${model} is not a seat model; a seat runs on ${SEAT_MODELS.join(", ")} (the other priced models are fallback targets only)`,
-    );
-  }
+  const info = checkSeatModel(where, provider, model);
   const e = EFFORTS.find((x) => x === effort);
-  if (e === undefined) {
-    throw new UsageError(
-      `--seat ${seat}=${value}: effort must be one of ${EFFORTS.join(", ")}, got "${effort}"`,
-    );
+  const accepted = info?.capabilities.efforts ?? EFFORTS;
+  if (e === undefined || !accepted.includes(e)) {
+    throw new UsageError(`${where}: effort must be one of ${accepted.join(", ")}, got "${effort}"`);
   }
   const profile = findProfile(profileText);
   if (profile === undefined) {
     throw new UsageError(
-      `--seat ${seat}=${value}: unknown profile "${profileText}"; the profiles are ${PROFILES.map(profileRef).join(", ")}`,
+      `${where}: unknown profile "${profileText}"; the profiles are ${PROFILES.map(profileRef).join(", ")}`,
     );
   }
   return {
     seat,
     kind: "llm",
-    provider: "anthropic",
+    provider,
     model,
     effort: e,
     profile: profileRef(profile),
+    ...(endpoint === undefined ? {} : { endpoint }),
   };
+}
+
+/**
+ * The catalog entry of a seat's model; a model that is not a seat model of its provider is refused
+ * (compat models are not catalogued: their card decides).
+ */
+function checkSeatModel(where: string, provider: string, model: string): ModelInfo | undefined {
+  if (provider === "compat") return undefined;
+  const info = modelInfo(provider, model);
+  if (info?.seat !== true) {
+    const models = seatModels(provider).map((m) => m.model);
+    throw new UsageError(
+      `${where}: ${model} is not a seat model; a seat runs on ${models.join(", ")}${provider === "anthropic" ? " (the other priced models are fallback targets only)" : ""}`,
+    );
+  }
+  return info;
 }
 
 /**
@@ -436,8 +565,154 @@ export function randomSeed(): number {
 export interface PlanOptions {
   readonly randomSeed?: () => number;
   readonly randomKey?: () => string;
-  /** `false`: no API key needed (`arena estimate` plans without sending anything). Default true. */
+  /**
+   * `false`: no API key and no adapter needed (`arena estimate` plans without sending anything).
+   * Default true.
+   */
   readonly requireKey?: boolean;
+  /** The wall clock in ms (the price instant of a plan without `--price-date`); default `Date.now`. */
+  readonly now?: () => number;
+  /** OpenRouter endpoint metadata (design §2.5); default the snapshot checked on 2026-10-20. */
+  readonly endpoints?: EndpointSource;
+}
+
+const PRICE_DATE = /^(\d{4})-(\d{2})-(\d{2})$/;
+
+/** `--price-date YYYY-MM-DD` as that UTC day's start. */
+export function priceDateOf(text: string): string {
+  const m = PRICE_DATE.exec(text.trim());
+  const iso = m === null ? "" : `${m[1]}-${m[2]}-${m[3]}T00:00:00.000Z`;
+  if (m === null || Number.isNaN(Date.parse(iso)) || new Date(iso).toISOString() !== iso) {
+    throw new UsageError(`--price-date must be a UTC date such as 2026-10-19, got "${text}"`);
+  }
+  return iso;
+}
+
+/** The UTC start of the day of `ms`. */
+const dayStart = (ms: number): string => `${new Date(ms).toISOString().slice(0, 10)}T00:00:00.000Z`;
+
+/** A draft LLM seat, before its caps (they depend on the prediction). */
+interface LlmDraft {
+  readonly seat: PlayerId;
+  readonly kind: "llm";
+  readonly provider: ProviderInfo["id"];
+  readonly model: string;
+  readonly endpoint: string | null;
+  readonly quantization: string | null;
+  readonly promptVariant: PromptVariant;
+  readonly reasoningContext: "all_turns" | null;
+  readonly effort: Effort;
+  readonly profile: Profile;
+  readonly handoffBot: string;
+  readonly brain: string;
+  readonly fallbacks: "default" | "off";
+}
+
+/**
+ * The provider-level checks of one LLM seat (design §4.2): a card valid at the price instant, an
+ * OpenRouter pin that is a full endpoint slug of the model listing every needed parameter (and
+ * ZDR-listed when `zdr`), context and output limits. Returns the endpoint's quantization and the
+ * seat's warnings.
+ */
+function checkSeat(
+  d: Pick<LlmDraft, "seat" | "provider" | "model" | "endpoint" | "effort">,
+  o: {
+    readonly priceAt: string;
+    readonly maxTokens: number;
+    readonly attemptTimeoutMs: number;
+    readonly zdr: boolean;
+    readonly endpoints: EndpointSource;
+  },
+): { readonly quantization: string | null; readonly warnings: string[] } {
+  const p = providerInfo(d.provider);
+  if (p === undefined) throw new UsageError(`${d.seat}: unknown provider ${d.provider}`);
+  const warnings: string[] = [];
+  let quantization: string | null = null;
+  if (p.needsEndpoint) {
+    if (d.endpoint === null) {
+      throw new UsageError(
+        `${d.seat}: openrouter seats need a full endpoint slug (e.g. "z-ai/fp8") so routing cannot change the model: write ${d.model}@<endpoint>`,
+      );
+    }
+    const e = o.endpoints(d.model, d.endpoint);
+    if (e === undefined) {
+      throw new UsageError(
+        `${d.seat}: ${d.endpoint} is not an endpoint of ${d.model} on OpenRouter (its /endpoints list)`,
+      );
+    }
+    const wider = e.siblings.filter((t) => t.startsWith(`${d.endpoint}/`));
+    if (wider.length > 0) {
+      throw new UsageError(
+        `${d.seat}: ${d.endpoint} is not a full endpoint slug: it also matches ${wider.join(", ")}; pin one of them`,
+      );
+    }
+    const missing = REQUIRED_PARAMS.filter((x) => !e.supportedParams.includes(x));
+    if (missing.length > 0) {
+      throw new UsageError(
+        `${d.seat}: ${d.model}@${d.endpoint} does not list ${missing.join(", ")} in its supported parameters: a seat needs tools, tool_choice, max_tokens and reasoning`,
+      );
+    }
+    if (o.zdr && !e.zdr) {
+      throw new UsageError(
+        `${d.seat}: ${d.model}@${d.endpoint} is not in OpenRouter's zero-data-retention list while the lineup asks zdr: pin a listed endpoint or set defaults.zdr to false`,
+      );
+    }
+    if (!e.supportedParams.includes("parallel_tool_calls")) {
+      warnings.push(
+        `${d.seat}: ${d.model}@${d.endpoint} does not list parallel_tool_calls: it is not sent, and a seat that never makes parallel calls gets fewer calls per wake (reported per seat)`,
+      );
+    }
+    quantization = e.quantization;
+  } else if (d.endpoint !== null) {
+    throw new UsageError(`${d.seat}: an endpoint applies to openrouter seats only`);
+  }
+  if (cardAt(d.provider, d.model, d.endpoint, o.priceAt) === null) {
+    const id = `${d.provider}:${d.model}${d.endpoint === null ? "" : `@${d.endpoint}`}`;
+    throw new UsageError(
+      `${d.seat}: no price card for ${id} valid at ${o.priceAt.slice(0, 16)}Z; add it to ${p.pricesFile}`,
+    );
+  }
+  try {
+    encodeLabelPart(d.model);
+    if (d.endpoint !== null) encodeLabelPart(d.endpoint);
+  } catch (e) {
+    throw new UsageError(`${d.seat}: ${e instanceof Error ? e.message : String(e)}`);
+  }
+  const caps = capabilitiesFor(d.provider, d.model, d.endpoint);
+  if (caps.contextTokens < MIN_CONTEXT_TOKENS) {
+    throw new UsageError(
+      `${d.seat}: ${d.model} has a context of ${caps.contextTokens} tokens, under ${MIN_CONTEXT_TOKENS}`,
+    );
+  }
+  if (caps.maxOutputTokens < 2 * o.maxTokens) {
+    throw new UsageError(
+      `${d.seat}: ${d.model} returns at most ${caps.maxOutputTokens} output tokens, under twice the lineup's maxTokens ${o.maxTokens} (the max_tokens retry): lower maxTokens`,
+    );
+  }
+  if (o.attemptTimeoutMs < caps.minAttemptTimeoutMs) {
+    throw new UsageError(
+      `${d.seat}: ${d.model} needs an attempt timeout of at least ${caps.minAttemptTimeoutMs / 60_000} min, got ${o.attemptTimeoutMs / 60_000} min: raise attemptTimeoutMin`,
+    );
+  }
+  const info = modelInfo(d.provider, d.model);
+  const advertised = info?.advertisedEfforts ?? null;
+  if (advertised !== null && !advertised.includes(d.effort)) {
+    warnings.push(
+      `${d.seat}: OpenRouter lists ${d.model}'s efforts as ${advertised.join(", ")} (models list, ${CATALOG_CHECKED}): ${d.effort} is sent as is and its effect is unverified until a smoke records it`,
+    );
+  }
+  for (const n of info?.notes ?? []) warnings.push(`${d.seat}: ${n}`);
+  // A price change soon after the start: both cards are charged by wall time.
+  const start = Date.parse(o.priceAt);
+  for (const c of cardsFrom(d.provider, d.model, d.endpoint, o.priceAt)) {
+    const from = Date.parse(c.validFrom);
+    if (from > start && from - start <= PRICE_CHANGE_WARN_MS) {
+      warnings.push(
+        `${d.seat}: ${d.model}'s price changes at ${c.validFrom} (card ${c.id}), within two days of the start: attempts after it are billed at the new card, and the reserve already counts it`,
+      );
+    }
+  }
+  return { quantization, warnings };
 }
 
 /** What a lineup file adds to one of its LLM seats. */
@@ -448,17 +723,12 @@ interface LineupExtras {
   readonly fallbacks: "default" | "off" | undefined;
 }
 
-/** A lineup file's seats as seat specs, and its per-seat extras (Pass 1a: anthropic seats only). */
+/** A lineup file's seats as seat specs, and its per-seat extras. */
 function lineupSeats(lineup: Lineup): {
   readonly specs: SeatSpec[];
   readonly extras: Map<PlayerId, LineupExtras>;
 } {
   const where = `--lineup ${lineup.id}`;
-  if (lineup.reminders !== "every-round") {
-    throw new UsageError(
-      `${where}: reminders "${lineup.reminders}" arrive with the non-Anthropic seats (phase 4, Pass 1b); this build sends a reminder every round ("every-round")`,
-    );
-  }
   const specs: SeatSpec[] = [];
   const extras = new Map<PlayerId, LineupExtras>();
   for (const s of lineup.seats) {
@@ -466,49 +736,52 @@ function lineupSeats(lineup: Lineup): {
       specs.push({ seat: s.seat, kind: "bot", label: botLabelOf(s.label, `${where}: ${s.seat}`) });
       continue;
     }
-    if (s.provider !== "anthropic") {
-      throw new UsageError(
-        `${where}: ${s.seat}: provider ${s.provider} is not planned by this build (phase 4 Pass 1a plans anthropic seats; ${s.provider} arrives with its adapter in Pass 2)`,
-      );
-    }
-    if (s.endpoint !== undefined) {
-      throw new UsageError(`${where}: ${s.seat}: an endpoint applies to openrouter seats only`);
-    }
-    const model = Object.hasOwn(MODEL_ALIASES, s.model)
-      ? (MODEL_ALIASES[s.model] ?? s.model)
-      : s.model;
-    if (!SEAT_MODELS.includes(model)) {
-      throw new UsageError(
-        `${where}: ${s.seat}: ${model} is not a seat model; a seat runs on ${SEAT_MODELS.join(", ")}`,
-      );
-    }
+    const at = `${where}: ${s.seat}`;
+    const model = seatModelOf(s.provider, s.model);
+    const info = checkSeatModel(at, s.provider, model);
     if (findProfile(s.profile) === undefined) {
       throw new UsageError(
-        `${where}: ${s.seat}: unknown profile "${s.profile}"; the profiles are ${PROFILES.map(profileRef).join(", ")}`,
+        `${at}: unknown profile "${s.profile}"; the profiles are ${PROFILES.map(profileRef).join(", ")}`,
+      );
+    }
+    const effort = s.effort ?? lineup.defaults.effort ?? "medium";
+    const accepted = info?.capabilities.efforts ?? EFFORTS;
+    if (!accepted.includes(effort)) {
+      throw new UsageError(
+        `${s.seat}: ${model} accepts effort ${accepted.join(", ")}; got ${effort}`,
       );
     }
     specs.push({
       seat: s.seat,
       kind: "llm",
-      provider: "anthropic",
+      provider: s.provider,
       model,
-      effort: s.effort ?? lineup.defaults.effort ?? "medium",
+      effort,
       profile: s.profile,
+      ...(s.endpoint === undefined ? {} : { endpoint: s.endpoint }),
     });
     extras.set(s.seat, {
-      capNanoUsd: s.capUsd === undefined ? null : parseUsd(s.capUsd, `${where}: ${s.seat} capUsd`),
+      capNanoUsd: s.capUsd === undefined ? null : parseUsd(s.capUsd, `${at} capUsd`),
       wakeCapNanoUsd:
-        s.wakeCapUsd === undefined
-          ? null
-          : parseUsd(s.wakeCapUsd, `${where}: ${s.seat} wakeCapUsd`),
-      handoffBot:
-        s.handoffBot === undefined
-          ? null
-          : botLabelOf(s.handoffBot, `${where}: ${s.seat} handoffBot`),
-      fallbacks: fallbacksFor(s.seat, model, s.fallbacks, lineup.defaults.fallbacks),
+        s.wakeCapUsd === undefined ? null : parseUsd(s.wakeCapUsd, `${at} wakeCapUsd`),
+      handoffBot: s.handoffBot === undefined ? null : botLabelOf(s.handoffBot, `${at} handoffBot`),
+      fallbacks:
+        s.provider === "anthropic"
+          ? fallbacksFor(s.seat, model, s.fallbacks, lineup.defaults.fallbacks)
+          : nonAnthropicFallbacks(s.seat, model, s.fallbacks),
     });
   }
   return { specs, extras };
+}
+
+/** Server-side fallbacks are Anthropic's: any other seat records `off`, and `default` is refused. */
+function nonAnthropicFallbacks(seat: string, model: string, own: "default" | "off" | undefined) {
+  if (own === "default") {
+    throw new UsageError(
+      `${seat}: ${model} has no server-side refusal fallback: set its fallbacks to "off" (or leave them out)`,
+    );
+  }
+  return "off" as const;
 }
 
 /**
@@ -547,6 +820,7 @@ function carryOf(dir: string): { readonly nanoUsd: number; readonly lines: numbe
  */
 export function planArena(req: ArenaRequest, env: ArenaEnv, o: PlanOptions = {}): ArenaPlan {
   const fake = req.fake ?? false;
+  const forRun = o.requireKey !== false;
   const ruleset = rulesetFor(req.ruleset ?? "perfidia-1", req.allowTest ?? false);
   const overrides = overridesFrom(req.overrides ?? [], req.days);
   // The arena's default length is a week, unless `--override time.matchEnd` sets it.
@@ -580,6 +854,22 @@ export function planArena(req: ArenaRequest, env: ArenaEnv, o: PlanOptions = {})
     idKey = parsed.data;
   }
 
+  // The price instant: `--price-date` (fake runs and estimates), else now; a fake run prices every
+  // attempt at one instant (the day's start), so its files are byte-identical.
+  if (req.priceDate !== undefined && forRun && !fake) {
+    throw new UsageError(
+      "--price-date applies to --fake runs and arena estimate: a real run is priced at each attempt's wall-clock start",
+    );
+  }
+  const nowMs = (o.now ?? Date.now)();
+  const priceAt =
+    req.priceDate !== undefined
+      ? priceDateOf(req.priceDate)
+      : fake
+        ? dayStart(nowMs)
+        : new Date(nowMs).toISOString();
+  const priceFixed = fake ? priceAt : null;
+
   const overridden = new Set((req.seats ?? []).map((t) => seatOf(t, "--seat", players).seat));
   const specs = lineupOf(req.seats ?? [], players, fromLineup?.specs ?? DEFAULT_LINEUP);
   const extrasOf = (seat: PlayerId): LineupExtras | undefined =>
@@ -589,8 +879,30 @@ export function planArena(req: ArenaRequest, env: ArenaEnv, o: PlanOptions = {})
   const brains = brainsOf(req.brains ?? [], players);
   const handoffAll =
     req.handoffBot === undefined ? null : botLabelOf(req.handoffBot, "--handoff-bot");
+  const llmSpecs = specs.flatMap((s) => (s.kind === "llm" ? [s] : []));
+  const mixed = llmSpecs.some((s) => s.provider !== "anthropic");
+
+  // Lineup-wide limits: the lineup's, else phase 2's for Claude seats only and the owner's
+  // comparison defaults with any other provider (32,768 tokens, last-round, 15 minutes).
+  const maxTokens =
+    req.maxTokens ?? lineup?.maxTokens ?? (mixed ? MIXED_MAX_TOKENS : DEFAULT_MAX_TOKENS);
+  const reminders: ReminderCadence = lineup?.reminders ?? (mixed ? "last-round" : "every-round");
+  const attemptTimeoutMs =
+    req.attemptTimeoutMs ??
+    (lineup === null
+      ? mixed
+        ? MIXED_ATTEMPT_TIMEOUT_MS
+        : DEFAULT_ATTEMPT_TIMEOUT_MS
+      : lineup.attemptTimeoutMin * 60_000);
+  if (attemptTimeoutMs > MAX_TIMER_MS) {
+    throw new UsageError(`--lineup ${lineup?.id ?? ""}: attemptTimeoutMin is over a timer's limit`);
+  }
+  const zdr = lineup?.defaults.zdr ?? true;
+  const endpoints = o.endpoints ?? SNAPSHOT_ENDPOINTS;
+  const warnings: string[] = [];
+
   // Seats first without their caps: the lineup's default caps depend on the prediction.
-  const drafts = specs.map((s) => {
+  const drafts = specs.map((s): LlmDraft | SeatSpec => {
     if (s.kind === "bot") {
       if (caps.has(s.seat)) throw new UsageError(`--seat-cap ${s.seat}: ${s.seat} is a bot`);
       if (brains.has(s.seat)) throw new UsageError(`--brain ${s.seat}: ${s.seat} is a bot`);
@@ -598,30 +910,45 @@ export function planArena(req: ArenaRequest, env: ArenaEnv, o: PlanOptions = {})
     }
     const profile = findProfile(s.profile);
     if (profile === undefined) throw new UsageError(`${s.seat}: unknown profile ${s.profile}`);
-    try {
-      requirePrice(s.model);
-    } catch (error) {
-      throw new UsageError(`${s.seat}: ${error instanceof Error ? error.message : String(error)}`);
+    const provider = providerInfo(s.provider);
+    if (provider === undefined) throw new UsageError(`${s.seat}: unknown provider ${s.provider}`);
+    const endpoint = s.endpoint ?? null;
+    const checked = checkSeat(
+      { seat: s.seat, provider: provider.id, model: s.model, endpoint, effort: s.effort },
+      { priceAt, maxTokens, attemptTimeoutMs, zdr, endpoints },
+    );
+    warnings.push(...checked.warnings);
+    if (forRun && !fake && !provider.adapter) {
+      throw new UsageError(
+        `${s.seat}: ${provider.id} has no adapter in this build (phase 4 Pass 2 adds it): rehearse the lineup with --fake, which mirrors ${provider.id} at $0`,
+      );
     }
     const extras = extrasOf(s.seat);
     const handoffBot =
       handoffAll ??
       extras?.handoffBot ??
       botLabelOf(profile.handoffBot, `${s.seat}'s hand-off bot`);
+    const info = modelInfo(provider.id, s.model);
     return {
       seat: s.seat,
-      kind: "llm" as const,
-      provider: "anthropic" as const,
+      kind: "llm",
+      provider: provider.id,
       model: s.model,
+      endpoint,
+      quantization: checked.quantization,
+      promptVariant: capabilitiesFor(provider.id, s.model, endpoint).operatorChannel,
+      reasoningContext: info?.reasoningContext ?? null,
       effort: s.effort,
       profile,
       handoffBot,
       brain: brains.get(s.seat) ?? handoffBot,
-      fallbacks: extras?.fallbacks ?? fallbacksFor(s.seat, s.model, undefined, undefined),
+      fallbacks:
+        extras?.fallbacks ??
+        (provider.id === "anthropic" ? fallbacksFor(s.seat, s.model, undefined, undefined) : "off"),
     };
   });
   if (!fake && brains.size > 0) throw new UsageError("--brain applies to --fake runs only");
-  const llmDrafts = drafts.flatMap((s) => (s.kind === "llm" ? [s] : []));
+  const llmDrafts = drafts.flatMap((s) => (s.kind === "llm" && "handoffBot" in s ? [s] : []));
 
   const clockKind = oneOf(req.clock, ["lockstep", "realtime"] as const, "--clock", "lockstep");
   const time = oneOf(
@@ -634,12 +961,6 @@ export function planArena(req: ArenaRequest, env: ArenaEnv, o: PlanOptions = {})
     throw new UsageError(
       "--time virtual simulates the clock: it needs --fake (real models answer in real time)",
     );
-  }
-  const attemptTimeoutMs =
-    req.attemptTimeoutMs ??
-    (lineup === null ? DEFAULT_ATTEMPT_TIMEOUT_MS : lineup.attemptTimeoutMin * 60_000);
-  if (attemptTimeoutMs > MAX_TIMER_MS) {
-    throw new UsageError(`--lineup ${lineup?.id ?? ""}: attemptTimeoutMin is over a timer's limit`);
   }
   const promptCapTokens = req.promptCap ?? lineup?.promptCapTokens ?? DEFAULT_PROMPT_CAP_TOKENS;
   const pauseMaxMs = req.pauseMaxMs ?? DEFAULT_PAUSE_MAX_MS;
@@ -723,12 +1044,29 @@ export function planArena(req: ArenaRequest, env: ArenaEnv, o: PlanOptions = {})
   const transcripts =
     oneOf(req.transcripts, ["full", "off"] as const, "--transcripts", "full") === "full";
   const invariants = oneOf(req.invariants, INVARIANT_LEVELS, "--invariants", "checkpoint");
-  const maxTokens = req.maxTokens ?? lineup?.maxTokens ?? DEFAULT_MAX_TOKENS;
 
-  if (llmDrafts.length > 0 && !fake && env.apiKey === null && o.requireKey !== false) {
-    throw new UsageError(
-      `${KEY_VAR} is not set: the LLM seats (${llmDrafts.map((s) => s.seat).join(", ")}) need it. Export it, or pass --fake for a bot-backed fake model ($0, no API)`,
-    );
+  // Keys and base URLs: only for the providers some seat plays on (a real run).
+  if (forRun && !fake) {
+    const byProvider = new Map<string, PlayerId[]>();
+    for (const d of llmDrafts)
+      byProvider.set(d.provider, [...(byProvider.get(d.provider) ?? []), d.seat]);
+    for (const [id, seats] of byProvider) {
+      const p = providerInfo(id);
+      if (p === undefined) continue;
+      const pe = providerEnv(env, id);
+      const base = pe.baseURL ?? p.defaultBaseUrl;
+      if (base === null) {
+        throw new UsageError(
+          `${p.baseUrlVar} is not set: the ${id} seats (${seats.join(", ")}) need a base URL`,
+        );
+      }
+      const loopback = isLoopback(base);
+      if (pe.apiKey === null && (p.key === "always" || !loopback)) {
+        throw new UsageError(
+          `${p.keyVar} is not set: the LLM seats (${seats.join(", ")}) need it. Export it, or pass --fake for a bot-backed fake model ($0, no API)`,
+        );
+      }
+    }
   }
   const baseURL = env.baseURL ?? DEFAULT_BASE_URL;
   let url: URL;
@@ -766,9 +1104,17 @@ export function planArena(req: ArenaRequest, env: ArenaEnv, o: PlanOptions = {})
   checkCreation(setup, ruleset);
 
   // The prediction (phase 4 §5.3), from the texts every seat will get.
+  const info = rulesInfo(createMatch(setup, ruleset));
+  const sharedByVariant: Partial<Record<PromptVariant, string>> = {
+    system: sharedPrompt(info, setup.seats.length, "system"),
+  };
+  for (const d of llmDrafts) {
+    sharedByVariant[d.promptVariant] ??= sharedPrompt(info, setup.seats.length, d.promptVariant);
+  }
   const texts = {
-    shared: sharedPrompt(rulesInfo(createMatch(setup, ruleset)), setup.seats.length),
-    tools: anthropicTools(toolDefinitions(ruleset)),
+    shared: sharedByVariant.system ?? "",
+    tools: modelTools(toolDefinitions(ruleset)),
+    sharedByVariant,
   };
   const days = stopAt === null ? matchDays : stopAt / 86_400;
   const prediction = predict(
@@ -776,16 +1122,20 @@ export function planArena(req: ArenaRequest, env: ArenaEnv, o: PlanOptions = {})
       seat: s.seat,
       provider: s.provider,
       model: s.model,
+      endpoint: s.endpoint,
       effort: s.effort,
       fallbacks: s.fallbacks,
       profile: profileRef(s.profile),
       sampleTokens: sampleTokensUpper({
         seat: s.seat,
-        prompt: { shared: texts.shared, seat: seatPrompt(s.seat, s.profile) },
+        prompt: {
+          shared: sharedByVariant[s.promptVariant] ?? texts.shared,
+          seat: seatPrompt(s.seat, s.profile),
+        },
         tools: texts.tools,
       }),
     })),
-    { days, clock: clockKind, cacheTtl, maxTokens, promptCapTokens },
+    { days, clock: clockKind, cacheTtl, maxTokens, promptCapTokens, priceAt },
   );
   const predicted = new Map(prediction.seats.map((p) => [p.seat, p]));
 
@@ -793,8 +1143,8 @@ export function planArena(req: ArenaRequest, env: ArenaEnv, o: PlanOptions = {})
   // Wake caps: --wake-cap-usd, the lineup seat's, the lineup default (§3.9), phase 2's $2.
   const seats: SeatPlan[] = [];
   for (const d of drafts) {
-    if (d.kind === "bot") {
-      seats.push(d);
+    if (!("handoffBot" in d)) {
+      if (d.kind === "bot") seats.push(d);
       continue;
     }
     const extras = extrasOf(d.seat);
@@ -804,13 +1154,14 @@ export function planArena(req: ArenaRequest, env: ArenaEnv, o: PlanOptions = {})
       extras?.capNanoUsd ??
       capFlag ??
       (lineup === null ? DEFAULT_CAP_NANO_USD : defaultSeatCap(high));
+    const card = scenarioCard(d.model, { provider: d.provider, endpoint: d.endpoint, at: priceAt });
     const seatWakeCap =
       wakeCapFlag !== undefined
         ? wakeCapFlag
         : (extras?.wakeCapNanoUsd ??
           (lineup === null
             ? DEFAULT_WAKE_CAP_NANO_USD
-            : defaultWakeCap(centralWakeNano(d.model, clockKind, cacheTtl, d.effort))));
+            : defaultWakeCap(centralWakeNanoOf(card, clockKind, cacheTtl, d.effort))));
     seats.push({ ...d, capNanoUsd, wakeCapNanoUsd: seatWakeCap });
   }
   const llmSeats = seats.filter((s): s is LlmSeatPlan => s.kind === "llm");
@@ -820,7 +1171,6 @@ export function planArena(req: ArenaRequest, env: ArenaEnv, o: PlanOptions = {})
   const budgetText = req.budgetUsd ?? lineup?.budgetUsd;
   const budgetField = req.budgetUsd !== undefined ? "--budget-usd" : "the lineup's budgetUsd";
   let budget: PlanBudget | null = null;
-  const warnings: string[] = [];
   if (budgetText === undefined) {
     if (req.budgetCarry !== undefined) {
       throw new UsageError("--budget-carry needs a match budget (--budget-usd or a lineup's)");
@@ -855,7 +1205,17 @@ export function planArena(req: ArenaRequest, env: ArenaEnv, o: PlanOptions = {})
       );
     }
   }
+  // Gemini Tier 1 pauses an account at $250 a month (design §4.2): the run's Google high alone.
+  const googleHigh = prediction.seats
+    .filter((p) => p.provider === "google")
+    .reduce((n, p) => n + p.high, 0);
+  if (googleHigh > GOOGLE_TIER1_MONTHLY_NANO_USD) {
+    warnings.push(
+      `the Google seats' predicted high ${formatCents(googleHigh)} exceeds Gemini Tier 1's $250 monthly account cap: the service pauses until the 1st once it is reached`,
+    );
+  }
   const estimate = estimateFile({
+    priceAt,
     lineup: lineup?.id ?? null,
     ruleset: setup.ruleset,
     players: setup.seats.length,
@@ -896,6 +1256,9 @@ export function planArena(req: ArenaRequest, env: ArenaEnv, o: PlanOptions = {})
     baseURL,
     stopAt,
     lineup: lineup?.id ?? null,
+    reminders,
+    priceAt,
+    priceFixed,
     promptCapTokens,
     budget,
     prediction,
@@ -903,6 +1266,15 @@ export function planArena(req: ArenaRequest, env: ArenaEnv, o: PlanOptions = {})
     texts,
     warnings,
   };
+}
+
+/** Whether a base URL names a loopback host. */
+function isLoopback(base: string): boolean {
+  try {
+    return LOOPBACK.has(new URL(base).hostname);
+  } catch {
+    return false;
+  }
 }
 
 /** The LLM seats of a plan. */

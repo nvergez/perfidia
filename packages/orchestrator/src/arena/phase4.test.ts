@@ -138,7 +138,8 @@ describe("arena estimate (phase 4 §5.3, §5.4)", () => {
       );
     }
     expect(existsSync(dir)).toBe(false);
-    // The lineup's own budget is checked too; a lineup that plans a non-Anthropic seat is refused.
+    // A lineup with a non-Anthropic seat plans (Pass 1b) but runs only on the fake path: this build
+    // has no adapter for it.
     const bad = join(runDir("lineup"), "..", "mixed.json");
     const mixed = LineupSchema.parse(
       JSON.parse(
@@ -153,9 +154,16 @@ describe("arena estimate (phase 4 §5.3, §5.4)", () => {
       profile: "achilles@1",
     };
     writeFileSync(bad, JSON.stringify(mixed));
-    const refused = await cli(["estimate", "--lineup", bad]);
+    const planned = await cli(["estimate", "--lineup", bad]);
+    expect(planned.code).toBe(0);
+    expect(planned.out).toMatch(/p2 +gpt-6-luna +medium/);
+    const refused = await cli(["run", "--lineup", bad, "--out", dir], {
+      PERFIDIA_ANTHROPIC_API_KEY: "k",
+      PERFIDIA_OPENAI_API_KEY: "k",
+    });
     expect(refused.code).toBe(3);
-    expect(refused.err).toContain("p2: provider openai is not planned by this build");
+    expect(refused.err).toContain("p2: openai has no adapter in this build");
+    expect(existsSync(dir)).toBe(false);
   });
 });
 

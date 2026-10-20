@@ -1,14 +1,16 @@
 // Run directories from before and after phase 4 are both served (docs/phase4.md, compatibility):
 // a fake arena run as phase 4 writes it (`perfidia-arena/2`, `estimate.json`, `seats.json` with the
-// lineup, budget and fallbacks fields, `preflight` lines in `llm_calls.jsonl`) and the same run
+// lineup, budget and fallbacks fields and Pass 1b's price date, intended models, prompt variants and
+// cadences, `preflight` lines and Pass 1b's price cards and reasoning kinds in `llm_calls.jsonl`) and the same run
 // rewritten as phase 3 wrote it (`perfidia-arena/1`, no phase-4 file, field or line). The side-file
 // readers accept both; the server lists both, ended, with their LLM seats; the annotations of a
-// turn are the same.
+// turn are the same but for the reasoning kind only the new lines carry.
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { cpSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { LlmLogLineSchema, SeatsFileSchema } from "@perfidia/protocol";
+import { TurnAnnotationSchema } from "@perfidia/protocol/spectator";
 import { readArenaFile, readSeatsFile } from "./store/rundir.ts";
 import {
   fakeRun,
@@ -23,8 +25,25 @@ import {
 
 const LONG = 120_000;
 const PHASE4_LINES = new Set(["preflight", "prompt_cap", "kill_switch", "operator", "carry"]);
+/** Pass 1b's fields of a seat of `seats.json` and of an `llm_call` line. */
+const PASS1B_SEAT = [
+  "intended",
+  "endpoint",
+  "quantization",
+  "promptVariant",
+  "reminders",
+  "sharedHash",
+  "toolsHash",
+  "operatorHash",
+  "reasoningContext",
+];
+const PASS1B_CALL = ["endpoint", "priceCard", "feeNanoUsd", "reportedCostNanoUsd", "reasoningKind"];
 
 let root = "";
+
+/** The reasoning kind of each round of a served annotation (null: none). */
+const kinds = (text: string) =>
+  TurnAnnotationSchema.parse(JSON.parse(text)).rounds.map((r) => r.reasoningKind ?? null);
 
 function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null && !Array.isArray(v);
@@ -71,14 +90,23 @@ function downgrade(dir: string): void {
   writeFileSync(
     seatsPath,
     JSON.stringify({
-      ...without(seats.file, ["lineup", "estimateSha256", "promptCapTokens", "budgetNanoUsd"]),
-      seats: seats.seats.map((s) => without(s, ["fallbacks"])),
+      ...without(seats.file, [
+        "lineup",
+        "estimateSha256",
+        "promptCapTokens",
+        "budgetNanoUsd",
+        "priceDate",
+      ]),
+      seats: seats.seats.map((s) => without(s, ["fallbacks", ...PASS1B_SEAT])),
     }),
   );
   const callsPath = join(dir, "llm_calls.jsonl");
-  const kept = rows(readFileSync(callsPath, "utf8")).filter((r) => {
+  const kept = rows(readFileSync(callsPath, "utf8")).flatMap((r) => {
     const line: unknown = JSON.parse(r);
-    return isRecord(line) && typeof line.k === "string" && !PHASE4_LINES.has(line.k);
+    if (!isRecord(line) || typeof line.k !== "string" || PHASE4_LINES.has(line.k)) return [];
+    if (line.k !== "llm_call") return [r];
+    const usage = isRecord(line.usage) ? { usage: without(line.usage, ["reasoning"]) } : {};
+    return [JSON.stringify({ ...without(line, PASS1B_CALL), ...usage })];
   });
   writeFileSync(callsPath, `${kept.join("\n")}\n`);
   rmSync(join(dir, "estimate.json"));
@@ -113,6 +141,23 @@ describe("run directories from before and after phase 4", () => {
       }
     }
     expect(readObject(join(root, "phase3", "arena.json")).file.format).toBe("perfidia-arena/1");
+    for (const [file, field] of [
+      ["llm_calls.jsonl", '"priceCard"'],
+      ["llm_calls.jsonl", '"reasoningKind"'],
+      ["seats.json", '"promptVariant"'],
+      ["seats.json", '"priceDate"'],
+    ] as const) {
+      expect([file, field, readFileSync(join(root, "now", file), "utf8").includes(field)]).toEqual([
+        file,
+        field,
+        true,
+      ]);
+      expect([
+        file,
+        field,
+        readFileSync(join(root, "phase3", file), "utf8").includes(field),
+      ]).toEqual([file, field, false]);
+    }
     const file = SeatsFileSchema.parse(
       JSON.parse(readFileSync(join(root, "now", "seats.json"), "utf8")),
     );
@@ -142,7 +187,11 @@ describe("run directories from before and after phase 4", () => {
         expect(res.status).toBe(200);
         return res.text();
       };
-      expect(await annotation("phase3")).toBe(await annotation("now"));
+      // The same but for Pass 1b's reasoning kind, which only the new run's lines carry.
+      const [oldText, nowText] = [await annotation("phase3"), await annotation("now")];
+      expect(kinds(oldText).every((k) => k === null)).toBe(true);
+      expect(kinds(nowText).every((k) => k === "summary")).toBe(true);
+      expect(oldText).toBe(nowText.replaceAll(',"reasoningKind":"summary"', ""));
     },
     LONG,
   );

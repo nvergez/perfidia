@@ -118,7 +118,10 @@ export class FeedState {
     this.events = events;
   }
 
-  /** A seat's controller label: an LLM label names its profile (`llm:…:odysseus@1:p2`). */
+  /**
+   * A seat's controller label: an LLM label names its profile (`llm:…:odysseus@1:p2`, phase 4's
+   * `…:p2-env` too; its model and endpoint ids never hold `:`).
+   */
   controller(seat: PlayerId, label: string): void {
     const m = /^llm:[^:]*:([a-z][a-z0-9-]*)@[0-9]+:/.exec(label);
     if (m?.[1] !== undefined) this.profiles.set(seat, m[1]);

@@ -111,7 +111,9 @@ describe("arena CLI", () => {
     expect(est.stdout()).not.toContain("--out <dir>");
     const lineup = memoryIo();
     expect(await main(["estimate", "--lineup", "no-such-lineup"], lineup, {})).toBe(3);
-    expect(lineup.stderr()).toContain("(the presets are claude-duo, claude-family)");
+    expect(lineup.stderr()).toContain(
+      "(the presets are claude-duo, claude-family, budget-mix, mid-tier, mid-tier-flash, frontier)",
+    );
     const onBudget = memoryIo();
     expect(await main(["estimate", "--on-budget", "abort"], onBudget, {})).toBe(3);
     expect(onBudget.stderr()).toContain("--on-budget needs a match budget");
