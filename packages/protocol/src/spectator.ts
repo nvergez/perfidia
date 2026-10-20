@@ -939,3 +939,7 @@ export const ServerMsgSchema = z.discriminatedUnion("type", [
   z.strictObject({ type: z.literal("pong"), n: Int }),
 ]);
 export type ServerMsg = z.infer<typeof ServerMsgSchema>;
+
+// Per-model statistics (phase 4, Pass 3): the stats routes' payloads, for the web.
+
+export * from "./stats.ts";

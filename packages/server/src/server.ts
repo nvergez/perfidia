@@ -9,6 +9,7 @@ import { StaticSite } from "./http/static.ts";
 import { SpectatorService } from "./service/api.ts";
 import { LiveHub } from "./service/live.ts";
 import { Registry } from "./service/matches.ts";
+import { StatsService } from "./stats/service.ts";
 import { PublishList } from "./store/publish.ts";
 import { TimelineCache } from "./timeline/cache.ts";
 
@@ -57,7 +58,14 @@ export function startServer(config: ServeConfig, o: StartOptions = {}): RunningS
   );
   hub = new LiveHub(registry, config.limits, now);
   const memo = new BodyMemo();
-  const service = new SpectatorService(registry, memo);
+  const stats = new StatsService(registry, {
+    file: config.stats ?? null,
+    runs: config.runs,
+    costs: config.policy.costs,
+    now,
+    warn,
+  });
+  const service = new SpectatorService(registry, memo, stats);
   let site: StaticSite | null = null;
   let http: RunningHttp;
   try {

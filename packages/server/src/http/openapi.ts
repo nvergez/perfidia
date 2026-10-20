@@ -6,6 +6,9 @@ import {
   HealthSchema,
   MatchListItemSchema,
   MatchMetaSchema,
+  MatchStatsSchema,
+  ModelDetailSchema,
+  ModelsResponseSchema,
   MomentSchema,
   PlayerDossierSchema,
   ReportDetailSchema,
@@ -34,6 +37,9 @@ const NAMED = new Map<z.core.$ZodType, string>([
   [TurnAnnotationSchema, "TurnAnnotation"],
   [PlayerDossierSchema, "PlayerDossier"],
   [ReportDetailSchema, "ReportDetail"],
+  [MatchStatsSchema, "MatchStats"],
+  [ModelsResponseSchema, "Models"],
+  [ModelDetailSchema, "ModelDetail"],
   [ApiErrorSchema, "ApiError"],
   [ClientMsgSchema, "ClientMsg"],
   [ServerMsgSchema, "ServerMsg"],
@@ -57,9 +63,9 @@ function ref(schema: z.ZodType): Json {
 }
 
 const STATUS_TEXT: Readonly<Record<number, string>> = {
-  404: "Not found: an unknown or unpublished match, or a timeline that is no longer current",
+  404: "Not found: an unknown or unpublished match, a timeline that is no longer current, or no statistics",
   422: "Invalid path or query parameter",
-  503: "The match is loading (its log is being folded)",
+  503: "The match (or a match the statistics aggregate) is loading: its log is being folded",
 };
 
 function parameters(r: Route): Json[] {

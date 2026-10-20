@@ -25,6 +25,7 @@
     "sim": "bun packages/sim/src/cli.ts",
     "arena": "bun packages/orchestrator/src/arena/cli.ts",
     "serve": "bun packages/server/src/main.ts",
+    "stats": "bun packages/server/src/stats/cli.ts",
     "dev": "bun packages/web/scripts/dev.ts",
     "web:build": "bun packages/web/scripts/build.ts",
     "test:e2e": "PERFIDIA_E2E=1 bun test packages/web/e2e",

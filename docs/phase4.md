@@ -1,4 +1,4 @@
-# Phase 4: the multi-model arena (Pass 1a, Pass 1b and Pass 2 as built)
+# Phase 4: the multi-model arena (Pass 1a, Pass 1b, Pass 2 and Pass 3 stats as built)
 
 > **Status.** Roadmap step 4 of `docs/brief.md`, "Multi-model arena": seats with different models
 > and personalities, budgets, per-model stats. Exit criterion: the cost per match is known and
@@ -25,7 +25,13 @@
 >   the integration's cross-adapter conformance suite and four-provider wire-stub match. Nothing in
 >   Pass 2 has called a real API: provider behaviour is documented and pinned by synthetic
 >   fixtures until the owner's recorded smokes (§32, §36).
-> - **Not built yet:** Pass 3 (per-model stats and their spectator pages).
+> - **Pass 3's statistics are built** (§41–§48, agent F): the per seat per match fold
+>   (`@perfidia/spectator/stats`, `perfidia-stats/1`), the aggregation across matches with MAP
+>   Plackett–Luce ratings and block-bootstrap intervals (`perfidia-model-stats/1`), the claim
+>   threshold of design §6.4 (no ranking below it), the power simulation, `bun run stats` and three
+>   GET routes of the spectator server (`/api/matches/:id/stats`, `/api/models`, `/api/models/:id`).
+> - **Not built yet:** Pass 3's web pages (agent G: model names, the dossier's model block, the
+>   `/models` page, reasoning-kind labels) and the optional red team (agent H).
 > - This document describes what was built. The reviewed phase-4 design (with its `[critic]`
 >   corrections) is the source of the decisions; "design §x" below and in code comments refers to
 >   it. Where this document and the code disagree, the code wins; fix this document. Where
@@ -74,6 +80,15 @@
 37. Tests and measurements (Pass 2)
 38. Deviations (Pass 2)
 39. Open items (Pass 2)
+40. The Pass 2 review's fixes
+41. What Pass 3's statistics deliver
+42. Per seat per match: `perfidia-stats/1`
+43. Across matches: `perfidia-model-stats/1`
+44. How many matches before a claim: the power simulation
+45. The routes (the web's contract)
+46. `bun run stats`
+47. Tests and measurements (Pass 3 statistics)
+48. Deviations and open items (Pass 3 statistics)
 
 ---
 
@@ -1671,3 +1686,318 @@ reserve $1.43, K $38.57; `mid-tier` $10.41 / $40.44 / $170.13, reserve $6.64, K 
 `mid-tier-flash` $8.76 / $32.57 / $131.02, reserve $5.25, K $144.75; `frontier` $36.78 / $134.16 /
 $524.44, reserve $22.90, K $547.10. The GLM and Kimi seats now predict at `low`; the reserves grew
 with the OpenAI 12-hour write price and OpenRouter's completion slack.
+
+# Part IV: Pass 3, statistics (agent F)
+
+## 41. What Pass 3's statistics deliver
+
+Design §6 asks for per-model statistics: what each seat did, cost and went through in a match,
+and, across matches, how the models compare, with intervals and an honest "too few matches" state.
+Pass 3 agent F built the numbers and their routes; agent G builds the web pages on them (§45 is
+their contract).
+
+- **Per seat per match** (`perfidia-stats/1`, §42): a pure fold in `@perfidia/spectator/stats`
+  (`matchStats`, `statsOfLog`) over `match.jsonl` (through the spectator fold, so ruleset names stay
+  in `fold/rulesets.ts`), `llm_calls.jsonl`, `seats.json` and `arena.json`'s cost by kind. No I/O, no
+  `Math.random`, integers for money.
+- **Across matches** (`perfidia-model-stats/1`, §43): `packages/server/src/stats/` aggregates run
+  directories per model (or profile, prompt variant, model × profile), groups a rotation series'
+  matches into blocks from the root's `series.json`, fits MAP Plackett–Luce ratings with seeded
+  block-bootstrap (or Laplace) intervals, and reports the claim state of design §6.4. Below the
+  threshold no outcome, rank or rating is shown: the file says how many more matches a claim needs.
+- **The power simulation** (§44): `bun run stats -- power` reproduces the design's exact table and
+  measures the pipeline's own power on synthetic series of known strengths; a 48-seed bot batch ran
+  through the same pipeline.
+- **Routes** (§45): `GET /api/matches/:id/stats`, `GET /api/models`, `GET /api/models/:id` on both
+  HTTP adapters, Zod-validated, in the OpenAPI document, under `publish.json` visibility and
+  `--no-costs`.
+- **CLI** (§46): `bun run stats -- match|aggregate|power`, a table or `--json`.
+- **Protocol** (`packages/protocol/src/stats.ts`): every schema above, exported from the root barrel
+  and from `@perfidia/protocol/spectator` (the web's import). Additive: no existing format changed.
+- Engine, gateway, bots, sim, the orchestrator and every golden are untouched; no dependency was
+  added.
+
+## 42. Per seat per match: `perfidia-stats/1`
+
+`MatchStatsSchema`: `{format, match, ruleset, status, verified, rated, clock, lastT, endedAt,
+result, fake, lineup, series, published, seats[], collusion, cost}`.
+
+- **`rated`** = the log verifies (level E) and has an end line, and the status is `ended` or
+  `degraded`. Only rated matches enter ratings, outcomes and the claim count.
+- **`series`** = `{lineup, block, index}` from the runs root's `series.json` (`perfidia-series/1`):
+  the series' base lineup, the block (from 0) and the match's index (from 1). The series seed is
+  never copied (each block's game seed derives from it; seeds are never served).
+- **`published.costs`**: false under `--no-costs`; then `cost` of the match and of every seat, and
+  `operations.latencyMs` / `ttftMs`, are null.
+
+Each seat (`SeatStatsSchema`):
+
+| Block        | Fields and definitions                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| who          | `kind` as it started (`llm`, or `bot`; a handed-off seat stays `llm`: intention to treat), `label`, `key` (`provider/model[@endpoint]/effort`, or the bot label `bot:conqueror@3`), `id` (the key as a URL-safe model id: `anthropic.claude-haiku-5-5.medium`, `openrouter.z-ai-glm-5-3.z-ai-fp8.low`, `bot.conqueror.3`; two keys that slug alike get `-2`, `-3` in the aggregate), `name` (profile first name, `Conqueror (bot)`), `model` `{provider, model, endpoint, effort, intended, quantization, effortSent}`, `profile`, `promptVariant`, `reminders`, `toolsHash`, `fake` (a bot behind the LLM pipe: provider `fake`, never a model's play)                                                                                                                   |
+| `outcome`    | the end line's `result.standings` (the ruleset's standings at the last line of a match that did not end): `rank` (1-based, no shared ranks), `score`, `cities`, `alive`, `eliminatedAt`, `winner` (among the end line's winners)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| `play`       | `turns` (every turn the seat ended, equal to the dossier's `counts.turns`), `wakes` (turns ended while an LLM controlled it), `rounds`, `calls`, `accepted`, `rejections` by code, `thoughts` (wakes with a public thought), `endings` by kind                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| `diplomacy`  | `messagesSent`, `messagesReceived` (to the seat or to everyone, from another seat), `publicSent`, `proposalsSent/Received`, `accepted`, `refused`, `alliancesFounded/Joined/Left`, `pactsSigned`; **`pactsKept`** = pacts that expired or were active at the end with no betrayal by the seat of that partner meanwhile; **`pactsBroken`** = `betrayal {by: seat, relation: "pact"}`; `pactEnds` = early ends by `pact_ended.cause` as is; `betrayalsCommitted` / `Suffered` from `betrayal {by, against}`; `sameModel` / `crossModel` `{messages, pacts, alliances}` with LLM seats that started on the same model / another one (design §3.8; null for a bot); `selfIdentification` = sent messages naming a model, a vendor or "language model" (counted, never shown) |
+| `military`   | `battlesAttacked`, `battlesDefended`, `battlesWon`, `citiesConquered`, `citiesLost`, `citiesFounded`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| `incidents`  | `handoff {t, reason, label}` (reason from `seats.json`, null when absent), `wakeCaps`, `promptCaps`, `fallbackPermille` (attempts a fallback served), `errorWakes`, `refusals` by category, **`parallelPermille`** = round attempts that called ≥ 2 tools ÷ round attempts that called ≥ 1, ‰ (null without one)                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| `operations` | null for a bot or without `llm_calls.jsonl`: `attempts`, `thoughtCalls`, `stops`, `errors` by kind, `toolErrors {malformed (stop "other"), invalidArgs (gateway INVALID_ARGS)}`, `fallbacks`, `toolRounds`, `parallelRounds`, `textChars`, `reasoningChars`, `reasoningKinds`, `latencyMs` / `ttftMs` `{n, p50, p95}` (nearest rank; null under `--no-costs`)                                                                                                                                                                                                                                                                                                                                                                                                             |
+| `cost`       | null for a bot, without `llm_calls.jsonl` and under `--no-costs`: `nanoUsd` (every attempt and thought call, fees included), `perWakeNanoUsd` (floor), `preflightNanoUsd` (the start preflight and probes split equally among seats of the same provider, model and endpoint; the remainder to the first), `feesNanoUsd`, `reportedNanoUsd` (OpenRouter, when every line has one), `estimatedNanoUsd`, `byKind` (from `arena.json`), `tokens {input, cacheWrite5m, cacheWrite1h, cacheRead, output, reasoning}`, `cacheReadPermille` = cacheRead ÷ (input + writes + cacheRead), `priceCards`, `capNanoUsd`                                                                                                                                                               |
+
+`collusion` sums the same-model and cross-model pairs (`samePairs`, `crossPairs`, `same`, `cross`);
+`cost` of the match is `{nanoUsd (attempts, preflight, probes), preflightNanoUsd, probeNanoUsd,
+budgetNanoUsd}`. Derived ratios the design lists (cost per turn, dollars per wake, output characters
+per wake, calls per round, rounds per wake, thought coverage) are quotients of these fields; the web
+computes them.
+
+Old run directories fold without error: a bots-only run (the war golden) has `operations` and
+`cost` null on every seat; a `perfidia-arena/1` run has no prompt variant, no price card and no
+preflight (`reminders`, `toolsHash` null, `priceCards` empty, `preflightNanoUsd` 0).
+
+## 43. Across matches: `perfidia-model-stats/1`
+
+`bun run stats -- aggregate --runs <dir>` discovers run directories as the server does, keeps the
+public ones with `--publish <file>` (an `after_end` match only once it has ended), folds each
+(`statsOfRunDir`; a directory that cannot be folded is left out with a warning), and aggregates
+(`aggregate.ts`):
+
+- **Items.** By `--group model` (default: `provider/model[@endpoint]/effort`; bots by label), or
+  `profile`, `variant`, `model-profile`. Sorted by id, never by outcome.
+- **Per item** (`ModelAggregateSchema`): `matches`, `seats`, `rated`, `handoffs` by reason, sums of
+  `play`, `diplomacy`, `military` and `incidents`, the item's `parallelPermille`, `operations`
+  (`latencyMs` = the seats' p50 and p95 averaged, weighted by their attempts), `cost` (`nanoUsd`,
+  `perMatchNanoUsd`, `perWakeNanoUsd`, `cacheReadPermille`, `tokens`, **`byLineup`**: mean cost per
+  match in each lineup with a block-bootstrap interval from 5 blocks, since social and urgent
+  wakes depend on the opponents), and `outcome` (`rated`, `meanRank`, `ranks[]` = seats per final
+  rank, `wins`, `dominationWins`, `citiesMean`) — **null until the claim threshold is met**.
+- **Blocks.** A series match's block is `series:<lineup>#<block>` (four matches of a rotation
+  square); any other match is its own block (`match:<id>`). `blocks` counts the rated ones.
+- **Ratings: MAP Plackett–Luce** (`pl.ts`). Each item i has a log-strength θᵢ; a match's full
+  ranking r (best first, every seat an entry, two seats of one model are two entries of one item)
+  has probability Πₖ exp(θ_{rₖ}) / Σ_{j≥k} exp(θ_{rⱼ}). The prior is N(0, 1.5²) on every θᵢ, which
+  keeps the fit finite on a weakly connected comparison graph (a bot always last). The
+  log-posterior is strictly concave: Newton's method from θ = 0 (Cholesky solve, step halving,
+  step below 1e-10 or 100 iterations) gives the mode deterministically; its Laplace covariance is
+  the inverse negative Hessian. Strengths are centred on the LLM items' mean (sum to zero over
+  LLM items; over all items in a bots-only root) and also shown on an Elo-like scale, 1500 + 400 ·
+  θ / ln 10. Under Plackett–Luce, P(i ahead of j) = exp(θᵢ) / (exp(θᵢ) + exp(θⱼ)).
+- **Intervals** (`rate.ts`). From 5 blocks: a block bootstrap (blocks drawn with replacement,
+  `--replicates` refits from the mode, default 1000; percentile intervals, linear between order
+  statistics, 95%) for strengths, Elo, mean rank, every LLM pair's difference and the cost per
+  lineup. Below 5 blocks: Laplace intervals for strengths and differences (mean rank has none).
+  `bootstrapSeed` (default 20261019, `--seed`) feeds the engine's `streamRng` with the streams
+  `headline`, `clean` and `cost:<id>:<lineup>`: the same seed gives byte-identical output.
+- **Headline and sensitivity.** `headline` ranks every seat as it started (intention to treat,
+  handed-off seats included); `clean` leaves handed-off seats out of each ranking.
+- **Pairs.** For each pair of LLM items: matches they met in, `aAhead` (a's best seat ahead of b's
+  best seat), the strength difference a − b and its interval.
+- **The claim state** (`ClaimsSchema`, `power.ts`): `pairs` = LLM item pairs that met in a rated
+  match, `matches` = rated matches of the pair that met least, `alpha` = 0.05 / pairs (Bonferroni),
+  `needed` = the smallest n at which the exact two-sided binomial test of p = 0.5 at `alpha` has
+  80% power against a 70/30 head-to-head, `more` = needed − matches, `power` = the test's achieved
+  power at `matches`, and `table` the same at 80/20, 70/30 and 60/40. `state`: `ok` when matches ≥
+  needed; `too_few_matches` otherwise; `no_comparison` when no two LLM items met. A root of bots
+  only compares its bots (the power check). Below `ok`, `outcome`, `ratings` and the seats' `rank`
+  are null; `--exploratory` fills them for the operator (`exploratory: true`), and the server never
+  serves such a file.
+- **Seats** (`ModelSeatRowSchema`): `{id, match, seat, rated, lineup, profile, promptVariant,
+  handedOff, wakes, costNanoUsd, rank}` per seat, for `/api/models/:id`.
+- **Series** (`series[]`): `{lineup, fake, order, blocks, orthogonal, planned, found}` per manifest
+  (planned matches against those found and aggregated).
+
+Thresholds in one place: prior σ 1.5; bootstrap from 5 blocks; 95% intervals; 1000 replicates;
+claim gap 70/30 at 80% power, α 0.05 Bonferroni over the compared pairs (one pair 49 matches; six
+pairs, four models, 74; ten pairs 80).
+
+## 44. How many matches before a claim: the power simulation
+
+**Exact table** (`power.ts`, pinned by `power.test.ts`; design §6.4 reproduced): one pair 20 / 49 /
+199 and six pairs 32 / 74 / 303 matches for 80/20, 70/30, 60/40; the draft's power 0.38 at 10, 0.42
+at 20, 0.46 at 90. The exact test's power is a sawtooth in n (70/30, one pair: 0.810 at 49 but
+below 0.80 at 50–53), so the achieved power is reported as it is.
+
+**Pipeline simulation** (`simulate.ts`, method): six items with one seat each, as in a comparison
+lineup (four LLM models A–D, two bots); θ_A = δ/2, θ_B = −δ/2, the rest 0, δ = ln(0.7 / 0.3), so A
+finishes ahead of B with probability 0.7. For each series length, 400 series are drawn from
+Plackett–Luce (the engine's seeded PRNG), grouped in blocks of 4 matches, and rated by the same code
+as real matches (`rateMatches`); power is the share of series where the claim is made: the exact
+binomial test on A's head-to-head record rejects (α 0.05 one pair, 0.05/6 six pairs), or A − B's
+interval excludes 0 (Laplace at 95% or 1 − 0.05/6; block bootstrap at 95% with 200 replicates).
+
+`bun run stats -- power --matches 12,20,32,49,52,74,76,100 --reps 400 --replicates 200` (3 min 16 s
+on the 4-vCPU box):
+
+| matches | exact, 1 pair | binomial sim, 1 | Laplace, 1 | bootstrap, 1 | exact, 6 pairs | binomial sim, 6 | Laplace, 6 |
+| ------: | ------------: | --------------: | ---------: | -----------: | -------------: | --------------: | ---------: |
+|      12 |         0.253 |           0.248 |      0.418 |        0.418 |          0.085 |           0.070 |      0.180 |
+|      20 |         0.416 |           0.398 |      0.580 |        0.695 |          0.107 |           0.083 |      0.295 |
+|      32 |         0.495 |           0.493 |      0.815 |        0.868 |          0.344 |           0.343 |      0.563 |
+|      49 |         0.810 |           0.798 |      0.913 |        0.925 |          0.484 |           0.493 |      0.808 |
+|      52 |         0.811 |           0.763 |      0.940 |        0.940 |          0.614 |           0.598 |      0.798 |
+|      74 |         0.943 |           0.920 |      0.993 |        0.988 |          0.800 |           0.788 |      0.945 |
+|      76 |         0.921 |           0.933 |      0.995 |        0.993 |          0.823 |           0.830 |      0.948 |
+|     100 |         0.979 |           0.985 |      1.000 |        0.998 |          0.920 |           0.925 |      0.988 |
+
+Reading: the simulated binomial column matches the exact one (the simulation is sound); the rating
+pipeline, which uses every match's full ranking and not only the A–B result, reaches 80% earlier
+(one pair at about 32 matches, six pairs at about 49). The threshold stays the design's exact
+binomial count (74 for four models): conservative, simple to explain, and the simulated advantage
+holds only when the models really follow Plackett–Luce. Wider lineups need more (ten pairs: 80).
+
+**The bot batch** (design §6.4: bots of known strength through the same pipeline): `bun run sim --
+batch --variant "v: perfidia-1@1.1.0" --seeds 1-48 --players 6 --out <scratch>` (48 matches of
+conqueror@3, two expander@2, opportunist@3, rusher@3, turtle@3; 7 days) then `bun run stats --
+aggregate --runs <scratch> --exploratory` (2 min 54 s for 48 matches, 288 seats, 1000 replicates):
+48 blocks, block bootstrap. Strengths (95%): expander@2 1.687 [1.428, 2.011], opportunist@3 1.677
+[1.268, 2.131], conqueror@3 1.322 [0.973, 1.678], rusher@3 −2.060 [−2.518, −1.592], turtle@3 −2.626
+[−3.107, −2.233]. The pipeline separates the two tiers by more than 3 log-units and, inside the
+bottom tier, rusher@3 from turtle@3 (31 of 48 ahead, difference 0.565 [0.078, 1.226]); it does not
+separate conqueror@3 from expander@2 (13 of 48, −0.365 [−0.842, 0.044]) or expander@2 from
+opportunist@3 (28 of 48, 0.010 [−0.455, 0.492]). The claim state on that root is honest: five items,
+ten pairs, α 0.005, 48 matches, a 70/30 claim needs 80 (power now 0.40): `too_few_matches`, 32 more.
+
+## 45. The routes (the web's contract)
+
+All three are `GET`, return JSON validated by the named schema (`@perfidia/protocol/spectator`),
+appear in the OpenAPI document (`MatchStats`, `Models`, `ModelDetail`), behave identically on the
+Elysia and raw adapters (contract tests on both), and return errors as `ApiError {code, message,
+hint}`.
+
+| Route                                       | Body                                                                                                             | Cache-Control                                                      | Errors                                                                                    |
+| ------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------ | ----------------------------------------------------------------------------------------- |
+| `/api/matches/:id/stats`                    | `MatchStatsSchema`                                                                                               | `private, max-age=3600` once the match is final, else `max-age=10` | 404 `NOT_FOUND` (unknown or not public), 503 `LOADING` (`retry-after`), 422 `BAD_REQUEST` |
+| `/api/models`                               | `ModelsResponseSchema` = `{format, grouping, published, matches[], series[], blocks, models[], claims, ratings}` | `private, max-age=60`                                              | 404 `NO_STATS`, 404 `STATS_NOT_PUBLIC`, 503 `LOADING`                                     |
+| `/api/models/:id` (`:id` a `ModelIdSchema`) | `ModelDetailSchema` = `{format, grouping, published, model, claims, rating, seats[]}`                            | `private, max-age=60`                                              | 404 `NO_MODEL`, 404 `NO_STATS`, 404 `STATS_NOT_PUBLIC`, 503 `LOADING`, 422 `BAD_REQUEST`  |
+
+- **Per-match statistics** are computed on the main thread from the steps the fold workers already
+  made and the frame at the tail (never a fold on the request thread), with the side files read
+  whole; kept per match (up to 32) while the timeline and the side files are unchanged, and
+  recomputed at most every 5 s for a running match. They equal `bun run stats -- match` of the
+  same directory (test on both adapters).
+- **Model statistics** are the file `bun run stats -- aggregate --out <file>` wrote, served with
+  `serve --stats <file>` (re-read when it changes). Served only when every match it aggregates is
+  public now: an unlisted or hidden match makes it `STATS_NOT_PUBLIC` (fail closed), one still
+  loading `LOADING`. No `--stats`, an unreadable or invalid file, or an `--exploratory` file:
+  `NO_STATS` (the server logs a warning when it reads such a file). `/api/models` drops the file's `seats` and `exploratory`;
+  `/api/models/:id` carries that model's seats and its headline rating item (null below the
+  threshold).
+- **`--no-costs`** (the owner's default is costs published): `published.costs: false`, and every
+  cost, token and model-time figure is null in all three routes (`cost`, `operations.latencyMs`,
+  `ttftMs`, `costNanoUsd`).
+
+What the web uses:
+
+- the claim state: `claims.state`, `claims.matches`, `claims.needed`, `claims.more`,
+  `claims.power`, `claims.pairs`, `claims.table` — "too few matches: N more needed" when
+  `state !== "ok"`, never a ranking; `ratings === null` and every `outcome === null` then;
+- ratings when `ok`: `ratings.headline.items[] {id, strength, interval, elo, eloInterval,
+  meanRank, meanRankInterval}` (sorted by id; the web chooses the display order),
+  `ratings.headline.pairs[]`, `ratings.clean` for the sensitivity view, `ratings.intervals
+  {method, blocks, replicates, level}` to say how intervals were made;
+- per model: `id`, `key`, `kind`, `model {provider, model, endpoint, effort, intended,
+  quantization, effortSent}`, `fake`, `matches`, `seats`, `handoffs`, `play`, `diplomacy`,
+  `military`, `incidents.parallelPermille`, `operations.toolErrors`, `cost.perMatchNanoUsd`,
+  `cost.perWakeNanoUsd`, `cost.cacheReadPermille`, `cost.byLineup[]`, `outcome`;
+- per match (the dossier's model block): `seats[].model`, `profile`, `promptVariant`, `fake`,
+  `incidents` (hand-off, caps, `parallelPermille`), `operations.reasoningKinds`, `cost`,
+  `diplomacy.sameModel` / `crossModel`, `outcome.rank`, and `series` / `lineup`.
+
+## 46. `bun run stats`
+
+```sh
+bun run stats -- match <run-dir> [--json] [--no-costs]
+bun run stats -- aggregate --runs <dir> [--publish <publish.json>] [--group model|profile|variant|model-profile] \
+  [--seed N] [--replicates N] [--no-costs] [--exploratory] [--json] [--out <file>]
+bun run stats -- power [--p 0.7] [--matches 12,20,32,48,76] [--reps 200] [--replicates 200] [--seed N] [--json]
+```
+
+- `match`: one match as a seat table, or the `perfidia-stats/1` document with `--json`; a
+  `series.json` next to the run directory gives its series match.
+- `aggregate`: the claim line ("claims: too few matches, no ranking shown: … 70 more"), the model
+  table, the series found, and, once the threshold is met (or with `--exploratory`, labelled
+  EXPLORATORY), the headline and clean ratings with their pairs. `--out` writes the file atomically
+  (temporary file and rename) for `serve --stats`.
+- `power`: the exact table and the simulated rows of §44.
+- Exit codes: 0 ok, 2 a run directory cannot be read, 3 usage. Only the run directories (and
+  `series.json`, `publish.json`) are read; nothing is sent anywhere.
+
+A rotated series is aggregated where `arena series --out <dir>` wrote it (the root holds
+`series.json` and one run directory per match); the server discovers the same root with
+`serve --runs <dir> --stats <file>`.
+
+## 47. Tests and measurements (Pass 3 statistics)
+
+Tests (50 in the new files, in `packages/protocol`, `packages/spectator` and `packages/server`;
+none touches the network):
+
+- `spectator/src/stats/stats.test.ts` (11): on the war golden, every seat's turns, messages,
+  proposals and betrayals equal the dossier's `counts` and the fold's seat tally; ranks equal the
+  end line's standings; event sums (42 battles, 7 proposals, 10 messages, p2 betrays p3); bots-only
+  nulls; an unverifiable log is not rated; two fake runs' wakes, attempts, cost and cost by kind
+  equal `arena.json` per seat; planted secrets and texts never appear; `--no-costs`; hand-made
+  feeds for pacts kept and broken, alliances, same and cross model, self-identification, labels and
+  ids, the preflight split (4/3), the parallel share (667‰), tool rounds and fallbacks.
+- `server/src/stats/pl.test.ts` (4): the MAP fit recovers known strengths from 600 drawn rankings
+  within 0.3 and orders every pair more than 0.6 apart (fast-check, 25 runs, seed 4242); it is
+  deterministic, stationary (no nudge raises the log-posterior) and finite for an item always last;
+  the two-item closed form; the pipeline's intervals are deterministic for a seed, cover the truth,
+  and fall back to Laplace below 5 blocks.
+- `power.test.ts` (5): the design's table (20/49/199, 32/74/303), the draft's powers, the sawtooth,
+  a deterministic simulation.
+- `aggregate.test.ts` (9): a 76-match rotated series (19 blocks of 4) reaches `ok` and recovers the
+  four models' order; 8 matches stay `too_few_matches` with no outcome; `--exploratory`; clean seats
+  = 76 × 6 − 8 handed-off; the output is identical for a seed, and another seed moves the intervals,
+  not the fit; cost per lineup; groupings; id collisions.
+- `cli.test.ts` (8): the table and `--json`; a capped run's hand-off and LLM figures equal
+  `arena.json`; a 4-match `budget-mix` fake series grouped by `series.json` (one block of four,
+  each model on each profile once, 70 more matches needed, no ranking); old run directories (the
+  war golden, a `perfidia-arena/1` run, a hand-off) aggregate without error; `--no-costs`,
+  `--publish`, `--out`, `--exploratory`; usage errors.
+- `routes.test.ts` (10, both adapters): served per-match statistics equal the CLI's; cache headers;
+  `/api/models` has no seat list and no ranking below the threshold; `--no-costs` withholds every
+  figure; `publish.json` visibility (`NOT_FOUND`, `STATS_NOT_PUBLIC`, a fitting public file
+  served); `NO_STATS` without `--stats` and for an `--exploratory` file.
+- `protocol/src/stats.test.ts` (3) and `stats.fixtures.test.ts` (valid and invalid fixtures of the
+  14 schemas, checked by `schemas.test.ts`); the contract (the three paths in the OpenAPI document),
+  security (nothing served holds a `seed` key: the series seed is never copied), and architecture
+  (only `stats/runs.ts` folds whole logs; nothing imports the CLI) suites cover the rest.
+
+Measurements (this box, 4 vCPU shared):
+
+- `bun run stats -- match` on the war golden (16,253 lines, bots only): 3.98 s wall, nearly all of
+  it the fold (the spectator's war test folds it in 3.5 s).
+- A 4-match, 7-day `budget-mix` fake series aggregated in 19.5 s (fake ledger spend $10.13 in all);
+  per model per match: Haiku $0.24, GPT-6 Luna $0.27, GLM-5.3 Flash $0.36, Gemini 3.8 Flash $1.66
+  (fake brains, the real cards); parallel share 800–826‰, cache reads 851–861‰.
+- The 48-match bot batch aggregated with 1000 replicates in 2 min 54 s; a 1000-replicate bootstrap
+  over 100 synthetic matches takes about 1.1 s.
+- `@perfidia/protocol/spectator` bundle 38,212 → 39,765 bytes gzipped (the statistics schemas);
+  the web's initial JS 174.7 → 176.1 KB gzipped (budget 185).
+- `bun run check`: 3,781 pass, 34 skip, 0 fail (3,815 tests in 304 files, 9 min 16 s);
+  `bun run test:e2e` (web sources unchanged): 11 pass in 23 s.
+
+## 48. Deviations and open items (Pass 3 statistics)
+
+Deviations from design §6:
+
+- `/api/models/:id`, not `:key`: a key holds `/` and `@`; the id is its URL-safe slug, the key is in
+  the body.
+- Mean-rank intervals exist only with the block bootstrap (from 5 blocks); Laplace intervals cover
+  strengths and differences only.
+- The claim threshold is the exact binomial count, although the simulated pipeline reaches 80%
+  power earlier (§44).
+- Pair `aAhead` compares each item's best seat when an item holds two seats in a match.
+- An item's latency is the attempt-weighted mean of its seats' p50 and p95, not a pooled
+  percentile (the per-attempt latencies are not kept in the aggregate).
+- Fake LLM seats are their own items (provider `fake`), counted in the claim state of a fake root:
+  a fake root is a rehearsal, never a claim about models.
+
+Open items:
+
+- The server reads one `series.json`, at the runs root: one series per root (nested series roots
+  are not discovered).
+- The orchestrator's `report.ts` and `arena.json` are unchanged (owned elsewhere): the parallel-call
+  share and series grouping are in `bun run stats` and the routes, and the plan's warning still
+  says the share is "not reported yet".
+- Web pages (agent G): model names, the dossier's model block, the `/models` page, reasoning-kind
+  labels.
+- No real-model statistics yet: every LLM figure above comes from `--fake` runs.
