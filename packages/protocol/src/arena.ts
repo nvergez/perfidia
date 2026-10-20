@@ -923,11 +923,16 @@ export type ReconcileFile = z.infer<typeof ReconcileFileSchema>;
 
 export const TOKEN_PROFILE_FORMAT = "perfidia-profile/1";
 
-/** One round trip of a measured wake: its prompt, output and cache-read tokens. */
+/**
+ * One attempt of a measured wake (its rounds, retries and thought calls, in order): its prompt,
+ * output and cache-read tokens. Pass 2: `cacheWriteTokens`, the prompt tokens written to a cache
+ * (both TTL buckets); absent, every uncached prompt token is priced as a write (an upper side).
+ */
 const ProfileRoundSchema = z.strictObject({
   promptTokens: Int,
   outputTokens: Int,
   cacheReadTokens: Int,
+  cacheWriteTokens: Int.optional(),
 });
 
 export const TokenProfileSchema = z.strictObject({
@@ -960,3 +965,66 @@ export const TokenProfileSchema = z.strictObject({
   briefingGrowth: z.array(z.strictObject({ day: Int, briefingTokens: Int })),
 });
 export type TokenProfile = z.infer<typeof TokenProfileSchema>;
+
+// A rotation series (`perfidia-series/1`, phase 4 §3.7 and §6.4; written by `arena series`): the
+// matches of seeded random Latin squares that rotate a lineup's LLM seat entries (`models`) over
+// its LLM positions, and an orthogonal square that rotates its profiles, block by block. Each block
+// of `order` matches plays one map (one game seed): every model plays every position once, and
+// with an orthogonal pair every profile once.
+
+export const SERIES_FORMAT = "perfidia-series/1";
+
+export const SeriesManifestSchema = z.strictObject({
+  format: z.literal(SERIES_FORMAT),
+  /** The base lineup's id. */
+  lineup: z.string().min(1),
+  /** The series seed: the squares and the game seed of each block. */
+  seed: z.int().nonnegative(),
+  fake: z.boolean(),
+  /** The squares' order: the LLM seats of a match. */
+  order: z.int().positive(),
+  blocks: z.int().positive(),
+  /**
+   * Graeco-Latin: the profile square is orthogonal to the model square, so each model plays each
+   * profile once per block; false where no orthogonal square of this order is built (2 and 6 have
+   * none), the profiles then rotating by an independent Latin square.
+   */
+  orthogonal: z.boolean(),
+  /** The LLM positions, in order. */
+  positions: z.array(PlayerIdSchema).min(1),
+  /** The rotated seat entries (`models[i]`), as the base lineup gives them. */
+  models: z
+    .array(
+      z.strictObject({
+        provider: z.string().min(1),
+        model: z.string().min(1),
+        endpoint: z.string().min(1).nullable(),
+        effort: EffortSchema,
+      }),
+    )
+    .min(1),
+  /** The rotated profiles (`profiles[j]`), e.g. `odysseus@1`. */
+  profiles: z.array(z.string().min(1)).min(1),
+  matches: z.array(
+    z.strictObject({
+      /** From 1. */
+      index: z.int().positive(),
+      /** From 0. */
+      block: Int,
+      /** The run directory, relative to the series directory. */
+      run: z.string().min(1),
+      /** The game seed (one per block). */
+      seed: z.int().nonnegative(),
+      /** Per LLM position, the indices of its model and profile. */
+      seats: z.array(z.strictObject({ seat: PlayerIdSchema, model: Int, profile: Int })),
+      /** `planned` until the match ran, then its status. */
+      status: z.union([z.literal("planned"), ArenaStatusSchema]),
+      /** The run's exit code; null until it ran. */
+      code: z.int().nonnegative().nullable(),
+      levelE: z.boolean().nullable(),
+      /** The run's own spend (`arena.json` `budget.actualNanoUsd`). */
+      costNanoUsd: Nano.nullable(),
+    }),
+  ),
+});
+export type SeriesManifest = z.infer<typeof SeriesManifestSchema>;

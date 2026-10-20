@@ -13,6 +13,7 @@ import type {
   Lineup,
   ReconcileFile,
   TokenProfile,
+  SeriesManifest,
   ReconcileInput,
   CityEnt,
   FeedItem,
@@ -546,6 +547,52 @@ const tokenProfile: TokenProfile = {
   briefingGrowth: [{ day: 0, briefingTokens: 1500 }],
 };
 
+const seriesManifest: SeriesManifest = {
+  format: "perfidia-series/1",
+  lineup: "budget-mix",
+  seed: 1,
+  fake: true,
+  order: 2,
+  blocks: 1,
+  orthogonal: false,
+  positions: ["p1", "p2"],
+  models: [
+    { provider: "anthropic", model: "claude-haiku-5-5", endpoint: null, effort: "medium" },
+    { provider: "openrouter", model: "z-ai/glm-5.3-flash", endpoint: "z-ai/fp8", effort: "medium" },
+  ],
+  profiles: ["odysseus@1", "achilles@1"],
+  matches: [
+    {
+      index: 1,
+      block: 0,
+      run: "m01",
+      seed: 7,
+      seats: [
+        { seat: "p1", model: 1, profile: 0 },
+        { seat: "p2", model: 0, profile: 1 },
+      ],
+      status: "ended",
+      code: 0,
+      levelE: true,
+      costNanoUsd: 367630000,
+    },
+    {
+      index: 2,
+      block: 0,
+      run: "m02",
+      seed: 7,
+      seats: [
+        { seat: "p1", model: 0, profile: 1 },
+        { seat: "p2", model: 1, profile: 0 },
+      ],
+      status: "planned",
+      code: null,
+      levelE: null,
+      costNanoUsd: null,
+    },
+  ],
+};
+
 export const ARENA_CASES: Record<string, SchemaCase> = {
   EffortSchema: {
     schema: protocol.EffortSchema,
@@ -911,13 +958,29 @@ export const ARENA_CASES: Record<string, SchemaCase> = {
   },
   TokenProfileSchema: {
     schema: protocol.TokenProfileSchema,
-    valid: [tokenProfile, { ...tokenProfile, seatDays: [], briefingGrowth: [] }],
+    valid: [
+      tokenProfile,
+      { ...tokenProfile, seatDays: [], briefingGrowth: [] },
+      withAt(tokenProfile, ["seatDays", 0, "wakes", 0, "rounds", 0, "cacheWriteTokens"], 1500),
+    ],
     invalid: [
       bad(tokenProfile, ["format"], "perfidia-profile/0"),
       bad(tokenProfile, ["key", "rulesetMajor"], "perfidia-1@1.1.0"),
       bad(tokenProfile, ["seatDays", 0, "wakes", 0, "rounds"], []),
       bad(tokenProfile, ["key", "promptVariant"], "whisper"),
+      bad(tokenProfile, ["seatDays", 0, "wakes", 0, "rounds", 0, "cacheWriteTokens"], -1),
       extra(tokenProfile, []),
+    ],
+  },
+  SeriesManifestSchema: {
+    schema: protocol.SeriesManifestSchema,
+    valid: [seriesManifest, { ...seriesManifest, matches: [] }],
+    invalid: [
+      bad(seriesManifest, ["format"], "perfidia-series/0"),
+      bad(seriesManifest, ["matches", 1, "status"], "queued"),
+      bad(seriesManifest, ["models", 0, "effort"], "huge"),
+      bad(seriesManifest, ["positions"], []),
+      extra(seriesManifest, ["matches", 0]),
     ],
   },
 };

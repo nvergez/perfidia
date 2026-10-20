@@ -162,8 +162,8 @@ describe("spectator schemas", () => {
     const all = [...schemasOf(spectator), ...schemasOf(arena)];
     // 63 through phase 4 Pass 1a; Pass 1b adds Provider, PromptVariant, ReminderCadence,
     // ReasoningContext and TokenProfile; the review the `perfidia-arena/1` readers (ArenaSeatReportV1,
-    // ArenaReportV1, ArenaReportAny).
-    expect(all.length).toBe(71);
+    // ArenaReportV1, ArenaReportAny); Pass 2 the series manifest (SeriesManifest).
+    expect(all.length).toBe(72);
     for (const [name, schema] of all) {
       const json = z.toJSONSchema(schema, { io: "output", unrepresentable: "any" });
       expect([name, typeof json]).toEqual([name, "object"]);

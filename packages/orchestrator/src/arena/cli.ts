@@ -16,10 +16,18 @@ import { LlmLogLineSchema, type LlmLogLine } from "../log/schema.ts";
 import { capabilitiesFor } from "../model/catalog.ts";
 import { PROFILES, profileRef } from "../seat/personalities.ts";
 import { seatPrompt } from "../seat/prompt.ts";
+import { PROFILES_DIR, calibrate, formatCalibrate } from "./calibrate.ts";
 import { formatCardTable, formatEstimate } from "./estimate.ts";
 import { PRESETS } from "./lineup.ts";
 import { PreflightError } from "./preflight.ts";
-import { arenaEnv, parseDuration, planArena, type ArenaEnv, type ArenaRequest } from "./plan.ts";
+import {
+  arenaEnv,
+  parseDuration,
+  planArena,
+  randomSeed,
+  type ArenaEnv,
+  type ArenaRequest,
+} from "./plan.ts";
 import {
   EXIT_RECONCILE,
   RECONCILE_AFTER_HOURS,
@@ -30,6 +38,7 @@ import {
 } from "./reconcile.ts";
 import { formatCost } from "./report.ts";
 import { CALLS_FILE, runArena, type SignalSource } from "./run.ts";
+import { runSeries } from "./series.ts";
 import { smokeCommand } from "./smoke.ts";
 
 /** The largest seed. */
@@ -54,6 +63,8 @@ export const USAGE = [
   "  estimate       the prediction, reserve and kill threshold of a run, without running it",
   "  cost           spend per seat and model of a run, from its llm_calls.jsonl",
   "  reconcile      check a run's ledger against the provider's usage pages (48 h after it)",
+  "  calibrate      measure real runs into calibration profiles (and 7-day --fake runs' briefing growth)",
+  "  series         play a lineup as rotated matches (Latin squares over seats and profiles)",
   "  personalities  list the profiles and their exact seat text",
   "  smoke          one live check of the key, the model and the request shape (needs the key)",
   "",
@@ -109,6 +120,11 @@ const RUN_FLAGS: FlagSpecs = {
     type: "string",
     value: "<YYYY-MM-DD>",
     help: "--fake runs and estimates: price at the cards of that UTC day (default: today; a real run prices each attempt at its start)",
+  },
+  profiles: {
+    type: "string",
+    value: "<dir>|off",
+    help: "calibration profiles the prediction draws on (arena calibrate; default packages/orchestrator/profiles/; off: the scenario only)",
   },
   "budget-usd": {
     type: "string",
@@ -272,6 +288,49 @@ const RECONCILE_USAGE = usageText(
   "arena reconcile <run-dir> (--input <file> | --usd <provider=usd> ...) [--force]",
   RECONCILE_FLAGS,
 );
+const CALIBRATE_FLAGS: FlagSpecs = {
+  profiles: {
+    type: "string",
+    value: "<dir>",
+    help: "where the profiles are kept (default packages/orchestrator/profiles/): a run measured again replaces its seat-days",
+  },
+};
+const CALIBRATE_USAGE = usageText(
+  "arena calibrate <run-dir>... [--profiles <dir>]   (real runs give seat-days; 7-day --fake runs give the briefing growth only)",
+  CALIBRATE_FLAGS,
+);
+/** `arena series`: the run flags every match shares, and the series' own. */
+const SERIES_FLAGS: FlagSpecs = {
+  ...Object.fromEntries(
+    Object.entries(RUN_FLAGS).filter(
+      ([k]) => !["out", "seat", "seed", "brain", "budget-carry", "watch", "lineup"].includes(k),
+    ),
+  ),
+  lineup: {
+    type: "string",
+    value: "<preset | file>",
+    help: "the lineup whose LLM seat entries and profiles rotate (required)",
+  },
+  out: {
+    type: "string",
+    value: "<dir>",
+    help: "the series directory: series.json, lineups/ and one run directory per match (required)",
+  },
+  blocks: {
+    type: "string",
+    value: "<N>",
+    help: "blocks of rotated matches, each as many matches as the lineup has LLM seats (default 1)",
+  },
+  seed: {
+    type: "string",
+    value: "<uint32>",
+    help: "series seed: the squares, and the game seed of block b (seed + b) (default: random, printed)",
+  },
+};
+const SERIES_USAGE = usageText(
+  "arena series --lineup <preset | file> --out <dir> [--blocks N] [--seed S] [run flags]",
+  SERIES_FLAGS,
+);
 const PERSONALITIES_USAGE = usageText("arena personalities", {});
 /** The efforts a Claude smoke takes. */
 const CLAUDE_EFFORTS = capabilitiesFor("anthropic", "claude-haiku-5-5").efforts;
@@ -347,6 +406,7 @@ function requestOf(f: Flags): ArenaRequest {
     budgetCarry: f.string("budget-carry"),
     promptCap: int(f.string("prompt-cap"), "--prompt-cap", 1_000, 1_000_000),
     priceDate: f.string("price-date"),
+    profiles: f.string("profiles") ?? PROFILES_DIR,
   };
   return req;
 }
@@ -449,6 +509,53 @@ function reconcileCommand(argv: readonly string[], io: CliIo, nowMs: number): nu
   return r.ok ? EXIT.ok : EXIT_RECONCILE;
 }
 
+/** `arena calibrate`: measures run directories into the profiles. */
+function calibrateCommand(argv: readonly string[], io: CliIo): number {
+  const f = parseFlags(argv, CALIBRATE_FLAGS, CALIBRATE_USAGE, {
+    min: 1,
+    max: Infinity,
+    name: "run",
+  });
+  io.out(
+    formatCalibrate(
+      calibrate(f.positionals, { profilesDir: f.string("profiles") ?? PROFILES_DIR }),
+    ),
+  );
+  return EXIT.ok;
+}
+
+/** `arena series`: a rotation series of a lineup (exit code of the first match that failed). */
+function seriesCommand(
+  argv: readonly string[],
+  io: CliIo,
+  env: ArenaEnv,
+  signals: SignalSource | undefined,
+  nowMs: () => number,
+): Promise<number> {
+  const f = parseFlags(argv, SERIES_FLAGS, SERIES_USAGE, { min: 0, max: 0, name: "positional" });
+  const lineup = f.string("lineup");
+  const out = f.string("out");
+  if (lineup === undefined || out === undefined) {
+    throw new UsageError(`--lineup and --out are required\n\n${SERIES_USAGE}`);
+  }
+  const given = int(f.string("seed"), "--seed", 0, UINT32_MAX);
+  const seed = given ?? randomSeed();
+  if (given === undefined) io.out(`series seed ${seed} (random; pass --seed ${seed} to replay)\n`);
+  return runSeries({
+    lineup,
+    out,
+    blocks: int(f.string("blocks"), "--blocks", 1, 1000) ?? 1,
+    seed,
+    // Each match's lineup file and game seed replace the request's.
+    request: requestOf(f),
+    env,
+    io,
+    quiet: f.bool("quiet"),
+    now: nowMs,
+    ...(signals === undefined ? {} : { signals }),
+  });
+}
+
 /** What `main` takes besides its streams and environment (the process's by default). */
 export interface MainOptions {
   /** `arena run`'s operator signals. */
@@ -471,6 +578,10 @@ function dispatch(
       return estimateCommand(argv, io, env, o.nowMs ?? Date.now);
     case "reconcile":
       return reconcileCommand(argv, io, (o.nowMs ?? Date.now)());
+    case "calibrate":
+      return calibrateCommand(argv, io);
+    case "series":
+      return seriesCommand(argv, io, env, o.signals, o.nowMs ?? Date.now);
     case "cost": {
       const f = parseFlags(argv, COST_FLAGS, COST_USAGE, { min: 1, max: 1, name: "run" });
       io.out(
@@ -510,6 +621,8 @@ const COMMAND_USAGE: Readonly<Record<string, string>> = {
   run: RUN_USAGE,
   estimate: ESTIMATE_USAGE,
   reconcile: RECONCILE_USAGE,
+  calibrate: CALIBRATE_USAGE,
+  series: SERIES_USAGE,
   cost: COST_USAGE,
   personalities: PERSONALITIES_USAGE,
   smoke: SMOKE_USAGE,
