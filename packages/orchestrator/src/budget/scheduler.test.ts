@@ -423,6 +423,21 @@ async function play(s: Scenario, seen: Seen, cfg: Config = CLAUDE): Promise<void
     inFlight = pending.length - 1 + (probe === null ? 0 : 1);
     pending.splice(pick, 1)[0]?.resolve();
   }
+  // Choices that keep picking the probe slot can leave replies pending after the last step:
+  // resolve the rest in order, so every seat finishes and a stuck scheduler fails instead of hanging.
+  for (let quiet = 0; done < agents.length || pending.length > 0;) {
+    // oxlint-disable-next-line no-await-in-loop -- one reply at a time
+    await settle();
+    const first = pending.shift();
+    if (first === undefined) {
+      quiet += 1;
+      if (quiet > 100) throw new Error(`scheduler stuck: ${done} of ${agents.length} seats done`);
+      continue;
+    }
+    quiet = 0;
+    inFlight = pending.length + (probe === null ? 0 : 1);
+    first.resolve();
+  }
   await Promise.all(loops);
   if (probe !== null) budget.add(probe.cost, 0);
 
