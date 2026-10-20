@@ -30,7 +30,7 @@ import type { Brain, FakeReply } from "../model/fake.ts";
 // spectator path of reasoning (`replies.jsonl`) is exercised with no network; it is left out of the
 // usage, so fake costs are those of a reply without it. In real time it can add a seeded latency on
 // the run's time source; an attempt aborted while it "thinks" is charged as the Anthropic adapter
-// charges a broken stream (`brokenStreamOutput`, from the time it streamed).
+// charges a broken stream (`brokenStreamOutput`: the request's full `max_tokens`).
 
 export interface BrainLatency {
   readonly time: TimeSource;
@@ -171,13 +171,12 @@ export function botBrain(o: BotBrainOptions): Brain {
       const ms = latencyOf(o.seed, o.seat, m.turn, m.round, o.latency);
       latencyMs = ms;
       const time = o.latency.time;
-      const start = time.nowMs();
       try {
         await sleepMs(time, ms, req.signal);
       } catch (e) {
         if (req.signal?.aborted !== true) throw e;
         const maxTokens = req.maxOutputTokens ?? o.maxOutputTokens ?? DEFAULT_MAX_OUTPUT_TOKENS;
-        const spent = estimate(req, o.model, maxTokens, time.nowMs() - start);
+        const spent = estimate(req, o.model, maxTokens);
         return new ModelError("aborted", "request aborted", { spent });
       }
     }
@@ -196,12 +195,7 @@ export function botBrain(o: BotBrainOptions): Brain {
 }
 
 /** What an aborted fake attempt is charged: its input, and the broken-stream output estimate. */
-function estimate(
-  req: ChatRequest,
-  model: string | undefined,
-  maxTokens: number,
-  streamedMs: number,
-): UsageEntry[] {
+function estimate(req: ChatRequest, model: string | undefined, maxTokens: number): UsageEntry[] {
   if (model === undefined) return [];
   return [
     {
@@ -212,7 +206,7 @@ function estimate(
         cacheWrite5m: 0,
         cacheWrite1h: 0,
         cacheRead: 0,
-        output: brokenStreamOutput({ observed: 0, maxTokens, streamedMs }),
+        output: brokenStreamOutput(maxTokens),
       },
       estimated: true,
     },

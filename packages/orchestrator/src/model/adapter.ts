@@ -25,29 +25,82 @@ export function retryOutputTokens(limit: number): number | null {
   return next > limit ? next : null;
 }
 
-/** Floor of the output charged for a stream that broke after it started (§5.3). */
-export const BROKEN_STREAM_OUTPUT_FLOOR = 4_000;
-/**
- * An upper bound of any priced model's output speed, in tokens per second: a stream that broke
- * after `s` seconds may have produced `400 × s` tokens. An assumption, checked against the
- * measured `output / latencyMs` of `llm_calls.jsonl` in calibration.
- */
-export const OUTPUT_TOKENS_PER_S_BOUND = 400;
-
 /**
  * The output charged for a stream that broke before its final usage arrived (aborted, cut, or an
- * error event): conservative, because the API may bill what was generated before the break, and
- * the streamed text undercounts it (summarized thinking is shorter than the thinking billed). The
- * largest of what was seen, the floor and `OUTPUT_TOKENS_PER_S_BOUND × streamed seconds`, capped
- * at the request's `max_tokens` (the real upper bound).
+ * error event): the request's full `max_tokens` (phase-4 design §2.2). The API may bill whatever
+ * was generated before the break, and nothing seen on the stream bounds it (summarized thinking is
+ * shorter than the thinking billed), so only the request's limit is an upper bound: the ledger
+ * never undercounts, and `arena reconcile` measures how pessimistic this is.
  */
-export function brokenStreamOutput(o: {
-  readonly observed: number;
-  readonly maxTokens: number;
-  readonly streamedMs: number;
-}): number {
-  const byTime = Math.ceil((Math.max(0, o.streamedMs) * OUTPUT_TOKENS_PER_S_BOUND) / 1000);
-  return Math.min(o.maxTokens, Math.max(o.observed, BROKEN_STREAM_OUTPUT_FLOOR, byTime));
+export function brokenStreamOutput(maxTokens: number): number {
+  return maxTokens;
+}
+
+/**
+ * The prompt cap (phase-4 design §5.2): an attempt whose estimated prompt exceeds it is not sent,
+ * and its turn closes (`prompt_cap`), so every attempt's prompt, and with it the attempt bound, is
+ * bounded. 160,000 tokens keeps every attempt under the long-context tiers of the planned cards.
+ */
+export const DEFAULT_PROMPT_CAP_TOKENS = 160_000;
+
+/** The per-token prices `attemptBoundNano` reads (structurally `Price` of `prices.ts`). */
+export interface TokenPrices {
+  readonly input: number;
+  readonly output: number;
+  readonly cacheRead: number;
+  readonly write5m: number;
+  readonly write1h: number;
+}
+
+/** The highest price any prompt token can be billed at on these cards (input, writes, reads). */
+export function maxInputSide(cards: readonly TokenPrices[]): number {
+  let m = 0;
+  for (const c of cards) m = Math.max(m, c.input, c.cacheRead, c.write5m, c.write1h);
+  return m;
+}
+
+/** The highest output price of these cards. */
+export function maxOutputPrice(cards: readonly TokenPrices[]): number {
+  let m = 0;
+  for (const c of cards) m = Math.max(m, c.output);
+  return m;
+}
+
+/** The most output one attempt of `spec` can request: the `max_tokens` retry's limit. */
+export function maxAttemptOutput(spec: Pick<ModelSpec, "maxOutputTokens">): number {
+  return retryOutputTokens(spec.maxOutputTokens) ?? spec.maxOutputTokens;
+}
+
+/**
+ * The most one attempt of `spec` can cost, in nano-dollars (phase-4 design §5.2): a prompt of at
+ * most `promptCap` tokens at the highest input-side price of the cards the served model can bill
+ * (its long-context card included), plus the retry limit of output at the highest output price;
+ * plus, when the spec's server-side fallbacks are on, one such iteration per fallback target (the
+ * refused attempt bills, then a cold-cache attempt on the target), each priced at `fallback`'s
+ * highest prices. A charge of an attempt whose prompt and output stay within those limits never
+ * exceeds it, whatever its split between input, cache writes and cache reads.
+ */
+export function attemptBoundNano(
+  spec: Pick<ModelSpec, "maxOutputTokens" | "fallbacks">,
+  cards: {
+    readonly served: readonly TokenPrices[];
+    /** The cards of the fallback targets (one iteration per target). */
+    readonly fallback: readonly (readonly TokenPrices[])[];
+  },
+  promptCap: number,
+): number {
+  if (!Number.isSafeInteger(promptCap) || promptCap < 1) {
+    throw new Error(`the prompt cap must be a positive integer, got ${promptCap}`);
+  }
+  if (cards.served.length === 0) throw new Error("attemptBoundNano needs the served model's cards");
+  const out = maxAttemptOutput(spec);
+  const one = (c: readonly TokenPrices[]): number =>
+    promptCap * maxInputSide(c) + out * maxOutputPrice(c);
+  let bound = one(cards.served);
+  if (spec.fallbacks !== "off") for (const f of cards.fallback) bound += one(f);
+  if (!Number.isSafeInteger(bound))
+    throw new Error(`attempt bound is not a safe integer: ${bound}`);
+  return bound;
 }
 
 export interface ModelSpec {
@@ -60,6 +113,12 @@ export interface ModelSpec {
   readonly maxOutputTokens: number;
   /** TTL of the two stable system blocks. */
   readonly cacheTtl: CacheTtl;
+  /**
+   * Anthropic server-side refusal fallbacks (phase 4): `off` omits the parameter and its beta;
+   * absent or `default` sends them on the models that have them (phase 2's behaviour). The arena
+   * plan always sets it: `off` for Claude Sonnet 5.5 unless a lineup asks otherwise.
+   */
+  readonly fallbacks?: "default" | "off";
 }
 
 /** The model part of a controller label, e.g. `anthropic/claude-opus-5-5/medium`. */
@@ -161,7 +220,7 @@ export interface UsageEntry {
   readonly model: string;
   readonly kind: "message" | "fallback";
   readonly tokens: TokenUsage;
-  /** An aborted or broken stream: charged from what was seen, conservatively (§5.3, `brokenStreamOutput`). */
+  /** An aborted or broken stream: charged conservatively (the full `max_tokens`, `brokenStreamOutput`). */
   readonly estimated: boolean;
 }
 

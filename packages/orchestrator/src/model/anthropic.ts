@@ -33,7 +33,8 @@ import {
 // - The client gets an explicit API key and base URL and reads no `ANTHROPIC_*` variable that
 //   matters: `authToken`, `webhookKey` and `logLevel` are explicit too, and a guarded `fetch` sends
 //   only to the configured origin, with our `x-api-key`, no `authorization` header and only the
-//   SDK's own headers. `ANTHROPIC_CUSTOM_HEADERS`, which the SDK reads itself, is neutralised: the
+//   SDK's own headers, and never follows a redirect (`redirect: "error"`, phase 4: Bun forwards
+//   `x-api-key` to another origin on a 307, so a redirect would hand the key to its target). `ANTHROPIC_CUSTOM_HEADERS`, which the SDK reads itself, is neutralised: the
 //   allowlist drops its other headers, our `defaultHeaders` override its `anthropic-beta` (each
 //   request sends only its own betas) and the guarded fetch pins `anthropic-version`.
 // - `maxRetries: 0`: the harness owns every retry (seat/retry.ts), so each attempt is visible,
@@ -41,13 +42,16 @@ import {
 // - Every call streams (`.stream().finalMessage()`): no idle connection while the model thinks, a
 //   time-to-first-token, and a known partial usage when the stream breaks. `chat` keeps its own
 //   reference to the latest snapshot (the SDK clears `currentMessage` when a body ends without
-//   `message_stop`) and charges a broken stream conservatively (`brokenStreamOutput`).
+//   `message_stop`) and charges a broken stream conservatively: its prompt as `message_start`
+//   reported it, and the request's full `max_tokens` of output (`brokenStreamOutput`).
 // - Requests: adaptive thinking with `display: "summarized"` (never disabled, never a budget),
 //   explicit `output_config.effort`, no `tool_choice` (forced use is a 400 on the 5.5 models), no
 //   sampling parameters, no prefill; `tools` → `system[0]` (shared) → `system[1]` (seat), both
 //   system blocks with `cache_control`, plus the automatic breakpoint on the growing tail; operator
 //   entries are mid-conversation `role: "system"` messages; server-side `fallbacks: "default"` under
-//   its beta for the models that have it.
+//   its beta for the models that have it, unless the spec says `fallbacks: "off"` (phase 4: the
+//   default for Claude Sonnet 5.5, whose fallback model, Claude Sonnet 5, rejects the operator
+//   entries).
 // - Responses: `stop_reason` is checked before any content is read; refusals carry
 //   `stop_details`; the assistant content is echoed back verbatim except for the fallback rule
 //   (declined thinking and tool calls before the last `fallback` block are dropped).
@@ -61,6 +65,11 @@ export const FALLBACK_CAPABLE: ReadonlySet<string> = new Set([
 export const FALLBACK_BETA = "server-side-fallback-2026-07-01";
 /** The beta that makes `allowed_fallback_models` visible on `/v1/models`. */
 export const MODELS_FALLBACK_BETA = "server-side-fallback-2026-06-01";
+
+/** Whether a request of `spec` sends `fallbacks: "default"` (and its beta). */
+export function fallbacksOn(spec: Pick<ModelSpec, "model" | "fallbacks">): boolean {
+  return FALLBACK_CAPABLE.has(spec.model) && spec.fallbacks !== "off";
+}
 
 export const DEFAULT_BASE_URL = "https://api.anthropic.com";
 /** The API version the SDK sends; pinned by the guarded fetch. */
@@ -99,7 +108,8 @@ function guardedFetch(inner: HttpFetch, origin: string, apiKey: string): HttpFet
     });
     headers.set("anthropic-version", ANTHROPIC_VERSION);
     headers.set("x-api-key", apiKey);
-    return inner(url.toString(), { ...init, headers });
+    // Never follow a redirect: the key would go to wherever it points (phase-4 design §2.6).
+    return inner(url.toString(), { ...init, headers, redirect: "error" });
   };
 }
 
@@ -425,32 +435,17 @@ export interface StreamSeen {
 }
 
 /**
- * What a broken stream cost before it broke (§5.3), flagged `estimated`: nothing when it never
- * started; the final usage when `message_delta` arrived; else the `message_start` input and cache
- * usage and `brokenStreamOutput` (what was streamed, the floor, or the time it streamed for).
+ * What a broken stream cost before it broke (phase-4 design §2.2), flagged `estimated`: nothing
+ * when it never started (no `message_start`: no inference ran); the final usage when
+ * `message_delta` arrived; else the prompt as `message_start` reported it (its input and cache
+ * split are final) and the request's full `max_tokens` of output (`brokenStreamOutput`).
  */
 export function spentOf(seen: StreamSeen): UsageEntry[] {
   const snapshot = seen.snapshot;
   if (snapshot === undefined) return [];
   if (seen.final) return usageEntries(snapshot.usage, snapshot.model, seen.model, seen.ttl, true);
-  let chars = 0;
-  for (const b of snapshot.content) {
-    if (b.type === "text") chars += b.text.length;
-    else if (b.type === "thinking") chars += b.thinking.length;
-    else if (b.type === "tool_use") {
-      try {
-        chars += JSON.stringify(b.input ?? {}).length;
-      } catch {
-        chars += 0;
-      }
-    }
-  }
   const t = tokensOf(snapshot.usage, seen.ttl);
-  const output = brokenStreamOutput({
-    observed: Math.max(t.output, Math.ceil(chars / 4)),
-    maxTokens: seen.maxTokens,
-    streamedMs: seen.streamedMs,
-  });
+  const output = brokenStreamOutput(seen.maxTokens);
   return [{ model: snapshot.model, kind: "message", tokens: { ...t, output }, estimated: true }];
 }
 
@@ -511,7 +506,7 @@ export class AnthropicAdapter implements ModelAdapter {
       ],
       cache_control: { type: "ephemeral" },
       messages: req.entries.map((e, i) => toMessage(e, i, req.entries)),
-      ...(FALLBACK_CAPABLE.has(s.model) ? { betas: [FALLBACK_BETA], fallbacks: "default" } : {}),
+      ...(fallbacksOn(s) ? { betas: [FALLBACK_BETA], fallbacks: "default" } : {}),
     };
   }
 

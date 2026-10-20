@@ -1,5 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import type { LlmCallLine, ReplyLine } from "@perfidia/protocol";
+import {
+  LlmLogLineSchema,
+  type LlmCallLine,
+  type LlmLogLine,
+  type ReplyLine,
+} from "@perfidia/protocol";
 import { LABEL_MAX_CHARS, TOOL_NAME_MAX_CHARS } from "../clean.ts";
 import { createAnnotationFold } from "./annotations.ts";
 
@@ -111,5 +116,66 @@ describe("the policy", () => {
     const all = createAnnotationFold();
     all.call(call({}));
     expect(all.turn("p1", 1)?.rounds[0]?.latencyMs).toBe(2345);
+  });
+});
+
+describe("phase-4 side lines (additive)", () => {
+  test("hand-offs keep their widened reason; preflight, prompt-cap, kill-switch, operator and carry lines change no turn", () => {
+    const a = createAnnotationFold();
+    a.call(call({}));
+    const before = JSON.stringify(a.turn("p1", 1));
+    const lines: LlmLogLine[] = [
+      {
+        k: "preflight",
+        phase: "probe",
+        group: "anthropic/claude-sonnet-5-5/medium",
+        provider: "anthropic",
+        model: "claude-sonnet-5-5",
+        endpoint: null,
+        t: 60,
+        ok: false,
+        usage: [],
+        costNanoUsd: 2_500_000,
+        priceCard: null,
+        error: { kind: "billing", status: 402, message: "never served" },
+      },
+      {
+        k: "prompt_cap",
+        seat: "p1",
+        turn: 1,
+        round: 1,
+        kind: "round",
+        t: 60,
+        estimateTokens: 170_000,
+        capTokens: 160_000,
+      },
+      {
+        k: "kill_switch",
+        t: 60,
+        spentNanoUsd: 10,
+        killAtNanoUsd: 10,
+        budgetNanoUsd: 20,
+        action: "handoff",
+      },
+      { k: "operator", signal: "SIGINT", action: "handoff", t: 60 },
+      { k: "carry", from: "run-1", lines: 3, costNanoUsd: 7 },
+      {
+        k: "handoff",
+        seat: "p1",
+        t: 60,
+        reason: "match_budget",
+        label: "bot:opportunist@3",
+        spentNanoUsd: 5_000_000,
+        capNanoUsd: 1_000_000_000,
+      },
+    ];
+    for (const l of lines) a.call(LlmLogLineSchema.parse(l));
+    expect(JSON.stringify(a.turn("p1", 1))).toBe(before);
+    expect(a.turns("p1")).toEqual([1]);
+    expect(a.spend("p1")).toEqual({ spentNanoUsd: 5_000_000, capNanoUsd: 1_000_000_000 });
+    expect(a.handoff("p1")).toEqual({ t: 60, label: "bot:opportunist@3", reason: "match_budget" });
+    // A phase-2 line (reason "cap") still parses and folds the same way.
+    a.call(LlmLogLineSchema.parse({ ...lines[5], seat: "p2", reason: "cap" }));
+    expect(a.handoff("p2")?.reason).toBe("cap");
   });
 });

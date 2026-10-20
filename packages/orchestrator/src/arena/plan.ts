@@ -1,5 +1,9 @@
-import type { AnyRuleset, InvariantLevel } from "@perfidia/engine";
+import { existsSync, readFileSync, statSync } from "node:fs";
+import { basename, join } from "node:path";
+import { createMatch, type AnyRuleset, type InvariantLevel } from "@perfidia/engine";
 import { idKeyFromSeed } from "@perfidia/engine/core";
+import { rulesInfo } from "@perfidia/gateway/present";
+import { toolDefinitions } from "@perfidia/gateway/runtime";
 import { IdKeySchema, type MatchSetup, type PlayerId } from "@perfidia/protocol";
 import {
   INVARIANT_LEVELS,
@@ -26,20 +30,44 @@ import {
   lockstepRoundTimeoutMs,
   type SeatSpec,
 } from "../defaults.ts";
+import { LlmLogLineSchema, type EstimateFile, type Lineup } from "../log/schema.ts";
 import { DEFAULT_BASE_URL } from "../model/anthropic.ts";
-import { EFFORTS, type CacheTtl, type Effort } from "../model/adapter.ts";
+import {
+  DEFAULT_PROMPT_CAP_TOKENS,
+  EFFORTS,
+  type CacheTtl,
+  type Effort,
+  type ModelTool,
+} from "../model/adapter.ts";
 import { requirePrice, usdToNano } from "../model/prices.ts";
+import { anthropicTools } from "../model/tools.ts";
 import type { SeatPolicy } from "../seat/agent.ts";
 import { PROFILES, findProfile, profileRef, type Profile } from "../seat/personalities.ts";
+import { seatPrompt, sharedPrompt } from "../seat/prompt.ts";
+import { centralWakeNano, loggedSpend } from "./cost.ts";
+import {
+  budgetCheck,
+  estimateFile,
+  predict,
+  type PlanBudget,
+  type Prediction,
+} from "./estimate.ts";
+import { defaultSeatCap, defaultWakeCap, fallbacksFor, loadLineup } from "./lineup.ts";
+import { sampleTokensUpper } from "./preflight.ts";
 
 /** The largest seed. */
 const UINT32_MAX = 4_294_967_295;
 
 // The plan of an `arena run` (phase-2 design §8): every flag checked, the lineup resolved (the
-// default of §4.4, then `--seat` overrides), the models priced, the timeouts derived, and the
-// environment read once (`PERFIDIA_ANTHROPIC_API_KEY`, `PERFIDIA_ANTHROPIC_BASE_URL`; nothing
-// else). Every check runs before any file is written: a bad command line is a `UsageError` (exit
-// code 3) and leaves no run directory behind.
+// default of §4.4 or a `--lineup` file, then `--seat` overrides), the models priced, the timeouts
+// derived, and the environment read once (`PERFIDIA_ANTHROPIC_API_KEY`,
+// `PERFIDIA_ANTHROPIC_BASE_URL`; nothing else). Every check runs before any file is written: a bad
+// command line is a `UsageError` (exit code 3) and leaves no run directory behind.
+//
+// Phase 4 (Pass 1a): the plan also holds the prediction (`estimate.json`, written before turn 1),
+// the prompt cap, each seat's fallbacks and wake cap, and the match budget: a budget whose kill
+// threshold `K = budget − reserve` (less any carry) falls below the predicted low is refused with
+// the design's §4.2 message; below the predicted high it is a warning.
 
 /** The environment of the harness: the only variables it reads. */
 export interface ArenaEnv {
@@ -84,6 +112,10 @@ export interface LlmSeatPlan {
   readonly effort: Effort;
   readonly profile: Profile;
   readonly capNanoUsd: number;
+  /** The seat's per-wake soft cap; `null`: none. */
+  readonly wakeCapNanoUsd: number | null;
+  /** Anthropic server-side refusal fallbacks (phase 4: `off` by default on Claude Sonnet 5.5). */
+  readonly fallbacks: "default" | "off";
   /** The hand-off bot's label, `bot:<strategy>@<n>`. */
   readonly handoffBot: string;
   /** `--fake`: the bot whose rounds the fake model replays (`bot:<strategy>@<n>`). */
@@ -139,6 +171,20 @@ export interface ArenaPlan {
    * the run plays the match to its end.
    */
   readonly stopAt: number | null;
+  /** The lineup id (`--lineup`); null for the default lineup and `--seat`. */
+  readonly lineup: string | null;
+  /** The prompt cap in tokens (phase 4 §5.2). */
+  readonly promptCapTokens: number;
+  /** The match budget (a lineup's `budgetUsd` or `--budget-usd`); null: none. */
+  readonly budget: PlanBudget | null;
+  /** The prediction and reserve of the LLM seats. */
+  readonly prediction: Prediction;
+  /** `estimate.json`, as `arena run` writes it before turn 1. */
+  readonly estimate: EstimateFile;
+  /** The shared system block and the tools every seat gets (also the preflight bounds' input). */
+  readonly texts: { readonly shared: string; readonly tools: readonly ModelTool[] };
+  /** Plan warnings (the kill switch might fire, …), printed before the run starts. */
+  readonly warnings: readonly string[];
 }
 
 /** What an `arena run` command line asks for, parsed but not yet checked. */
@@ -178,6 +224,16 @@ export interface ArenaRequest {
   readonly invariants?: string | undefined;
   readonly snapshotEvery?: number | undefined;
   readonly allowTest?: boolean | undefined;
+  /** A preset name or a `perfidia-lineup/1` file (phase 4). */
+  readonly lineup?: string | undefined;
+  /** The match budget in USD; overrides the lineup's `budgetUsd`. */
+  readonly budgetUsd?: string | undefined;
+  /** `handoff` (default) or `abort` when the kill switch fires. */
+  readonly onBudget?: string | undefined;
+  /** A crashed run of the same budget: its logged spend counts toward this run's budget. */
+  readonly budgetCarry?: string | undefined;
+  /** The prompt cap in tokens (default the lineup's, else 160 000). */
+  readonly promptCap?: number | undefined;
 }
 
 export const DEFAULT_ARENA_DAYS = 7;
@@ -304,10 +360,17 @@ export function parseSeatSpec(seat: PlayerId, value: string): SeatSpec {
   };
 }
 
-/** The lineup: the default one (§4.4) on seats p1..pN, then the `--seat` overrides. */
-export function lineupOf(texts: readonly string[], players: number): SeatSpec[] {
+/**
+ * The lineup: the base one on seats p1..pN (the default of §4.4, or a lineup file's seats), then
+ * the `--seat` overrides.
+ */
+export function lineupOf(
+  texts: readonly string[],
+  players: number,
+  base: readonly SeatSpec[] = DEFAULT_LINEUP,
+): SeatSpec[] {
   const bySeat = new Map<PlayerId, SeatSpec>();
-  for (const s of DEFAULT_LINEUP) {
+  for (const s of base) {
     if (Number(s.seat.slice(1)) <= players) bySeat.set(s.seat, s);
   }
   const given = new Set<PlayerId>();
@@ -373,6 +436,109 @@ export function randomSeed(): number {
 export interface PlanOptions {
   readonly randomSeed?: () => number;
   readonly randomKey?: () => string;
+  /** `false`: no API key needed (`arena estimate` plans without sending anything). Default true. */
+  readonly requireKey?: boolean;
+}
+
+/** What a lineup file adds to one of its LLM seats. */
+interface LineupExtras {
+  readonly capNanoUsd: number | null;
+  readonly wakeCapNanoUsd: number | null;
+  readonly handoffBot: string | null;
+  readonly fallbacks: "default" | "off" | undefined;
+}
+
+/** A lineup file's seats as seat specs, and its per-seat extras (Pass 1a: anthropic seats only). */
+function lineupSeats(lineup: Lineup): {
+  readonly specs: SeatSpec[];
+  readonly extras: Map<PlayerId, LineupExtras>;
+} {
+  const where = `--lineup ${lineup.id}`;
+  if (lineup.reminders !== "every-round") {
+    throw new UsageError(
+      `${where}: reminders "${lineup.reminders}" arrive with the non-Anthropic seats (phase 4, Pass 1b); this build sends a reminder every round ("every-round")`,
+    );
+  }
+  const specs: SeatSpec[] = [];
+  const extras = new Map<PlayerId, LineupExtras>();
+  for (const s of lineup.seats) {
+    if (s.kind === "bot") {
+      specs.push({ seat: s.seat, kind: "bot", label: botLabelOf(s.label, `${where}: ${s.seat}`) });
+      continue;
+    }
+    if (s.provider !== "anthropic") {
+      throw new UsageError(
+        `${where}: ${s.seat}: provider ${s.provider} is not planned by this build (phase 4 Pass 1a plans anthropic seats; ${s.provider} arrives with its adapter in Pass 2)`,
+      );
+    }
+    if (s.endpoint !== undefined) {
+      throw new UsageError(`${where}: ${s.seat}: an endpoint applies to openrouter seats only`);
+    }
+    const model = Object.hasOwn(MODEL_ALIASES, s.model)
+      ? (MODEL_ALIASES[s.model] ?? s.model)
+      : s.model;
+    if (!SEAT_MODELS.includes(model)) {
+      throw new UsageError(
+        `${where}: ${s.seat}: ${model} is not a seat model; a seat runs on ${SEAT_MODELS.join(", ")}`,
+      );
+    }
+    if (findProfile(s.profile) === undefined) {
+      throw new UsageError(
+        `${where}: ${s.seat}: unknown profile "${s.profile}"; the profiles are ${PROFILES.map(profileRef).join(", ")}`,
+      );
+    }
+    specs.push({
+      seat: s.seat,
+      kind: "llm",
+      provider: "anthropic",
+      model,
+      effort: s.effort ?? lineup.defaults.effort ?? "medium",
+      profile: s.profile,
+    });
+    extras.set(s.seat, {
+      capNanoUsd: s.capUsd === undefined ? null : parseUsd(s.capUsd, `${where}: ${s.seat} capUsd`),
+      wakeCapNanoUsd:
+        s.wakeCapUsd === undefined
+          ? null
+          : parseUsd(s.wakeCapUsd, `${where}: ${s.seat} wakeCapUsd`),
+      handoffBot:
+        s.handoffBot === undefined
+          ? null
+          : botLabelOf(s.handoffBot, `${where}: ${s.seat} handoffBot`),
+      fallbacks: fallbacksFor(s.seat, model, s.fallbacks, lineup.defaults.fallbacks),
+    });
+  }
+  return { specs, extras };
+}
+
+/**
+ * The logged spend of a crashed run (`--budget-carry <dir>`): every cost line of its
+ * `llm_calls.jsonl`, its own carry line included.
+ */
+function carryOf(dir: string): { readonly nanoUsd: number; readonly lines: number } {
+  const path = existsSync(dir) && statSync(dir).isDirectory() ? join(dir, "llm_calls.jsonl") : dir;
+  if (!existsSync(path)) {
+    throw new UsageError(`--budget-carry ${dir}: no llm_calls.jsonl (not an arena run directory)`);
+  }
+  const rows = readFileSync(path, "utf8")
+    .split("\n")
+    .filter((r) => r.trim() !== "");
+  const lines = rows.flatMap((r, i) => {
+    let raw: unknown;
+    try {
+      raw = JSON.parse(r);
+    } catch {
+      // A crash can cut the last line short: it was never complete, so it carries nothing.
+      if (i === rows.length - 1) return [];
+      throw new UsageError(`--budget-carry ${dir}: line ${i + 1} is not JSON`);
+    }
+    const parsed = LlmLogLineSchema.safeParse(raw);
+    if (!parsed.success) {
+      throw new UsageError(`--budget-carry ${dir}: line ${i + 1} is not an LLM log line`);
+    }
+    return [parsed.data];
+  });
+  return loggedSpend(lines);
 }
 
 /**
@@ -389,7 +555,9 @@ export function planArena(req: ArenaRequest, env: ArenaEnv, o: PlanOptions = {})
   }
   const config = checkOverrides(ruleset, overrides);
   const range = playerRange(ruleset, config);
-  const players = req.players ?? DEFAULT_LINEUP.length;
+  const lineup = req.lineup === undefined ? null : loadLineup(req.lineup);
+  const fromLineup = lineup === null ? null : lineupSeats(lineup);
+  const players = req.players ?? fromLineup?.specs.length ?? DEFAULT_LINEUP.length;
   if (players < range.min || players > range.max) {
     throw new UsageError(
       `--players ${players} is outside the player range of ${ruleset.ref}: ${range.min}..${range.max}`,
@@ -412,14 +580,17 @@ export function planArena(req: ArenaRequest, env: ArenaEnv, o: PlanOptions = {})
     idKey = parsed.data;
   }
 
-  const lineup = lineupOf(req.seats ?? [], players);
-  const capDefault =
-    req.capUsd === undefined ? DEFAULT_CAP_NANO_USD : parseUsd(req.capUsd, "--cap-usd");
+  const overridden = new Set((req.seats ?? []).map((t) => seatOf(t, "--seat", players).seat));
+  const specs = lineupOf(req.seats ?? [], players, fromLineup?.specs ?? DEFAULT_LINEUP);
+  const extrasOf = (seat: PlayerId): LineupExtras | undefined =>
+    overridden.has(seat) ? undefined : fromLineup?.extras.get(seat);
+  const capFlag = req.capUsd === undefined ? null : parseUsd(req.capUsd, "--cap-usd");
   const caps = seatCaps(req.seatCaps ?? [], players);
   const brains = brainsOf(req.brains ?? [], players);
   const handoffAll =
     req.handoffBot === undefined ? null : botLabelOf(req.handoffBot, "--handoff-bot");
-  const seats: SeatPlan[] = lineup.map((s): SeatPlan => {
+  // Seats first without their caps: the lineup's default caps depend on the prediction.
+  const drafts = specs.map((s) => {
     if (s.kind === "bot") {
       if (caps.has(s.seat)) throw new UsageError(`--seat-cap ${s.seat}: ${s.seat} is a bot`);
       if (brains.has(s.seat)) throw new UsageError(`--brain ${s.seat}: ${s.seat} is a bot`);
@@ -432,21 +603,25 @@ export function planArena(req: ArenaRequest, env: ArenaEnv, o: PlanOptions = {})
     } catch (error) {
       throw new UsageError(`${s.seat}: ${error instanceof Error ? error.message : String(error)}`);
     }
-    const handoffBot = handoffAll ?? botLabelOf(profile.handoffBot, `${s.seat}'s hand-off bot`);
+    const extras = extrasOf(s.seat);
+    const handoffBot =
+      handoffAll ??
+      extras?.handoffBot ??
+      botLabelOf(profile.handoffBot, `${s.seat}'s hand-off bot`);
     return {
       seat: s.seat,
-      kind: "llm",
-      provider: "anthropic",
+      kind: "llm" as const,
+      provider: "anthropic" as const,
       model: s.model,
       effort: s.effort,
       profile,
-      capNanoUsd: caps.get(s.seat) ?? capDefault,
       handoffBot,
       brain: brains.get(s.seat) ?? handoffBot,
+      fallbacks: extras?.fallbacks ?? fallbacksFor(s.seat, s.model, undefined, undefined),
     };
   });
   if (!fake && brains.size > 0) throw new UsageError("--brain applies to --fake runs only");
-  const llmSeats = seats.filter((s) => s.kind === "llm");
+  const llmDrafts = drafts.flatMap((s) => (s.kind === "llm" ? [s] : []));
 
   const clockKind = oneOf(req.clock, ["lockstep", "realtime"] as const, "--clock", "lockstep");
   const time = oneOf(
@@ -460,7 +635,13 @@ export function planArena(req: ArenaRequest, env: ArenaEnv, o: PlanOptions = {})
       "--time virtual simulates the clock: it needs --fake (real models answer in real time)",
     );
   }
-  const attemptTimeoutMs = req.attemptTimeoutMs ?? DEFAULT_ATTEMPT_TIMEOUT_MS;
+  const attemptTimeoutMs =
+    req.attemptTimeoutMs ??
+    (lineup === null ? DEFAULT_ATTEMPT_TIMEOUT_MS : lineup.attemptTimeoutMin * 60_000);
+  if (attemptTimeoutMs > MAX_TIMER_MS) {
+    throw new UsageError(`--lineup ${lineup?.id ?? ""}: attemptTimeoutMin is over a timer's limit`);
+  }
+  const promptCapTokens = req.promptCap ?? lineup?.promptCapTokens ?? DEFAULT_PROMPT_CAP_TOKENS;
   const pauseMaxMs = req.pauseMaxMs ?? DEFAULT_PAUSE_MAX_MS;
   const thoughtCall =
     oneOf(req.thoughtCall, ["off", "on"] as const, "--thought-call", "off") === "on";
@@ -487,6 +668,7 @@ export function planArena(req: ArenaRequest, env: ArenaEnv, o: PlanOptions = {})
       attemptTimeoutMs,
       roundDeadlineMs: roundTimeoutMs - LOCKSTEP_DEADLINE_MARGIN_MS,
       thoughtCall,
+      promptCapTokens,
     };
   } else {
     for (const [flag, v] of [
@@ -521,15 +703,17 @@ export function planArena(req: ArenaRequest, env: ArenaEnv, o: PlanOptions = {})
       attemptTimeoutMs: Math.min(attemptTimeoutMs, deadline),
       roundDeadlineMs: deadline,
       thoughtCall,
+      promptCapTokens,
     };
   }
 
-  const wakeCapNanoUsd =
+  const wakeCapFlag =
     req.wakeCapUsd === "off"
       ? null
       : req.wakeCapUsd === undefined
-        ? DEFAULT_WAKE_CAP_NANO_USD
+        ? undefined
         : parseUsd(req.wakeCapUsd, "--wake-cap-usd");
+  const wakeCapNanoUsd = wakeCapFlag === undefined ? DEFAULT_WAKE_CAP_NANO_USD : wakeCapFlag;
   const cacheTtl = oneOf(
     req.cacheTtl,
     ["5m", "1h"] as const,
@@ -539,11 +723,11 @@ export function planArena(req: ArenaRequest, env: ArenaEnv, o: PlanOptions = {})
   const transcripts =
     oneOf(req.transcripts, ["full", "off"] as const, "--transcripts", "full") === "full";
   const invariants = oneOf(req.invariants, INVARIANT_LEVELS, "--invariants", "checkpoint");
-  const maxTokens = req.maxTokens ?? DEFAULT_MAX_TOKENS;
+  const maxTokens = req.maxTokens ?? lineup?.maxTokens ?? DEFAULT_MAX_TOKENS;
 
-  if (llmSeats.length > 0 && !fake && env.apiKey === null) {
+  if (llmDrafts.length > 0 && !fake && env.apiKey === null && o.requireKey !== false) {
     throw new UsageError(
-      `${KEY_VAR} is not set: the LLM seats (${llmSeats.map((s) => s.seat).join(", ")}) need it. Export it, or pass --fake for a bot-backed fake model ($0, no API)`,
+      `${KEY_VAR} is not set: the LLM seats (${llmDrafts.map((s) => s.seat).join(", ")}) need it. Export it, or pass --fake for a bot-backed fake model ($0, no API)`,
     );
   }
   const baseURL = env.baseURL ?? DEFAULT_BASE_URL;
@@ -580,6 +764,113 @@ export function planArena(req: ArenaRequest, env: ArenaEnv, o: PlanOptions = {})
 
   const setup = harness.setupFor(ruleset, { seed, players, overrides, idKey });
   checkCreation(setup, ruleset);
+
+  // The prediction (phase 4 §5.3), from the texts every seat will get.
+  const texts = {
+    shared: sharedPrompt(rulesInfo(createMatch(setup, ruleset)), setup.seats.length),
+    tools: anthropicTools(toolDefinitions(ruleset)),
+  };
+  const days = stopAt === null ? matchDays : stopAt / 86_400;
+  const prediction = predict(
+    llmDrafts.map((s) => ({
+      seat: s.seat,
+      provider: s.provider,
+      model: s.model,
+      effort: s.effort,
+      fallbacks: s.fallbacks,
+      profile: profileRef(s.profile),
+      sampleTokens: sampleTokensUpper({
+        seat: s.seat,
+        prompt: { shared: texts.shared, seat: seatPrompt(s.seat, s.profile) },
+        tools: texts.tools,
+      }),
+    })),
+    { days, clock: clockKind, cacheTtl, maxTokens, promptCapTokens },
+  );
+  const predicted = new Map(prediction.seats.map((p) => [p.seat, p]));
+
+  // Caps: --seat-cap, the lineup seat's, --cap-usd, the lineup default (§3.9), phase 2's $100.
+  // Wake caps: --wake-cap-usd, the lineup seat's, the lineup default (§3.9), phase 2's $2.
+  const seats: SeatPlan[] = [];
+  for (const d of drafts) {
+    if (d.kind === "bot") {
+      seats.push(d);
+      continue;
+    }
+    const extras = extrasOf(d.seat);
+    const high = predicted.get(d.seat)?.high ?? 0;
+    const capNanoUsd =
+      caps.get(d.seat) ??
+      extras?.capNanoUsd ??
+      capFlag ??
+      (lineup === null ? DEFAULT_CAP_NANO_USD : defaultSeatCap(high));
+    const seatWakeCap =
+      wakeCapFlag !== undefined
+        ? wakeCapFlag
+        : (extras?.wakeCapNanoUsd ??
+          (lineup === null
+            ? DEFAULT_WAKE_CAP_NANO_USD
+            : defaultWakeCap(centralWakeNano(d.model, clockKind, cacheTtl, d.effort))));
+    seats.push({ ...d, capNanoUsd, wakeCapNanoUsd: seatWakeCap });
+  }
+  const llmSeats = seats.filter((s): s is LlmSeatPlan => s.kind === "llm");
+
+  // The match budget (phase 4 §5.2, §4.2).
+  const onBudget = oneOf(req.onBudget, ["handoff", "abort"] as const, "--on-budget", "handoff");
+  const budgetText = req.budgetUsd ?? lineup?.budgetUsd;
+  const budgetField = req.budgetUsd !== undefined ? "--budget-usd" : "the lineup's budgetUsd";
+  let budget: PlanBudget | null = null;
+  const warnings: string[] = [];
+  if (budgetText === undefined) {
+    if (req.budgetCarry !== undefined) {
+      throw new UsageError("--budget-carry needs a match budget (--budget-usd or a lineup's)");
+    }
+    if (req.onBudget !== undefined) {
+      throw new UsageError("--on-budget needs a match budget (--budget-usd or a lineup's)");
+    }
+  } else if (llmSeats.length > 0) {
+    const budgetNanoUsd = parseUsd(
+      budgetText,
+      req.budgetUsd !== undefined ? "--budget-usd" : `--lineup ${lineup?.id ?? ""}: budgetUsd`,
+    );
+    const carry =
+      req.budgetCarry === undefined ? { nanoUsd: 0, lines: 0 } : carryOf(req.budgetCarry);
+    budget = {
+      budgetNanoUsd,
+      onBudget,
+      carryNanoUsd: carry.nanoUsd,
+      carryFrom: req.budgetCarry === undefined ? null : basename(req.budgetCarry),
+      carryLines: carry.lines,
+    };
+    const check = budgetCheck(budget, prediction, budgetField);
+    if (check.refusal !== null) throw new UsageError(check.refusal);
+    warnings.push(...check.warnings);
+  }
+  if (lineup?.comparison === true) {
+    const models = llmSeats.map((s) => s.model);
+    const repeated = [...new Set(models.filter((m, i) => models.indexOf(m) !== i))];
+    if (repeated.length > 0) {
+      warnings.push(
+        `--lineup ${lineup.id} is a comparison lineup but repeats ${repeated.join(", ")}: one seat per model is the rule (§3.8)`,
+      );
+    }
+  }
+  const estimate = estimateFile({
+    lineup: lineup?.id ?? null,
+    ruleset: setup.ruleset,
+    players: setup.seats.length,
+    matchDays,
+    clock: clockKind,
+    cacheTtl,
+    maxTokens,
+    promptCapTokens,
+    prediction,
+    extras: new Map(
+      llmSeats.map((s) => [s.seat, { capNanoUsd: s.capNanoUsd, wakeCapNanoUsd: s.wakeCapNanoUsd }]),
+    ),
+    budget,
+  });
+
   return {
     ruleset,
     setup,
@@ -604,6 +895,13 @@ export function planArena(req: ArenaRequest, env: ArenaEnv, o: PlanOptions = {})
     env,
     baseURL,
     stopAt,
+    lineup: lineup?.id ?? null,
+    promptCapTokens,
+    budget,
+    prediction,
+    estimate,
+    texts,
+    warnings,
   };
 }
 

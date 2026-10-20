@@ -1,10 +1,16 @@
 import { describe, expect, test } from "bun:test";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { UsageError } from "@perfidia/sim";
+import { centralWakeNano } from "./cost.ts";
+import { lineupPath } from "./lineup.ts";
 import {
   DEFAULT_CAP_NANO_USD,
   DEFAULT_WAKE_CAP_NANO_USD,
   lockstepRoundTimeoutMs,
 } from "../defaults.ts";
+import { LineupSchema } from "../log/schema.ts";
 import {
   arenaEnv,
   llmSeatsOf,
@@ -22,6 +28,9 @@ const KEY: ArenaEnv = { apiKey: "sk-test", baseURL: null, live: false };
 const fixed = { randomSeed: () => 42, randomKey: () => "0123456789abcdef0123456789abcdef" };
 
 const plan = (req: ArenaRequest, env: ArenaEnv = KEY) => planArena(req, env, fixed);
+
+/** The lineup default wake cap of `m` (§3.9): 20 × its central wake. */
+const wake = (m: string): number => 20 * centralWakeNano(m, "lockstep", "5m");
 
 function usage(req: ArenaRequest, env: ArenaEnv = KEY): string {
   try {
@@ -63,6 +72,7 @@ describe("arena plan", () => {
       attemptTimeoutMs: 10 * 60_000,
       roundDeadlineMs: 200 * 60_000 - 60_000,
       thoughtCall: false,
+      promptCapTokens: 160_000,
     });
     expect([p.cacheTtl, p.time, p.fake, p.maxTokens, p.maxInflight]).toEqual([
       "5m",
@@ -188,6 +198,7 @@ describe("arena plan", () => {
       attemptTimeoutMs: 290_000,
       roundDeadlineMs: 290_000,
       thoughtCall: false,
+      promptCapTokens: 160_000,
     });
     expect(p.cacheTtl).toBe("1h");
     expect(plan({ clock: "realtime", fake: true }).clock).toMatchObject({
@@ -270,5 +281,146 @@ describe("arena plan", () => {
     expect(usage({ pauseMaxMs: 400 * 3_600_000, retryBudgetMs: 300 * 3_600_000 })).toContain(
       "the lockstep round timeout: it must stay under 596h",
     );
+  });
+});
+
+describe("arena plan: lineups and the match budget (phase 4 Pass 1a)", () => {
+  test("--lineup claude-duo: the seats, Sonnet 5.5 without fallbacks, the §3.9 caps, the budget", () => {
+    const p = plan({ lineup: "claude-duo" });
+    expect(p.lineup).toBe("claude-duo");
+    expect(
+      p.seats.map((s) =>
+        s.kind === "bot" ? s.label : `${s.model}/${s.effort}/${s.fallbacks}/${s.profile.id}`,
+      ),
+    ).toEqual([
+      "claude-sonnet-5-5/medium/off/odysseus",
+      "claude-haiku-5-5/medium/off/achilles",
+      "claude-haiku-5-5/medium/off/penelope",
+      "claude-haiku-5-5/medium/off/agamemnon",
+      "bot:opportunist@3",
+      "bot:conqueror@3",
+    ]);
+    const sonnet = p.prediction.seats[0];
+    // Cap: twice the seat's predicted high, at least $5; wake cap: 20 × the central wake, ≥ $0.10.
+    expect(llmSeatsOf(p).map((s) => s.capNanoUsd)).toEqual([
+      2 * (sonnet?.high ?? 0),
+      5_000_000_000,
+      5_000_000_000,
+      5_000_000_000,
+    ]);
+    expect(llmSeatsOf(p).map((s) => s.wakeCapNanoUsd)).toEqual([
+      wake("claude-sonnet-5-5"),
+      wake("claude-haiku-5-5"),
+      wake("claude-haiku-5-5"),
+      wake("claude-haiku-5-5"),
+    ]);
+    // $1.92 and $0.10 (Haiku's is just over the $0.10 floor).
+    expect([wake("claude-sonnet-5-5"), wake("claude-haiku-5-5")]).toEqual([
+      1_919_200_000, 100_920_000,
+    ]);
+    expect([
+      p.maxTokens,
+      p.promptCapTokens,
+      p.policy.promptCapTokens,
+      p.policy.attemptTimeoutMs,
+    ]).toEqual([16_000, 160_000, 160_000, 600_000]);
+    expect(p.budget).toEqual({
+      budgetNanoUsd: 55_000_000_000,
+      onBudget: "handoff",
+      carryNanoUsd: 0,
+      carryFrom: null,
+      carryLines: 0,
+    });
+    expect(p.estimate.budget?.killAtNanoUsd).toBe(
+      55_000_000_000 - p.prediction.reserve.reserveNanoUsd,
+    );
+    expect(p.warnings).toEqual([]);
+  });
+
+  test("flags over the lineup: --seat, --cap-usd, --wake-cap-usd, --max-tokens, --prompt-cap, --budget-usd, --on-budget", () => {
+    const p = plan(
+      {
+        lineup: "claude-duo",
+        seats: ["p2=claude:opus-5-5:low:achilles"],
+        capUsd: "7",
+        wakeCapUsd: "off",
+        maxTokens: 20_000,
+        promptCap: 120_000,
+        budgetUsd: "60",
+        onBudget: "abort",
+      },
+      KEY,
+    );
+    const llm = llmSeatsOf(p);
+    // The overridden seat takes the model's default fallbacks (Opus 5.5: default) and no lineup extras.
+    expect(
+      llm.map((s) => [s.model, s.effort, s.fallbacks, s.capNanoUsd, s.wakeCapNanoUsd]),
+    ).toEqual([
+      ["claude-sonnet-5-5", "medium", "off", 7_000_000_000, null],
+      ["claude-opus-5-5", "low", "default", 7_000_000_000, null],
+      ["claude-haiku-5-5", "medium", "off", 7_000_000_000, null],
+      ["claude-haiku-5-5", "medium", "off", 7_000_000_000, null],
+    ]);
+    expect([p.maxTokens, p.promptCapTokens, p.budget?.budgetNanoUsd, p.budget?.onBudget]).toEqual([
+      20_000,
+      120_000,
+      60_000_000_000,
+      "abort",
+    ]);
+    // Without a lineup the phase-2 defaults stay, and Sonnet 5.5 seats get fallbacks off.
+    const bare = plan({ seats: ["p1=claude:sonnet-5-5:medium:odysseus"] });
+    expect(
+      llmSeatsOf(bare).map((s) => [s.model, s.fallbacks, s.capNanoUsd, s.wakeCapNanoUsd]),
+    ).toEqual([
+      ["claude-sonnet-5-5", "off", DEFAULT_CAP_NANO_USD, DEFAULT_WAKE_CAP_NANO_USD],
+      ["claude-opus-5-5", "default", DEFAULT_CAP_NANO_USD, DEFAULT_WAKE_CAP_NANO_USD],
+      ["claude-opus-5-5", "default", DEFAULT_CAP_NANO_USD, DEFAULT_WAKE_CAP_NANO_USD],
+      ["claude-opus-5-5", "default", DEFAULT_CAP_NANO_USD, DEFAULT_WAKE_CAP_NANO_USD],
+    ]);
+    expect([bare.budget, bare.lineup, bare.promptCapTokens]).toEqual([null, null, 160_000]);
+  });
+
+  test("lineup and budget errors name the field and the fix", () => {
+    const dir = mkdtempSync(join(tmpdir(), "perfidia-lineup-"));
+    try {
+      const duo = LineupSchema.parse(JSON.parse(readFileSync(lineupPath("claude-duo"), "utf8")));
+      const write = (name: string, value: unknown): string => {
+        const p = join(dir, `${name}.json`);
+        writeFileSync(p, JSON.stringify(value));
+        return p;
+      };
+      expect(
+        usage({ lineup: write("late", { ...duo, reminders: "last-round" }), fake: true }),
+      ).toContain('reminders "last-round" arrive with the non-Anthropic seats');
+      const haiku = {
+        ...duo,
+        seats: duo.seats.map((s, i) => (i === 1 ? { ...s, fallbacks: "default" } : s)),
+      };
+      expect(usage({ lineup: write("haiku", haiku), fake: true })).toContain(
+        "p2: claude-haiku-5-5 has no server-side refusal fallback",
+      );
+      const gap = { ...duo, seats: duo.seats.filter((_, i) => i !== 2) };
+      expect(usage({ lineup: write("gap", gap), fake: true })).toContain("p3 is missing");
+      expect(usage({ lineup: write("bad", { ...duo, budgetUsd: "lots" }), fake: true })).toContain(
+        "not a perfidia-lineup/1 file: budgetUsd",
+      );
+      expect(usage({ lineup: join(dir, "absent.json"), fake: true })).toContain(
+        "no lineup file at",
+      );
+      expect(usage({ budgetCarry: dir, fake: true })).toContain(
+        "--budget-carry needs a match budget",
+      );
+      expect(usage({ lineup: "claude-duo", budgetCarry: dir, fake: true })).toContain(
+        "no llm_calls.jsonl",
+      );
+      expect(usage({ lineup: "claude-duo", onBudget: "panic", fake: true })).toContain(
+        "--on-budget must be one of handoff, abort",
+      );
+      // A comparison lineup that repeats a model: a warning.
+      const cmp = plan({ lineup: write("cmp", { ...duo, comparison: true }), fake: true });
+      expect(cmp.warnings.join("\n")).toContain("repeats claude-haiku-5-5");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

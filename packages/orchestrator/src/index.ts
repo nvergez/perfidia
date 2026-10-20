@@ -1,7 +1,7 @@
 // @perfidia/orchestrator: the LLM harness (phase-2 design). The model layer (`ModelAdapter`, the
 // Anthropic adapter, the fake), the seat layer (`LlmSeatAgent`, prompts, profiles, retries, the
 // pause gate), the budget ledger, the run-directory logs, and the arena (`bun run arena --
-// <command>`: plan, preflight, run, report, smoke).
+// <command>`: plan, preflight, run, report, smoke; phase 4: estimate, lineups, reconcile).
 
 export * from "./model/adapter.ts";
 export * from "./model/anthropic.ts";
@@ -23,13 +23,18 @@ export * from "./seat/thought.ts";
 export * from "./defaults.ts";
 export * from "./arena/brain.ts";
 export * from "./arena/cost.ts";
+export * from "./arena/estimate.ts";
+export * from "./arena/lineup.ts";
 export * from "./arena/plan.ts";
 export * from "./arena/preflight.ts";
+export * from "./arena/reconcile.ts";
 export * from "./arena/report.ts";
 export * from "./arena/run.ts";
 export * from "./arena/smoke.ts";
 export {
   USAGE as ARENA_USAGE,
   RUN_USAGE as ARENA_RUN_USAGE,
+  ESTIMATE_USAGE as ARENA_ESTIMATE_USAGE,
   main as arenaMain,
+  type MainOptions as ArenaMainOptions,
 } from "./arena/cli.ts";

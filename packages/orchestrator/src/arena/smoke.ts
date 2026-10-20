@@ -23,6 +23,7 @@ import { BRIEFING_TOKENS, PREFIX_TOKENS } from "./cost.ts";
 import { anthropicTools } from "../model/tools.ts";
 import { PROFILES } from "../seat/personalities.ts";
 import { seatPrompt, sharedPrompt, turnHeader } from "../seat/prompt.ts";
+import { defaultFallbacks } from "./lineup.ts";
 import { PreflightError, preflight } from "./preflight.ts";
 import { DEFAULT_ARENA_DAYS, MODEL_ALIASES, type ArenaEnv } from "./plan.ts";
 
@@ -123,6 +124,8 @@ export async function smokeCommand(o: SmokeOptions): Promise<number> {
     effort,
     maxOutputTokens: SMOKE_MAX_TOKENS,
     cacheTtl: "5m",
+    // As the arena plans it (phase 4): Claude Sonnet 5.5 without server-side fallbacks.
+    fallbacks: defaultFallbacks(model),
   };
   const client = new AnthropicClient({
     apiKey: o.env.apiKey,

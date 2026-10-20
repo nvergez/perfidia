@@ -160,7 +160,7 @@ describe("spectator schemas", () => {
 
   test("every schema of the spectator and arena modules converts to JSON Schema", () => {
     const all = [...schemasOf(spectator), ...schemasOf(arena)];
-    expect(all.length).toBe(48);
+    expect(all.length).toBe(63);
     for (const [name, schema] of all) {
       const json = z.toJSONSchema(schema, { io: "output", unrepresentable: "any" });
       expect([name, typeof json]).toEqual([name, "object"]);

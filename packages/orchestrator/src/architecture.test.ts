@@ -7,7 +7,10 @@
 // - the seat, budget and model layers read no wall clock and no randomness of their own (both are
 //   injected, so retries and fake runs are deterministic);
 // - boundary: no string literal names a building, unit or queue id of a published ruleset, so the
-//   prompts and profiles stay ruleset-agnostic and survive reskins.
+//   prompts and profiles stay ruleset-agnostic and survive reskins;
+// - phase 4: the global `fetch` is called by `model/anthropic.ts` alone, whose guarded fetch never
+//   follows a redirect (`redirect: "error"`); only `arena/cli.ts` touches process signals; no
+//   string literal names a provider key or base URL variable outside `PERFIDIA_*`.
 
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
@@ -282,6 +285,38 @@ describe("orchestrator architecture", () => {
         /\b(Date\.now|new Date|Math\.random|performance\.now|setTimeout|setInterval|crypto\.)/g,
       )) {
         found.push(`${f}: ${m[1] ?? ""}`);
+      }
+    }
+    expect(found).toEqual([]);
+  });
+
+  test("phase 4: fetch only in model/anthropic.ts, never following redirects; signals only in arena/cli.ts", () => {
+    const found: string[] = [];
+    for (const f of sources) {
+      const { code } = lex(text(f));
+      if (/(?<![.\w])fetch\(/.test(code) && f !== "model/anthropic.ts")
+        found.push(`${f}: calls fetch`);
+      if (
+        /\bprocess\.(on|off|once|addListener|removeListener)\(/.test(code) &&
+        f !== "arena/cli.ts"
+      ) {
+        found.push(`${f}: handles process signals`);
+      }
+    }
+    expect(found).toEqual([]);
+    expect(lex(text("model/anthropic.ts")).code).toContain('redirect: "error"');
+  });
+
+  test("phase 4: provider keys and base URLs are PERFIDIA_* variables only", () => {
+    const found: string[] = [];
+    for (const f of sources) {
+      for (const s of lex(text(f)).strings) {
+        for (const m of s.matchAll(
+          /\b([A-Z][A-Z0-9]*(?:_[A-Z0-9]+)*_(?:API_KEY|BASE_URL|AUTH_TOKEN))\b/g,
+        )) {
+          const name = m[1] ?? "";
+          if (!name.startsWith("PERFIDIA_")) found.push(`${f}: names ${name}`);
+        }
       }
     }
     expect(found).toEqual([]);

@@ -5,6 +5,7 @@ import {
   ModelError,
   RETRY_MAX_OUTPUT_TOKENS,
   type ChatRequest,
+  type Entry,
 } from "../model/adapter.ts";
 import { sleepMs } from "../model/clock.ts";
 import type { FakeReply } from "../model/fake.ts";
@@ -19,7 +20,7 @@ import {
   SPEC,
   virtualTime,
 } from "../testkit.test.ts";
-import { AgentError } from "./agent.ts";
+import { AgentError, ENTRY_OVERHEAD_TOKENS, entryTokensUpper, promptEstimate } from "./agent.ts";
 
 /** An SSE `overloaded` error charged an estimated $1. */
 const overloadedUsd = () =>
@@ -665,5 +666,128 @@ describe("caps", () => {
     expect(lines[0]?.costNanoUsd).toBe(100 * 4000 + 4000 * 20000);
     expect(lines.reduce((n, l) => n + l.costNanoUsd, 0)).toBe(r.ledger.spent("p1"));
     expect(lines.at(-1)?.seatSpentNanoUsd).toBe(r.ledger.spent("p1"));
+  });
+});
+
+/** One Opus message's usage: a prompt of `tokens` (all cache reads) and `output`. */
+const prompt = (tokens: number, output = 10) => [
+  {
+    model: "claude-opus-5-5",
+    kind: "message" as const,
+    tokens: { input: 0, cacheWrite5m: 0, cacheWrite1h: 0, cacheRead: tokens, output },
+    estimated: false,
+  },
+];
+
+describe("the prompt cap (phase 4 §5.2)", () => {
+  test("the estimate: the prefix and every entry, then the last measured prompt, its output and the bytes since", () => {
+    const user: Entry = { role: "user", parts: [{ kind: "text", text: "é".repeat(10) }] };
+    const op: Entry = { role: "operator", text: "abcd" };
+    const reply: Entry = {
+      role: "assistant",
+      reply: { native: [{ type: "text", text: "x" }], text: ["x"], calls: [], reasoning: [] },
+    };
+    const results: Entry = {
+      role: "user",
+      parts: [{ kind: "result", callId: "c1", content: "{}", isError: false }],
+    };
+    // Round 0: the prefix, then one token per UTF-8 byte plus an overhead per part.
+    expect(promptEstimate([user, op], null, 1000)).toBe(
+      1000 + 20 + ENTRY_OVERHEAD_TOKENS + 4 + ENTRY_OVERHEAD_TOKENS,
+    );
+    expect(entryTokensUpper(results)).toBe(2 + 2 + ENTRY_OVERHEAD_TOKENS);
+    const known = { prompt: 5000, output: 700, entries: 2 };
+    // A retry of the same request: its measured prompt.
+    expect(promptEstimate([user, op], known, 1000)).toBe(5000);
+    // The next round: that prompt, its reply's output, and the results and reminder appended.
+    expect(promptEstimate([user, op, reply, results, op], known, 1000)).toBe(
+      5000 + 700 + entryTokensUpper(results) + entryTokensUpper(op),
+    );
+  });
+
+  test("a round whose estimated prompt is over the cap is never sent: a prompt_cap line, the turn closes (not systemic)", async () => {
+    const r = rig([{ calls: view, usage: prompt(150_000) }, { text: ["never sent"] }], {
+      policy: { promptCapTokens: 150_100 },
+    });
+    await r.time.run(() => r.agent.round(inputOf(1, 0)));
+    const e = await rejection(r.time.run(() => r.agent.round(inputOf(1, 1, [ok()]))));
+    expect(e).toBeInstanceOf(AgentError);
+    expect(e.message).toMatch(/round 1: prompt_cap \(estimated \d+ prompt tokens > 150100\)$/);
+    expect(e instanceof AgentError && e.systemic).toBe(false);
+    expect(r.fake.requests).toHaveLength(1);
+    const capLines = r.log.lines.filter((l) => l.k === "prompt_cap");
+    expect(capLines).toHaveLength(1);
+    const line = capLines[0];
+    expect(line?.k === "prompt_cap" && line.estimateTokens > 150_100).toBe(true);
+    const estimateTokens = line?.k === "prompt_cap" ? line.estimateTokens : 0;
+    expect(line).toEqual({
+      k: "prompt_cap",
+      seat: "p1",
+      turn: 1,
+      round: 1,
+      kind: "round",
+      t: 0,
+      estimateTokens,
+      capTokens: 150_100,
+    });
+  });
+
+  test("round 0 over the cap: no request at all; a max_tokens retry keeps its measured prompt", async () => {
+    const tiny = rig([{ text: ["never"] }], { policy: { promptCapTokens: 100 } });
+    await rejection(tiny.time.run(() => tiny.agent.round(inputOf(1, 0))));
+    expect(tiny.fake.requests).toHaveLength(0);
+    // A truncated reply's retry sends the same entries: estimated at the measured prompt (under
+    // the cap), so it goes out.
+    const retry = rig(
+      [
+        { stop: "max_tokens", usage: prompt(90_000) },
+        { text: ["done"], usage: prompt(90_000) },
+      ],
+      { policy: { promptCapTokens: 95_000 } },
+    );
+    await retry.time.run(() => retry.agent.round(inputOf(1, 0)));
+    expect(retry.fake.requests).toHaveLength(2);
+    expect(retry.log.lines.some((l) => l.k === "prompt_cap")).toBe(false);
+  });
+
+  test("a thought call over the cap is skipped (no thought), with a prompt_cap line", async () => {
+    const r = rig([{ calls: [endTurn], usage: prompt(99_000) }, { text: ["never"] }], {
+      policy: { thoughtCall: true, promptCapTokens: 99_100 },
+    });
+    const out = await r.time.run(() => r.agent.round(inputOf(1, 0)));
+    expect(out.thought).toBeUndefined();
+    expect(r.fake.requests).toHaveLength(1);
+    expect(
+      r.log.lines.filter((l) => l.k === "prompt_cap").map((l) => l.k === "prompt_cap" && l.kind),
+    ).toEqual(["thought_call"]);
+  });
+});
+
+describe("the match budget's kill switch in the turn loop (phase 4)", () => {
+  test("a halted ledger: no attempt, {calls: []}, the hand-off requested with the halt's reason", async () => {
+    const r = rig([{ text: ["never"] }]);
+    r.ledger.halt("match_budget", 7200);
+    const out = await r.time.run(() => r.agent.round(inputOf(2, 0)));
+    expect(out).toEqual({ calls: [] });
+    expect(r.fake.requests).toHaveLength(0);
+    expect(r.handoffs.map((h) => [h.seat, h.reason, h.t])).toEqual([["p1", "match_budget", 7200]]);
+  });
+
+  test("the kill fired while an attempt was in flight: it is charged, its retry is not made", async () => {
+    const box: { halt: () => void } = { halt: () => undefined };
+    const r = rig([
+      () => {
+        box.halt();
+        return overloadedUsd();
+      },
+      { text: ["never"] },
+    ]);
+    box.halt = () => r.ledger.halt("match_budget", 10);
+    const out = await r.time.run(() => r.agent.round(inputOf(1, 0)));
+    expect(out).toEqual({ calls: [] });
+    expect(r.fake.requests).toHaveLength(1);
+    // The attempt in flight at the kill is still charged and logged ($1 estimated).
+    expect(calls(r.log).map((l) => l.costNanoUsd)).toEqual([1_000_000_000]);
+    expect(r.ledger.spent("p1")).toBe(1_000_000_000);
   });
 });

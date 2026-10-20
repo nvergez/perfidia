@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import type { SeatAgent } from "@perfidia/protocol";
 import type { UsageEntry } from "../model/adapter.ts";
-import { BudgetLedger, type HandoffNote } from "./ledger.ts";
+import { BudgetLedger, MatchBudget, type HandoffNote, type KillNote } from "./ledger.ts";
 
 const bot = (label: string): SeatAgent => ({ label, round: () => Promise.resolve({ calls: [] }) });
 
@@ -105,5 +105,129 @@ describe("BudgetLedger", () => {
     const c = l.charge("p1", 1, 0, [{ ...opus(1), model: "claude-unknown-1" }]);
     expect(c.unpriced).toEqual(["claude-unknown-1"]);
     expect(c.costNanoUsd).toBe(5_000);
+  });
+});
+
+/** A Sonnet 5.5 message that produced `output` tokens. */
+const sonnet = (output: number): UsageEntry => ({
+  model: "claude-sonnet-5-5",
+  kind: "message",
+  tokens: { input: 0, cacheWrite5m: 0, cacheWrite1h: 0, cacheRead: 0, output },
+  estimated: false,
+});
+
+/** A ledger of two seats under a match budget, with its kill and hand-off notes. */
+function matched(budget: number, reserve: number, carry = 0) {
+  const kills: KillNote[] = [];
+  const match = new MatchBudget({
+    budgetNanoUsd: budget,
+    reserveNanoUsd: reserve,
+    carryNanoUsd: carry,
+    onKill: (k) => kills.push(k),
+  });
+  const notes: HandoffNote[] = [];
+  const l = new BudgetLedger({
+    caps: new Map([
+      ["p1", 100_000_000_000],
+      ["p2", 1_000_000],
+    ]),
+    wakeCapNanoUsd: null,
+    handoffTo: (seat) => ({ label: `bot:turtle@3`, agent: bot(`bot ${seat}`) }),
+    onHandoff: (n) => notes.push(n),
+    match,
+  });
+  return { match, l, notes, kills };
+}
+
+describe("MatchBudget and the kill switch (phase 4 §5.2)", () => {
+  test("K = budget − reserve; the charge that reaches K fires once and halts every seat", () => {
+    const { match, l, notes, kills } = matched(1_000_000_000, 400_000_000);
+    expect(match.killAtNanoUsd).toBe(600_000_000);
+    l.charge("p1", 1, 100, [sonnet(50_000)]); // $0.50
+    expect([match.killed, l.over("p1"), l.over("p2")]).toEqual([false, false, false]);
+    l.charge("p1", 1, 200, [sonnet(10_000)]); // $0.10: $0.60 = K
+    expect(match.killed).toBe(true);
+    expect(kills).toEqual([
+      {
+        t: 200,
+        spentNanoUsd: 600_000_000,
+        killAtNanoUsd: 600_000_000,
+        budgetNanoUsd: 1_000_000_000,
+      },
+    ]);
+    expect([l.over("p1"), l.over("p2"), l.overReason("p1"), l.halted]).toEqual([
+      true,
+      true,
+      "match_budget",
+      "match_budget",
+    ]);
+    expect(notes.map((n) => [n.seat, n.reason, n.t])).toEqual([
+      ["p1", "match_budget", 200],
+      ["p2", "match_budget", 200],
+    ]);
+    // In-flight attempts still land (charged, counted), nothing fires twice.
+    l.charge("p2", 3, 250, [sonnet(1_000)]);
+    expect(match.spentNanoUsd).toBe(610_000_000);
+    expect(kills).toHaveLength(1);
+    expect(notes).toHaveLength(2);
+    expect(l.allHandedOff()).toBe(true);
+  });
+
+  test("a seat over its own cap keeps its cap hand-off; the kill hands off the rest", () => {
+    const { l, notes } = matched(1_000_000_000, 100_000_000);
+    l.charge("p2", 1, 10, [sonnet(200)]); // over p2's $0.001 cap
+    expect(l.overReason("p2")).toBe("cap");
+    l.charge("p1", 1, 20, [sonnet(90_000)]);
+    expect(notes.map((n) => [n.seat, n.reason])).toEqual([
+      ["p2", "cap"],
+      ["p1", "match_budget"],
+    ]);
+  });
+
+  test("the carry counts from the start; a carry at K kills before any attempt", () => {
+    const { match, l } = matched(1_000_000_000, 400_000_000, 250_000_000);
+    expect(match.spentNanoUsd).toBe(250_000_000);
+    l.charge("p1", 1, 0, [sonnet(35_000)]);
+    expect(match.killed).toBe(true);
+    const at = matched(1_000_000_000, 400_000_000, 600_000_000);
+    expect([at.match.killed, at.l.over("p1")]).toEqual([true, true]);
+    expect(at.notes.map((n) => n.reason)).toEqual(["match_budget", "match_budget"]);
+  });
+
+  test("probes and the preflight count through add(); the operator halt is its own reason", () => {
+    const { match, l, notes } = matched(1_000_000_000, 400_000_000);
+    match.add(599_999_999, 0);
+    expect(match.killed).toBe(false);
+    l.halt("operator", 3600);
+    l.halt("match_budget", 3700);
+    expect(notes.map((n) => n.reason)).toEqual(["operator", "operator"]);
+    match.add(1, 3800);
+    expect(l.halted).toBe("operator");
+    expect(() => new MatchBudget({ budgetNanoUsd: 1, reserveNanoUsd: 2 })).toThrow("exceeds");
+    expect(() => match.add(-1, 0)).toThrow("integer ≥ 0");
+  });
+
+  test("per-seat wake caps over the ledger-wide one", () => {
+    const l = new BudgetLedger({
+      caps: new Map([
+        ["p1", 100_000_000_000],
+        ["p2", 100_000_000_000],
+        ["p3", 100_000_000_000],
+      ]),
+      wakeCapNanoUsd: 2_000_000_000,
+      wakeCaps: new Map([
+        ["p1", 100_000_000],
+        ["p2", null],
+      ]),
+      handoffTo: () => ({ label: "bot:turtle@3", agent: bot("bot:turtle@3") }),
+    });
+    expect([l.wakeCap("p1"), l.wakeCap("p2"), l.wakeCap("p3")]).toEqual([
+      100_000_000,
+      null,
+      2_000_000_000,
+    ]);
+    l.charge("p1", 1, 0, [sonnet(10_000)]);
+    l.charge("p2", 1, 0, [sonnet(1_000_000)]);
+    expect([l.wakeOver("p1", 1), l.wakeOver("p2", 1)]).toEqual([true, false]);
   });
 });

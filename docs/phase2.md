@@ -261,9 +261,12 @@ High: 6 round trips, 3 000 output tokens, cold, 20 wakes per day. Computed by th
 | ---------------------------------------- | ------ | --------------- | ------- |
 | Opus 5.5, `medium`, lockstep             | $23.91 | **$83.29**      | $306.60 |
 | Opus 5.5, real time, 5-min TTL / 1-h TTL | –      | $99.13 / $85.77 | –       |
-| Sonnet 5.5, lockstep                     | –      | $43.80          | –       |
+| Sonnet 5.5, lockstep                     | –      | $41.65          | –       |
 | Haiku 5.5, lockstep                      | –      | $2.19           | –       |
 | One calibration day, Opus 5.5            | –      | $11.90          | –       |
+
+Phase 4 corrected Sonnet 5.5's cache-read price to the pricing page's $0.10 per MTok (it was $0.20
+here, giving $43.80); see `docs/phase4.md` §12.
 
 Output, thinking included, is about two thirds of the Opus bill: effort is the lever. The bots of
 the arena lineup wake 16.2 times per seat per day on `perfidia-1@1.1.0` (seeds 1–4), slightly above

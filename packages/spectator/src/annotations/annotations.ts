@@ -33,7 +33,11 @@ export interface Handoff {
 }
 
 export interface AnnotationFold {
-  /** One line of `llm_calls.jsonl` (`llm_call`, `handoff`, `pause` or `wake_cap`). */
+  /**
+   * One line of `llm_calls.jsonl` (`llm_call`, `handoff`, `pause` or `wake_cap`). Phase 4's
+   * `preflight`, `prompt_cap`, `kill_switch`, `operator` and `carry` lines are accepted and change
+   * no annotation; a hand-off keeps its reason (`cap`, `match_budget`, `outage`, `operator`).
+   */
   call(line: LlmLogLine): void;
   /** One line of `replies.jsonl`. */
   reply(line: ReplyLine): void;

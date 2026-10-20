@@ -18,9 +18,9 @@ import type { PlayerId } from "@perfidia/protocol";
 // Time behind a closed gate never counts against a retry budget (`pausedMs`). The arena (file
 // writing, `arena.json`, exit codes) hooks in through `onPause`, `onResume`, `onAbort`, `onAlert`.
 
-/** Why the gate closed. */
+/** Why the gate closed, or why the arena aborted (`budget`, `operator`: phase 4). */
 export interface PauseReason {
-  readonly kind: ModelErrorKind | "breaker";
+  readonly kind: ModelErrorKind | "breaker" | "budget" | "operator";
   readonly message: string;
   readonly seat: PlayerId | null;
   readonly model: string | null;
@@ -266,7 +266,13 @@ export class ArenaPauseGate implements PauseGate {
     for (const w of this.waiters.splice(0)) w.resolve();
   }
 
-  private abort(reason: PauseReason, why: string): void {
+  /**
+   * Aborts the arena now, through the same path as a pause past its maximum: every waiter and every
+   * later `open` rejects with `ArenaAborted` (phase 4: `--on-budget abort`, a second operator
+   * signal). Idempotent.
+   */
+  abort(reason: PauseReason, why: string): void {
+    if (this.aborted !== null) return;
     if (this.closedBy !== null) {
       this.pausedTotal += this.o.clock.time.nowMs() - this.closedAt;
       this.closedBy = null;

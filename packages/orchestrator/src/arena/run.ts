@@ -1,11 +1,9 @@
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { createMatch, verifyLog } from "@perfidia/engine";
+import { verifyLog } from "@perfidia/engine";
 import { canonicalJson, fmtTime, sha256Hex } from "@perfidia/engine/core";
-import { rulesInfo } from "@perfidia/gateway/present";
 import {
   runMatch,
-  toolDefinitions,
   type LogSink,
   type RunMatchOptions,
   type RunResult,
@@ -22,9 +20,10 @@ import {
   type CliIo,
   type ExitCode,
 } from "@perfidia/sim";
-import { BudgetLedger } from "../budget/ledger.ts";
+import { BudgetLedger, MatchBudget, type KillNote } from "../budget/ledger.ts";
 import { FileCallLog, writePrompts, type CallLog } from "../log/calls.ts";
 import {
+  EstimateFileSchema,
   SeatsFileSchema,
   type ArenaReport,
   type ArenaStatus,
@@ -32,19 +31,26 @@ import {
   type SeatsFile,
 } from "../log/schema.ts";
 import { watchFold } from "../log/watch.ts";
-import type { ModelAdapter, ModelSpec } from "../model/adapter.ts";
+import { promptTokens, type ModelAdapter, type ModelSpec } from "../model/adapter.ts";
 import { AnthropicAdapter, AnthropicClient, type HttpFetch } from "../model/anthropic.ts";
 import { seededRandom, type HarnessClock } from "../model/clock.ts";
 import { FakeAdapter } from "../model/fake.ts";
-import { formatUsd } from "../model/prices.ts";
+import { formatCents, formatUsd } from "../model/prices.ts";
 import { RateGates } from "../model/rate.ts";
-import { anthropicTools } from "../model/tools.ts";
 import { LlmSeatAgent } from "../seat/agent.ts";
 import { ArenaPauseGate, type ArenaAborted, type PauseReason } from "../seat/pause.ts";
-import { PROMPT_VERSION, operatorTemplates, seatPrompt, sharedPrompt } from "../seat/prompt.ts";
+import { PROMPT_VERSION, operatorTemplates, seatPrompt } from "../seat/prompt.ts";
 import { botBrain } from "./brain.ts";
 import { estimateSeat, projectSpend } from "./cost.ts";
-import { groupsOf, preflight, type PreflightGroup } from "./preflight.ts";
+import { reserveText } from "./estimate.ts";
+import {
+  PreflightError,
+  groupKey,
+  groupsOf,
+  preflight,
+  type GroupOutcome,
+  type PreflightGroup,
+} from "./preflight.ts";
 import {
   DEFAULT_ARENA_DAYS,
   llmSeatsOf,
@@ -90,12 +96,22 @@ import {
 // and no LLM round is called past the cut. A run that ends or stops with at least
 // `DEGRADED_ERROR_PCT` of its LLM turns closed by an error is `degraded` (exit 2), and two
 // consecutive refused turns of a seat are an alert naming the turns' inbox message ids (§3.8).
+//
+// Phase 4 (Pass 1a, docs/phase4.md): every dollar is on a line of `llm_calls.jsonl` (the start
+// preflight's `preflight` lines are buffered until the run directory exists, failed groups
+// included; probes write theirs), and counts toward the match budget when the run has one.
+// `estimate.json` is written once, before turn 1, and its sha256 goes into `seats.json`. The kill
+// switch (spend reaching `K = budget − reserve`) halts every LLM seat: no attempt starts after it,
+// each seat is handed to its bot (`match_budget`) and the match plays on to its end, or, with
+// `--on-budget abort`, the run aborts. Probes stop once no LLM seat can call its model. An operator
+// signal (SIGINT or SIGTERM) once hands every LLM seat to its bot (`operator`); twice aborts.
 
 export const ARENA_FILE = "arena.json";
 export const SEATS_FILE = "seats.json";
 export const FEED_FILE = "feed.txt";
 export const CALLS_FILE = "llm_calls.jsonl";
 export const REPLIES_FILE = "replies.jsonl";
+export const ESTIMATE_FILE = "estimate.json";
 
 export interface ArenaPaths {
   readonly dir: string;
@@ -106,6 +122,7 @@ export interface ArenaPaths {
   readonly seats: string;
   readonly feed: string;
   readonly summary: string;
+  readonly estimate: string;
 }
 
 export function arenaPaths(dir: string): ArenaPaths {
@@ -118,7 +135,14 @@ export function arenaPaths(dir: string): ArenaPaths {
     seats: join(dir, SEATS_FILE),
     feed: join(dir, FEED_FILE),
     summary: join(dir, "summary.json"),
+    estimate: join(dir, ESTIMATE_FILE),
   };
+}
+
+/** Operator signals (SIGINT, SIGTERM): the CLI subscribes the process's, tests their own. */
+export interface SignalSource {
+  /** Calls `handler` with the signal's name on each signal; returns the unsubscribe. */
+  subscribe(handler: (signal: string) => void): () => void;
 }
 
 /** What an adapter factory gets besides the seat's plan and spec. */
@@ -140,6 +164,8 @@ export interface RunArenaOptions {
   readonly brainLatencyMs?: readonly [number, number];
   /** Print nothing but alerts. */
   readonly quiet?: boolean;
+  /** Operator signals: once hands every LLM seat to its bot, twice aborts (phase 4). */
+  readonly signals?: SignalSource;
 }
 
 export interface ArenaOutcome {
@@ -191,6 +217,19 @@ function stopping(agent: SeatAgent, stopAt: number | null): SeatAgent {
 const pauseText = (r: PauseReason): string =>
   `${r.kind}: ${r.message}${r.seat === null ? "" : ` (${r.seat}${r.model === null ? "" : `, ${r.model}`})`}`;
 
+/** `--on-budget abort`: the kill switch aborts the run. */
+function abortForBudget(g: ArenaPauseGate, k: KillNote): void {
+  g.abort(
+    {
+      kind: "budget",
+      message: `spent ${formatUsd(k.spentNanoUsd)} reached the kill threshold ${formatUsd(k.killAtNanoUsd)}`,
+      seat: null,
+      model: null,
+    },
+    "the match budget's kill switch fired (--on-budget abort)",
+  );
+}
+
 /** Runs a planned arena match into `o.dir` (which must not hold a run). */
 export async function runArena(plan: ArenaPlan, o: RunArenaOptions): Promise<ArenaOutcome> {
   const io = o.io;
@@ -200,9 +239,7 @@ export async function runArena(plan: ArenaPlan, o: RunArenaOptions): Promise<Are
   const setup = plan.setup;
   const seed = setup.seed;
   const llm = llmSeatsOf(plan);
-  const info = rulesInfo(createMatch(setup, plan.ruleset));
-  const tools = anthropicTools(toolDefinitions(plan.ruleset));
-  const shared = sharedPrompt(info, setup.seats.length);
+  const { shared, tools } = plan.texts;
 
   const virtual = plan.time === "virtual" ? harness.createVirtualTime() : null;
   const time: TimeSource = virtual ?? new harness.SystemTime();
@@ -218,6 +255,118 @@ export async function runArena(plan: ArenaPlan, o: RunArenaOptions): Promise<Are
       : { time, random: seededRandom(seed) };
   const think =
     plan.clock.kind === "realtime" ? { time, latencyMs: plan.clock.botLatencyMs } : undefined;
+  const wall: { start: string; end: string | null } = { start: iso(), end: null };
+
+  // The LLM log: buffered until the run directory exists (the start preflight comes first).
+  let calls: FileCallLog | null = null;
+  const early: LlmLogLine[] = [];
+  const llmLines: LlmLogLine[] = [];
+  /** Per seat, the last turn closed by a refusal, its inbox, and the streak it ends. */
+  const refused = new Map<PlayerId, { turn: number; inbox: readonly string[]; streak: number }>();
+  const alerts: string[] = [];
+  const alert = (text: string): void => {
+    alerts.push(text);
+    io.err(`ALERT: ${text}\n`);
+  };
+  const log: CallLog = {
+    write(line) {
+      if (calls === null) early.push(line);
+      else calls.write(line);
+      llmLines.push(line);
+      if (line.k === "llm_call") {
+        if (line.fallback) {
+          io.err(
+            `${line.seat} turn ${line.turn}: served by the fallback model ${line.servedBy ?? "?"} (requested ${line.model})\n`,
+          );
+        }
+        if (line.stop === "refusal") {
+          const inbox = line.inbox ?? [];
+          io.err(
+            `${line.seat} turn ${line.turn}: refusal (${line.refusal?.category ?? "uncategorised"}) on ${line.servedBy ?? line.model}; inbox ${inbox.length === 0 ? "empty" : inbox.join(", ")}\n`,
+          );
+          // A refused round closes its turn (a refused thought call does not).
+          const prev = refused.get(line.seat);
+          if (line.kind === "round" && prev?.turn !== line.turn) {
+            const streak = prev?.turn === line.turn - 1 ? prev.streak + 1 : 1;
+            refused.set(line.seat, { turn: line.turn, inbox, streak });
+            if (streak === 2) {
+              const ids = [...new Set([...(prev?.inbox ?? []), ...inbox])];
+              alert(
+                `${line.seat}: 2 consecutive turns refused (${line.turn - 1}, ${line.turn}); a player's message may be the cause (refusal-DoS): their inbox ${ids.length === 0 ? "was empty" : `held ${ids.join(", ")}`}`,
+              );
+            }
+          }
+        }
+      } else if (line.k === "handoff") {
+        const why =
+          line.reason === "cap"
+            ? `over its cap (${formatUsd(line.spentNanoUsd)} of ${formatUsd(line.capNanoUsd)})`
+            : line.reason === "match_budget"
+              ? "the match budget's kill switch fired"
+              : line.reason === "operator"
+                ? "the operator stopped the LLM seats"
+                : line.reason;
+        io.err(`${line.seat}: ${why}: handed to ${line.label} at its next turn\n`);
+      } else if (line.k === "wake_cap") {
+        io.err(
+          `${line.seat} turn ${line.turn}: wake cap reached (${formatUsd(line.wakeSpentNanoUsd)}): the turn ends\n`,
+        );
+      } else if (line.k === "prompt_cap") {
+        io.err(
+          `${line.seat} turn ${line.turn}: prompt cap (an estimated ${line.estimateTokens} tokens > ${line.capTokens}): the ${line.kind === "round" ? "turn closes" : "thought call is skipped"}\n`,
+        );
+      }
+    },
+    reply(line) {
+      calls?.reply(line);
+    },
+    transcript(record) {
+      calls?.transcript(record);
+    },
+  };
+
+  /** The last game time of the log (probes and signals are dated with it). */
+  let lastT = 0;
+  // The gate exists once the run directory does; a kill before it (the start preflight) is acted
+  // on when it is built.
+  let gateRef: ArenaPauseGate | null = null;
+  let killAbort = false;
+  const onKill = (k: KillNote): void => {
+    const action = plan.budget?.onBudget ?? "handoff";
+    log.write({
+      k: "kill_switch",
+      t: k.t,
+      ...(virtual === null ? { wall: iso() } : {}),
+      spentNanoUsd: k.spentNanoUsd,
+      killAtNanoUsd: k.killAtNanoUsd,
+      budgetNanoUsd: k.budgetNanoUsd,
+      action,
+    });
+    alert(
+      `the match budget's kill switch fired: ${formatUsd(k.spentNanoUsd)} spent reached K = ${formatUsd(k.killAtNanoUsd)} (budget ${formatUsd(k.budgetNanoUsd)}); no model attempt starts from now on, ${action === "abort" ? "and the run aborts (--on-budget abort)" : "every LLM seat is handed to its bot at its next turn and the match plays on"}`,
+    );
+    if (action === "abort") {
+      if (gateRef === null) killAbort = true;
+      else abortForBudget(gateRef, k);
+    }
+  };
+  const budget =
+    plan.budget === null
+      ? null
+      : new MatchBudget({
+          budgetNanoUsd: plan.budget.budgetNanoUsd,
+          reserveNanoUsd: plan.prediction.reserve.reserveNanoUsd,
+          carryNanoUsd: plan.budget.carryNanoUsd,
+          onKill,
+        });
+  if (plan.budget !== null && plan.budget.carryFrom !== null) {
+    log.write({
+      k: "carry",
+      from: plan.budget.carryFrom,
+      lines: plan.budget.carryLines,
+      costNanoUsd: plan.budget.carryNanoUsd,
+    });
+  }
 
   // Adapters and the preflight, before anything is written.
   let client: AnthropicClient | null = null;
@@ -241,6 +390,7 @@ export async function runArena(plan: ArenaPlan, o: RunArenaOptions): Promise<Are
       effort: s.effort,
       maxOutputTokens: plan.maxTokens,
       cacheTtl: plan.cacheTtl,
+      fallbacks: s.fallbacks,
     };
     const latency =
       plan.clock.kind === "realtime"
@@ -274,8 +424,58 @@ export async function runArena(plan: ArenaPlan, o: RunArenaOptions): Promise<Are
       tools,
     })),
   );
-  const pre = await preflight(groups);
-  let preflightNanoUsd = pre.nanoUsd;
+  /** Charges one group's check to the budget and writes its `preflight` line. */
+  const preflightLine =
+    (phase: "start" | "probe") =>
+    (g: GroupOutcome): void => {
+      const spec = g.group.adapter.spec;
+      const t = phase === "start" ? 0 : lastT;
+      log.write({
+        k: "preflight",
+        phase,
+        group: g.group.adapter.label,
+        provider: spec.provider,
+        model: spec.model,
+        endpoint: null,
+        t,
+        ok: g.ok,
+        usage: g.usage.map((u) => ({
+          model: u.model,
+          kind: u.kind,
+          input: u.tokens.input,
+          cacheWrite5m: u.tokens.cacheWrite5m,
+          cacheWrite1h: u.tokens.cacheWrite1h,
+          cacheRead: u.tokens.cacheRead,
+          output: u.tokens.output,
+          estimated: u.estimated,
+        })),
+        costNanoUsd: g.nanoUsd,
+        priceCard: g.cards[0] ?? null,
+        error: g.error,
+        ...(virtual === null ? { wallStart: iso() } : {}),
+      });
+      budget?.add(g.nanoUsd, t);
+    };
+  const pre = await preflight(groups, { onGroup: preflightLine("start") }).catch((e: unknown) => {
+    const spent = early.reduce((n, l) => n + (l.k === "preflight" ? l.costNanoUsd : 0), 0);
+    if (e instanceof PreflightError && spent > 0) {
+      io.err(
+        `the start preflight spent ${formatUsd(spent)} before it failed (nothing is written: this is its only record)\n`,
+      );
+    }
+    throw e;
+  });
+  /** Per preflight group, the measured prompt of its shape check: an upper bound of its prefix. */
+  const measured = new Map<string, { tokens: number; seatBytes: number }>();
+  for (const g of pre.groups) {
+    const last = g.usage.at(-1);
+    if (last !== undefined) {
+      measured.set(groupKey(g.group.adapter), {
+        tokens: promptTokens(last.tokens),
+        seatBytes: new TextEncoder().encode(g.group.prompt.seat).length,
+      });
+    }
+  }
   for (const r of pre.reports) {
     say(
       `preflight ${r.model}: ok${r.allowedFallbackModels.length === 0 ? "" : `, fallbacks ${r.allowedFallbackModels.join(", ")}`}\n`,
@@ -285,7 +485,8 @@ export async function runArena(plan: ArenaPlan, o: RunArenaOptions): Promise<Are
   // The run directory.
   const files = new RunDirSink(o.dir, { flush: "line" });
   const paths = arenaPaths(o.dir);
-  const calls = new FileCallLog(o.dir, { transcripts: plan.transcripts });
+  calls = new FileCallLog(o.dir, { transcripts: plan.transcripts });
+  for (const line of early.splice(0)) calls.write(line);
   const operator = operatorTemplates();
   writePrompts(o.dir, {
     shared,
@@ -293,59 +494,13 @@ export async function runArena(plan: ArenaPlan, o: RunArenaOptions): Promise<Are
     operator,
     tools,
   });
+  // The prediction, once, before turn 1 (§5.1): its sha256 goes into seats.json.
+  const estimateText = `${JSON.stringify(EstimateFileSchema.parse(plan.estimate), null, 2)}\n`;
+  writeFileSync(paths.estimate, estimateText, { flag: "wx" });
+  const estimateSha256 = sha256Hex(estimateText);
   const agentLabels = new Map<PlayerId, string>();
 
-  const llmLines: LlmLogLine[] = [];
-  /** Per seat, the last turn closed by a refusal, its inbox, and the streak it ends. */
-  const refused = new Map<PlayerId, { turn: number; inbox: readonly string[]; streak: number }>();
-  const log: CallLog = {
-    write(line) {
-      calls.write(line);
-      llmLines.push(line);
-      if (line.k === "llm_call") {
-        if (line.fallback) {
-          io.err(
-            `${line.seat} turn ${line.turn}: served by the fallback model ${line.servedBy ?? "?"} (requested ${line.model})\n`,
-          );
-        }
-        if (line.stop === "refusal") {
-          const inbox = line.inbox ?? [];
-          io.err(
-            `${line.seat} turn ${line.turn}: refusal (${line.refusal?.category ?? "uncategorised"}) on ${line.servedBy ?? line.model}; inbox ${inbox.length === 0 ? "empty" : inbox.join(", ")}\n`,
-          );
-          // A refused round closes its turn (a refused thought call does not).
-          const prev = refused.get(line.seat);
-          if (line.kind === "round" && prev?.turn !== line.turn) {
-            const streak = prev?.turn === line.turn - 1 ? prev.streak + 1 : 1;
-            refused.set(line.seat, { turn: line.turn, inbox, streak });
-            if (streak === 2) {
-              const ids = [...new Set([...(prev?.inbox ?? []), ...inbox])];
-              alert(
-                `${line.seat}: 2 consecutive turns refused (${line.turn - 1}, ${line.turn}); a player's message may be the cause (refusal-DoS): their inbox ${ids.length === 0 ? "was empty" : `held ${ids.join(", ")}`}`,
-              );
-            }
-          }
-        }
-      } else if (line.k === "handoff") {
-        io.err(
-          `${line.seat}: over its cap (${formatUsd(line.spentNanoUsd)} of ${formatUsd(line.capNanoUsd)}): handed to ${line.label} at its next turn\n`,
-        );
-      } else if (line.k === "wake_cap") {
-        io.err(
-          `${line.seat} turn ${line.turn}: wake cap reached (${formatUsd(line.wakeSpentNanoUsd)}): the turn ends\n`,
-        );
-      }
-    },
-    reply(line) {
-      calls.reply(line);
-    },
-    transcript(record) {
-      calls.transcript(record);
-    },
-  };
-
   // Status, pauses and alerts.
-  const alerts: string[] = [];
   const days: DayRow[] = [];
   let status: ArenaStatus = "running";
   let reason: string | null = null;
@@ -359,18 +514,14 @@ export async function runArena(plan: ArenaPlan, o: RunArenaOptions): Promise<Are
       alerts,
       days,
       levelE,
-      preflightNanoUsd,
+      estimate: { file: plan.estimate, sha256: estimateSha256 },
+      wall,
     });
   const writeReport = (r: ArenaReport): void =>
     writeFileAtomic(paths.arena, `${JSON.stringify(r, null, 2)}\n`);
-  const alert = (text: string): void => {
-    alerts.push(text);
-    io.err(`ALERT: ${text}\n`);
-  };
 
   /** After an abort: the last game second the log may still hold. */
   let cutAfter: number | null = null;
-  let lastT = 0;
   const stop: { aborted: ArenaAborted | null } = { aborted: null };
   const alerted = new Set<string>();
   let pauseStart: { readonly wall: string; readonly ms: number } | null = null;
@@ -385,13 +536,44 @@ export async function runArena(plan: ArenaPlan, o: RunArenaOptions): Promise<Are
       outcome,
       pausedMs: Math.max(0, Math.floor(pausedMs)),
     });
+
+  const rates = new RateGates({ clock, maxInflight: plan.maxInflight });
+  const seatPlanOf = (seat: PlayerId): LlmSeatPlan =>
+    llm.find((s) => s.seat === seat) ?? missing(seat);
+  const ledger = new BudgetLedger({
+    caps: new Map(llm.map((s) => [s.seat, s.capNanoUsd])),
+    wakeCapNanoUsd: plan.wakeCapNanoUsd,
+    wakeCaps: new Map(llm.map((s) => [s.seat, s.wakeCapNanoUsd])),
+    handoffTo: (seat) => {
+      const label = seatPlanOf(seat).handoffBot;
+      return { label, agent: harness.agentFromLabel(label, seat, seed, think) };
+    },
+    onHandoff: (n) =>
+      log.write({
+        k: "handoff",
+        seat: n.seat,
+        t: n.t,
+        reason: n.reason,
+        label: n.label,
+        spentNanoUsd: n.spentNanoUsd,
+        capNanoUsd: n.capNanoUsd,
+      }),
+    ...(budget === null ? {} : { match: budget }),
+  });
+
   const gate = new ArenaPauseGate({
     clock,
     mode: plan.clock.kind === "lockstep" ? "wait" : "abort",
     probe: async () => {
+      // No LLM seat can call its model any more (the kill switch, the operator, every seat over
+      // its cap): reopen without probing, so the waiting seats reach their hand-offs.
+      if (ledger.halted !== null || ledger.allHandedOff()) return true;
       try {
-        const r = await preflight(groups);
-        preflightNanoUsd += r.nanoUsd;
+        // Charged and logged group by group; it stops between groups once the seats are halted.
+        await preflight(groups, {
+          onGroup: preflightLine("probe"),
+          stop: () => ledger.halted !== null,
+        });
         return true;
       } catch {
         return false;
@@ -427,7 +609,9 @@ export async function runArena(plan: ArenaPlan, o: RunArenaOptions): Promise<Are
       stop.aborted = e;
       files.flush();
       cutAfter = lastT;
-      pauseLine(e.reason, "aborted", pauseStart === null ? 0 : time.nowMs() - pauseStart.ms);
+      if (e.reason.kind !== "budget" && e.reason.kind !== "operator") {
+        pauseLine(e.reason, "aborted", pauseStart === null ? 0 : time.nowMs() - pauseStart.ms);
+      }
       alert(e.message);
     },
     onAlert: (r) =>
@@ -435,30 +619,12 @@ export async function runArena(plan: ArenaPlan, o: RunArenaOptions): Promise<Are
         `${pauseText(r)} (real time cannot pause: the failing LLM turns close on their own; if the breaker trips again before an LLM turn closes cleanly, the arena aborts)`,
       ),
   });
-
-  const rates = new RateGates({ clock, maxInflight: plan.maxInflight });
-  const seatPlanOf = (seat: PlayerId): LlmSeatPlan =>
-    llm.find((s) => s.seat === seat) ?? missing(seat);
-  const ledger = new BudgetLedger({
-    caps: new Map(llm.map((s) => [s.seat, s.capNanoUsd])),
-    wakeCapNanoUsd: plan.wakeCapNanoUsd,
-    handoffTo: (seat) => {
-      const label = seatPlanOf(seat).handoffBot;
-      return { label, agent: harness.agentFromLabel(label, seat, seed, think) };
-    },
-    onHandoff: (n) =>
-      log.write({
-        k: "handoff",
-        seat: n.seat,
-        t: n.t,
-        reason: n.reason,
-        label: n.label,
-        spentNanoUsd: n.spentNanoUsd,
-        capNanoUsd: n.capNanoUsd,
-      }),
-  });
+  gateRef = gate;
+  const earlyKill = budget?.killNote ?? null;
+  if (killAbort && earlyKill !== null) abortForBudget(gate, earlyKill);
 
   const agents = new Map<PlayerId, SeatAgent>();
+  const utf8 = new TextEncoder();
   for (const s of plan.seats) {
     if (s.kind === "bot") {
       agents.set(s.seat, harness.agentFromLabel(s.label, s.seat, seed, think));
@@ -466,10 +632,17 @@ export async function runArena(plan: ArenaPlan, o: RunArenaOptions): Promise<Are
       continue;
     }
     const adapter = adapters.get(s.seat) ?? missing(s.seat);
+    const seatText = prompts.get(s.seat) ?? "";
+    // The measured prefix of the seat's group, adjusted for its own seat block's length.
+    const m = measured.get(groupKey(adapter));
+    const prefixTokens =
+      m === undefined
+        ? undefined
+        : m.tokens + Math.max(0, utf8.encode(seatText).length - m.seatBytes);
     const agent = new LlmSeatAgent({
       seat: s.seat,
       adapter,
-      prompt: { shared, seat: prompts.get(s.seat) ?? "" },
+      prompt: { shared, seat: seatText },
       tools,
       profile: s.profile,
       ledger,
@@ -478,6 +651,7 @@ export async function runArena(plan: ArenaPlan, o: RunArenaOptions): Promise<Are
       gate,
       rate: rates.gate(adapter.spec.provider, adapter.spec.model),
       policy: plan.policy,
+      ...(prefixTokens === undefined ? {} : { prefixTokens }),
     });
     agents.set(s.seat, stopping(agent, plan.stopAt));
     agentLabels.set(s.seat, agent.label);
@@ -491,6 +665,10 @@ export async function runArena(plan: ArenaPlan, o: RunArenaOptions): Promise<Are
       operator: sha256Hex(canonicalJson(operator)),
       tools: sha256Hex(canonicalJson(tools)),
     },
+    ...(plan.lineup === null ? {} : { lineup: plan.lineup }),
+    estimateSha256,
+    promptCapTokens: plan.promptCapTokens,
+    ...(plan.budget === null ? {} : { budgetNanoUsd: plan.budget.budgetNanoUsd }),
     seats: plan.seats.map((s) =>
       s.kind === "bot"
         ? { seat: s.seat, kind: "bot", label: s.label }
@@ -506,27 +684,67 @@ export async function runArena(plan: ArenaPlan, o: RunArenaOptions): Promise<Are
             profile: { ...s.profile },
             handoffBot: s.handoffBot,
             prompt: sha256Hex(prompts.get(s.seat) ?? ""),
+            fallbacks: s.fallbacks,
           },
     ),
   });
   writeFileSync(paths.seats, `${JSON.stringify(seatsFile, null, 2)}\n`);
 
-  // The plan, then the a-priori estimate (§5.4).
+  // The plan, then the prediction and the budget (§5.3).
   const matchDays = matchEndOf(plan) / 86_400;
   const stopText = plan.stopAt === null ? "" : `, stopping after day ${plan.stopAt / 86_400}`;
   say(
-    `arena: ${plan.setup.ruleset}, seed ${seed}, ${setup.seats.length} players, ${matchDays} day(s)${stopText}, ${plan.clock.kind}${plan.fake ? ", fake models ($0)" : ""}\n`,
+    `arena: ${plan.setup.ruleset}, seed ${seed}, ${setup.seats.length} players, ${matchDays} day(s)${stopText}, ${plan.clock.kind}${plan.fake ? ", fake models ($0)" : ""}${plan.lineup === null ? "" : `, lineup ${plan.lineup}`}\n`,
   );
+  const predicted = new Map(plan.prediction.seats.map((p) => [p.seat, p]));
   for (const s of plan.seats) {
     if (s.kind === "bot") say(`  ${s.seat}  ${s.label}\n`);
     else {
-      const est = estimateSeat(s.model, matchDays, plan.clock.kind, plan.cacheTtl);
+      const est = predicted.get(s.seat);
       say(
-        `  ${s.seat}  ${agentLabels.get(s.seat) ?? ""}  cap ${formatUsd(s.capNanoUsd)}  estimate ${formatUsd(est.central)} (${formatUsd(est.low)}–${formatUsd(est.high)})${plan.fake ? ` [plays ${s.brain}]` : ""}\n`,
+        `  ${s.seat}  ${agentLabels.get(s.seat) ?? ""}  cap ${formatUsd(s.capNanoUsd)}  estimate ${formatUsd(est?.central ?? 0)} (${formatUsd(est?.low ?? 0)}–${formatUsd(est?.high ?? 0)})${plan.fake ? ` [plays ${s.brain}]` : ""}\n`,
       );
     }
   }
+  const e = plan.estimate;
+  say(
+    `prediction for ${e.days} game day(s) (${e.match.source}): ${formatCents(e.match.low)} low · ${formatCents(e.match.central)} central · ${formatCents(e.match.high)} high; reserve ${reserveText(e.reserve)}${e.budget === null ? "; no match budget" : `; budget ${formatCents(e.budget.budgetNanoUsd)}, kill threshold K = ${formatCents(e.budget.killAtNanoUsd)}`}\n`,
+  );
+  for (const w of plan.warnings) alert(w);
   writeReport(report(null));
+
+  // Operator signals: once hands every LLM seat to its bot, twice aborts.
+  let signals = 0;
+  const unsubscribe = o.signals?.subscribe((signal) => {
+    signals += 1;
+    if (signals === 1) {
+      log.write({
+        k: "operator",
+        signal,
+        action: "handoff",
+        t: lastT,
+        ...(virtual === null ? { wall: iso() } : {}),
+      });
+      alert(
+        `${signal}: no model attempt starts from now on; every LLM seat is handed to its bot at its next turn and the match plays on (send it again to abort)`,
+      );
+      ledger.halt("operator", lastT);
+      return;
+    }
+    if (signals === 2) {
+      log.write({
+        k: "operator",
+        signal,
+        action: "abort",
+        t: lastT,
+        ...(virtual === null ? { wall: iso() } : {}),
+      });
+      gate.abort(
+        { kind: "operator", message: `${signal} received twice`, seat: null, model: null },
+        "the operator sent a second signal",
+      );
+    }
+  });
 
   // The daily tripwire (§5.3, item 8): spend per seat at every game-day boundary.
   const spentAt = new Map<PlayerId, number>(llm.map((s) => [s.seat, 0]));
@@ -550,7 +768,7 @@ export async function runArena(plan: ArenaPlan, o: RunArenaOptions): Promise<Are
       );
       const calibrated =
         plan.calibratedNanoUsdPerDay ??
-        estimateSeat(s.model, 1, plan.clock.kind, plan.cacheTtl).central;
+        estimateSeat(s.model, 1, plan.clock.kind, plan.cacheTtl, s.effort).central;
       if (dayNano > 2 * calibrated) {
         alert(
           `${s.seat} spent ${formatUsd(dayNano)} on day ${day}, over twice the calibrated ${formatUsd(calibrated)} per day`,
@@ -563,7 +781,13 @@ export async function runArena(plan: ArenaPlan, o: RunArenaOptions): Promise<Are
         );
       }
     }
-    if (llm.length > 0) say(`D${day + 1} 00:00 spend: ${parts.join(" · ")}\n`);
+    if (llm.length > 0) {
+      const match =
+        budget === null
+          ? ""
+          : ` · match ${formatUsd(budget.spentNanoUsd)} of ${formatUsd(budget.budgetNanoUsd)}`;
+      say(`D${day + 1} 00:00 spend: ${parts.join(" · ")}${match}\n`);
+    }
   };
 
   const names: Record<string, string> = {};
@@ -623,10 +847,13 @@ export async function runArena(plan: ArenaPlan, o: RunArenaOptions): Promise<Are
   try {
     const go = (): Promise<RunResult> => runMatch(options);
     result = await (virtual === null ? go() : virtual.run(go));
-  } catch (e) {
-    error = errorText(e);
+  } catch (err) {
+    error = errorText(err);
+  } finally {
+    unsubscribe?.();
   }
   const elapsedMs = Math.round(performance.now() - t0);
+  wall.end = iso();
   files.flush();
   files.close();
 

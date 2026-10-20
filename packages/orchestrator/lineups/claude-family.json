@@ -1,0 +1,48 @@
+{
+  "format": "perfidia-lineup/1",
+  "id": "claude-family",
+  "title": "The Claude 5.5 family: Opus, Sonnet, Haiku and Opus at low effort",
+  "comparison": false,
+  "budgetUsd": "180",
+  "maxTokens": 16000,
+  "attemptTimeoutMin": 10,
+  "promptCapTokens": 160000,
+  "reminders": "every-round",
+  "defaults": { "effort": "medium" },
+  "seats": [
+    {
+      "seat": "p1",
+      "kind": "llm",
+      "provider": "anthropic",
+      "model": "claude-opus-5-5",
+      "profile": "odysseus@1",
+      "fallbacks": "default"
+    },
+    {
+      "seat": "p2",
+      "kind": "llm",
+      "provider": "anthropic",
+      "model": "claude-sonnet-5-5",
+      "profile": "achilles@1",
+      "fallbacks": "off"
+    },
+    {
+      "seat": "p3",
+      "kind": "llm",
+      "provider": "anthropic",
+      "model": "claude-haiku-5-5",
+      "profile": "penelope@1"
+    },
+    {
+      "seat": "p4",
+      "kind": "llm",
+      "provider": "anthropic",
+      "model": "claude-opus-5-5",
+      "effort": "low",
+      "profile": "agamemnon@1",
+      "fallbacks": "default"
+    },
+    { "seat": "p5", "kind": "bot", "label": "bot:opportunist@3" },
+    { "seat": "p6", "kind": "bot", "label": "bot:conqueror@3" }
+  ]
+}

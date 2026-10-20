@@ -5,26 +5,42 @@ import { controllerText, type ControllerSpan } from "@perfidia/sim";
 import {
   ARENA_REPORT_FORMAT,
   ArenaReportSchema,
+  type ArenaBudget,
   type ArenaReport,
   type ArenaSeatReport,
   type ArenaStatus,
+  type EstimateFile,
+  type Exit4,
   type ExitCriterion,
   type LlmCallLine,
   type LlmLogLine,
   type PauseLine,
+  type PreflightLine,
 } from "../log/schema.ts";
 import { ZERO_TOKENS, type TokenUsage, type UsageEntry } from "../model/adapter.ts";
-import { formatUsd, priceFor } from "../model/prices.ts";
+import { formatCents, formatUsd, priceFor } from "../model/prices.ts";
 import { PROMPT_VERSION } from "../seat/prompt.ts";
-import { costRows, daysCovered, estimateSeat, projectSpend } from "./cost.ts";
+import {
+  costRows,
+  daysCovered,
+  estimateSeat,
+  preflightSpend,
+  projectSpend,
+  repricePreflight,
+} from "./cost.ts";
 import { DEFAULT_ARENA_DAYS, llmSeatsOf, matchEndOf, type ArenaPlan } from "./plan.ts";
 
 // `arena.json` (phase-2 design §6): a pure fold over the match log, the LLM log and the plan. Per
 // LLM seat: cost by token kind, attempts, stops, errors, refusals, fallbacks and served-by shares,
-// cache misses, wake caps, thought coverage, think time, rejections, the hand-off; then the
-// totals, the a-priori estimate and the projection of the measured spend (§5.4, §5.5), the
-// recommended real-time speed, pauses and alerts, Level E, and the exit criterion: an alliance
-// formed and a betrayal, overall and with an LLM seat as betrayer or victim.
+// cache misses, wake caps, prompt-cap stops, thought coverage, think time, rejections, the
+// hand-off; then the totals, the a-priori estimate and the projection of the measured spend (§5.4,
+// §5.5), the recommended real-time speed, pauses and alerts, Level E, and the exit criterion: an
+// alliance formed and a betrayal, overall and with an LLM seat as betrayer or victim.
+//
+// Phase 4 (`perfidia-arena/2`): the `budget` block (budget, reserve, kill threshold, carry, the
+// stored prediction, the actual spend split into attempts, start preflight and probes, the kill
+// switch, the wall window, spend by provider), every figure a sum of logged line costs, and the
+// `exit4` block, roadmap step 4's criterion (`reconciled` stays null until `arena reconcile`).
 
 export const HARNESS_VERSION = "orchestrator/1";
 
@@ -55,7 +71,10 @@ export interface ReportInput {
   readonly alerts: readonly string[];
   readonly days: readonly DayRow[];
   readonly levelE: LevelE | null;
-  readonly preflightNanoUsd: number;
+  /** `estimate.json` as written before turn 1, and its sha256; null when none was written. */
+  readonly estimate: { readonly file: EstimateFile; readonly sha256: string } | null;
+  /** The run's wall window (`end` null while it runs). */
+  readonly wall: { readonly start: string | null; readonly end: string | null };
 }
 
 /** Controller spans per seat: the header's, then one per `controller` line. */
@@ -313,7 +332,7 @@ export function buildReport(r: ReportInput): ArenaReport {
       (l): l is Extract<LogLine, { k: "controller" }> =>
         l.k === "controller" && l.seat === s.seat && !isLlm(l.label),
     );
-    const est = estimateSeat(s.model, days, clockKind, plan.cacheTtl);
+    const est = estimateSeat(s.model, days, clockKind, plan.cacheTtl, s.effort);
     return {
       seat: s.seat,
       label: header?.controllers[s.seat] ?? "",
@@ -347,8 +366,10 @@ export function buildReport(r: ReportInput): ArenaReport {
               time: fmtTime(controllerLine?.t ?? handoffLine.t),
               label: handoffLine.label,
               spentNanoUsd: handoffLine.spentNanoUsd,
+              reason: handoffLine.reason,
             }
           : null,
+      promptCaps: r.calls.filter((l) => l.k === "prompt_cap" && l.seat === s.seat).length,
       estimate: { low: est.low, central: est.central, high: est.high },
       projectedNanoUsd: projectSpend(cost, measuredDays, toDays),
     };
@@ -382,6 +403,12 @@ export function buildReport(r: ReportInput): ArenaReport {
     if (toBot && parseWar(text).length > 0) warCalls += 1;
   }
 
+  const levelE = r.levelE;
+  const budget = budgetBlock(r, llmCalls);
+  const exit4 = exit4Of(r, budget, llmCalls);
+  const seatsCost = seats.reduce((n, s) => n + s.costNanoUsd, 0);
+  const pre = preflightSpend(r.calls);
+
   const report: ArenaReport = {
     format: ARENA_REPORT_FORMAT,
     status: r.status,
@@ -403,12 +430,12 @@ export function buildReport(r: ReportInput): ArenaReport {
     seats,
     bots,
     totals: {
-      costNanoUsd: seats.reduce((n, s) => n + s.costNanoUsd, 0),
+      costNanoUsd: seatsCost + pre.start + pre.probes,
       attempts,
       tokens,
       cacheReadPct: prompt === 0 ? 0 : Math.round((tokens.cacheRead * 100) / prompt),
       fallbackPermille: attempts === 0 ? 0 : Math.round((fallbacks * 1000) / attempts),
-      preflightNanoUsd: r.preflightNanoUsd,
+      preflightNanoUsd: pre.start + pre.probes,
     },
     estimate: {
       low: seats.reduce((n, s) => n + s.estimate.low, 0),
@@ -425,10 +452,137 @@ export function buildReport(r: ReportInput): ArenaReport {
     alerts: [...r.alerts],
     daily: [...r.days],
     llmToBotWarCalls: warCalls,
-    levelE: r.levelE,
+    levelE,
     exit: exitCriterion(r.lines),
+    budget,
+    exit4,
   };
   return ArenaReportSchema.parse(report);
+}
+
+/** Whether any usage entry of `l` is an estimate (a broken stream, a failed count). */
+function isEstimated(l: { readonly usage: readonly { readonly estimated: boolean }[] }): boolean {
+  return l.usage.some((u) => u.estimated);
+}
+
+/** The `budget` block (phase 4 §5.5): every figure a sum of logged line costs. */
+export function budgetBlock(r: ReportInput, llmCalls: readonly LlmCallLine[]): ArenaBudget {
+  const plan = r.plan;
+  const pre = preflightSpend(r.calls);
+  const attemptsNanoUsd = llmCalls.reduce((n, l) => n + l.costNanoUsd, 0);
+  const actual = attemptsNanoUsd + pre.start + pre.probes;
+  const preflights = r.calls.filter((l): l is PreflightLine => l.k === "preflight");
+  const estimatedNanoUsd =
+    llmCalls.reduce((n, l) => n + (isEstimated(l) ? l.costNanoUsd : 0), 0) +
+    preflights.reduce((n, l) => n + (isEstimated(l) ? l.costNanoUsd : 0), 0);
+  const byProvider = new Map<
+    string,
+    { attempts: number; nanoUsd: number; estimatedNanoUsd: number }
+  >();
+  const add = (provider: string, nano: number, estimated: boolean, attempt: boolean): void => {
+    const row = byProvider.get(provider) ?? { attempts: 0, nanoUsd: 0, estimatedNanoUsd: 0 };
+    row.nanoUsd += nano;
+    if (estimated) row.estimatedNanoUsd += nano;
+    if (attempt) row.attempts += 1;
+    byProvider.set(provider, row);
+  };
+  for (const l of llmCalls) add(l.provider, l.costNanoUsd, isEstimated(l), true);
+  for (const l of preflights) add(l.provider, l.costNanoUsd, isEstimated(l), false);
+  const killLine = r.calls.find((l) => l.k === "kill_switch");
+  const carry = plan.budget?.carryNanoUsd ?? 0;
+  const budgetNanoUsd = plan.budget?.budgetNanoUsd ?? null;
+  const stored = r.estimate;
+  const low = stored?.file.match.low ?? null;
+  const high = stored?.file.match.high ?? null;
+  return {
+    budgetNanoUsd,
+    reserveNanoUsd: plan.prediction.reserve.reserveNanoUsd,
+    killAtNanoUsd:
+      budgetNanoUsd === null
+        ? null
+        : Math.max(0, budgetNanoUsd - plan.prediction.reserve.reserveNanoUsd),
+    carryNanoUsd: carry,
+    onBudget: plan.budget?.onBudget ?? "handoff",
+    estimate:
+      stored === null
+        ? null
+        : {
+            sha256: stored.sha256,
+            low: stored.file.match.low,
+            central: stored.file.match.central,
+            high: stored.file.match.high,
+            source: stored.file.match.source,
+          },
+    actualNanoUsd: actual,
+    attemptsNanoUsd,
+    preflightNanoUsd: pre.start,
+    probeNanoUsd: pre.probes,
+    estimatedNanoUsd,
+    feesNanoUsd: 0,
+    under: budgetNanoUsd === null ? null : actual + carry <= budgetNanoUsd,
+    withinPrediction: low === null || high === null ? null : actual >= low && actual <= high,
+    killSwitch:
+      killLine?.k === "kill_switch"
+        ? {
+            fired: true,
+            t: killLine.t,
+            wall: killLine.wall ?? null,
+            spentNanoUsd: killLine.spentNanoUsd,
+          }
+        : null,
+    wall: { start: r.wall.start, end: r.wall.end },
+    byProvider: [...byProvider.entries()]
+      .toSorted(([a], [b]) => byText(a, b))
+      .map(([provider, row]) => ({
+        provider,
+        endpoint: null,
+        attempts: row.attempts,
+        nanoUsd: row.nanoUsd,
+        reportedNanoUsd: null,
+        estimatedNanoUsd: row.estimatedNanoUsd,
+      })),
+  };
+}
+
+/**
+ * The `exit4` block (phase 4 §5.1): a lockstep match that ended, at least 2 distinct served models
+ * among the LLM seats' attempts, its prediction stored before turn 1, no hand-off of any reason and
+ * no kill switch, its actual cost inside the stored [low, high] and under the budget, Level E, and
+ * reconciled (null until `arena reconcile` fills it, so `met` is false until then).
+ */
+export function exit4Of(
+  r: ReportInput,
+  budget: ArenaBudget,
+  llmCalls: readonly LlmCallLine[],
+): Exit4 {
+  const served = new Set<string>();
+  for (const l of llmCalls) if (l.servedBy !== null) served.add(l.servedBy);
+  const handoffs = r.calls.some((l) => l.k === "handoff");
+  const parts = {
+    models: served.size,
+    ended: r.status === "ended" && r.plan.clock.kind === "lockstep",
+    estimateStored: r.estimate !== null,
+    noHandoff: !handoffs && budget.killSwitch === null,
+    withinPrediction: budget.withinPrediction === true,
+    under: budget.under === true,
+    levelE: r.levelE?.ok === true,
+    reconciled: null,
+  };
+  return { ...parts, met: exit4Met(parts) };
+}
+
+/** `exit4.met`: every part holds, with at least two served models and a reconciled run. */
+export function exit4Met(e: Omit<Exit4, "met">): boolean {
+  return (
+    e.models >= 2 &&
+    e.ended &&
+    e.estimateStored &&
+    e.noHandoff &&
+    e.withinPrediction &&
+    e.under &&
+    e.levelE &&
+    e.reconciled === true
+  );
 }
 
 const usd = formatUsd;
@@ -491,13 +645,38 @@ export function formatReport(r: ArenaReport): string {
       `Level E: ${r.levelE.ok ? ok : "FAILED"} (${r.levelE.actions} actions, ${r.levelE.checkpoints} checkpoints)${r.levelE.divergence === null ? "" : `: ${r.levelE.divergence}`}`,
     );
   }
+  const b = r.budget;
+  const parts = [
+    `spent ${formatCents(b.actualNanoUsd)} (attempts ${formatCents(b.attemptsNanoUsd)}, start preflight ${formatCents(b.preflightNanoUsd)}, probes ${formatCents(b.probeNanoUsd)}${b.estimatedNanoUsd > 0 ? `, of which estimated ${formatCents(b.estimatedNanoUsd)}` : ""})`,
+  ];
+  if (b.estimate !== null) {
+    parts.push(
+      `prediction ${formatCents(b.estimate.low)}–${formatCents(b.estimate.high)} (${b.estimate.source}): ${b.withinPrediction === true ? "inside" : "outside"}`,
+    );
+  }
+  if (b.budgetNanoUsd !== null) {
+    parts.push(
+      `budget ${formatCents(b.budgetNanoUsd)}${b.carryNanoUsd > 0 ? ` (carry ${formatCents(b.carryNanoUsd)})` : ""}, K = ${formatCents(b.killAtNanoUsd ?? 0)}: ${b.under === true ? "under" : "OVER"}`,
+    );
+  } else parts.push("no match budget");
+  if (b.killSwitch !== null) parts.push(`kill switch fired at ${fmtTime(b.killSwitch.t)}`);
+  out.push(`budget: ${parts.join("; ")}`);
+  const x = r.exit4;
+  out.push(
+    `exit criterion of step 4: ${x.met ? "met" : "not met"} (models ${x.models}, ended ${x.ended}, estimate stored ${x.estimateStored}, no hand-off ${x.noHandoff}, within prediction ${x.withinPrediction}, under budget ${x.under}, Level E ${x.levelE}, reconciled ${x.reconciled === null ? "not yet: run arena reconcile" : x.reconciled})`,
+  );
   for (const a of r.alerts) out.push(`alert: ${a}`);
   return `${out.join("\n")}\n`;
 }
 
-/** `arena cost <run-dir>`: spend per seat and model. */
-export function formatCost(lines: readonly LlmLogLine[]): string {
-  const rows = costRows(lines.filter((l): l is LlmCallLine => l.k === "llm_call"));
+/**
+ * `arena cost <run-dir>`: spend per seat and model, then the preflight and probes, from the logged
+ * costs (phase 4: a card changed since the run never rewrites what it cost). `reprice`: every line
+ * at today's cards, with the difference.
+ */
+export function formatCost(lines: readonly LlmLogLine[], o: { reprice?: boolean } = {}): string {
+  const llmCalls = lines.filter((l): l is LlmCallLine => l.k === "llm_call");
+  const rows = costRows(llmCalls);
   const out = [
     "seat  model                attempts  input      write      read        output     cost",
   ];
@@ -517,6 +696,22 @@ export function formatCost(lines: readonly LlmLogLine[]): string {
       ].join(" "),
     );
   }
-  out.push(`total ${usd(total)}`);
+  const pre = preflightSpend(lines);
+  if (lines.some((l) => l.k === "preflight")) {
+    out.push(`preflight ${usd(pre.start)} · probes ${usd(pre.probes)} (${pre.probeCount} checks)`);
+  }
+  total += pre.start + pre.probes;
+  const carry = lines.reduce((n, l) => n + (l.k === "carry" ? l.costNanoUsd : 0), 0);
+  out.push(
+    `total ${usd(total)}${carry > 0 ? ` (plus ${usd(carry)} carried from an earlier run)` : ""}`,
+  );
+  if (o.reprice === true) {
+    const again =
+      costRows(llmCalls, { reprice: true }).reduce((n, r) => n + r.nanoUsd, 0) +
+      lines.reduce((n, l) => n + (l.k === "preflight" ? repricePreflight(l) : 0), 0);
+    out.push(
+      `repriced at today's cards: ${usd(again)} (${again >= total ? "+" : "-"}${usd(Math.abs(again - total))})`,
+    );
+  }
   return `${out.join("\n")}\n`;
 }

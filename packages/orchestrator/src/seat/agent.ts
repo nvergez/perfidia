@@ -47,11 +47,18 @@ import { thoughtOf } from "./thought.ts";
 //   within the retry budget; operator-recoverable errors close the pause gate and wait.
 // - The public thought comes only from a terminal reply: no tool call, a reply carrying
 //   `end_turn`, or the last round trip.
-// - Over the seat's cap: `{calls: []}` and a hand-off request. The per-wake soft cap is checked
-//   before every attempt: the first attempt that finds it reached is the wake's last (a `wake_cap`
-//   line; when it starts a round, that round's reminder tells the model this reply is its last, so
-//   it can end with `end_turn` and keep a self-wake); any later attempt of the wake is not made
-//   (`{calls: []}`).
+// - Over the seat's cap, or halted (the match budget's kill switch, the operator): `{calls: []}`
+//   and a hand-off request. `ledger.over` is checked right before every attempt and thought call,
+//   after the pause and rate gates (phase 4): no attempt starts once the kill switch has fired.
+//   The per-wake soft cap is checked before every attempt: the first attempt that finds it reached
+//   is the wake's last (a `wake_cap` line; when it starts a round, that round's reminder tells the
+//   model this reply is its last, so it can end with `end_turn` and keep a self-wake); any later
+//   attempt of the wake is not made (`{calls: []}`).
+// - The prompt cap (phase 4, `policy.promptCapTokens`): before each attempt and thought call, the
+//   prompt is estimated from above (`promptEstimate`: the last measured prompt of the turn, its
+//   reply's output and the bytes appended since, or the stable prefix and the bytes of the turn);
+//   over the cap, nothing is sent, a `prompt_cap` line is written, and the turn closes (not
+//   systemic). Every attempt's prompt is therefore bounded, and so is what it can cost.
 // - A turn-closing error is `systemic` (it counts toward the breaker) unless it is a refusal, a
 //   truncation or a deadline abort: those are about one request, not about the API or the harness.
 // - Every reply that arrived and that the conversation keeps (`end_turn` or `tool_use`) gets a
@@ -74,6 +81,8 @@ export class AgentError extends Error {
 export interface SeatPolicy {
   /** Retry waits per round, paused time excluded: 60 min in lockstep, the deadline in real time. */
   readonly retryBudgetMs: number;
+  /** The prompt cap in tokens (phase 4); absent: none. */
+  readonly promptCapTokens?: number;
   /** Backstop of one attempt; it aborts the request, and the attempt counts as a timeout. */
   readonly attemptTimeoutMs: number;
   /** The agent's own round deadline (the driver's timeout minus a margin); `null`: none. */
@@ -107,6 +116,69 @@ export interface LlmSeatOptions {
   readonly gate: PauseGate;
   readonly rate: RateGate;
   readonly policy: SeatPolicy;
+  /**
+   * An upper bound of the stable prefix in tokens (tools and both system blocks): the measured
+   * prompt of the preflight's shape check when there is one. Default: one token per UTF-8 byte of
+   * the prefix, an upper bound for byte-level tokenizers.
+   */
+  readonly prefixTokens?: number;
+}
+
+/** What one part of a conversation entry may add to a prompt besides its bytes (role, ids, wrappers). */
+export const ENTRY_OVERHEAD_TOKENS = 32;
+
+const utf8 = new TextEncoder();
+const bytesOf = (text: string): number => utf8.encode(text).length;
+
+/**
+ * An upper bound of the prompt tokens of `entry`: one token per UTF-8 byte of its text (no
+ * byte-level tokenizer makes more) plus `ENTRY_OVERHEAD_TOKENS` per part. An assistant entry counts
+ * its native content's JSON bytes; `promptEstimate` counts a reply by its measured output instead.
+ */
+export function entryTokensUpper(entry: Entry): number {
+  if (entry.role === "operator") return bytesOf(entry.text) + ENTRY_OVERHEAD_TOKENS;
+  if (entry.role === "assistant") {
+    return bytesOf(JSON.stringify(entry.reply.native) ?? "") + ENTRY_OVERHEAD_TOKENS;
+  }
+  let n = 0;
+  for (const p of entry.parts) {
+    n +=
+      (p.kind === "text" ? bytesOf(p.text) : bytesOf(p.content) + bytesOf(p.callId)) +
+      ENTRY_OVERHEAD_TOKENS;
+  }
+  return n;
+}
+
+/** The last answered request of a turn: its prompt and output tokens, and how many entries it had. */
+export interface KnownPrompt {
+  readonly prompt: number;
+  readonly output: number;
+  readonly entries: number;
+}
+
+/**
+ * An upper bound of the prompt of a request with `entries` (phase-4 design §5.2): the same entries
+ * as the last answered request of the turn (a retry) cost its measured prompt; more entries cost
+ * that prompt, its reply's measured output and the appended non-reply entries
+ * (`entryTokensUpper`); without a measured request in the turn (round 0), the stable prefix and
+ * every entry. Each round starts from a measured prompt, so the overestimate never accumulates.
+ */
+export function promptEstimate(
+  entries: readonly Entry[],
+  known: KnownPrompt | null,
+  prefixTokens: number,
+): number {
+  if (known !== null && entries.length >= known.entries) {
+    if (entries.length === known.entries) return known.prompt;
+    let n = known.prompt + known.output;
+    for (const e of entries.slice(known.entries)) {
+      if (e.role !== "assistant") n += entryTokensUpper(e);
+    }
+    return n;
+  }
+  let n = prefixTokens;
+  for (const e of entries) n += entryTokensUpper(e);
+  return n;
 }
 
 interface TurnState {
@@ -120,6 +192,8 @@ interface TurnState {
   logged: number;
   /** The per-wake soft cap: `used` once an attempt was made with the cap reached (the wake's last). */
   capGrant: "none" | "used";
+  /** The last answered round request of the turn (the prompt cap's estimate). */
+  known: KnownPrompt | null;
 }
 
 interface Where {
@@ -156,11 +230,18 @@ export class LlmSeatAgent implements SeatAgent {
     readonly seat: string;
     readonly tools: string;
   } | null = null;
+  private readonly prefixTokens: number;
 
   constructor(o: LlmSeatOptions) {
     this.o = o;
     this.seat = o.seat;
     this.label = `llm:${o.adapter.label}:${profileRef(o.profile)}:p${PROMPT_VERSION}`;
+    this.prefixTokens =
+      o.prefixTokens ??
+      bytesOf(o.prompt.shared) +
+        bytesOf(o.prompt.seat) +
+        bytesOf(JSON.stringify(o.tools)) +
+        3 * ENTRY_OVERHEAD_TOKENS;
   }
 
   async round(input: RoundInput): Promise<RoundOutput> {
@@ -171,8 +252,7 @@ export class LlmSeatAgent implements SeatAgent {
     const token = this.token;
     const s = this.enter(input, where);
     const t = requestTime(input);
-    if (o.ledger.over(this.seat)) {
-      o.ledger.requestHandoff(this.seat, "cap", t);
+    if (this.stopped(t)) {
       o.gate.record({ k: "turn_ok", seat: this.seat });
       return { calls: [] };
     }
@@ -235,6 +315,17 @@ export class LlmSeatAgent implements SeatAgent {
     }
   }
 
+  /**
+   * The seat may make no more attempts (its cap, the kill switch, the operator): its hand-off is
+   * requested (idempotent) and `true` returned.
+   */
+  private stopped(t: GameTime): boolean {
+    const why = this.o.ledger.overReason(this.seat);
+    if (why === null) return false;
+    this.o.ledger.requestHandoff(this.seat, why, t);
+    return true;
+  }
+
   /** The `wake_cap` line: the wake reached its soft cap; this attempt is its last. */
   private wakeCapLine(input: RoundInput, t: GameTime): void {
     const o = this.o;
@@ -245,8 +336,34 @@ export class LlmSeatAgent implements SeatAgent {
       round: input.round,
       t,
       wakeSpentNanoUsd: o.ledger.wakeSpent(this.seat, input.turn),
-      wakeCapNanoUsd: o.ledger.wakeCapNanoUsd ?? 0,
+      wakeCapNanoUsd: o.ledger.wakeCap(this.seat) ?? 0,
     });
+  }
+
+  /**
+   * The prompt cap: the estimate of a request with `entries` over `policy.promptCapTokens` writes
+   * a `prompt_cap` line and returns the estimate; `null` when the request may be sent.
+   */
+  private overPromptCap(
+    s: TurnState,
+    w: Where,
+    entries: readonly Entry[],
+  ): { readonly estimate: number; readonly cap: number } | null {
+    const cap = this.o.policy.promptCapTokens;
+    if (cap === undefined) return null;
+    const estimate = promptEstimate(entries, s.known, this.prefixTokens);
+    if (estimate <= cap) return null;
+    this.o.log.write({
+      k: "prompt_cap",
+      seat: this.seat,
+      turn: w.input.turn,
+      round: w.input.round,
+      kind: w.kind,
+      t: w.t,
+      estimateTokens: estimate,
+      capTokens: cap,
+    });
+    return { estimate, cap };
   }
 
   /** The turn's conversation with this round's input appended. */
@@ -262,6 +379,7 @@ export class LlmSeatAgent implements SeatAgent {
         lastPrompt: 0,
         logged: 0,
         capGrant: "none",
+        known: null,
       };
       this.state = s;
       return s;
@@ -319,17 +437,26 @@ export class LlmSeatAgent implements SeatAgent {
     for (;;) {
       // oxlint-disable-next-line no-await-in-loop -- attempts are sequential by design
       await o.gate.open(roundSignal);
-      if (o.ledger.over(this.seat)) {
-        o.ledger.requestHandoff(this.seat, "cap", w.t);
-        return null;
-      }
+      if (this.stopped(w.t)) return null;
       if (o.ledger.wakeOver(this.seat, w.input.turn)) {
         if (s.capGrant === "used") return null;
         s.capGrant = "used";
         this.wakeCapLine(w.input, w.t);
       }
+      const capped = this.overPromptCap(s, w, entries);
+      if (capped !== null) {
+        throw new AgentError(
+          `${where}: prompt_cap (estimated ${capped.estimate} prompt tokens > ${capped.cap})`,
+          false,
+        );
+      }
       // oxlint-disable-next-line no-await-in-loop -- one slot per attempt
       const release = await o.rate.acquire(roundSignal);
+      // The kill switch may have fired while this attempt waited for its slot: none starts after it.
+      if (this.stopped(w.t)) {
+        release();
+        return null;
+      }
       attempt += 1;
       const attemptTimer = timeoutSignal(
         o.clock.time,
@@ -430,6 +557,7 @@ export class LlmSeatAgent implements SeatAgent {
       const share = o.policy.cacheMissShare ?? 0.8;
       const cacheMiss = s.lastPrompt > 0 && served.cacheRead < s.lastPrompt * share;
       s.lastPrompt = promptTokens(served);
+      s.known = { prompt: s.lastPrompt, output: served.output, entries: entries.length };
       this.writeCall(w, attempt, req, {
         wallStart,
         latencyMs: res.latencyMs,
@@ -500,6 +628,8 @@ export class LlmSeatAgent implements SeatAgent {
           }))
         : [{ kind: "text", text: THOUGHT_QUEUED }];
     const w: Where = { input, t, kind: "thought_call" };
+    const entries = [...s.entries, userOf(parts), operatorOf(THOUGHT_ASK)];
+    if (this.overPromptCap(s, w, entries) !== null) return undefined;
     const attemptTimer = timeoutSignal(o.clock.time, o.policy.attemptTimeoutMs, "attempt timeout");
     const signal =
       roundSignal === undefined
@@ -508,7 +638,7 @@ export class LlmSeatAgent implements SeatAgent {
     const req: ChatRequest = {
       prompt: o.prompt,
       tools: o.tools,
-      entries: [...s.entries, userOf(parts), operatorOf(THOUGHT_ASK)],
+      entries,
       signal,
       meta: this.meta(input, "thought"),
     };
@@ -518,6 +648,8 @@ export class LlmSeatAgent implements SeatAgent {
     try {
       await o.gate.open(roundSignal);
       release = await o.rate.acquire(roundSignal);
+      // As for a round: no thought call starts once the seat is over its cap or halted.
+      if (o.ledger.over(this.seat)) return undefined;
       this.logRequest(s, w, 1, req);
       const res = await o.adapter.chat(req);
       const charge = o.ledger.charge(this.seat, input.turn, t, res.usage);

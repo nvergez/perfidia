@@ -121,7 +121,8 @@ describe("bot-backed brain", () => {
     expect(r).toBeInstanceOf(ModelError);
     if (r instanceof ModelError) {
       expect(r.kind).toBe("aborted");
-      expect(r.spent.map((u) => [u.estimated, u.tokens.output])).toEqual([[true, 4000]]);
+      // Charged the full max_tokens (16 000 by default), as a broken stream is (phase 4).
+      expect(r.spent.map((u) => [u.estimated, u.tokens.output])).toEqual([[true, 16_000]]);
     }
     // Not aborted: the reply comes after the seeded latency, which the reply reports.
     const t2 = virtualTime();
