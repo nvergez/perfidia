@@ -938,8 +938,9 @@ describe("per-seat prompt hashes (review: correctness)", () => {
       for (const s of llm) {
         const provider = s.intended?.provider ?? s.provider;
         expect(s.toolsHash).toBe(sha256Hex(canonicalJson(toolsFor(provider, plan.texts.tools))));
-        // This build's transforms are all the identity: the neutral list's hash.
-        expect(s.toolsHash).toBe(neutral);
+        // Pass 2: Gemini's schema subset (`gemini@1`) shows; the other transforms are the identity.
+        if (provider === "google") expect(s.toolsHash).not.toBe(neutral);
+        else expect(s.toolsHash).toBe(neutral);
       }
       // The system channel keeps phase 2's hash (prompts.operator); the others differ.
       expect(llm[0]?.operatorHash).toBe(seats.prompts.operator);

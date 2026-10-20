@@ -12,6 +12,7 @@ import {
   type CliIo,
   type FlagSpecs,
 } from "@perfidia/sim";
+import { EFFORTS } from "@perfidia/protocol";
 import { LlmLogLineSchema, type LlmLogLine } from "../log/schema.ts";
 import { capabilitiesFor } from "../model/catalog.ts";
 import { PROFILES, profileRef } from "../seat/personalities.ts";
@@ -30,6 +31,7 @@ import {
 } from "./reconcile.ts";
 import { formatCost } from "./report.ts";
 import { CALLS_FILE, runArena, type SignalSource } from "./run.ts";
+import { geminiSmokeCommand } from "./providers/gemini-smoke.ts";
 import { smokeCommand } from "./smoke.ts";
 
 /** The largest seed. */
@@ -276,14 +278,26 @@ const PERSONALITIES_USAGE = usageText("arena personalities", {});
 /** The efforts a Claude smoke takes. */
 const CLAUDE_EFFORTS = capabilitiesFor("anthropic", "claude-haiku-5-5").efforts;
 const SMOKE_FLAGS: FlagSpecs = {
+  provider: {
+    type: "string",
+    value: "<provider>",
+    help: "anthropic (default) or google (alias gemini)",
+  },
   model: {
     type: "string",
     value: "<alias | id>",
-    help: "opus-5-5, sonnet-5-5, haiku-5-5, fable-5-1 or a full id (default haiku-5-5)",
+    help: "anthropic: opus-5-5, sonnet-5-5, haiku-5-5, fable-5-1 or a full id (default haiku-5-5); google: gemini-3.8-flash (default) or gemini-4-argon",
   },
-  effort: { type: "string", value: "<effort>", help: `${CLAUDE_EFFORTS.join("|")} (default low)` },
+  effort: {
+    type: "string",
+    value: "<effort>",
+    help: `anthropic: ${CLAUDE_EFFORTS.join("|")}; google: the model's (low|medium|high); default low`,
+  },
 };
-const SMOKE_USAGE = usageText("arena smoke [--model <alias>] [--effort <effort>]", SMOKE_FLAGS);
+const SMOKE_USAGE = usageText(
+  "arena smoke [--provider <provider>] [--model <alias>] [--effort <effort>]",
+  SMOKE_FLAGS,
+);
 
 const int = (text: string | undefined, flag: string, min: number, max: number) =>
   text === undefined ? undefined : parseIntIn(text, flag, min, max);
@@ -486,6 +500,26 @@ function dispatch(
       return personalities(io);
     case "smoke": {
       const f = parseFlags(argv, SMOKE_FLAGS, SMOKE_USAGE, { min: 0, max: 0, name: "positional" });
+      const provider = f.string("provider") ?? "anthropic";
+      if (provider === "google" || provider === "gemini") {
+        const effort = f.string("effort");
+        const e = effort === undefined ? undefined : EFFORTS.find((x) => x === effort);
+        if (effort !== undefined && e === undefined) {
+          throw new UsageError(`--effort must be one of ${EFFORTS.join(", ")}, got "${effort}"`);
+        }
+        const model = f.string("model");
+        return geminiSmokeCommand({
+          env,
+          io,
+          ...(model === undefined ? {} : { model }),
+          ...(e === undefined ? {} : { effort: e }),
+        });
+      }
+      if (provider !== "anthropic") {
+        throw new UsageError(
+          `--provider must be anthropic or google (gemini), got "${provider}": this build has no other provider's smoke`,
+        );
+      }
       const effort = f.string("effort");
       const e = effort === undefined ? undefined : CLAUDE_EFFORTS.find((x) => x === effort);
       if (effort !== undefined && e === undefined) {

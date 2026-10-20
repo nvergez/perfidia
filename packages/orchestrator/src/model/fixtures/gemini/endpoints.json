@@ -1,0 +1,41 @@
+{
+  "synthetic": true,
+  "checked": "2026-10-20",
+  "sources": [
+    "https://ai.google.dev/api/models.md.txt (models.get: Model)",
+    "https://ai.google.dev/api/tokens.md.txt (models.countTokens: totalTokens)",
+    "https://ai.google.dev/api/generate-content.md.txt (models.generateContent: GenerateContentResponse)",
+    "https://ai.google.dev/gemini-api/docs/models/gemini-4-argon.md.txt (output token limit 65,536; thinking)"
+  ],
+  "note": "Written from the docs, not recorded: what the preflight and the smoke read besides the stream.",
+  "modelsGet": {
+    "name": "models/gemini-4-argon",
+    "version": "4",
+    "displayName": "Gemini 4 Argon",
+    "inputTokenLimit": 1048576,
+    "outputTokenLimit": 65536,
+    "supportedGenerationMethods": ["generateContent", "countTokens"],
+    "thinking": true
+  },
+  "countTokens": { "totalTokens": 11234 },
+  "generateContent": {
+    "candidates": [
+      {
+        "content": {
+          "role": "model",
+          "parts": [{ "text": "", "thoughtSignature": "U2lnbmF0dXJlX1A=" }]
+        },
+        "finishReason": "MAX_TOKENS",
+        "index": 0
+      }
+    ],
+    "usageMetadata": {
+      "promptTokenCount": 11234,
+      "candidatesTokenCount": 0,
+      "thoughtsTokenCount": 16,
+      "totalTokenCount": 11250
+    },
+    "modelVersion": "gemini-4-argon",
+    "responseId": "resp-preflight-1"
+  }
+}

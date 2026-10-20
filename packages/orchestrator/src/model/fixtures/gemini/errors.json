@@ -1,0 +1,169 @@
+{
+  "synthetic": true,
+  "checked": "2026-10-20",
+  "sources": [
+    "https://ai.google.dev/gemini-api/docs/generate-content/api-errors.md.txt (HTTP codes and statuses; the error body; the API_KEY_INVALID example, copied verbatim)",
+    "https://ai.google.dev/gemini-api/docs/billing.md.txt (402 when the Prepay balance is at $0; tier spend caps pause the service until the 1st)",
+    "https://ai.google.dev/gemini-api/docs/rate-limits.md.txt (spend-based rate limits: 429 RESOURCE_EXHAUSTED)",
+    "https://raw.githubusercontent.com/googleapis/googleapis/master/google/rpc/error_details.proto (RetryInfo.retry_delay, a Duration; ErrorInfo.reason)"
+  ],
+  "note": "Written from the docs, not recorded, but the API_KEY_INVALID body. The monthly tier-cap error's shape is not documented (design §2.2, unverified): its case below is an assumption the first smoke that hits the cap replaces. `expect` is the adapter's classification.",
+  "cases": [
+    {
+      "name": "prepay balance at $0",
+      "status": 402,
+      "body": {
+        "error": {
+          "code": 402,
+          "message": "Your Prepay credit balance is depleted.",
+          "status": "RESOURCE_EXHAUSTED"
+        }
+      },
+      "expect": { "kind": "billing", "retryable": false, "retryAfterMs": null }
+    },
+    {
+      "name": "rate limit with a RetryInfo delay",
+      "status": 429,
+      "body": {
+        "error": {
+          "code": 429,
+          "message": "You exceeded your current quota.",
+          "status": "RESOURCE_EXHAUSTED",
+          "details": [
+            {
+              "@type": "type.googleapis.com/google.rpc.QuotaFailure",
+              "violations": [{ "quotaMetric": "generate_content_paid_tier_input_token_count" }]
+            },
+            { "@type": "type.googleapis.com/google.rpc.RetryInfo", "retryDelay": "41s" }
+          ]
+        }
+      },
+      "expect": { "kind": "rate_limit", "retryable": true, "retryAfterMs": 41000 }
+    },
+    {
+      "name": "spend-based rate limit (per 10 minutes)",
+      "status": 429,
+      "body": {
+        "error": {
+          "code": 429,
+          "message": "Spend-based rate limit exceeded.",
+          "status": "RESOURCE_EXHAUSTED"
+        }
+      },
+      "expect": { "kind": "rate_limit", "retryable": true, "retryAfterMs": null }
+    },
+    {
+      "name": "monthly tier spend cap (assumed shape)",
+      "status": 429,
+      "body": {
+        "error": {
+          "code": 429,
+          "message": "The billing account reached its monthly spend cap.",
+          "status": "RESOURCE_EXHAUSTED",
+          "details": [
+            {
+              "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+              "reason": "BILLING_TIER_CAP_EXCEEDED",
+              "domain": "googleapis.com",
+              "metadata": { "cap": "monthly" }
+            }
+          ]
+        }
+      },
+      "expect": { "kind": "billing", "retryable": false, "retryAfterMs": null }
+    },
+    {
+      "name": "API key not valid (verbatim from the docs)",
+      "status": 400,
+      "body": {
+        "error": {
+          "code": 400,
+          "message": "API key not valid. Please pass a valid API key.",
+          "status": "INVALID_ARGUMENT",
+          "details": [
+            {
+              "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+              "reason": "API_KEY_INVALID",
+              "domain": "googleapis.com",
+              "metadata": { "service": "generativelanguage.googleapis.com" }
+            },
+            {
+              "@type": "type.googleapis.com/google.rpc.LocalizedMessage",
+              "locale": "en-US",
+              "message": "API key not valid. Please pass a valid API key."
+            }
+          ]
+        }
+      },
+      "expect": { "kind": "auth", "retryable": false, "retryAfterMs": null }
+    },
+    {
+      "name": "billing not enabled",
+      "status": 400,
+      "body": {
+        "error": {
+          "code": 400,
+          "message": "Gemini API free tier is not available in your country. Please enable billing on your project in Google AI Studio.",
+          "status": "FAILED_PRECONDITION"
+        }
+      },
+      "expect": { "kind": "billing", "retryable": false, "retryAfterMs": null }
+    },
+    {
+      "name": "a missing thought signature",
+      "status": 400,
+      "body": {
+        "error": {
+          "code": 400,
+          "message": "Function call `FC1` in the `1.` content block is missing a `thought_signature`.",
+          "status": "INVALID_ARGUMENT"
+        }
+      },
+      "expect": { "kind": "bad_request", "retryable": false, "retryAfterMs": null }
+    },
+    {
+      "name": "permission denied",
+      "status": 403,
+      "body": {
+        "error": {
+          "code": 403,
+          "message": "Your API key doesn't have the required permissions.",
+          "status": "PERMISSION_DENIED"
+        }
+      },
+      "expect": { "kind": "auth", "retryable": false, "retryAfterMs": null }
+    },
+    {
+      "name": "model not found",
+      "status": 404,
+      "body": {
+        "error": { "code": 404, "message": "models/gemini-9 is not found.", "status": "NOT_FOUND" }
+      },
+      "expect": { "kind": "not_found", "retryable": false, "retryAfterMs": null }
+    },
+    {
+      "name": "internal",
+      "status": 500,
+      "body": {
+        "error": { "code": 500, "message": "An internal error has occurred.", "status": "INTERNAL" }
+      },
+      "expect": { "kind": "server", "retryable": true, "retryAfterMs": null }
+    },
+    {
+      "name": "unavailable",
+      "status": 503,
+      "body": {
+        "error": { "code": 503, "message": "The model is overloaded.", "status": "UNAVAILABLE" }
+      },
+      "expect": { "kind": "overloaded", "retryable": true, "retryAfterMs": null }
+    },
+    {
+      "name": "deadline exceeded",
+      "status": 504,
+      "body": {
+        "error": { "code": 504, "message": "Deadline exceeded.", "status": "DEADLINE_EXCEEDED" }
+      },
+      "expect": { "kind": "server", "retryable": true, "retryAfterMs": null }
+    }
+  ]
+}

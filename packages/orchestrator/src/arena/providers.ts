@@ -1,14 +1,16 @@
 import type { Provider } from "@perfidia/protocol";
-import type { ModelTool } from "../model/adapter.ts";
+import type { ModelAdapter, ModelSpec, ModelTool } from "../model/adapter.ts";
 import { endpointInfo as catalogEndpoint, type EndpointInfo } from "../model/catalog.ts";
+import { GEMINI_TOOL_TRANSFORM_ID } from "../model/gemini-tools.ts";
 import { toolTransformOf, transformTools } from "../model/tools.ts";
+import { geminiAdapter, type AdapterFactoryOptions } from "./providers/gemini.ts";
 
 // The provider registry of the arena (phase-4 design §2.8, Pass 1b): for each provider, the
 // environment variables the harness reads (`PERFIDIA_<PROVIDER>_*` only, read once by `arenaEnv`),
 // its default base URL, its auth header, whether this build has its adapter, where its price cards
-// live, and how a seat pins it (OpenRouter needs a full endpoint slug). Only Anthropic has an
-// adapter in this build; every other provider plans and runs on the fake path, which mirrors it
-// (Pass 2 adds the OpenAI, Gemini and OpenAI-compatible adapters).
+// live, and how a seat pins it (OpenRouter needs a full endpoint slug). Anthropic and Google (Pass 2,
+// `ADAPTER_FACTORIES`) have adapters; every other provider plans and runs on the fake path, which
+// mirrors it.
 
 export interface ProviderInfo {
   readonly id: Exclude<Provider, "fake">;
@@ -66,12 +68,12 @@ export const PROVIDERS: Readonly<Record<Exclude<Provider, "fake">, ProviderInfo>
     defaultBaseUrl: "https://generativelanguage.googleapis.com",
     key: "always",
     authHeader: "x-goog-api-key",
-    adapter: false,
+    adapter: true,
     pricesFile: `${PRICES_DIR}/google.ts`,
     needsEndpoint: false,
-    // The Gemini schema transform (design §2.4) is built with its adapter (Pass 2): until then the
-    // fake path sends the neutral list, and `toolsHash` shows it.
-    toolTransform: "none",
+    // Gemini's JSON Schema subset (design §2.4, Pass 2): every Google seat, real or fake, gets the
+    // neutral list through it, and `toolsHash` shows it.
+    toolTransform: GEMINI_TOOL_TRANSFORM_ID,
   },
   openrouter: {
     id: "openrouter",
@@ -98,6 +100,15 @@ export const PROVIDERS: Readonly<Record<Exclude<Provider, "fake">, ProviderInfo>
     toolTransform: "none",
   },
 });
+
+export type { AdapterFactoryOptions };
+
+/** Builds a real seat's adapter of a provider other than Anthropic (Pass 2). */
+export type AdapterFactory = (spec: ModelSpec, o: AdapterFactoryOptions) => ModelAdapter;
+
+/** The factories of the providers whose adapters this build has (Anthropic's is `arena/run.ts`'s). */
+export const ADAPTER_FACTORIES: Readonly<Partial<Record<ProviderInfo["id"], AdapterFactory>>> =
+  Object.freeze({ google: geminiAdapter });
 
 /** The provider of `id`, or undefined (`fake` is not a provider seats are planned on). */
 export function providerInfo(id: string): ProviderInfo | undefined {

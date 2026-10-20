@@ -48,7 +48,7 @@ import { LlmSeatAgent } from "../seat/agent.ts";
 import { ArenaPauseGate, type ArenaAborted, type PauseReason } from "../seat/pause.ts";
 import { PROMPT_VERSION, operatorTemplates, seatPrompt } from "../seat/prompt.ts";
 import { botBrain } from "./brain.ts";
-import { toolsFor } from "./providers.ts";
+import { ADAPTER_FACTORIES, providerInfo, toolsFor } from "./providers.ts";
 import { estimateCard, projectSpend, scenarioCard } from "./cost.ts";
 import { reserveText } from "./estimate.ts";
 import {
@@ -63,6 +63,7 @@ import {
   DEFAULT_ARENA_DAYS,
   llmSeatsOf,
   matchEndOf,
+  providerEnv,
   type ArenaPlan,
   type LlmSeatPlan,
 } from "./plan.ts";
@@ -170,7 +171,7 @@ export interface RunArenaOptions {
   readonly io: CliIo;
   /** Builds an LLM seat's adapter instead of the plan's (tests: scripted brains, failures). */
   readonly adapterFor?: (seat: LlmSeatPlan, spec: ModelSpec, ctx: AdapterContext) => ModelAdapter;
-  /** The Anthropic client's `fetch` (tests: a stub). */
+  /** The `fetch` of every real adapter (Anthropic's client, Pass 2's providers; tests: a stub). */
   readonly fetch?: HttpFetch;
   /** How often a closed pause gate re-runs the preflight; default 2 minutes. */
   readonly probeEveryMs?: number;
@@ -476,6 +477,23 @@ async function runArenaWith(
     });
     return client;
   };
+  /** A real seat of a provider other than Anthropic: its registry factory (Pass 2). */
+  const providerAdapter = (s: LlmSeatPlan, spec: ModelSpec): ModelAdapter => {
+    const make = ADAPTER_FACTORIES[s.provider];
+    const base =
+      providerEnv(plan.env, s.provider).baseURL ?? providerInfo(s.provider)?.defaultBaseUrl;
+    if (make === undefined || base === null || base === undefined) {
+      throw new Error(
+        `${s.seat}: no ${s.provider} adapter or base URL: the plan should have refused`,
+      );
+    }
+    return make(spec, {
+      apiKey: providerEnv(plan.env, s.provider).apiKey,
+      baseURL: base,
+      time,
+      ...(o.fetch === undefined ? {} : { fetch: o.fetch }),
+    });
+  };
   const prompts = new Map<PlayerId, string>();
   const adapters = new Map<PlayerId, ModelAdapter>();
   /** Each seat's pricer: its provider's cards, its endpoint, at the attempt's start or the pin. */
@@ -529,7 +547,9 @@ async function runArenaWith(
               }),
               { intended: { provider: s.provider, model: s.model, endpoint: s.endpoint } },
             )
-          : new AnthropicAdapter(spec, anthropic())),
+          : s.provider === "anthropic"
+            ? new AnthropicAdapter(spec, anthropic())
+            : providerAdapter(s, spec)),
     );
   }
   const groups = groupsOf(

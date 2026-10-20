@@ -1152,6 +1152,8 @@ export function planArena(req: ArenaRequest, env: ArenaEnv, o: PlanOptions = {})
           `${p.baseUrlVar} is not set: the ${id} seats (${seats.join(", ")}) need a base URL`,
         );
       }
+      // Pass 2: an http(s) URL, `http:` on loopback only (exit 3, as Anthropic's).
+      checkedBaseUrl(base, p.baseUrlVar);
       const loopback = isLoopback(base);
       if (pe.apiKey === null && (p.key === "always" || !loopback)) {
         throw new UsageError(
