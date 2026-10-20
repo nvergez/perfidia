@@ -14,7 +14,7 @@ import {
 } from "@perfidia/sim";
 import { LlmLogLineSchema, type LlmLogLine } from "../log/schema.ts";
 import { EFFORTS } from "../model/adapter.ts";
-import { capabilitiesFor } from "../model/catalog.ts";
+import { capabilitiesFor, seatModels } from "../model/catalog.ts";
 import { PROFILES, profileRef } from "../seat/personalities.ts";
 import { seatPrompt } from "../seat/prompt.ts";
 import { PROFILES_DIR, calibrate, formatCalibrate } from "./calibrate.ts";
@@ -26,6 +26,7 @@ import {
   parseDuration,
   planArena,
   randomSeed,
+  providerEnv,
   type ArenaEnv,
   type ArenaRequest,
 } from "./plan.ts";
@@ -40,6 +41,7 @@ import {
 import { formatCost } from "./report.ts";
 import { CALLS_FILE, runArena, type SignalSource } from "./run.ts";
 import { geminiSmokeCommand } from "./providers/gemini-smoke.ts";
+import { startRecording } from "./record.ts";
 import { runSeries } from "./series.ts";
 import { smokeCommand } from "./smoke.ts";
 import { planLive, smokeOpenRouter } from "./providers/openrouter.ts";
@@ -367,9 +369,14 @@ const SMOKE_FLAGS: FlagSpecs = {
     value: "<slug>",
     help: "openrouter: the full endpoint slug (default the model's catalogued one, e.g. z-ai/fp8)",
   },
+  record: {
+    type: "string",
+    value: "<dir>",
+    help: "write every exchange, sanitised (keys, request and account ids replaced), as a perfidia-recording/1 file into <dir> (new or empty)",
+  },
 };
 const SMOKE_USAGE = usageText(
-  "arena smoke [--provider <p>] [--model <alias | id>] [--endpoint <slug>] [--effort <effort>]",
+  "arena smoke [--provider <p>] [--model <alias | id>] [--endpoint <slug>] [--effort <effort>] [--record <dir>]",
   SMOKE_FLAGS,
 );
 
@@ -594,6 +601,67 @@ export interface MainOptions {
   readonly nowMs?: () => number;
 }
 
+/** `arena smoke`: one provider's live check, recorded when `--record` names a directory. */
+async function smoke(
+  argv: readonly string[],
+  io: CliIo,
+  env: ArenaEnv,
+  o: MainOptions,
+): Promise<number> {
+  const f = parseFlags(argv, SMOKE_FLAGS, SMOKE_USAGE, { min: 0, max: 0, name: "positional" });
+  const provider = f.string("provider") ?? "anthropic";
+  if (!SMOKE_PROVIDERS.has(provider)) {
+    throw new UsageError(
+      `--provider must be anthropic, openai, google (gemini) or openrouter, got "${provider}"`,
+    );
+  }
+  const effort = f.string("effort");
+  // Another provider's efforts are checked against its model by its smoke (Pass 2).
+  const efforts = provider === "anthropic" ? CLAUDE_EFFORTS : EFFORTS;
+  const e = effort === undefined ? undefined : efforts.find((x) => x === effort);
+  if (effort !== undefined && e === undefined) {
+    throw new UsageError(`--effort must be one of ${efforts.join(", ")}, got "${effort}"`);
+  }
+  const model = f.string("model");
+  const endpoint = f.string("endpoint");
+  if (endpoint !== undefined && provider !== "openrouter") {
+    throw new UsageError("--endpoint applies to --provider openrouter only");
+  }
+  const id = provider === "gemini" ? "google" : provider;
+  const dir = f.string("record");
+  const key = id === "anthropic" ? env.apiKey : providerEnv(env, id).apiKey;
+  const recording =
+    dir === undefined
+      ? null
+      : startRecording(dir, {
+          provider: id,
+          secrets: key === null ? [] : [key],
+          now: o.nowMs ?? Date.now,
+          keep: seatModels(id).map((m) => m.model),
+        });
+  const common = {
+    env,
+    io,
+    ...(model === undefined ? {} : { model }),
+    ...(e === undefined ? {} : { effort: e }),
+    ...(recording === null ? {} : { fetch: recording.fetch }),
+  };
+  const code =
+    id === "openrouter"
+      ? await smokeOpenRouter({
+          ...common,
+          ...(endpoint === undefined ? {} : { endpoint }),
+          ...(o.nowMs === undefined ? {} : { now: o.nowMs }),
+        })
+      : id === "google"
+        ? await geminiSmokeCommand(common)
+        : await smokeCommand({ ...common, ...(id === "anthropic" ? {} : { provider: id }) });
+  if (recording !== null && dir !== undefined) {
+    io.out(`recorded ${await recording.done()} exchange(s), sanitised, in ${dir}\n`);
+  }
+  return code;
+}
+
 function dispatch(
   command: string,
   argv: readonly string[],
@@ -625,52 +693,8 @@ function dispatch(
     case "personalities":
       parseFlags(argv, {}, PERSONALITIES_USAGE, { min: 0, max: 0, name: "positional" });
       return personalities(io);
-    case "smoke": {
-      const f = parseFlags(argv, SMOKE_FLAGS, SMOKE_USAGE, { min: 0, max: 0, name: "positional" });
-      const provider = f.string("provider") ?? "anthropic";
-      if (!SMOKE_PROVIDERS.has(provider)) {
-        throw new UsageError(
-          `--provider must be anthropic, openai, google (gemini) or openrouter, got "${provider}"`,
-        );
-      }
-      const effort = f.string("effort");
-      // Another provider's efforts are checked against its model by its smoke (Pass 2).
-      const efforts = provider === "anthropic" ? CLAUDE_EFFORTS : EFFORTS;
-      const e = effort === undefined ? undefined : efforts.find((x) => x === effort);
-      if (effort !== undefined && e === undefined) {
-        throw new UsageError(`--effort must be one of ${efforts.join(", ")}, got "${effort}"`);
-      }
-      const model = f.string("model");
-      const endpoint = f.string("endpoint");
-      if (provider === "openrouter") {
-        return smokeOpenRouter({
-          env,
-          io,
-          ...(model === undefined ? {} : { model }),
-          ...(endpoint === undefined ? {} : { endpoint }),
-          ...(e === undefined ? {} : { effort: e }),
-          ...(o.nowMs === undefined ? {} : { now: o.nowMs }),
-        });
-      }
-      if (endpoint !== undefined) {
-        throw new UsageError("--endpoint applies to --provider openrouter only");
-      }
-      if (provider === "google" || provider === "gemini") {
-        return geminiSmokeCommand({
-          env,
-          io,
-          ...(model === undefined ? {} : { model }),
-          ...(e === undefined ? {} : { effort: e }),
-        });
-      }
-      return smokeCommand({
-        env,
-        io,
-        ...(model === undefined ? {} : { model }),
-        ...(e === undefined ? {} : { effort: e }),
-        ...(provider === "anthropic" ? {} : { provider }),
-      });
-    }
+    case "smoke":
+      return smoke(argv, io, env, o);
     default:
       throw new UsageError(`unknown command "${command}"\n\n${USAGE}`);
   }
