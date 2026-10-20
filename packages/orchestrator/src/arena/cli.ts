@@ -13,6 +13,7 @@ import {
   type FlagSpecs,
 } from "@perfidia/sim";
 import { LlmLogLineSchema, type LlmLogLine } from "../log/schema.ts";
+import { EFFORTS } from "../model/adapter.ts";
 import { capabilitiesFor } from "../model/catalog.ts";
 import { PROFILES, profileRef } from "../seat/personalities.ts";
 import { seatPrompt } from "../seat/prompt.ts";
@@ -279,11 +280,23 @@ const SMOKE_FLAGS: FlagSpecs = {
   model: {
     type: "string",
     value: "<alias | id>",
-    help: "opus-5-5, sonnet-5-5, haiku-5-5, fable-5-1 or a full id (default haiku-5-5)",
+    help: "opus-5-5, sonnet-5-5, haiku-5-5, fable-5-1 or a full id (default haiku-5-5); with --provider, one of its seat models (OpenAI: default gpt-6-luna)",
   },
-  effort: { type: "string", value: "<effort>", help: `${CLAUDE_EFFORTS.join("|")} (default low)` },
+  effort: {
+    type: "string",
+    value: "<effort>",
+    help: `${CLAUDE_EFFORTS.join("|")} (default low); with --provider, one the model accepts`,
+  },
+  provider: {
+    type: "string",
+    value: "<provider>",
+    help: "anthropic (default) or a provider with an adapter in this build (openai): needs PERFIDIA_<PROVIDER>_API_KEY",
+  },
 };
-const SMOKE_USAGE = usageText("arena smoke [--model <alias>] [--effort <effort>]", SMOKE_FLAGS);
+const SMOKE_USAGE = usageText(
+  "arena smoke [--provider <provider>] [--model <alias>] [--effort <effort>]",
+  SMOKE_FLAGS,
+);
 
 const int = (text: string | undefined, flag: string, min: number, max: number) =>
   text === undefined ? undefined : parseIntIn(text, flag, min, max);
@@ -487,11 +500,12 @@ function dispatch(
     case "smoke": {
       const f = parseFlags(argv, SMOKE_FLAGS, SMOKE_USAGE, { min: 0, max: 0, name: "positional" });
       const effort = f.string("effort");
-      const e = effort === undefined ? undefined : CLAUDE_EFFORTS.find((x) => x === effort);
+      const provider = f.string("provider");
+      // Another provider's efforts are checked against its model (Pass 2).
+      const efforts = provider === undefined || provider === "anthropic" ? CLAUDE_EFFORTS : EFFORTS;
+      const e = effort === undefined ? undefined : efforts.find((x) => x === effort);
       if (effort !== undefined && e === undefined) {
-        throw new UsageError(
-          `--effort must be one of ${CLAUDE_EFFORTS.join(", ")}, got "${effort}"`,
-        );
+        throw new UsageError(`--effort must be one of ${efforts.join(", ")}, got "${effort}"`);
       }
       const model = f.string("model");
       return smokeCommand({
@@ -499,6 +513,7 @@ function dispatch(
         io,
         ...(model === undefined ? {} : { model }),
         ...(e === undefined ? {} : { effort: e }),
+        ...(provider === undefined ? {} : { provider }),
       });
     }
     default:

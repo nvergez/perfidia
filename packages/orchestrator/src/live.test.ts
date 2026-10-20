@@ -14,7 +14,7 @@
 import { describe, expect, test } from "bun:test";
 import { verifyLog } from "@perfidia/engine";
 import { memoryIo } from "@perfidia/sim";
-import { arenaEnv, planArena } from "./arena/plan.ts";
+import { arenaEnv, planArena, providerEnv } from "./arena/plan.ts";
 import { smokeCommand } from "./arena/smoke.ts";
 import { play, runDir } from "./arena/rig.test.ts";
 
@@ -67,6 +67,33 @@ describe.skipIf(!LIVE)("live: the real Claude API (opt-in)", () => {
       const io = memoryIo();
       const code = await smokeCommand({ env, io, model: "opus-5-5", effort: "low" });
       console.log(io.stdout(), io.stderr());
+      expect(code).toBe(0);
+    },
+    FIVE_MINUTES,
+  );
+});
+
+// Phase 4 Pass 2: the OpenAI adapter, behind PERFIDIA_LIVE=1 and PERFIDIA_OPENAI_API_KEY. One
+// `arena smoke --provider openai` on GPT-6 Luna at low effort: the model's access, the production
+// shape at 16 output tokens, the input-token count and one streamed call of a real round-0
+// request capped at 4,000 output tokens, no retry. Its bound is printed first and asserted under
+// $0.05 ($0.009973 at the 2026-10-20 card). The test name carries why it is skipped.
+const OPENAI_LIVE = env.live && providerEnv(env, "openai").apiKey !== null;
+if (!OPENAI_LIVE) {
+  console.log(
+    `live: the OpenAI test is skipped: it needs PERFIDIA_LIVE=1 (${env.live ? "set" : "not set"}) and PERFIDIA_OPENAI_API_KEY (${providerEnv(env, "openai").apiKey === null ? "not set" : "set"}); it spends under $0.05`,
+  );
+}
+
+describe("live: the real OpenAI API (opt-in)", () => {
+  test.skipIf(!OPENAI_LIVE)(
+    "one GPT-6 Luna smoke at low effort, under $0.05 (skipped unless PERFIDIA_LIVE=1 and PERFIDIA_OPENAI_API_KEY are set)",
+    async () => {
+      const io = memoryIo();
+      const code = await smokeCommand({ env, io, provider: "openai" });
+      console.log(io.stdout(), io.stderr());
+      const bound = /at most \$(\d+\.\d+)/.exec(io.stdout());
+      expect(Number(bound?.[1] ?? "1")).toBeLessThan(0.05);
       expect(code).toBe(0);
     },
     FIVE_MINUTES,

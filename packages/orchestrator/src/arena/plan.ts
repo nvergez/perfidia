@@ -1152,6 +1152,12 @@ export function planArena(req: ArenaRequest, env: ArenaEnv, o: PlanOptions = {})
           `${p.baseUrlVar} is not set: the ${id} seats (${seats.join(", ")}) need a base URL`,
         );
       }
+      if (id !== "anthropic") {
+        // Pass 2: the same check as Anthropic's (http:// on loopback only), and the provider's own.
+        checkedBaseUrl(base, p.baseUrlVar);
+        const problem = p.baseUrlProblem?.(base) ?? null;
+        if (problem !== null) throw new UsageError(`${problem} (seats ${seats.join(", ")})`);
+      }
       const loopback = isLoopback(base);
       if (pe.apiKey === null && (p.key === "always" || !loopback)) {
         throw new UsageError(

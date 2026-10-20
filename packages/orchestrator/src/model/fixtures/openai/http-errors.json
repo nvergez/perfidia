@@ -1,0 +1,221 @@
+{
+  "synthetic": true,
+  "checked": "2026-10-20",
+  "sources": [
+    "https://developers.openai.com/api/docs/guides/error-codes.md",
+    "https://developers.openai.com/api/docs/guides/rate-limits.md",
+    "https://developers.openai.com/api/docs/guides/spend-limits.md",
+    "https://developers.openai.com/api/docs/guides/safety-checks/misalignment-monitoring.md",
+    "https://developers.openai.com/api/docs/guides/reasoning.md"
+  ],
+  "note": "Written from the docs, not recorded: HTTP error answers of POST /responses with the code or type each guide names, and the kind the adapter maps them to (design \u00a72.2: the provider's code before the HTTP status). The organisation-verification body is a guess (its shape is not documented: unverified until a smoke records it). Where a guide names no code or type for a status, the body carries null there rather than an invented value.",
+  "cases": [
+    {
+      "name": "429 credit balance exhausted",
+      "status": 429,
+      "body": {
+        "error": {
+          "message": "You have no prepaid credits remaining.",
+          "type": "insufficient_quota",
+          "param": null,
+          "code": "credit_balance_exhausted"
+        }
+      },
+      "expect": "billing"
+    },
+    {
+      "name": "429 project spend limit (hard limit)",
+      "status": 429,
+      "body": {
+        "error": {
+          "message": "Your project reached its enforced spend limit.",
+          "type": "insufficient_quota",
+          "param": null,
+          "code": "project_spend_limit_exceeded"
+        }
+      },
+      "expect": "billing"
+    },
+    {
+      "name": "429 organization spend limit",
+      "status": 429,
+      "body": {
+        "error": {
+          "message": "Your organization reached its enforced spend limit.",
+          "type": "insufficient_quota",
+          "param": null,
+          "code": "organization_spend_limit_exceeded"
+        }
+      },
+      "expect": "billing"
+    },
+    {
+      "name": "429 organization usage limit",
+      "status": 429,
+      "body": {
+        "error": {
+          "message": "Your organization reached its usage limit.",
+          "type": "insufficient_quota",
+          "param": null,
+          "code": "organization_usage_limit_exceeded"
+        }
+      },
+      "expect": "billing"
+    },
+    {
+      "name": "429 insufficient_quota type, no code",
+      "status": 429,
+      "body": {
+        "error": {
+          "message": "You exceeded your current quota.",
+          "type": "insufficient_quota",
+          "param": null,
+          "code": null
+        }
+      },
+      "expect": "billing"
+    },
+    {
+      "name": "429 rate limit with Retry-After",
+      "status": 429,
+      "headers": {
+        "retry-after": "56"
+      },
+      "body": {
+        "error": {
+          "message": "Rate limit reached for requests.",
+          "type": null,
+          "param": null,
+          "code": null
+        }
+      },
+      "expect": "rate_limit",
+      "retryAfterMs": 56000
+    },
+    {
+      "name": "429 slow down",
+      "status": 429,
+      "headers": {
+        "retry-after": "2"
+      },
+      "body": {
+        "error": {
+          "message": "Please slow down.",
+          "type": "rate_limit_error",
+          "param": null,
+          "code": "slow_down"
+        }
+      },
+      "expect": "rate_limit",
+      "retryAfterMs": 2000
+    },
+    {
+      "name": "403 misalignment monitoring block",
+      "status": 403,
+      "body": {
+        "error": {
+          "message": "This request was stopped by misalignment monitoring.",
+          "type": "invalid_request_error",
+          "param": null,
+          "code": "misalignment_policy_violation"
+        }
+      },
+      "expect": "refusal"
+    },
+    {
+      "name": "403 country not supported",
+      "status": 403,
+      "body": {
+        "error": {
+          "message": "Country, region, or territory not supported",
+          "type": null,
+          "param": null,
+          "code": null
+        }
+      },
+      "expect": "auth"
+    },
+    {
+      "name": "401 invalid authentication",
+      "status": 401,
+      "body": {
+        "error": {
+          "message": "Incorrect API key provided.",
+          "type": null,
+          "param": null,
+          "code": null
+        }
+      },
+      "expect": "auth"
+    },
+    {
+      "name": "400 reasoning summary needs organization verification (unverified shape)",
+      "status": 400,
+      "body": {
+        "error": {
+          "message": "Your organization must be verified to generate reasoning summaries.",
+          "type": "invalid_request_error",
+          "param": "reasoning.summary",
+          "code": "unsupported_value"
+        }
+      },
+      "expect": "auth"
+    },
+    {
+      "name": "400 invalid service_tier",
+      "status": 400,
+      "body": {
+        "error": {
+          "message": "Invalid service_tier argument: The requested service tier is not allowed for this project.",
+          "type": "invalid_request_error",
+          "param": "service_tier",
+          "code": null
+        }
+      },
+      "expect": "bad_request"
+    },
+    {
+      "name": "404 model not found",
+      "status": 404,
+      "body": {
+        "error": {
+          "message": "The model does not exist or you do not have access to it.",
+          "type": null,
+          "param": null,
+          "code": null
+        }
+      },
+      "expect": "not_found"
+    },
+    {
+      "name": "500 server error",
+      "status": 500,
+      "body": {
+        "error": {
+          "message": "The server had an error while processing your request.",
+          "type": null,
+          "param": null,
+          "code": null
+        }
+      },
+      "expect": "server"
+    },
+    {
+      "name": "503 model overloaded with Retry-After",
+      "status": 503,
+      "headers": {
+        "retry-after": "3"
+      },
+      "body": {
+        "error": {
+          "message": "The model is temporarily overloaded.",
+          "type": "service_unavailable_error",
+          "param": null,
+          "code": "server_is_overloaded"
+        }
+      },
+      "expect": "overloaded",
+      "retryAfterMs": 3000
+    }
+  ]
+}

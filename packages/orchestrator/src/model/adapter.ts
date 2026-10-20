@@ -309,6 +309,13 @@ export interface ChatRequest {
   readonly maxOutputTokens?: number;
   readonly signal?: AbortSignal;
   readonly meta: CallMeta;
+  /**
+   * Phase 4 (Pass 2): an upper bound of the request's prompt tokens (the seat's prompt-cap
+   * estimate, at most the cap). An adapter whose provider reports no usage before the end of a
+   * stream charges a broken one this prompt at its dearest prompt-side price (design §2.2), which
+   * keeps the charge within the attempt bound; absent, it bounds the prompt from the bytes.
+   */
+  readonly promptTokensUpper?: number;
 }
 
 export type StopReason = "end_turn" | "tool_use" | "max_tokens" | "refusal" | "pause" | "other";
