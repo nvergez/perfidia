@@ -7,12 +7,18 @@
 // - the seat, budget and model layers read no wall clock and no randomness of their own (both are
 //   injected, so retries and fake runs are deterministic);
 // - boundary: no string literal names a building, unit or queue id of a published ruleset, so the
-//   prompts and profiles stay ruleset-agnostic and survive reskins.
+//   prompts and profiles stay ruleset-agnostic and survive reskins;
+// - phase 4: the global `fetch` is called by `model/http.ts` alone (Pass 1b: the shared transport of
+//   every provider, the Anthropic SDK's client included), whose guarded fetch never follows a
+//   redirect (`redirect: "error"`); only `arena/cli.ts` touches process signals; no string literal
+//   names a provider key or base URL variable outside `PERFIDIA_*`, nor any `ANTHROPIC_*`,
+//   `OPENAI_*`, `GEMINI_*`, `GOOGLE_*` or `OPENROUTER_*` variable.
 
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { dirname, join, posix } from "node:path";
 import { RULESETS, createMatch, idKeyFromSeed } from "@perfidia/engine";
+import { ENV_VARS } from "./arena/providers.ts";
 
 const DIR = import.meta.dir;
 
@@ -185,6 +191,28 @@ function layerProblems(file: string, src: string): string[] {
   return problems;
 }
 
+// Environment names -----------------------------------------------------------------------------------
+
+/** Provider prefixes whose variables the harness must never read (only `PERFIDIA_*` exist). */
+const PROVIDER_PREFIX =
+  /(?:^|[^A-Z0-9_])((?:ANTHROPIC|OPENAI|GEMINI|GOOGLE|OPENROUTER)_[A-Z0-9_]+)/g;
+/** Any key, base URL or token variable. */
+const SECRET_NAME = /\b([A-Z][A-Z0-9]*(?:_[A-Z0-9]+)*_(?:API_KEY|BASE_URL|AUTH_TOKEN))\b/g;
+
+/** The variable names a source's string literals give that are not `PERFIDIA_*`. */
+function envNameProblems(file: string, strings: readonly string[]): string[] {
+  const found = new Set<string>();
+  for (const s of strings) {
+    for (const re of [PROVIDER_PREFIX, SECRET_NAME]) {
+      for (const m of s.matchAll(re)) {
+        const name = m[1] ?? "";
+        if (!name.startsWith("PERFIDIA_")) found.add(`${file}: names ${name}`);
+      }
+    }
+  }
+  return [...found];
+}
+
 // Ruleset ids ----------------------------------------------------------------------------------------
 
 /** Building, unit and queue ids of every published ruleset (`build`, the generic queue, excepted). */
@@ -285,6 +313,56 @@ describe("orchestrator architecture", () => {
       }
     }
     expect(found).toEqual([]);
+  });
+
+  test("phase 4: fetch only in model/http.ts, never following redirects; signals only in arena/cli.ts", () => {
+    const found: string[] = [];
+    for (const f of sources) {
+      const { code } = lex(text(f));
+      if (/(?<![.\w])fetch\(/.test(code) && f !== "model/http.ts") found.push(`${f}: calls fetch`);
+      if (
+        /\bprocess\.(on|off|once|addListener|removeListener)\(/.test(code) &&
+        f !== "arena/cli.ts"
+      ) {
+        found.push(`${f}: handles process signals`);
+      }
+    }
+    expect(found).toEqual([]);
+    expect(lex(text("model/http.ts")).code).toContain('redirect: "error"');
+    // The Anthropic client goes through it.
+    expect(importsOf(text("model/anthropic.ts"))).toContain("./http.ts");
+    expect(lex(text("model/anthropic.ts")).code).toContain("guardedFetch(");
+  });
+
+  test("phase 4: provider keys and base URLs are PERFIDIA_* variables only", () => {
+    const found = sources.flatMap((f) => envNameProblems(f, lex(text(f)).strings));
+    expect(found).toEqual([]);
+    // The checker rejects every non-PERFIDIA_ provider variable (Pass 1b acceptance) …
+    expect(
+      envNameProblems("arena/x.ts", [
+        "OPENAI_API_KEY",
+        "read GEMINI_API_KEY here",
+        "GOOGLE_APPLICATION_CREDENTIALS",
+        "OPENROUTER_API_KEY",
+        "OPENROUTER_BASE_URL",
+        "ANTHROPIC_BASE_URL",
+        "TOGETHER_API_KEY",
+        "PERFIDIA_OPENAI_API_KEY",
+        "PERFIDIA_LIVE",
+      ]),
+    ).toEqual([
+      "arena/x.ts: names OPENAI_API_KEY",
+      "arena/x.ts: names GEMINI_API_KEY",
+      "arena/x.ts: names GOOGLE_APPLICATION_CREDENTIALS",
+      "arena/x.ts: names OPENROUTER_API_KEY",
+      "arena/x.ts: names OPENROUTER_BASE_URL",
+      "arena/x.ts: names ANTHROPIC_BASE_URL",
+      "arena/x.ts: names TOGETHER_API_KEY",
+    ]);
+    // … and the registry names only PERFIDIA_ variables.
+    for (const name of ENV_VARS) expect(name.startsWith("PERFIDIA_")).toBe(true);
+    expect(ENV_VARS).toContain("PERFIDIA_OPENROUTER_API_KEY");
+    expect(ENV_VARS).toContain("PERFIDIA_COMPAT_BASE_URL");
   });
 
   test("no string literal names a building, unit or queue id of a published ruleset", () => {

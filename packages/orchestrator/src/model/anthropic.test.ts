@@ -1,6 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import {
-  BROKEN_STREAM_OUTPUT_FLOOR,
   ModelError,
   type ChatRequest,
   type Entry,
@@ -14,6 +13,7 @@ import {
   AnthropicClient,
   FALLBACK_BETA,
   MODELS_FALLBACK_BETA,
+  fallbacksOn,
   echoContent,
   modelErrorOf,
   type HttpFetch,
@@ -26,11 +26,14 @@ import { anthropicTools } from "./tools.ts";
 const BASE = "https://api.test.invalid";
 const KEY = "sk-test-perfidia";
 
+/** The request's max_tokens: what a broken stream is charged as output (phase 4). */
+const MAX_TOKENS = 16_000;
+
 const OPUS: ModelSpec = {
   provider: "anthropic",
   model: "claude-opus-5-5",
   effort: "medium",
-  maxOutputTokens: 16_000,
+  maxOutputTokens: MAX_TOKENS,
   cacheTtl: "5m",
 };
 const HAIKU: ModelSpec = { ...OPUS, model: "claude-haiku-5-5", effort: "low" };
@@ -224,6 +227,8 @@ interface Seen {
   readonly method: string;
   readonly headers: Record<string, string>;
   readonly body: Record<string, unknown> | null;
+  /** The request's redirect mode (phase 4: always "error"). */
+  readonly redirect: RequestInit["redirect"];
 }
 
 type Answer = Response | Error | ((init: RequestInit | undefined) => Promise<Response>);
@@ -241,6 +246,7 @@ function stub(answers: Answer[]): { fetch: HttpFetch; seen: Seen[] } {
       method: init?.method ?? "GET",
       headers,
       body: raw === null ? null : recordOf(JSON.parse(raw)),
+      redirect: init?.redirect,
     });
     const a = answers.shift();
     if (a === undefined) return Promise.reject(new Error("stub: no answer left"));
@@ -386,6 +392,47 @@ describe("AnthropicAdapter requests", () => {
     expect(seen[0]?.headers["anthropic-beta"]).toBeUndefined();
     expect(body["output_config"]).toEqual({ effort: "low" });
     expect(body["max_tokens"]).toBe(32_000);
+  });
+
+  test("phase 4: fallbacks off (Claude Sonnet 5.5's default) omits the parameter and its beta; default keeps both", async () => {
+    const sonnet: ModelSpec = { ...OPUS, model: "claude-sonnet-5-5", fallbacks: "off" };
+    const off = adapter([streamResponse({ ...textReply, model: "claude-sonnet-5-5" })], sonnet);
+    await off.a.chat(request([BRIEFING, HEADER]));
+    expect(off.seen[0]?.body?.["fallbacks"]).toBeUndefined();
+    expect(off.seen[0]?.headers["anthropic-beta"]).toBeUndefined();
+    expect(fallbacksOn(sonnet)).toBe(false);
+    const on = adapter([streamResponse({ ...textReply, model: "claude-sonnet-5-5" })], {
+      ...sonnet,
+      fallbacks: "default",
+    });
+    await on.a.chat(request([BRIEFING, HEADER]));
+    expect(on.seen[0]?.body?.["fallbacks"]).toBe("default");
+    expect(on.seen[0]?.headers["anthropic-beta"]).toBe(FALLBACK_BETA);
+    // Everything else of the body is the same: off only drops `fallbacks` (and the beta header).
+    const { fallbacks: _f, ...rest } = on.seen[0]?.body ?? {};
+    expect(off.seen[0]?.body).toEqual(rest);
+    // Off on a model without fallbacks changes nothing; absent means phase 2's default.
+    expect(fallbacksOn({ model: "claude-haiku-5-5", fallbacks: "default" })).toBe(false);
+    expect(fallbacksOn({ model: "claude-opus-5-5" })).toBe(true);
+  });
+
+  test("phase 4: every request (messages, models, count_tokens) is sent with redirect: error", async () => {
+    const { a, seen } = adapter([
+      streamResponse(textReply),
+      new Response(
+        JSON.stringify({ id: "claude-opus-5-5", type: "model", allowed_fallback_models: [] }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      ),
+      new Response(JSON.stringify({ input_tokens: 42 }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+    ]);
+    await a.chat(request([BRIEFING, HEADER]));
+    await a.preflight(request([BRIEFING, HEADER])).catch(() => undefined);
+    await a.countTokens(request([BRIEFING, HEADER])).catch(() => undefined);
+    expect(seen.length).toBeGreaterThanOrEqual(2);
+    expect(seen.map((x) => x.redirect)).toEqual(seen.map(() => "error"));
   });
 
   test("1-hour TTL on the two system blocks; at most 4 breakpoints, TTLs non-increasing in prefix order", () => {
@@ -698,7 +745,7 @@ describe("AnthropicAdapter errors", () => {
     expect([e.kind, e.retryable]).toEqual(["timeout", true]);
   });
 
-  test("our abort mid-stream: aborted, charged message_start usage plus an output estimate", async () => {
+  test("our abort mid-stream: aborted, charged message_start usage plus the full max_tokens (phase 4)", async () => {
     const ctl = new AbortController();
     const start = eventsOf({
       content: [{ type: "text", text: "x".repeat(40) }],
@@ -731,19 +778,20 @@ describe("AnthropicAdapter errors", () => {
           cacheWrite5m: 2000,
           cacheWrite1h: 0,
           cacheRead: 9000,
-          output: BROKEN_STREAM_OUTPUT_FLOOR,
+          output: MAX_TOKENS,
         },
         estimated: true,
       },
     ]);
   });
 
-  test("an abort after a long stream is charged by the time it streamed, up to max_tokens", async () => {
-    // Summarized thinking is far shorter than the thinking billed: 2 000 characters seen, but the
-    // stream ran 30 s (400 tokens/s bound: 12 000 tokens), then 90 s (capped at max_tokens).
+  test("an abort is charged the request's full max_tokens of output, however long it streamed", async () => {
+    // Summarized thinking is far shorter than the thinking billed: nothing seen on the stream bounds
+    // what was generated, so a broken stream is charged its whole max_tokens (phase-4 design §2.2).
     for (const [streamedS, output] of [
-      [30, 12_000],
-      [90, 16_000],
+      [1, MAX_TOKENS],
+      [30, MAX_TOKENS],
+      [90, MAX_TOKENS],
     ] as const) {
       const ctl = new AbortController();
       let now = 0;
@@ -789,7 +837,7 @@ describe("AnthropicAdapter errors", () => {
           cacheWrite5m: 2000,
           cacheWrite1h: 0,
           cacheRead: 9000,
-          output: BROKEN_STREAM_OUTPUT_FLOOR,
+          output: MAX_TOKENS,
         },
         estimated: true,
       },
@@ -803,7 +851,7 @@ describe("AnthropicAdapter errors", () => {
     const e = await errorOf(a.chat(request([BRIEFING, HEADER])));
     expect([e.kind, e.retryable]).toEqual(["connection", true]);
     expect(e.message).toContain("terminated");
-    expect(e.spent[0]?.tokens.output).toBe(BROKEN_STREAM_OUTPUT_FLOOR);
+    expect(e.spent[0]?.tokens.output).toBe(MAX_TOKENS);
   });
 
   test("a break after message_delta is charged the final usage the API reported", async () => {
@@ -842,7 +890,7 @@ describe("AnthropicAdapter errors", () => {
     const e = await errorOf(a.chat(request([BRIEFING, HEADER])));
     expect([e.kind, e.retryable, e.status]).toEqual(["overloaded", true, null]);
     expect(e.spent[0]?.estimated).toBe(true);
-    expect(e.spent[0]?.tokens.output).toBe(BROKEN_STREAM_OUTPUT_FLOOR);
+    expect(e.spent[0]?.tokens.output).toBe(MAX_TOKENS);
   });
 });
 

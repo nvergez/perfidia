@@ -13,38 +13,58 @@ import {
   type FlagSpecs,
 } from "@perfidia/sim";
 import { LlmLogLineSchema, type LlmLogLine } from "../log/schema.ts";
-import { EFFORTS } from "../model/adapter.ts";
+import { capabilitiesFor } from "../model/catalog.ts";
 import { PROFILES, profileRef } from "../seat/personalities.ts";
 import { seatPrompt } from "../seat/prompt.ts";
+import { formatCardTable, formatEstimate } from "./estimate.ts";
+import { PRESETS } from "./lineup.ts";
 import { PreflightError } from "./preflight.ts";
 import { arenaEnv, parseDuration, planArena, type ArenaEnv, type ArenaRequest } from "./plan.ts";
+import {
+  EXIT_RECONCILE,
+  RECONCILE_AFTER_HOURS,
+  formatReconcile,
+  inputFromFlags,
+  readInput,
+  reconcileDir,
+} from "./reconcile.ts";
 import { formatCost } from "./report.ts";
-import { CALLS_FILE, runArena } from "./run.ts";
+import { CALLS_FILE, runArena, type SignalSource } from "./run.ts";
 import { smokeCommand } from "./smoke.ts";
 
 /** The largest seed. */
 const UINT32_MAX = 4_294_967_295;
 
-// The `arena` command line (phase-2 design §8): `bun run arena -- <command>`, where the root script
-// runs `bun packages/orchestrator/src/arena/cli.ts`. Exit codes as in `sim`: 0 ok, 1 replay
-// divergence, 2 fatal or aborted, 3 usage, config or preflight error. `main` takes its output
-// streams and the environment as arguments, so tests run it in-process; the environment is read
-// once, here, and only for `PERFIDIA_ANTHROPIC_API_KEY`, `PERFIDIA_ANTHROPIC_BASE_URL` and
-// `PERFIDIA_LIVE`.
+// The `arena` command line (phase-2 design §8; phase-4 design §5, Pass 1a): `bun run arena --
+// <command>`, where the root script runs `bun packages/orchestrator/src/arena/cli.ts`. Exit codes
+// as in `sim`: 0 ok, 1 replay divergence, 2 fatal or aborted, 3 usage, config, budget or preflight
+// error; 4: `arena reconcile` outside tolerance. `main` takes its output streams, the environment
+// and the signal source as arguments, so tests run it in-process; the environment is read once,
+// here, and only for `PERFIDIA_ANTHROPIC_API_KEY`, `PERFIDIA_ANTHROPIC_BASE_URL` and
+// `PERFIDIA_LIVE` (Pass 1b: `PERFIDIA_<PROVIDER>_API_KEY` and `_BASE_URL` for openai, google,
+// openrouter and compat too). `arena run` takes over SIGINT, SIGTERM and SIGHUP from before its start
+// preflight: the first hands every LLM seat to its bot (or stops the start preflight, nothing
+// written), the second aborts the run, a third exits at once (after an `operator` line).
 
 export const USAGE = [
   "usage: bun run arena -- <command> [flags]",
   "",
   "commands:",
   "  run            play a match with LLM seats and bots into a run directory",
+  "  estimate       the prediction, reserve and kill threshold of a run, without running it",
   "  cost           spend per seat and model of a run, from its llm_calls.jsonl",
+  "  reconcile      check a run's ledger against the provider's usage pages (48 h after it)",
   "  personalities  list the profiles and their exact seat text",
   "  smoke          one live check of the key, the model and the request shape (needs the key)",
   "",
   "`bun run arena -- <command> --help` lists a command's flags.",
-  "environment: PERFIDIA_ANTHROPIC_API_KEY (required for LLM seats unless --fake),",
-  "             PERFIDIA_ANTHROPIC_BASE_URL (optional); nothing else is read.",
-  "exit codes: 0 ok, 1 replay divergence, 2 fatal error, abort or degraded run, 3 usage, config or preflight error",
+  `lineup presets: ${PRESETS.join(", ")} (packages/orchestrator/lineups/)`,
+  "environment: PERFIDIA_<PROVIDER>_API_KEY for each provider a seat plays on, unless --fake",
+  "             (ANTHROPIC, OPENAI, GOOGLE, OPENROUTER; COMPAT: optional on loopback), and",
+  "             PERFIDIA_<PROVIDER>_BASE_URL (optional; required for COMPAT); nothing else is read.",
+  "             This build calls Anthropic only: the other providers run with --fake.",
+  "exit codes: 0 ok, 1 replay divergence, 2 fatal error, abort or degraded run, 3 usage, config,",
+  "            budget or preflight error, 4 reconciliation outside tolerance",
   "",
 ].join("\n");
 
@@ -74,11 +94,41 @@ const RUN_FLAGS: FlagSpecs = {
     value: "random|seed|<32 hex>",
     help: "secret key of opaque ids (default random)",
   },
+  lineup: {
+    type: "string",
+    value: "<preset | file>",
+    help: `a perfidia-lineup/1 file or a preset (${PRESETS.join(", ")}): seats, limits and the match budget`,
+  },
   seat: {
     type: "string",
     repeat: true,
     value: "<pN=spec>",
-    help: "pN=claude:<model>:<effort>:<profile> or pN=bot:<strategy>@<n> (default: p1–p4 claude:opus-5-5:medium with the four profiles, p5 bot:opportunist@3, p6 bot:conqueror@3)",
+    help: "pN=claude:<model>:<effort>:<profile>, pN=<provider>:<model>[@<endpoint>]:<effort>:<profile> or pN=bot:<strategy>@<n>, over the lineup (default: p1–p4 claude:opus-5-5:medium with the four profiles, p5 bot:opportunist@3, p6 bot:conqueror@3)",
+  },
+  "price-date": {
+    type: "string",
+    value: "<YYYY-MM-DD>",
+    help: "--fake runs and estimates: price at the cards of that UTC day (default: today; a real run prices each attempt at its start)",
+  },
+  "budget-usd": {
+    type: "string",
+    value: "<usd>",
+    help: "the match budget: the kill switch keeps the run's spend under it (default: the lineup's; none without a lineup)",
+  },
+  "on-budget": {
+    type: "string",
+    value: "handoff|abort",
+    help: "when the kill switch fires: hand every LLM seat to its bot and play on, or abort (default handoff)",
+  },
+  "budget-carry": {
+    type: "string",
+    value: "<run-dir>",
+    help: "a crashed run of the same budget: its logged spend counts toward this run's budget",
+  },
+  "prompt-cap": {
+    type: "string",
+    value: "<tokens>",
+    help: "an attempt whose estimated prompt is over it is not sent; its turn closes (default 160000)",
   },
   clock: { type: "string", value: "lockstep|realtime", help: "clock (default lockstep)" },
   time: {
@@ -180,15 +230,58 @@ const RUN_FLAGS: FlagSpecs = {
 };
 export const RUN_USAGE = usageText("arena run --out <dir> [flags]", RUN_FLAGS);
 
-const COST_USAGE = usageText("arena cost <run-dir>", {});
+/** `arena estimate` plans like `arena run` (same flags but the output ones) and prints the prediction. */
+const ESTIMATE_FLAGS: FlagSpecs = {
+  ...Object.fromEntries(
+    Object.entries(RUN_FLAGS).filter(
+      ([k]) => !["out", "watch", "quiet", "transcripts", "brain"].includes(k),
+    ),
+  ),
+  cards: {
+    type: "boolean",
+    help: "print every seat model's card with its scenario estimate (7-day lockstep, medium), instead of a run's",
+  },
+};
+export const ESTIMATE_USAGE = usageText(
+  "arena estimate [--lineup <preset | file>] [flags]",
+  ESTIMATE_FLAGS,
+);
+
+const COST_FLAGS: FlagSpecs = {
+  reprice: { type: "boolean", help: "also price every line at today's cards, with the difference" },
+};
+const COST_USAGE = usageText("arena cost <run-dir> [--reprice]", COST_FLAGS);
+const RECONCILE_FLAGS: FlagSpecs = {
+  input: {
+    type: "string",
+    value: "<file>",
+    help: "a perfidia-reconcile-input/1 file: per provider, the pre-tax usage cost (and token counts) of the run's wall-clock window",
+  },
+  usd: {
+    type: "string",
+    repeat: true,
+    value: "<provider=usd>",
+    help: "the pre-tax usage cost of one provider, without token counts (e.g. anthropic=12.34)",
+  },
+  force: {
+    type: "boolean",
+    help: "fill exit4.reconciled even under 48 hours after the run (usage pages may still lag)",
+  },
+};
+const RECONCILE_USAGE = usageText(
+  "arena reconcile <run-dir> (--input <file> | --usd <provider=usd> ...) [--force]",
+  RECONCILE_FLAGS,
+);
 const PERSONALITIES_USAGE = usageText("arena personalities", {});
+/** The efforts a Claude smoke takes. */
+const CLAUDE_EFFORTS = capabilitiesFor("anthropic", "claude-haiku-5-5").efforts;
 const SMOKE_FLAGS: FlagSpecs = {
   model: {
     type: "string",
     value: "<alias | id>",
-    help: "opus-5-5, sonnet-5-5, haiku-5-5 or a full id (default haiku-5-5)",
+    help: "opus-5-5, sonnet-5-5, haiku-5-5, fable-5-1 or a full id (default haiku-5-5)",
   },
-  effort: { type: "string", value: "<effort>", help: `${EFFORTS.join("|")} (default low)` },
+  effort: { type: "string", value: "<effort>", help: `${CLAUDE_EFFORTS.join("|")} (default low)` },
 };
 const SMOKE_USAGE = usageText("arena smoke [--model <alias>] [--effort <effort>]", SMOKE_FLAGS);
 
@@ -196,6 +289,8 @@ const int = (text: string | undefined, flag: string, min: number, max: number) =
   text === undefined ? undefined : parseIntIn(text, flag, min, max);
 const duration = (text: string | undefined, flag: string) =>
   text === undefined ? undefined : parseDuration(text, flag);
+
+type Flags = ReturnType<typeof parseFlags>;
 
 /** The request and output directory of an `arena run` command line. */
 export function runRequestOf(argv: readonly string[]): {
@@ -206,6 +301,11 @@ export function runRequestOf(argv: readonly string[]): {
   const f = parseFlags(argv, RUN_FLAGS, RUN_USAGE, { min: 0, max: 0, name: "positional" });
   const out = f.string("out");
   if (out === undefined) throw new UsageError(`--out <dir> is required\n\n${RUN_USAGE}`);
+  return { req: requestOf(f), out, quiet: f.bool("quiet") };
+}
+
+/** The plan request of `arena run` or `arena estimate` flags. */
+function requestOf(f: Flags): ArenaRequest {
   const speed = f.string("speed");
   const latency = f.string("bot-latency");
   const req: ArenaRequest = {
@@ -241,16 +341,33 @@ export function runRequestOf(argv: readonly string[]): {
     invariants: f.string("invariants"),
     snapshotEvery: int(f.string("snapshot-every"), "--snapshot-every", 0, 100_000),
     allowTest: f.bool("allow-test"),
+    lineup: f.string("lineup"),
+    budgetUsd: f.string("budget-usd"),
+    onBudget: f.string("on-budget"),
+    budgetCarry: f.string("budget-carry"),
+    promptCap: int(f.string("prompt-cap"), "--prompt-cap", 1_000, 1_000_000),
+    priceDate: f.string("price-date"),
   };
-  return { req, out, quiet: f.bool("quiet") };
+  return req;
 }
 
-async function runCommand(argv: readonly string[], io: CliIo, env: ArenaEnv): Promise<number> {
+async function runCommand(
+  argv: readonly string[],
+  io: CliIo,
+  env: ArenaEnv,
+  signals: SignalSource | undefined,
+  nowMs: () => number,
+): Promise<number> {
   const { req, out, quiet } = runRequestOf(argv);
-  const plan = planArena(req, env);
+  const plan = planArena(req, env, { now: nowMs });
   assertFreeRunDir(out);
   try {
-    const outcome = await runArena(plan, { dir: out, io, quiet });
+    const outcome = await runArena(plan, {
+      dir: out,
+      io,
+      quiet,
+      ...(signals === undefined ? {} : { signals }),
+    });
     if (outcome.status !== "ended" && outcome.status !== "stopped") {
       io.err(`arena run: ${outcome.status}: ${outcome.report.reason ?? outcome.error ?? ""}\n`);
     }
@@ -283,18 +400,85 @@ function personalities(io: CliIo): number {
   return EXIT.ok;
 }
 
+/** `arena estimate`: plans like `arena run` (no key needed, nothing sent) and prints the prediction. */
+function estimateCommand(
+  argv: readonly string[],
+  io: CliIo,
+  env: ArenaEnv,
+  nowMs: () => number,
+): number {
+  const f = parseFlags(argv, ESTIMATE_FLAGS, ESTIMATE_USAGE, {
+    min: 0,
+    max: 0,
+    name: "positional",
+  });
+  if (f.bool("cards")) {
+    io.out(formatCardTable());
+    return EXIT.ok;
+  }
+  const plan = planArena(requestOf(f), env, { requireKey: false, now: nowMs });
+  io.out(formatEstimate(plan.estimate));
+  for (const w of plan.warnings) io.out(`warning: ${w}\n`);
+  return EXIT.ok;
+}
+
+/** `arena reconcile`: exit 0 within tolerance, 4 outside it. */
+function reconcileCommand(argv: readonly string[], io: CliIo, nowMs: number): number {
+  const f = parseFlags(argv, RECONCILE_FLAGS, RECONCILE_USAGE, { min: 1, max: 1, name: "run" });
+  const dir = f.positionals[0] ?? "";
+  const file = f.string("input");
+  const usd = f.strings("usd");
+  if ((file === undefined) === (usd.length === 0)) {
+    throw new UsageError(
+      `give the provider figures with exactly one of --input <file> and --usd\n\n${RECONCILE_USAGE}`,
+    );
+  }
+  const input = file === undefined ? inputFromFlags(usd) : readInput(file);
+  const force = f.bool("force");
+  const r = reconcileDir(dir, input, nowMs, { force });
+  if (r.hoursAfterEnd === null) {
+    io.err("warning: the run's wall-clock times are virtual (a --fake run): no 48-hour check\n");
+  } else if (r.early) {
+    io.err(
+      `warning: only ${r.hoursAfterEnd} h since the run's wall-clock end: usage pages can lag up to a day; reconcile again after ${RECONCILE_AFTER_HOURS} h${force ? " (--force: exit4.reconciled is filled anyway)" : " (exit4.reconciled stays null until then; --force fills it now)"}\n`,
+    );
+  }
+  io.out(formatReconcile(r));
+  const filled = r.early && !force ? null : r.ok;
+  io.out(`wrote ${dir}/reconcile.json; arena.json exit4.reconciled = ${filled}\n`);
+  return r.ok ? EXIT.ok : EXIT_RECONCILE;
+}
+
+/** What `main` takes besides its streams and environment (the process's by default). */
+export interface MainOptions {
+  /** `arena run`'s operator signals. */
+  readonly signals?: SignalSource;
+  /** The wall clock in ms (`arena reconcile`'s 48-hour check). */
+  readonly nowMs?: () => number;
+}
+
 function dispatch(
   command: string,
   argv: readonly string[],
   io: CliIo,
   env: ArenaEnv,
+  o: MainOptions,
 ): Promise<number> | number {
   switch (command) {
     case "run":
-      return runCommand(argv, io, env);
+      return runCommand(argv, io, env, o.signals, o.nowMs ?? Date.now);
+    case "estimate":
+      return estimateCommand(argv, io, env, o.nowMs ?? Date.now);
+    case "reconcile":
+      return reconcileCommand(argv, io, (o.nowMs ?? Date.now)());
     case "cost": {
-      const f = parseFlags(argv, {}, COST_USAGE, { min: 1, max: 1, name: "run" });
-      io.out(formatCost(readCalls(f.positionals[0] ?? "")));
+      const f = parseFlags(argv, COST_FLAGS, COST_USAGE, { min: 1, max: 1, name: "run" });
+      io.out(
+        formatCost(readCalls(f.positionals[0] ?? ""), {
+          reprice: f.bool("reprice"),
+          at: new Date((o.nowMs ?? Date.now)()).toISOString(),
+        }),
+      );
       return EXIT.ok;
     }
     case "personalities":
@@ -303,9 +487,11 @@ function dispatch(
     case "smoke": {
       const f = parseFlags(argv, SMOKE_FLAGS, SMOKE_USAGE, { min: 0, max: 0, name: "positional" });
       const effort = f.string("effort");
-      const e = effort === undefined ? undefined : EFFORTS.find((x) => x === effort);
+      const e = effort === undefined ? undefined : CLAUDE_EFFORTS.find((x) => x === effort);
       if (effort !== undefined && e === undefined) {
-        throw new UsageError(`--effort must be one of ${EFFORTS.join(", ")}, got "${effort}"`);
+        throw new UsageError(
+          `--effort must be one of ${CLAUDE_EFFORTS.join(", ")}, got "${effort}"`,
+        );
       }
       const model = f.string("model");
       return smokeCommand({
@@ -322,6 +508,8 @@ function dispatch(
 
 const COMMAND_USAGE: Readonly<Record<string, string>> = {
   run: RUN_USAGE,
+  estimate: ESTIMATE_USAGE,
+  reconcile: RECONCILE_USAGE,
   cost: COST_USAGE,
   personalities: PERSONALITIES_USAGE,
   smoke: SMOKE_USAGE,
@@ -332,6 +520,7 @@ export async function main(
   argv: readonly string[],
   io: CliIo,
   env: Readonly<Record<string, string | undefined>>,
+  o: MainOptions = {},
 ): Promise<number> {
   const args = argv[0] === "--" ? argv.slice(1) : argv;
   const [command, ...rest] = args;
@@ -349,7 +538,7 @@ export async function main(
     return EXIT.ok;
   }
   try {
-    return await dispatch(command, rest, io, arenaEnv(env));
+    return await dispatch(command, rest, io, arenaEnv(env), o);
   } catch (error) {
     if (error instanceof UsageError) {
       io.err(`arena ${command}: ${error.message}\n`);
@@ -361,6 +550,41 @@ export async function main(
   }
 }
 
+/** The signals `arena run` takes over: an interrupt, a termination, a closed terminal or session. */
+export const OPERATOR_SIGNALS: readonly NodeJS.Signals[] = Object.freeze([
+  "SIGINT",
+  "SIGTERM",
+  "SIGHUP",
+]);
+
+/**
+ * SIGINT, SIGTERM and SIGHUP for `arena run` (subscribed before its start preflight): the first two
+ * go to the run (hand off, then abort); a third is handed to the run (it writes an `operator` line)
+ * and then exits at once (code 130), whatever the run is doing.
+ */
+export function processSignalsOf(exit: (code: number) => void = (c) => process.exit(c)) {
+  const source: SignalSource = {
+    subscribe(handler) {
+      let count = 0;
+      const on = (signal: NodeJS.Signals): void => {
+        count += 1;
+        try {
+          handler(signal);
+        } finally {
+          if (count >= 3) exit(130);
+        }
+      };
+      for (const s of OPERATOR_SIGNALS) process.on(s, on);
+      return () => {
+        for (const s of OPERATOR_SIGNALS) process.off(s, on);
+      };
+    },
+  };
+  return source;
+}
+
+export const processSignals: SignalSource = processSignalsOf();
+
 if (import.meta.main) {
   const code = await main(
     process.argv.slice(2),
@@ -369,6 +593,7 @@ if (import.meta.main) {
       err: (text) => process.stderr.write(text),
     },
     process.env,
+    { signals: processSignals },
   );
   // A real-time abort can leave a bot's think-time timer behind: exit once the run is reported.
   process.exitCode = code;

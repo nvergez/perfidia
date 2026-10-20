@@ -3,21 +3,27 @@ import {
   ModelError,
   type ChatRequest,
   type ChatResult,
-  type Entry,
   type ModelAdapter,
   type ModelCall,
+  type ModelCapabilities,
   type ModelSpec,
   type PreflightReport,
   type Refusal,
   type StopReason,
   type UsageEntry,
 } from "./adapter.ts";
+import { capabilitiesFor } from "./catalog.ts";
 
 // `FakeAdapter` (phase-2 design §2.7): a model with no network. A brain answers each request with a
 // result or a `ModelError`; replies carry Anthropic-shaped `native` content, so the recorded
 // requests also go through `AnthropicAdapter.build()` in the cache-prefix tests. Without usage
 // from the brain, usage is derived deterministically from byte lengths: the stable prefix is a
 // cache write on a seat's first call and a cache read afterwards.
+//
+// Phase 4 (Pass 1b): a fake seat mirrors its intended model (`intended`, priced at that model's
+// cards by the arena): its capabilities, its reasoning kind, and in `build()` the way the intended
+// provider receives harness text: a `system` message (Anthropic), a `developer` message (OpenAI), or
+// a `[harness] ` text part appended to the user turn (Gemini, OpenRouter, compat).
 
 /** What a brain answers: a reply to build, or an error to throw. */
 export interface FakeReply {
@@ -64,22 +70,72 @@ export function fakeCallId(req: ChatRequest, i: number, attempt: number): string
   return `fk-${m.seat}-${m.turn}-${m.round}-${attempt}-${i}`;
 }
 
+/** The model a fake seat stands in for: priced at its cards, its channel mirrored. */
+export interface IntendedModel {
+  readonly provider: string;
+  readonly model: string;
+  readonly endpoint: string | null;
+}
+
+/** The prefix of harness text inside a user turn (the `envelope` channel, design §3.2). */
+export const HARNESS_PREFIX = "[harness] ";
+
 export class FakeAdapter implements ModelAdapter {
   readonly spec: ModelSpec;
   readonly label: string;
+  readonly capabilities: ModelCapabilities;
+  /** The intended model (Pass 1b); phase 2's fakes stand in for the Claude model of their spec. */
+  readonly intended: IntendedModel;
   /** Every request received, in order (entries copied: later appends do not show). */
   readonly requests: ChatRequest[] = [];
   private readonly brain: Brain;
   private readonly warm = new Set<string>();
 
-  constructor(spec: ModelSpec, brain: Brain) {
+  constructor(spec: ModelSpec, brain: Brain, o: { readonly intended?: IntendedModel } = {}) {
     this.spec = spec;
     this.label = adapterLabel(spec);
     this.brain = brain;
+    this.intended = o.intended ?? {
+      provider: "anthropic",
+      model: spec.model,
+      endpoint: spec.endpoint ?? null,
+    };
+    this.capabilities = capabilitiesFor(
+      this.intended.provider,
+      this.intended.model,
+      this.intended.endpoint,
+    );
   }
 
-  /** A provider-agnostic layout like the Anthropic request: tools, two system blocks, messages. */
+  /**
+   * A provider-agnostic layout like the Anthropic request (tools, two system blocks, messages),
+   * with harness text rendered as the intended provider receives it.
+   */
   build(req: ChatRequest): unknown {
+    const channel = this.capabilities.operatorChannel;
+    const messages: { readonly role: string; readonly content: unknown }[] = [];
+    /** The parts of the last message when it is a user turn (an envelope note joins it). */
+    let userParts: unknown[] | null = null;
+    for (const e of req.entries) {
+      if (e.role === "user") {
+        userParts = [...e.parts];
+        messages.push({ role: "user", content: userParts });
+        continue;
+      }
+      if (e.role === "operator" && channel === "envelope") {
+        const part = { kind: "text", text: `${HARNESS_PREFIX}${e.text}` };
+        if (userParts !== null) userParts.push(part);
+        else {
+          userParts = [part];
+          messages.push({ role: "user", content: userParts });
+        }
+        continue;
+      }
+      userParts = null;
+      if (e.role === "assistant") messages.push({ role: "assistant", content: e.reply.native });
+      else
+        messages.push({ role: channel === "developer" ? "developer" : "system", content: e.text });
+    }
     return {
       model: this.spec.model,
       max_tokens: req.maxOutputTokens ?? this.spec.maxOutputTokens,
@@ -92,13 +148,7 @@ export class FakeAdapter implements ModelAdapter {
         { type: "text", text: req.prompt.shared },
         { type: "text", text: req.prompt.seat },
       ],
-      messages: req.entries.map((e: Entry) =>
-        e.role === "assistant"
-          ? { role: "assistant", content: e.reply.native }
-          : e.role === "operator"
-            ? { role: "system", content: e.text }
-            : { role: "user", content: e.parts },
-      ),
+      messages,
     };
   }
 
@@ -129,9 +179,10 @@ export class FakeAdapter implements ModelAdapter {
     ];
     const stop: StopReason = r.stop ?? (calls.length > 0 ? "tool_use" : "end_turn");
     const refused = stop === "refusal";
+    const reasoningKind = this.capabilities.reasoning;
     const reply = refused
-      ? { native: [], text: [], calls: [], reasoning: [] }
-      : { native, text, calls, reasoning };
+      ? { native: [], text: [], calls: [], reasoning: [], reasoningKind }
+      : { native, text, calls, reasoning, reasoningKind };
     const servedBy = r.servedBy ?? this.spec.model;
     return {
       reply,

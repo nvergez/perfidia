@@ -106,6 +106,8 @@ const SeatModelSchema = z.strictObject({
   provider: z.string(),
   model: z.string(),
   effort: EffortSchema,
+  /** Phase 4: the pinned routing endpoint of an OpenRouter seat (`z-ai/fp8`). */
+  endpoint: z.string().optional(),
 });
 export type SeatModel = z.infer<typeof SeatModelSchema>;
 
@@ -726,6 +728,8 @@ const AnnotationRoundSchema = z.strictObject({
   /** Error kinds of failed attempts (never their messages). */
   errors: z.array(z.string()),
   reasoning: z.array(z.string()),
+  /** Phase 4: what `reasoning` is (a provider's summary or raw text), when the log says. */
+  reasoningKind: z.enum(["summary", "raw", "none"]).optional(),
   text: z.array(z.string()),
   /** Tool names of the reply's calls. */
   calls: z.array(z.string()),

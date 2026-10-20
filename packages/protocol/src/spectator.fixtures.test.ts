@@ -5,8 +5,15 @@ import type { ZodType } from "zod";
 import { SHA, withAt } from "./fixtures.test.ts";
 import * as protocol from "./index.ts";
 import type {
+  ArenaBudget,
   ArenaReport,
   ArenaSeatReport,
+  EstimateFile,
+  Exit4,
+  Lineup,
+  ReconcileFile,
+  TokenProfile,
+  ReconcileInput,
   CityEnt,
   FeedItem,
   Frame,
@@ -204,6 +211,7 @@ const seatReport: ArenaSeatReport = {
   rejections: { ALREADY_ALLIED: 1 },
   calls: 141,
   handoff: null,
+  promptCaps: 0,
   estimate: { low: 854050000, central: 2974760000, high: 10950000000 },
   projectedNanoUsd: 7097156308,
 };
@@ -225,8 +233,55 @@ const exitCriterion = {
   events: [exitEvent],
 } as const;
 
+const arenaBudget: ArenaBudget = {
+  budgetNanoUsd: 55000000000,
+  reserveNanoUsd: 2000000000,
+  killAtNanoUsd: 53000000000,
+  carryNanoUsd: 0,
+  onBudget: "handoff",
+  estimate: {
+    sha256: SHA,
+    low: 3416200000,
+    central: 11899040000,
+    high: 43800000000,
+    source: "scenario",
+  },
+  actualNanoUsd: 2836708800,
+  attemptsNanoUsd: 2836708800,
+  preflightNanoUsd: 0,
+  probeNanoUsd: 0,
+  estimatedNanoUsd: 0,
+  feesNanoUsd: 0,
+  under: true,
+  withinPrediction: false,
+  killSwitch: null,
+  wall: { start: "+0ms", end: "+5ms" },
+  byProvider: [
+    {
+      provider: "fake",
+      endpoint: null,
+      attempts: 193,
+      nanoUsd: 2836708800,
+      reportedNanoUsd: null,
+      estimatedNanoUsd: 0,
+    },
+  ],
+};
+
+const exit4: Exit4 = {
+  models: 1,
+  ended: true,
+  estimateStored: true,
+  noHandoff: true,
+  withinPrediction: false,
+  under: true,
+  levelE: true,
+  reconciled: null,
+  met: false,
+};
+
 const arenaReport: ArenaReport = {
-  format: "perfidia-arena/1",
+  format: "perfidia-arena/2",
   status: "ended",
   reason: null,
   fake: true,
@@ -263,12 +318,238 @@ const arenaReport: ArenaReport = {
     llm: { ...exitCriterion.llm },
     events: [{ ...exitEvent, seats: ["p1", "p4"], llm: ["p1", "p4"] }],
   },
+  budget: arenaBudget,
+  exit4,
+};
+
+/** `arena.json` as phases 2 and 3 wrote it (`perfidia-arena/1`): ec8e2ad's fixture. */
+const arenaReportV1 = {
+  format: "perfidia-arena/1",
+  status: "ended",
+  reason: null,
+  fake: true,
+  ruleset: "perfidia-1@1.1.0",
+  seed: 1,
+  players: 6,
+  days: 1,
+  clock: "lockstep",
+  promptVersion: 2,
+  harness: "orchestrator/1",
+  lastT: 86400,
+  endedAt: 86400,
+  result: { reason: "time", winners: ["p4"] },
+  seats: [
+    {
+      ...Object.fromEntries(Object.entries(seatReport).filter(([k]) => k !== "promptCaps")),
+      handoff: { t: 3600, time: "D1 01:00", label: "bot:turtle@3", spentNanoUsd: 100000000 },
+    },
+  ],
+  bots: [{ seat: "p5", controllers: "bot:opportunist@3" }],
+  totals: {
+    costNanoUsd: 2836708800,
+    attempts: 193,
+    tokens: { input: 0, cacheWrite5m: 234624, cacheWrite1h: 0, cacheRead: 1732544, output: 65854 },
+    cacheReadPct: 88,
+    fallbackPermille: 0,
+    preflightNanoUsd: 0,
+  },
+  estimate: { low: 3416200000, central: 11899040000, high: 43800000000 },
+  projection: { fromDays: 1, toDays: 7, costNanoUsd: 26291324231 },
+  recommendedSpeed: null,
+  pauses: [],
+  alerts: [],
+  daily: [],
+  llmToBotWarCalls: 0,
+  levelE: { ok: true, actions: 174, checkpoints: 23, divergence: null },
+  exit: {
+    ...exitCriterion,
+    llm: { ...exitCriterion.llm },
+    events: [{ ...exitEvent, seats: ["p1", "p4"], llm: ["p1", "p4"] }],
+  },
+};
+
+const preflightLine = {
+  k: "preflight",
+  phase: "start",
+  group: "anthropic/claude-sonnet-5-5/medium",
+  provider: "anthropic",
+  model: "claude-sonnet-5-5",
+  endpoint: null,
+  t: 0,
+  ok: true,
+  usage: [{ ...usageLine, model: "claude-sonnet-5-5" }],
+  costNanoUsd: 27000000,
+  priceCard: "anthropic:claude-sonnet-5-5@2026-10-20",
+  error: null,
+  wallStart: "2026-10-20T14:02:11.120Z",
+} as const;
+
+const promptCapLine = {
+  k: "prompt_cap",
+  seat: "p2",
+  turn: 9,
+  round: 4,
+  kind: "round",
+  t: 120000,
+  estimateTokens: 163220,
+  capTokens: 160000,
+} as const;
+
+const killSwitchLine = {
+  k: "kill_switch",
+  t: 150000,
+  wall: "2026-10-20T19:02:11.120Z",
+  spentNanoUsd: 53010000000,
+  killAtNanoUsd: 53000000000,
+  budgetNanoUsd: 55000000000,
+  action: "handoff",
+} as const;
+
+const operatorLine = {
+  k: "operator",
+  signal: "SIGINT",
+  action: "handoff",
+  t: 150000,
+} as const;
+
+const carryLine = { k: "carry", from: "match-1", lines: 812, costNanoUsd: 4120000000 } as const;
+
+const estimateFile: EstimateFile = {
+  format: "perfidia-estimate/1",
+  lineup: "claude-duo",
+  ruleset: "perfidia-1@1.1.0",
+  players: 6,
+  matchDays: 7,
+  days: 7,
+  clock: "lockstep",
+  cacheTtl: "5m",
+  maxTokens: 16000,
+  promptCapTokens: 160000,
+  seats: [
+    {
+      seat: "p1",
+      provider: "anthropic",
+      model: "claude-sonnet-5-5",
+      effort: "medium",
+      fallbacks: "off",
+      profile: "odysseus@1",
+      capNanoUsd: 79460000000,
+      wakeCapNanoUsd: 2000000000,
+      low: 3210000000,
+      central: 10950000000,
+      high: 39730000000,
+      source: "scenario",
+      priceCards: ["anthropic:claude-sonnet-5-5@2026-10-20"],
+      attemptBoundNanoUsd: 960000000,
+    },
+  ],
+  match: { low: 3210000000, central: 10950000000, high: 39730000000, source: "scenario" },
+  reserve: {
+    attemptBoundsNanoUsd: 960000000,
+    probeBoundNanoUsd: 130000000,
+    startPreflightBoundNanoUsd: 130000000,
+    reserveNanoUsd: 1220000000,
+  },
+  budget: {
+    budgetNanoUsd: 55000000000,
+    killAtNanoUsd: 53780000000,
+    carryNanoUsd: 0,
+    onBudget: "handoff",
+  },
+  assumptions: ["15.5 wakes per seat per game day"],
+};
+
+const lineup: Lineup = {
+  format: "perfidia-lineup/1",
+  id: "claude-duo",
+  title: "Claude exit lineup",
+  comparison: false,
+  budgetUsd: "55",
+  maxTokens: 16000,
+  attemptTimeoutMin: 10,
+  promptCapTokens: 160000,
+  reminders: "every-round",
+  defaults: { effort: "medium" },
+  seats: [
+    {
+      seat: "p1",
+      kind: "llm",
+      provider: "anthropic",
+      model: "claude-sonnet-5-5",
+      profile: "odysseus@1",
+      fallbacks: "off",
+    },
+    { seat: "p5", kind: "bot", label: "bot:opportunist@3" },
+  ],
+};
+
+const reconcileInput: ReconcileInput = {
+  format: "perfidia-reconcile-input/1",
+  providers: [
+    {
+      provider: "anthropic",
+      usd: "12.34",
+      source: "Console usage, workspace perfidia-m1",
+      tokens: [{ model: "claude-sonnet-5-5", input: 1200, output: 98000 }],
+    },
+  ],
+};
+
+const reconcileFile: ReconcileFile = {
+  format: "perfidia-reconcile/1",
+  wall: { start: "2026-10-20T08:00:00.000Z", end: "2026-10-20T20:00:00.000Z" },
+  hoursAfterEnd: 50,
+  early: false,
+  providers: [
+    {
+      provider: "anthropic",
+      ledgerNanoUsd: 12500000000,
+      estimatedExcessNanoUsd: 0,
+      reportedNanoUsd: 12340000000,
+      feesNanoUsd: 0,
+      toleranceNanoUsd: 375000000,
+      lowNanoUsd: 12125000000,
+      highNanoUsd: 12875000000,
+      usdOk: true,
+      tokens: [
+        { model: "claude-sonnet-5-5", kind: "output", ledger: 98100, reported: 98000, ok: true },
+      ],
+      tokensOk: true,
+      ok: true,
+    },
+  ],
+  ok: true,
+};
+
+const tokenProfile: TokenProfile = {
+  format: "perfidia-profile/1",
+  key: {
+    provider: "openai",
+    model: "gpt-6.1-sol",
+    endpoint: null,
+    effort: "medium",
+    promptVariant: "developer",
+    reminders: "last-round",
+    maxTokens: 32768,
+    promptVersion: 2,
+    rulesetMajor: "perfidia-1@1",
+  },
+  runs: [{ run: "mid-tier-cal", seed: 7 }],
+  seatDays: [
+    {
+      run: "mid-tier-cal",
+      seat: "p2",
+      day: 0,
+      wakes: [{ rounds: [{ promptTokens: 11000, outputTokens: 1400, cacheReadTokens: 9500 }] }],
+    },
+  ],
+  briefingGrowth: [{ day: 0, briefingTokens: 1500 }],
 };
 
 export const ARENA_CASES: Record<string, SchemaCase> = {
   EffortSchema: {
     schema: protocol.EffortSchema,
-    valid: ["low", "medium", "xhigh", "max"],
+    valid: ["low", "medium", "xhigh", "max", "none", "minimal"],
     invalid: [{ value: "huge", path: [] }],
   },
   TokenUsageSchema: {
@@ -278,8 +559,12 @@ export const ARENA_CASES: Record<string, SchemaCase> = {
   },
   UsageLineSchema: {
     schema: protocol.UsageLineSchema,
-    valid: [usageLine],
-    invalid: [bad(usageLine, ["kind"], "batch"), bad(usageLine, ["model"], "")],
+    valid: [usageLine, { ...usageLine, reasoning: 900 }, { ...usageLine, geo: "us" }],
+    invalid: [
+      bad(usageLine, ["kind"], "batch"),
+      bad(usageLine, ["model"], ""),
+      bad(usageLine, ["reasoning"], -1),
+    ],
   },
   StopSchema: {
     schema: protocol.StopSchema,
@@ -288,18 +573,86 @@ export const ARENA_CASES: Record<string, SchemaCase> = {
   },
   LlmCallLineSchema: {
     schema: protocol.LlmCallLineSchema,
-    valid: [llmCallLine, { ...llmCallLine, inbox: ["g0k4qz"] }],
+    valid: [
+      llmCallLine,
+      { ...llmCallLine, inbox: ["g0k4qz"] },
+      {
+        ...llmCallLine,
+        provider: "openrouter",
+        model: "z-ai/glm-5.3",
+        effort: "minimal",
+        endpoint: "z-ai/fp8",
+        priceCard: "openrouter:z-ai/glm-5.3(z-ai/fp8)@2026-10-20",
+        feeNanoUsd: 1200,
+        reportedCostNanoUsd: 21000,
+        reasoningKind: "raw",
+      },
+    ],
     invalid: [
       bad(llmCallLine, ["attempt"], 0),
       bad(llmCallLine, ["costNanoUsd"], -1),
       bad(llmCallLine, ["effort"], "huge"),
       extra(llmCallLine, []),
+      bad(llmCallLine, ["reasoningKind"], "hidden"),
+      bad(llmCallLine, ["endpoint"], ""),
+      bad(llmCallLine, ["feeNanoUsd"], -1),
     ],
+  },
+  HandoffReasonSchema: {
+    schema: protocol.HandoffReasonSchema,
+    valid: ["cap", "match_budget", "outage", "operator"],
+    invalid: [{ value: "boredom", path: [] }],
   },
   HandoffLineSchema: {
     schema: protocol.HandoffLineSchema,
-    valid: [handoffLine],
+    valid: [handoffLine, { ...handoffLine, reason: "match_budget" }],
     invalid: [bad(handoffLine, ["reason"], "boredom")],
+  },
+  PreflightLineSchema: {
+    schema: protocol.PreflightLineSchema,
+    valid: [
+      preflightLine,
+      {
+        ...preflightLine,
+        phase: "probe",
+        ok: false,
+        usage: [],
+        costNanoUsd: 0,
+        priceCard: null,
+        error: { kind: "billing", status: 402, message: "credit balance too low" },
+      },
+      { ...preflightLine, provider: "openrouter", endpoint: "z-ai/fp8", feeNanoUsd: 55 },
+    ],
+    invalid: [
+      bad(preflightLine, ["phase"], "middle"),
+      bad(preflightLine, ["costNanoUsd"], -1),
+      extra(preflightLine, []),
+      bad(preflightLine, ["feeNanoUsd"], -1),
+    ],
+  },
+  PromptCapLineSchema: {
+    schema: protocol.PromptCapLineSchema,
+    valid: [promptCapLine],
+    invalid: [bad(promptCapLine, ["capTokens"], 0)],
+  },
+  KillSwitchLineSchema: {
+    schema: protocol.KillSwitchLineSchema,
+    valid: [killSwitchLine],
+    invalid: [bad(killSwitchLine, ["action"], "panic")],
+  },
+  OperatorLineSchema: {
+    schema: protocol.OperatorLineSchema,
+    valid: [
+      operatorLine,
+      { ...operatorLine, action: "abort", signal: "SIGTERM" },
+      { ...operatorLine, action: "exit", signal: "SIGHUP" },
+    ],
+    invalid: [bad(operatorLine, ["signal"], "")],
+  },
+  CarryLineSchema: {
+    schema: protocol.CarryLineSchema,
+    valid: [carryLine, { ...carryLine, inFlightNanoUsd: 2200000000 }],
+    invalid: [bad(carryLine, ["costNanoUsd"], -1), bad(carryLine, ["inFlightNanoUsd"], -1)],
   },
   PauseLineSchema: {
     schema: protocol.PauseLineSchema,
@@ -313,7 +666,17 @@ export const ARENA_CASES: Record<string, SchemaCase> = {
   },
   LlmLogLineSchema: {
     schema: protocol.LlmLogLineSchema,
-    valid: [llmCallLine, handoffLine, pauseLine, wakeCapLine],
+    valid: [
+      llmCallLine,
+      handoffLine,
+      pauseLine,
+      wakeCapLine,
+      preflightLine,
+      promptCapLine,
+      killSwitchLine,
+      operatorLine,
+      carryLine,
+    ],
     invalid: [bad(handoffLine, ["k"], "reply"), bad(wakeCapLine, ["turn"], -1)],
   },
   ReplyLineSchema: {
@@ -331,12 +694,60 @@ export const ARENA_CASES: Record<string, SchemaCase> = {
     valid: [profile],
     invalid: [bad(profile, ["id"], "Odysseus"), bad(profile, ["version"], 0)],
   },
+  FallbacksSchema: {
+    schema: protocol.FallbacksSchema,
+    valid: ["default", "off"],
+    invalid: [{ value: "on", path: [] }],
+  },
   SeatsFileSchema: {
     schema: protocol.SeatsFileSchema,
-    valid: [seatsFile],
+    valid: [
+      seatsFile,
+      {
+        ...seatsFile,
+        lineup: "claude-duo",
+        estimateSha256: SHA,
+        promptCapTokens: 160000,
+        budgetNanoUsd: 55000000000,
+        seats: [{ ...seatsFile.seats[0], fallbacks: "off" }, seatsFile.seats[1]],
+      },
+      {
+        ...seatsFile,
+        lineup: "mid-tier",
+        priceDate: "2026-10-19",
+        seats: [
+          {
+            ...seatsFile.seats[0],
+            provider: "fake",
+            model: "z-ai/glm-5.3",
+            intended: { provider: "openrouter", model: "z-ai/glm-5.3", endpoint: "z-ai/fp8" },
+            endpoint: "z-ai/fp8",
+            quantization: "fp8",
+            promptVariant: "envelope",
+            reminders: "last-round",
+            sharedHash: SHA,
+            toolsHash: SHA,
+            operatorHash: SHA,
+          },
+          { ...seatsFile.seats[0], seat: "p2", reasoningContext: "all_turns" },
+        ],
+      },
+    ],
     invalid: [
       bad(seatsFile, ["seats", 0, "effort"], "huge"),
       bad(seatsFile, ["seats", 1, "kind"], "human"),
+      bad(seatsFile, ["seats", 0, "fallbacks"], "on"),
+      bad(seatsFile, ["promptCapTokens"], 0),
+      bad(seatsFile, ["seats", 0, "promptVariant"], "whisper"),
+      bad(seatsFile, ["seats", 0, "reminders"], "never"),
+      bad(seatsFile, ["seats", 0, "reasoningContext"], "some_turns"),
+      {
+        value: withAt(seatsFile, ["seats", 0, "intended"], {
+          provider: "openai",
+          model: "gpt-6-luna",
+        }),
+        path: ["seats", 0, "intended", "endpoint"],
+      },
     ],
   },
   ArenaStatusSchema: {
@@ -359,13 +770,154 @@ export const ARENA_CASES: Record<string, SchemaCase> = {
     valid: [exitCriterion],
     invalid: [bad(exitCriterion, ["llm", "met"], "no")],
   },
+  ArenaBudgetSchema: {
+    schema: protocol.ArenaBudgetSchema,
+    valid: [
+      arenaBudget,
+      {
+        ...arenaBudget,
+        budgetNanoUsd: null,
+        killAtNanoUsd: null,
+        under: null,
+        estimate: null,
+        withinPrediction: null,
+      },
+    ],
+    invalid: [bad(arenaBudget, ["onBudget"], "panic"), bad(arenaBudget, ["actualNanoUsd"], -1)],
+  },
+  Exit4Schema: {
+    schema: protocol.Exit4Schema,
+    valid: [exit4, { ...exit4, reconciled: true, models: 2, withinPrediction: true, met: true }],
+    invalid: [bad(exit4, ["met"], null), bad(exit4, ["models"], -1)],
+  },
   ArenaReportSchema: {
     schema: protocol.ArenaReportSchema,
     valid: [arenaReport],
     invalid: [
-      bad(arenaReport, ["format"], "perfidia-arena/2"),
+      bad(arenaReport, ["format"], "perfidia-arena/1"),
       bad(arenaReport, ["status"], "loading"),
       bad(arenaReport, ["seats", 0, "seat"], "x1"),
+      bad(arenaReport, ["exit4", "ended"], "yes"),
+    ],
+  },
+  ArenaSeatReportV1Schema: {
+    schema: protocol.ArenaSeatReportV1Schema,
+    valid: [arenaReportV1.seats[0], { ...arenaReportV1.seats[0], handoff: null }],
+    invalid: [
+      extra(arenaReportV1.seats[0], []),
+      // A phase-4 hand-off (with its reason) is not a phase-2 one.
+      { value: withAt(arenaReportV1.seats[0], ["handoff", "reason"], "cap"), path: ["handoff"] },
+    ],
+  },
+  // The phase-2 and phase-3 cases of `ArenaReportSchema` (ec8e2ad), now this schema's.
+  ArenaReportV1Schema: {
+    schema: protocol.ArenaReportV1Schema,
+    valid: [arenaReportV1],
+    invalid: [
+      bad(arenaReportV1, ["format"], "perfidia-arena/2"),
+      bad(arenaReportV1, ["status"], "loading"),
+      bad(arenaReportV1, ["seats", 0, "seat"], "x1"),
+      { value: { ...arenaReportV1, budget: arenaBudget }, path: [] },
+    ],
+  },
+  ArenaReportAnySchema: {
+    schema: protocol.ArenaReportAnySchema,
+    valid: [arenaReport, arenaReportV1],
+    invalid: [
+      bad(arenaReport, ["format"], "perfidia-arena/3"),
+      bad(arenaReportV1, ["status"], "loading"),
+    ],
+  },
+  PredictionSourceSchema: {
+    schema: protocol.PredictionSourceSchema,
+    valid: ["calibrated", "measured-point", "scenario"],
+    invalid: [{ value: "guess", path: [] }],
+  },
+  EstimateFileSchema: {
+    schema: protocol.EstimateFileSchema,
+    valid: [
+      estimateFile,
+      { ...estimateFile, lineup: null, budget: null, days: 1 },
+      {
+        ...estimateFile,
+        priceAt: "2026-10-19T00:00:00.000Z",
+        seats: estimateFile.seats.map((x) => ({ ...x, endpoint: "z-ai/fp8" })),
+      },
+    ],
+    invalid: [
+      bad(estimateFile, ["seats", 0, "endpoint"], ""),
+      bad(estimateFile, ["format"], "perfidia-estimate/0"),
+      bad(estimateFile, ["seats", 0, "source"], "guess"),
+      bad(estimateFile, ["match", "high"], -1),
+    ],
+  },
+  LineupSeatSchema: {
+    schema: protocol.LineupSeatSchema,
+    valid: [lineup.seats[0], lineup.seats[1]],
+    invalid: [
+      bad(lineup.seats[0], ["profile"], "odysseus"),
+      bad(lineup.seats[0], ["provider"], "acme"),
+      bad(lineup.seats[1], ["label"], "opportunist@3"),
+    ],
+  },
+  LineupSchema: {
+    schema: protocol.LineupSchema,
+    valid: [lineup],
+    invalid: [
+      bad(lineup, ["budgetUsd"], "55 USD"),
+      bad(lineup, ["reminders"], "never"),
+      bad(lineup, ["seats", 0, "capUsd"], "-1"),
+      extra(lineup, []),
+    ],
+  },
+  ReconcileInputSchema: {
+    schema: protocol.ReconcileInputSchema,
+    valid: [reconcileInput],
+    invalid: [
+      bad(reconcileInput, ["providers", 0, "usd"], "12,34"),
+      bad(reconcileInput, ["providers"], []),
+    ],
+  },
+  ReconcileFileSchema: {
+    schema: protocol.ReconcileFileSchema,
+    valid: [
+      reconcileFile,
+      withAt(reconcileFile, ["providers", 0, "tokens", 0, "estimated"], 15000),
+    ],
+    invalid: [
+      bad(reconcileFile, ["providers", 0, "tokens", 0, "kind"], "thinking"),
+      bad(reconcileFile, ["providers", 0, "tokens", 0, "estimated"], -1),
+    ],
+  },
+  ProviderSchema: {
+    schema: protocol.ProviderSchema,
+    valid: ["anthropic", "openai", "google", "openrouter", "compat", "fake"],
+    invalid: [{ value: "acme", path: [] }],
+  },
+  PromptVariantSchema: {
+    schema: protocol.PromptVariantSchema,
+    valid: ["system", "developer", "envelope"],
+    invalid: [{ value: "whisper", path: [] }],
+  },
+  ReminderCadenceSchema: {
+    schema: protocol.ReminderCadenceSchema,
+    valid: ["every-round", "last-round"],
+    invalid: [{ value: "never", path: [] }],
+  },
+  ReasoningContextSchema: {
+    schema: protocol.ReasoningContextSchema,
+    valid: ["auto", "current_turn", "all_turns"],
+    invalid: [{ value: "some_turns", path: [] }],
+  },
+  TokenProfileSchema: {
+    schema: protocol.TokenProfileSchema,
+    valid: [tokenProfile, { ...tokenProfile, seatDays: [], briefingGrowth: [] }],
+    invalid: [
+      bad(tokenProfile, ["format"], "perfidia-profile/0"),
+      bad(tokenProfile, ["key", "rulesetMajor"], "perfidia-1@1.1.0"),
+      bad(tokenProfile, ["seatDays", 0, "wakes", 0, "rounds"], []),
+      bad(tokenProfile, ["key", "promptVariant"], "whisper"),
+      extra(tokenProfile, []),
     ],
   },
 };
@@ -895,7 +1447,21 @@ export const SPECTATOR_CASES: Record<string, SchemaCase> = {
   },
   SeatInfoSchema: {
     schema: protocol.SeatInfoSchema,
-    valid: [seatInfo, { ...seatInfo, kind: "bot", model: null, profile: null, handoffBot: null }],
+    valid: [
+      seatInfo,
+      { ...seatInfo, kind: "bot", model: null, profile: null, handoffBot: null },
+      {
+        ...seatInfo,
+        label: "llm:openrouter/z-ai%2Fglm-5.3@z-ai%2Ffp8/medium:agamemnon@1:p2-env",
+        fake: false,
+        model: {
+          provider: "openrouter",
+          model: "z-ai/glm-5.3",
+          effort: "medium",
+          endpoint: "z-ai/fp8",
+        },
+      },
+    ],
     invalid: [
       bad(seatInfo, ["color"], 12),
       { value: withAt(seatInfo, ["profile", "handoffBot"], "bot:turtle@3"), path: ["profile"] },
@@ -1026,7 +1592,13 @@ export const SPECTATOR_CASES: Record<string, SchemaCase> = {
   },
   TurnAnnotationSchema: {
     schema: protocol.TurnAnnotationSchema,
-    valid: [annotation],
+    valid: [
+      annotation,
+      {
+        ...annotation,
+        rounds: annotation.rounds.map((r) => ({ ...r, reasoningKind: "raw" as const })),
+      },
+    ],
     invalid: [
       bad(annotation, ["rounds", 0, "kind"], "batch"),
       bad(annotation, ["rounds", 0, "tokens", "output"], -1),

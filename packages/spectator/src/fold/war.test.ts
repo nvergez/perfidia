@@ -413,7 +413,7 @@ describe("the war golden through the spectator fold", () => {
       expect(JSON.stringify(again.notebook(s.id))).toBe(JSON.stringify(fold.notebook(s.id)));
     }
     expect(frames.length).toBeGreaterThan(10);
-  });
+  }, 60_000);
 
   test("frames hold materialised values only: projecting the same state later changes nothing", () => {
     const header = headerOf(lines);

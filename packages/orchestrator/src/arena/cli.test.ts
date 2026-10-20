@@ -50,7 +50,14 @@ describe("arena CLI", () => {
       expect(await main(["cost", dir], cost, {})).toBe(0);
       expect(cost.stdout()).toMatch(/^seat {2}model/);
       expect(cost.stdout()).toContain("p1    claude-opus-5-5");
+      expect(cost.stdout()).toContain("preflight $0.000000 · probes $0.000000 (0 checks)");
       expect(cost.stdout()).toMatch(/total \$[0-9]+\.[0-9]{6}\n$/);
+      // Phase 4: the logged costs are the source of truth; --reprice shows today's cards beside them.
+      const reprice = memoryIo();
+      expect(await main(["cost", dir, "--reprice"], reprice, {})).toBe(0);
+      expect(reprice.stdout()).toMatch(/repriced at today's cards: \$[0-9.]+ \(\+\$0\.000000\)\n$/);
+      for (const f of ["estimate.json", "prompts/shared.txt"])
+        expect(existsSync(join(dir, f))).toBe(true);
       const again = memoryIo();
       expect(await main(argv, again, {})).toBe(3);
       expect(again.stderr()).toContain("already holds a run");
@@ -83,7 +90,39 @@ describe("arena CLI", () => {
     const help = memoryIo();
     expect(await main(["run", "--help"], help, {})).toBe(0);
     expect(help.stdout()).toContain("--seat <pN=spec>");
+    for (const flag of [
+      "--lineup",
+      "--budget-usd",
+      "--on-budget",
+      "--budget-carry",
+      "--prompt-cap",
+    ]) {
+      expect(help.stdout()).toContain(flag);
+    }
     expect(await main([], memoryIo(), {})).toBe(3);
+    // Phase 4 commands and flags.
+    const all = memoryIo();
+    expect(await main(["help"], all, {})).toBe(0);
+    for (const c of ["estimate", "reconcile", "4 reconciliation outside tolerance", "claude-duo"]) {
+      expect(all.stdout()).toContain(c);
+    }
+    const est = memoryIo();
+    expect(await main(["estimate", "--help"], est, {})).toBe(0);
+    expect(est.stdout()).not.toContain("--out <dir>");
+    const lineup = memoryIo();
+    expect(await main(["estimate", "--lineup", "no-such-lineup"], lineup, {})).toBe(3);
+    expect(lineup.stderr()).toContain(
+      "(the presets are claude-duo, claude-family, budget-mix, mid-tier, mid-tier-flash, frontier)",
+    );
+    const onBudget = memoryIo();
+    expect(await main(["estimate", "--on-budget", "abort"], onBudget, {})).toBe(3);
+    expect(onBudget.stderr()).toContain("--on-budget needs a match budget");
+    const reconcile = memoryIo();
+    expect(await main(["reconcile", dir], reconcile, {})).toBe(3);
+    expect(reconcile.stderr()).toContain("exactly one of --input <file> and --usd");
+    const missing = memoryIo();
+    expect(await main(["reconcile", dir, "--usd", "anthropic=1"], missing, {})).toBe(3);
+    expect(missing.stderr()).toContain("not a run directory");
   });
 
   test("smoke refuses to run without PERFIDIA_ANTHROPIC_API_KEY, whatever else is set", async () => {

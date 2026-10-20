@@ -218,6 +218,8 @@ export interface PromptFiles {
   readonly operator: Readonly<Record<string, string>>;
   /** The transformed tools, as sent. */
   readonly tools: unknown;
+  /** Phase 4: the shared block of each other operator channel in use, by variant. */
+  readonly variants?: Readonly<Record<string, string | undefined>>;
 }
 
 /** Writes `prompts/shared.txt`, `prompts/<seat>.txt`, `operator.json` and `tools.json`. */
@@ -225,6 +227,10 @@ export function writePrompts(dir: string, p: PromptFiles): void {
   const out = join(dir, "prompts");
   mkdirSync(out, { recursive: true });
   writeFileSync(join(out, "shared.txt"), p.shared);
+  // Phase 4: the shared block of the other operator channels in use (`shared-<variant>.txt`).
+  for (const [variant, text] of Object.entries(p.variants ?? {})) {
+    if (text !== undefined) writeFileSync(join(out, `shared-${variant}.txt`), text);
+  }
   for (const [seat, text] of Object.entries(p.seats)) writeFileSync(join(out, `${seat}.txt`), text);
   writeFileSync(join(out, "operator.json"), `${JSON.stringify(p.operator, null, 2)}\n`);
   writeFileSync(join(out, "tools.json"), `${JSON.stringify(p.tools, null, 2)}\n`);

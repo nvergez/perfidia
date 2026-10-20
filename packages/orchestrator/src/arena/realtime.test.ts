@@ -59,16 +59,12 @@ describe("arena in real time (virtual time)", () => {
         turnTimeoutMs: 300_000,
       });
 
-      // Aborted at the round deadline: charged an estimate, by the time the call ran, up to
-      // max_tokens (a call cut at 290 s may have produced all of its 16 000 tokens).
+      // Aborted at the round deadline: charged an estimate, the request's full max_tokens (phase 4:
+      // nothing seen on a broken stream bounds what it generated).
       const aborted = llm.filter((l) => l.error?.kind === "aborted");
       expect(aborted.length).toBeGreaterThan(0);
       for (const l of aborted) {
-        const output = brokenStreamOutput({
-          observed: 0,
-          maxTokens: 16_000,
-          streamedMs: l.latencyMs,
-        });
+        const output = brokenStreamOutput(16_000);
         expect(output).toBe(16_000);
         expect(l.usage.every((u) => u.estimated && u.output === output)).toBe(true);
         expect(l.costNanoUsd).toBeGreaterThan(0);

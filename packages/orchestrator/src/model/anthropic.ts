@@ -15,9 +15,11 @@ import {
   type CacheTtl,
   type ChatRequest,
   type ChatResult,
+  type Effort,
   type Entry,
   type ModelAdapter,
   type ModelCall,
+  type ModelCapabilities,
   type ModelErrorKind,
   type ModelReply,
   type ModelSpec,
@@ -27,46 +29,59 @@ import {
   type TokenUsage,
   type UsageEntry,
 } from "./adapter.ts";
+import { FALLBACK_TARGETS, capabilitiesFor } from "./catalog.ts";
+import { guardedFetch, redact, type HttpFetch } from "./http.ts";
 
 // The Anthropic adapter (phase-2 design §2.2–§2.6): the only module that imports the SDK.
 //
 // - The client gets an explicit API key and base URL and reads no `ANTHROPIC_*` variable that
-//   matters: `authToken`, `webhookKey` and `logLevel` are explicit too, and a guarded `fetch` sends
-//   only to the configured origin, with our `x-api-key`, no `authorization` header and only the
-//   SDK's own headers. `ANTHROPIC_CUSTOM_HEADERS`, which the SDK reads itself, is neutralised: the
-//   allowlist drops its other headers, our `defaultHeaders` override its `anthropic-beta` (each
-//   request sends only its own betas) and the guarded fetch pins `anthropic-version`.
+//   matters: `authToken`, `webhookKey` and `logLevel` are explicit too, and the shared guarded
+//   `fetch` (`http.ts`) sends only to the configured origin, with our `x-api-key`, no
+//   `authorization` header and only the SDK's own headers, and never follows a redirect
+//   (`redirect: "error"`, phase 4: Bun forwards `x-api-key` to another origin on a 307, so a
+//   redirect would hand the key to its target). `ANTHROPIC_CUSTOM_HEADERS`, which the SDK reads
+//   itself, is neutralised: the allowlist drops its other headers, our `defaultHeaders` override its
+//   `anthropic-beta` (each request sends only its own betas) and the guarded fetch pins
+//   `anthropic-version`.
 // - `maxRetries: 0`: the harness owns every retry (seat/retry.ts), so each attempt is visible,
 //   logged, priced and jittered.
 // - Every call streams (`.stream().finalMessage()`): no idle connection while the model thinks, a
 //   time-to-first-token, and a known partial usage when the stream breaks. `chat` keeps its own
 //   reference to the latest snapshot (the SDK clears `currentMessage` when a body ends without
-//   `message_stop`) and charges a broken stream conservatively (`brokenStreamOutput`).
+//   `message_stop`) and charges a broken stream conservatively: its prompt as `message_start`
+//   reported it, and the request's full `max_tokens` of output (`brokenStreamOutput`).
 // - Requests: adaptive thinking with `display: "summarized"` (never disabled, never a budget),
 //   explicit `output_config.effort`, no `tool_choice` (forced use is a 400 on the 5.5 models), no
 //   sampling parameters, no prefill; `tools` → `system[0]` (shared) → `system[1]` (seat), both
 //   system blocks with `cache_control`, plus the automatic breakpoint on the growing tail; operator
 //   entries are mid-conversation `role: "system"` messages; server-side `fallbacks: "default"` under
-//   its beta for the models that have it.
+//   its beta for the models that have it, unless the spec says `fallbacks: "off"` (phase 4: the
+//   default for Claude Sonnet 5.5, whose fallback model, Claude Sonnet 5, rejects the operator
+//   entries).
 // - Responses: `stop_reason` is checked before any content is read; refusals carry
 //   `stop_details`; the assistant content is echoed back verbatim except for the fallback rule
 //   (declined thinking and tool calls before the last `fallback` block are dropped).
 
-/** The models with server-side refusal fallbacks (Claude API); Haiku 5.5 has none. */
-export const FALLBACK_CAPABLE: ReadonlySet<string> = new Set([
-  "claude-opus-5-5",
-  "claude-sonnet-5-5",
-]);
+/**
+ * The models whose server-side refusal fallbacks this build plans (the catalog's targets): Claude
+ * Opus 5.5 and Claude Sonnet 5.5. Claude Haiku 5.5 has none; Claude Fable 5.1's are not planned.
+ */
+export const FALLBACK_CAPABLE: ReadonlySet<string> = new Set(Object.keys(FALLBACK_TARGETS));
 /** The beta of the `fallbacks: "default"` scalar form. */
 export const FALLBACK_BETA = "server-side-fallback-2026-07-01";
 /** The beta that makes `allowed_fallback_models` visible on `/v1/models`. */
 export const MODELS_FALLBACK_BETA = "server-side-fallback-2026-06-01";
 
+/** Whether a request of `spec` sends `fallbacks: "default"` (and its beta). */
+export function fallbacksOn(spec: Pick<ModelSpec, "model" | "fallbacks">): boolean {
+  return FALLBACK_CAPABLE.has(spec.model) && spec.fallbacks !== "off";
+}
+
 export const DEFAULT_BASE_URL = "https://api.anthropic.com";
 /** The API version the SDK sends; pinned by the guarded fetch. */
 export const ANTHROPIC_VERSION = "2023-06-01";
 
-export type HttpFetch = (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
+export type { HttpFetch };
 
 export interface AnthropicClientOptions {
   /** `PERFIDIA_ANTHROPIC_API_KEY`, read once by the arena plan. */
@@ -83,37 +98,33 @@ export interface AnthropicClientOptions {
 const ALLOWED_HEADER =
   /^(?:accept|content-type|user-agent|anthropic-version|anthropic-beta|x-stainless-[a-z0-9-]+)$/;
 
-function guardedFetch(inner: HttpFetch, origin: string, apiKey: string): HttpFetch {
-  return (input, init) => {
-    const url = new URL(input instanceof Request ? input.url : input);
-    if (url.origin !== origin) {
-      return Promise.reject(
-        new Error(`refusing a request to ${url.origin}: the client is configured for ${origin}`),
-      );
-    }
-    const headers = new Headers();
-    const given = new Headers(input instanceof Request ? input.headers : undefined);
-    new Headers(init?.headers).forEach((value, name) => given.set(name, value));
-    given.forEach((value, name) => {
-      if (ALLOWED_HEADER.test(name)) headers.set(name, value);
-    });
-    headers.set("anthropic-version", ANTHROPIC_VERSION);
-    headers.set("x-api-key", apiKey);
-    return inner(url.toString(), { ...init, headers });
-  };
+/** The efforts a Claude request takes (`output_config.effort`). */
+type ClaudeEffort = "low" | "medium" | "high" | "xhigh" | "max";
+
+/** `effort` as a Claude effort; `none` and `minimal` are other vendors' (the plan refuses them). */
+function claudeEffort(effort: Effort): ClaudeEffort {
+  if (effort === "none" || effort === "minimal") {
+    throw new Error(`Claude models take effort low, medium, high, xhigh or max, not ${effort}`);
+  }
+  return effort;
 }
 
 /** One SDK client per process, shared by every adapter (one connection pool). */
 export class AnthropicClient {
   readonly baseURL: string;
   readonly sdk: Anthropic;
+  /**
+   * The key as it could appear in an error body (raw and URL-encoded): every error message is
+   * redacted with these before it reaches a log, an alert or stderr (phase-4 review).
+   */
+  readonly secrets: readonly string[];
 
   constructor(o: AnthropicClientOptions) {
     if (o.apiKey.trim() === "") {
       throw new Error("the Anthropic API key is empty: set PERFIDIA_ANTHROPIC_API_KEY");
     }
-    const origin = new URL(o.baseURL).origin;
     this.baseURL = o.baseURL;
+    this.secrets = [...new Set([o.apiKey, encodeURIComponent(o.apiKey)])];
     this.sdk = new Anthropic({
       apiKey: o.apiKey,
       authToken: null,
@@ -124,7 +135,13 @@ export class AnthropicClient {
       logLevel: "warn",
       // Over `ANTHROPIC_CUSTOM_HEADERS`: no default beta (a request's own `betas` still apply).
       defaultHeaders: { "anthropic-beta": null, "anthropic-version": ANTHROPIC_VERSION },
-      fetch: guardedFetch(o.fetch ?? ((input, init) => fetch(input, init)), origin, o.apiKey),
+      fetch: guardedFetch({
+        baseURL: o.baseURL,
+        auth: { header: "x-api-key", value: o.apiKey },
+        allowHeaders: ALLOWED_HEADER,
+        fixedHeaders: { "anthropic-version": ANTHROPIC_VERSION },
+        ...(o.fetch === undefined ? {} : { fetch: o.fetch }),
+      }),
     });
   }
 }
@@ -230,23 +247,43 @@ export function usageEntries(
   ttl: CacheTtl = "5m",
   estimated = false,
 ): UsageEntry[] {
+  const geo = geoOf(usage);
   const its = usage.iterations;
   if (its === null || its === undefined || its.length === 0) {
-    return [{ model: served, kind: "message", tokens: tokensOf(usage, ttl), estimated }];
+    return [usageEntry(served, "message", tokensOf(usage, ttl), estimated, geo)];
   }
   return its.map((it) => {
     const own: unknown = Reflect.get(it, "model");
     const model = typeof own === "string" && own !== "" ? own : undefined;
     if (it.type === "fallback_message") {
-      return { model: model ?? served, kind: "fallback", tokens: tokensOf(it, ttl), estimated };
+      return usageEntry(model ?? served, "fallback", tokensOf(it, ttl), estimated, geo);
     }
-    return {
-      model: model ?? (it.type === "message" ? requested : served),
-      kind: "message",
-      tokens: tokensOf(it, ttl),
-      estimated,
-    };
+    const which = model ?? (it.type === "message" ? requested : served);
+    return usageEntry(which, "message", tokensOf(it, ttl), estimated, geo);
   });
+}
+
+/** A usage entry, with its inference geography when one was reported. */
+function usageEntry(
+  model: string,
+  kind: UsageEntry["kind"],
+  tokens: TokenUsage,
+  estimated: boolean,
+  geo: string | undefined,
+): UsageEntry {
+  return geo === undefined
+    ? { model, kind, tokens, estimated }
+    : { model, kind, tokens, estimated, geo };
+}
+
+/**
+ * Where the request's inference ran, when not the global default (phase-4 review): the
+ * workspace's `default_inference_geo` applies when a request omits `inference_geo` (as ours do),
+ * and US-only inference bills 1.1× on every token kind. Read from `usage.inference_geo`.
+ */
+export function geoOf(usage: { readonly inference_geo?: string | null }): string | undefined {
+  const g: unknown = Reflect.get(usage, "inference_geo");
+  return typeof g === "string" && g !== "" && g !== "global" ? g : undefined;
 }
 
 /**
@@ -361,11 +398,20 @@ function kindOfType(type: string | null): ModelErrorKind {
   }
 }
 
-/** SDK error → `ModelError`, most specific class first (§2.6). */
-export function modelErrorOf(e: unknown, spent: readonly UsageEntry[]): ModelError {
+/**
+ * SDK error → `ModelError`, most specific class first (§2.6). The SDK's message embeds the error
+ * body; `secrets` (the client's key) are redacted from it, so a key an upstream echoes (a proxy, a
+ * gateway, an auth error) never reaches a log (phase-4 review).
+ */
+export function modelErrorOf(
+  e: unknown,
+  spent: readonly UsageEntry[],
+  secrets: readonly string[] = [],
+): ModelError {
   if (e instanceof ModelError) return e;
+  const line = (message: string): string => oneLine(redact(message, secrets));
   const make = (kind: ModelErrorKind, err: APIError | null, message: string) =>
-    new ModelError(kind, oneLine(message), {
+    new ModelError(kind, line(message), {
       status: err?.status ?? null,
       requestId: err?.requestID ?? null,
       retryAfterMs: retryAfterMs(err?.headers),
@@ -403,10 +449,10 @@ export function modelErrorOf(e: unknown, spent: readonly UsageEntry[]): ModelErr
     // `TypeError: terminated`, no `message_stop`). A transport failure: retryable, out of the breaker.
     const cause: unknown = e.cause;
     const why = cause instanceof Error && cause.message !== e.message ? ` (${cause.message})` : "";
-    return new ModelError("connection", oneLine(`the stream broke: ${e.message}${why}`), { spent });
+    return new ModelError("connection", line(`the stream broke: ${e.message}${why}`), { spent });
   }
   const message = e instanceof Error ? `${e.name}: ${e.message}` : String(e);
-  return new ModelError("unknown", oneLine(message), { spent });
+  return new ModelError("unknown", line(message), { spent });
 }
 
 /** What `chat` saw of a stream before it broke. */
@@ -422,36 +468,57 @@ export interface StreamSeen {
   readonly maxTokens: number;
   /** The longest TTL of the request's cache markers. */
   readonly ttl: CacheTtl;
+  /**
+   * The models of the `fallback` blocks seen (their `to.model`, phase-4 review): each switch runs
+   * the turn again on the target, cold, inside the same stream; their usage arrives only with
+   * `message_delta`.
+   */
+  readonly fallbacks?: readonly string[];
 }
 
 /**
- * What a broken stream cost before it broke (§5.3), flagged `estimated`: nothing when it never
- * started; the final usage when `message_delta` arrived; else the `message_start` input and cache
- * usage and `brokenStreamOutput` (what was streamed, the floor, or the time it streamed for).
+ * What a broken stream cost before it broke (phase-4 design §2.2), flagged `estimated`: nothing
+ * when it never started (no `message_start`: no inference ran); the final usage when
+ * `message_delta` arrived; else the prompt as `message_start` reported it (its input and cache
+ * split are final) and the request's full `max_tokens` of output (`brokenStreamOutput`).
  */
 export function spentOf(seen: StreamSeen): UsageEntry[] {
   const snapshot = seen.snapshot;
   if (snapshot === undefined) return [];
   if (seen.final) return usageEntries(snapshot.usage, snapshot.model, seen.model, seen.ttl, true);
-  let chars = 0;
-  for (const b of snapshot.content) {
-    if (b.type === "text") chars += b.text.length;
-    else if (b.type === "thinking") chars += b.thinking.length;
-    else if (b.type === "tool_use") {
-      try {
-        chars += JSON.stringify(b.input ?? {}).length;
-      } catch {
-        chars += 0;
-      }
-    }
-  }
   const t = tokensOf(snapshot.usage, seen.ttl);
-  const output = brokenStreamOutput({
-    observed: Math.max(t.output, Math.ceil(chars / 4)),
-    maxTokens: seen.maxTokens,
-    streamedMs: seen.streamedMs,
-  });
-  return [{ model: snapshot.model, kind: "message", tokens: { ...t, output }, estimated: true }];
+  const output = brokenStreamOutput(seen.maxTokens);
+  const geo = geoOf(snapshot.usage);
+  const hops = seen.fallbacks ?? [];
+  // The SDK's snapshot takes a fallback block's target as its model: the refused iteration that
+  // message_start reported ran on the requested model.
+  const first = hops.length > 0 ? seen.model : snapshot.model;
+  const out = [usageEntry(first, "message", { ...t, output }, true, geo)];
+  // A switch to a fallback model before the break (phase-4 review): the target ran the whole
+  // prompt cold (written at the request's TTL, the dearest prompt kind it can bill) and may have
+  // produced the full `max_tokens`; message_start reported only the refused iteration.
+  const prompt = t.input + t.cacheWrite5m + t.cacheWrite1h + t.cacheRead;
+  const cold: TokenUsage = {
+    input: 0,
+    cacheWrite5m: seen.ttl === "5m" ? prompt : 0,
+    cacheWrite1h: seen.ttl === "1h" ? prompt : 0,
+    cacheRead: 0,
+    output,
+  };
+  for (const model of hops) out.push(usageEntry(model, "fallback", cold, true, geo));
+  return out;
+}
+
+/** The target model of a `content_block_start` event's `fallback` block; null for any other. */
+function fallbackTarget(event: { readonly type: string }): string | null {
+  if (event.type !== "content_block_start") return null;
+  const block: unknown = Reflect.get(event, "content_block");
+  if (block === null || typeof block !== "object" || Reflect.get(block, "type") !== "fallback") {
+    return null;
+  }
+  const to: unknown = Reflect.get(block, "to");
+  const model: unknown = to !== null && typeof to === "object" ? Reflect.get(to, "model") : null;
+  return typeof model === "string" && model !== "" ? model : null;
 }
 
 // The adapter ----------------------------------------------------------------------------------
@@ -464,6 +531,7 @@ export interface AnthropicAdapterOptions {
 export class AnthropicAdapter implements ModelAdapter {
   readonly spec: ModelSpec;
   readonly label: string;
+  readonly capabilities: ModelCapabilities;
   private readonly client: AnthropicClient;
   private readonly nowMs: () => number;
   private readonly toolCache = new WeakMap<readonly ModelTool[], readonly BetaTool[]>();
@@ -472,6 +540,7 @@ export class AnthropicAdapter implements ModelAdapter {
     if (spec.provider !== "anthropic") throw new Error(`not an Anthropic spec: ${spec.provider}`);
     this.spec = spec;
     this.label = adapterLabel(spec);
+    this.capabilities = capabilitiesFor("anthropic", spec.model);
     this.client = client;
     this.nowMs = o.nowMs ?? (() => Math.floor(performance.now()));
   }
@@ -503,7 +572,7 @@ export class AnthropicAdapter implements ModelAdapter {
       model: s.model,
       max_tokens: req.maxOutputTokens ?? s.maxOutputTokens,
       thinking: { type: "adaptive", display: "summarized" },
-      output_config: { effort: s.effort },
+      output_config: { effort: claudeEffort(s.effort) },
       tools: this.toolsOf(req.tools),
       system: [
         { type: "text", text: req.prompt.shared, cache_control: ttl },
@@ -511,7 +580,7 @@ export class AnthropicAdapter implements ModelAdapter {
       ],
       cache_control: { type: "ephemeral" },
       messages: req.entries.map((e, i) => toMessage(e, i, req.entries)),
-      ...(FALLBACK_CAPABLE.has(s.model) ? { betas: [FALLBACK_BETA], fallbacks: "default" } : {}),
+      ...(fallbacksOn(s) ? { betas: [FALLBACK_BETA], fallbacks: "default" } : {}),
     };
   }
 
@@ -522,6 +591,7 @@ export class AnthropicAdapter implements ModelAdapter {
     let snapshot: BetaMessage | undefined;
     let startedAt: number | null = null;
     let final = false;
+    const fallbacks: string[] = [];
     const stream = this.client.sdk.beta.messages.stream(body, {
       maxRetries: 0,
       ...(req.signal === undefined ? {} : { signal: req.signal }),
@@ -531,6 +601,8 @@ export class AnthropicAdapter implements ModelAdapter {
       if (event.type === "message_start") startedAt ??= this.nowMs();
       else if (event.type === "message_delta") final = true;
       else if (ttftMs === null && event.type === "content_block_delta") ttftMs = this.nowMs() - t0;
+      const target = fallbackTarget(event);
+      if (target !== null) fallbacks.push(target);
     });
     let msg: BetaMessage;
     try {
@@ -543,8 +615,9 @@ export class AnthropicAdapter implements ModelAdapter {
         model: this.spec.model,
         maxTokens: body.max_tokens,
         ttl: this.spec.cacheTtl,
+        fallbacks,
       });
-      throw modelErrorOf(e, spent);
+      throw modelErrorOf(e, spent, this.client.secrets);
     }
     return this.resultOf(msg, stream.request_id ?? null, this.nowMs() - t0, ttftMs);
   }
@@ -600,7 +673,7 @@ export class AnthropicAdapter implements ModelAdapter {
       );
       return out.input_tokens;
     } catch (e) {
-      throw modelErrorOf(e, []);
+      throw modelErrorOf(e, [], this.client.secrets);
     }
   }
 
@@ -615,7 +688,7 @@ export class AnthropicAdapter implements ModelAdapter {
       );
       allowed = info.allowed_fallback_models ?? [];
     } catch (e) {
-      throw modelErrorOf(e, []);
+      throw modelErrorOf(e, [], this.client.secrets);
     }
     // The exact production shape, non-streamed with `max_tokens: 0` (a pre-warm cannot stream):
     // it validates betas, tool schemas and `display` before the run directory exists, and writes
@@ -632,7 +705,7 @@ export class AnthropicAdapter implements ModelAdapter {
         usage: usageEntries(msg.usage, msg.model, model, this.spec.cacheTtl),
       };
     } catch (e) {
-      throw modelErrorOf(e, []);
+      throw modelErrorOf(e, [], this.client.secrets);
     }
   }
 }

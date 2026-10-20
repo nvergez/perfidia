@@ -10,7 +10,10 @@ import {
   servedTokens,
   type ChatRequest,
   type Effort,
+  type Entry,
   type ModelSpec,
+  type ModelTool,
+  type StablePrompt,
 } from "../model/adapter.ts";
 import {
   AnthropicAdapter,
@@ -19,17 +22,24 @@ import {
   type HttpFetch,
 } from "../model/anthropic.ts";
 import { costOf, formatUsd, requirePrice } from "../model/prices.ts";
-import { BRIEFING_TOKENS, PREFIX_TOKENS } from "./cost.ts";
 import { anthropicTools } from "../model/tools.ts";
+import { ENTRY_OVERHEAD_TOKENS, entryTokensUpper } from "../seat/agent.ts";
 import { PROFILES } from "../seat/personalities.ts";
 import { seatPrompt, sharedPrompt, turnHeader } from "../seat/prompt.ts";
-import { PreflightError, preflight } from "./preflight.ts";
-import { DEFAULT_ARENA_DAYS, MODEL_ALIASES, type ArenaEnv } from "./plan.ts";
+import { defaultFallbacks } from "./lineup.ts";
+import { callBound } from "./estimate.ts";
+import {
+  PREFLIGHT_OUTPUT_TOKENS,
+  PreflightError,
+  preflight,
+  sampleTokensUpper,
+} from "./preflight.ts";
+import { DEFAULT_ARENA_DAYS, MODEL_ALIASES, checkedBaseUrl, type ArenaEnv } from "./plan.ts";
 
 // `arena smoke` (phase-2 design §8, §9.2 step 5): one live check of the key, the model and the
-// exact request shape, at most `smokeBoundNano` (about $0.20 on Opus 5.5, under a cent on Haiku
-// 5.5: the call's output is capped at `SMOKE_MAX_TOKENS`). It refuses to run without
-// PERFIDIA_ANTHROPIC_API_KEY. Steps:
+// exact request shape, at most `smokeBoundNano` (printed before anything is sent; the call's output
+// is capped at `SMOKE_MAX_TOKENS`, with no retry). It refuses to run without
+// PERFIDIA_ANTHROPIC_API_KEY, and checks the base URL as `arena run` does. Steps:
 // 1. the preflight: `models.retrieve` (with `allowed_fallback_models`) and the production shape at
 //    `max_tokens: 0`, which also writes the stable prefix to the cache;
 // 2. `count_tokens` of the prefix and a real round-0 briefing (p1 of a fresh perfidia-1 match);
@@ -52,14 +62,86 @@ export interface SmokeOptions {
 export const SMOKE_MAX_TOKENS = 4_000;
 
 /**
- * An upper bound of what `arena smoke` costs on `model`, in nano-dollars: the stable prefix and the
- * briefing written to the cache twice at a 25% margin (the pre-warm, then the call as if it read
- * nothing back), and `SMOKE_MAX_TOKENS` of output. `count_tokens` is free.
+ * An upper bound of what `arena smoke` costs on `model` (phase-4 review: the bound of its real
+ * requests, as the arena's attempt bound is): the preflight's shape check (its sample prompt at one
+ * token per UTF-8 byte, cold, and the check's output) and the call (its whole prompt, the tools,
+ * both system blocks, the briefing and the turn header at one token per byte, cold, and
+ * `SMOKE_MAX_TOKENS` of output, no retry), each once more per fallback target, cold, when the
+ * model's fallbacks are on (`callBound`). Every price kind the 5-minute request can be billed at
+ * counts, US-only inference (1.1×) included. `count_tokens` is free.
  */
-export function smokeBoundNano(model: string): number {
-  const p = requirePrice(model);
-  const prompt = Math.ceil(((PREFIX_TOKENS + BRIEFING_TOKENS) * 5) / 4);
-  return 2 * prompt * p.write5m + SMOKE_MAX_TOKENS * p.output;
+export function smokeBoundNano(
+  model: string,
+  fallbacks: "default" | "off",
+  tokens: { readonly sample: number; readonly call: number },
+): number {
+  return (
+    callBound(model, fallbacks, tokens.sample, PREFLIGHT_OUTPUT_TOKENS, {}, { ttl: "5m" }) +
+    callBound(model, fallbacks, tokens.call, SMOKE_MAX_TOKENS, {}, { ttl: "5m" })
+  );
+}
+
+/** The smoke's texts and request, built without the network, and what they can cost. */
+export async function smokePlan(
+  model: string,
+  effort: Effort,
+  rulesetRef = "perfidia-1",
+): Promise<{
+  readonly prompt: StablePrompt;
+  readonly tools: readonly ModelTool[];
+  readonly input: RoundInput;
+  readonly spec: ModelSpec;
+  readonly boundNano: number;
+}> {
+  requirePrice(model);
+  const ruleset = getRuleset(rulesetRef);
+  const info = rulesInfo(
+    createMatch(
+      harness.setupFor(ruleset, {
+        seed: 1,
+        players: 6,
+        days: DEFAULT_ARENA_DAYS,
+        idKey: idKeyFromSeed(1),
+      }),
+      ruleset,
+    ),
+  );
+  const tools = anthropicTools(toolDefinitions(ruleset));
+  const profile = PROFILES[0];
+  if (profile === undefined) throw new Error("no profile");
+  const prompt = { shared: sharedPrompt(info, 6), seat: seatPrompt("p1", profile) };
+  const spec: ModelSpec = {
+    provider: "anthropic",
+    model,
+    effort,
+    maxOutputTokens: SMOKE_MAX_TOKENS,
+    cacheTtl: "5m",
+    // As the arena plans it (phase 4): Claude Sonnet 5.5 without server-side fallbacks.
+    fallbacks: defaultFallbacks(model),
+  };
+  const input = await firstRoundInput(ruleset, "p1");
+  const sample = sampleTokensUpper({ seat: "p1", prompt, tools });
+  const call =
+    utf8Length(prompt.shared) +
+    utf8Length(prompt.seat) +
+    utf8Length(JSON.stringify(tools)) +
+    3 * ENTRY_OVERHEAD_TOKENS +
+    entryTokensUpper(briefingEntry(input)) +
+    entryTokensUpper({ role: "operator", text: turnHeader(input) });
+  return {
+    prompt,
+    tools,
+    input,
+    spec,
+    boundNano: smokeBoundNano(model, spec.fallbacks ?? "off", { sample, call }),
+  };
+}
+
+const utf8Length = (text: string): number => new TextEncoder().encode(text).length;
+
+/** The round-0 user entry of `input`: its briefing. */
+function briefingEntry(input: RoundInput): Entry {
+  return { role: "user", parts: [{ kind: "text", text: canonicalJson(input.briefing) }] };
 }
 
 /** The first round input of `seat` in a fresh match: what its first wake's request is built from. */
@@ -89,44 +171,29 @@ export async function smokeCommand(o: SmokeOptions): Promise<number> {
   const io = o.io;
   const alias = o.model ?? "haiku-5-5";
   const model = Object.hasOwn(MODEL_ALIASES, alias) ? (MODEL_ALIASES[alias] ?? alias) : alias;
-  let bound: number;
+  const effort: Effort = o.effort ?? "low";
   try {
-    bound = smokeBoundNano(model);
+    requirePrice(model);
   } catch (e) {
     throw new UsageError(e instanceof Error ? e.message : String(e));
   }
+  const {
+    prompt,
+    tools,
+    input,
+    spec,
+    boundNano: bound,
+  } = await smokePlan(model, effort, o.ruleset ?? "perfidia-1");
   if (o.env.apiKey === null) {
     throw new UsageError(
       `arena smoke makes one live API call (at most ${formatUsd(bound)} on ${model}): set PERFIDIA_ANTHROPIC_API_KEY first. Nothing was sent.`,
     );
   }
-  const effort: Effort = o.effort ?? "low";
-  const ruleset = getRuleset(o.ruleset ?? "perfidia-1");
-  const info = rulesInfo(
-    createMatch(
-      harness.setupFor(ruleset, {
-        seed: 1,
-        players: 6,
-        days: DEFAULT_ARENA_DAYS,
-        idKey: idKeyFromSeed(1),
-      }),
-      ruleset,
-    ),
-  );
-  const tools = anthropicTools(toolDefinitions(ruleset));
-  const profile = PROFILES[0];
-  if (profile === undefined) throw new Error("no profile");
-  const prompt = { shared: sharedPrompt(info, 6), seat: seatPrompt("p1", profile) };
-  const spec: ModelSpec = {
-    provider: "anthropic",
-    model,
-    effort,
-    maxOutputTokens: SMOKE_MAX_TOKENS,
-    cacheTtl: "5m",
-  };
+  // The same check as arena run's (exit 3): no key over http:// off loopback.
+  const baseURL = checkedBaseUrl(o.baseURL ?? o.env.baseURL ?? DEFAULT_BASE_URL);
   const client = new AnthropicClient({
     apiKey: o.env.apiKey,
-    baseURL: o.baseURL ?? o.env.baseURL ?? DEFAULT_BASE_URL,
+    baseURL,
     ...(o.fetch === undefined ? {} : { fetch: o.fetch }),
   });
   const adapter = new AnthropicAdapter(spec, client);
@@ -139,11 +206,7 @@ export async function smokeCommand(o: SmokeOptions): Promise<number> {
       `1. preflight: ok; allowed fallbacks: ${r === undefined || r.allowedFallbackModels.length === 0 ? "none" : r.allowedFallbackModels.join(", ")}; shape check and pre-warm cost ${formatUsd(pre.nanoUsd)}\n`,
     );
 
-    const input = await firstRoundInput(ruleset, "p1");
-    const briefing = {
-      role: "user" as const,
-      parts: [{ kind: "text" as const, text: canonicalJson(input.briefing) }],
-    };
+    const briefing = briefingEntry(input);
     const meta = {
       seat: input.seat,
       turn: input.turn,

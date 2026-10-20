@@ -1,0 +1,57 @@
+{
+  "format": "perfidia-lineup/1",
+  "id": "mid-tier-flash",
+  "title": "The mid tier with Gemini 3.8 Flash in place of Gemini 4 Argon",
+  "comparison": true,
+  "budgetUsd": "150",
+  "maxTokens": 32768,
+  "attemptTimeoutMin": 15,
+  "promptCapTokens": 160000,
+  "reminders": "last-round",
+  "defaults": {
+    "effort": "medium",
+    "fallbacks": "off",
+    "zdr": true
+  },
+  "seats": [
+    {
+      "seat": "p1",
+      "kind": "llm",
+      "provider": "anthropic",
+      "model": "claude-sonnet-5-5",
+      "profile": "odysseus@1"
+    },
+    {
+      "seat": "p2",
+      "kind": "llm",
+      "provider": "openai",
+      "model": "gpt-6.1-sol",
+      "profile": "achilles@1"
+    },
+    {
+      "seat": "p3",
+      "kind": "llm",
+      "provider": "google",
+      "model": "gemini-3.8-flash",
+      "profile": "penelope@1"
+    },
+    {
+      "seat": "p4",
+      "kind": "llm",
+      "provider": "openrouter",
+      "model": "z-ai/glm-5.3",
+      "endpoint": "z-ai/fp8",
+      "profile": "agamemnon@1"
+    },
+    {
+      "seat": "p5",
+      "kind": "bot",
+      "label": "bot:opportunist@3"
+    },
+    {
+      "seat": "p6",
+      "kind": "bot",
+      "label": "bot:conqueror@3"
+    }
+  ]
+}

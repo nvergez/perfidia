@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { LogLineSchema, type LogLine } from "@perfidia/protocol";
 import { LlmCallLineSchema, type LlmCallLine } from "../log/schema.ts";
-import { formatUsd } from "../model/prices.ts";
+import { formatUsd, requirePrice } from "../model/prices.ts";
 import {
   BOT_DAY_PROFILE,
   PROJECTION_MARGIN_PCT,
@@ -103,7 +103,15 @@ describe("the a-priori estimate reproduces the design's table (§5.4)", () => {
   });
 
   test("Sonnet 5.5 and Haiku 5.5", () => {
-    expect(usd(4 * estimateSeat("claude-sonnet-5-5", 7, "lockstep", "5m").central)).toBe(43.8);
+    // Phase 2's $43.80 priced Sonnet 5.5's cache reads at $0.20 per million tokens; the pricing
+    // page checked on 2026-10-20 says $0.10 (0.05× input), which gives $41.65.
+    const phase2Sonnet = { ...requirePrice("claude-sonnet-5-5"), cacheRead: 200 };
+    expect(
+      usd(
+        4 * estimateSeat("claude-sonnet-5-5", 7, "lockstep", "5m", "medium", phase2Sonnet).central,
+      ),
+    ).toBe(43.8);
+    expect(usd(4 * estimateSeat("claude-sonnet-5-5", 7, "lockstep", "5m").central)).toBe(41.65);
     expect(usd(4 * estimateSeat("claude-haiku-5-5", 7, "lockstep", "5m").central)).toBe(2.19);
     expect(() => estimateSeat("claude-unknown", 7, "lockstep", "5m")).toThrow("no price");
   });
@@ -130,6 +138,10 @@ describe("the projection of a measured run (§5.5)", () => {
     expect(daysCovered(2 * 86_400)).toBe(2);
   });
 });
+
+const fail = (): never => {
+  throw new Error("the fixture line has no usage");
+};
 
 describe("report folds", () => {
   test("recommended real-time speed: 3600 / (10 × 1.5 × p95)", () => {
@@ -163,17 +175,42 @@ describe("report folds", () => {
     expect(exitCriterion([header, ev(1, "pact_signed", { a: "p1", b: "p2" })]).met).toBe(false);
   });
 
-  test("cost rows per seat and billed model", () => {
-    const rows = costRows([
+  test("cost rows per seat and billed model: the logged costs, or repriced on request", () => {
+    const lines = [
       call("p2", "claude-opus-5-5", 10),
       call("p10", "claude-opus-5-5", 1),
       call("p2", "claude-opus-5", 10),
       call("p2", "claude-opus-5-5", 5),
-    ]);
-    expect(rows.map((r) => [r.seat, r.model, r.calls, r.output, r.nanoUsd])).toEqual([
+    ];
+    const repriced = costRows(lines, { reprice: true });
+    expect(repriced.map((r) => [r.seat, r.model, r.calls, r.output, r.nanoUsd])).toEqual([
       ["p2", "claude-opus-5", 1, 10, 1000 * 500 + 10 * 25_000],
       ["p2", "claude-opus-5-5", 2, 15, 2000 * 200 + 15 * 20_000],
       ["p10", "claude-opus-5-5", 1, 1, 1000 * 200 + 20_000],
     ]);
+    // The source of truth is what each line logged (here 0: a card changed since never rewrites it).
+    expect(costRows(lines).map((r) => r.nanoUsd)).toEqual([0, 0, 0]);
+    const logged: typeof lines = [];
+    for (const [i, l] of lines.entries()) logged.push({ ...l, costNanoUsd: 1000 * (i + 1) });
+    expect(costRows(logged).map((r) => [r.seat, r.model, r.nanoUsd])).toEqual([
+      ["p2", "claude-opus-5", 3000],
+      ["p2", "claude-opus-5-5", 1000 + 4000],
+      ["p10", "claude-opus-5-5", 2000],
+    ]);
+    // A line with a fallback iteration: the entries before the last at their card, the last the rest.
+    const fallback = {
+      ...call("p1", "claude-opus-5-5", 0),
+      usage: [
+        { ...(call("p1", "claude-opus-5-5", 0).usage[0] ?? fail()) },
+        { ...(call("p1", "claude-opus-5", 10).usage[0] ?? fail()), kind: "fallback" as const },
+      ],
+      costNanoUsd: 9_999_999,
+    };
+    const split = costRows([fallback]);
+    expect(split.map((r) => [r.model, r.nanoUsd])).toEqual([
+      ["claude-opus-5", 9_999_999 - 1000 * 200],
+      ["claude-opus-5-5", 1000 * 200],
+    ]);
+    expect(split.reduce((n, r) => n + r.nanoUsd, 0)).toBe(9_999_999);
   });
 });

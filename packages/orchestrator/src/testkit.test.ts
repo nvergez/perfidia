@@ -4,12 +4,26 @@
 import { expect, test } from "bun:test";
 import { canonicalJson } from "@perfidia/engine/core";
 import { VirtualTime } from "@perfidia/gateway/clock";
-import type { Briefing, PlayerId, RoundInput, SeatAgent, ToolResult } from "@perfidia/protocol";
+import type {
+  Briefing,
+  PlayerId,
+  PromptVariant,
+  ReminderCadence,
+  RoundInput,
+  SeatAgent,
+  ToolResult,
+} from "@perfidia/protocol";
 import { BudgetLedger, type HandoffNote } from "./budget/ledger.ts";
 import { MemoryCallLog } from "./log/calls.ts";
 import type { ModelSpec, ModelTool } from "./model/adapter.ts";
 import { seededRandom, type HarnessClock } from "./model/clock.ts";
-import { FakeAdapter, scripted, type Brain, type FakeStep } from "./model/fake.ts";
+import {
+  FakeAdapter,
+  scripted,
+  type Brain,
+  type FakeStep,
+  type IntendedModel,
+} from "./model/fake.ts";
 import { RateGate } from "./model/rate.ts";
 import { LOCKSTEP_POLICY, LlmSeatAgent, type SeatPolicy } from "./seat/agent.ts";
 import { NoPauseGate, type PauseGate } from "./seat/pause.ts";
@@ -124,6 +138,10 @@ export interface RigOptions {
   readonly time?: VirtualTime;
   readonly clock?: HarnessClock;
   readonly spec?: ModelSpec;
+  /** Phase 4 (Pass 1b): the model the fake stands in for, and the seat's channel and cadence. */
+  readonly intended?: IntendedModel;
+  readonly promptVariant?: PromptVariant;
+  readonly reminders?: ReminderCadence;
 }
 
 const idleBot = (label: string): SeatAgent => ({
@@ -139,6 +157,7 @@ export function rig(brain: Brain | readonly FakeStep[], o: RigOptions = {}): Sea
   const fake = new FakeAdapter(
     o.spec ?? SPEC,
     typeof brain === "function" ? brain : scripted(brain),
+    o.intended === undefined ? {} : { intended: o.intended },
   );
   const log = new MemoryCallLog();
   const handoffs: HandoffNote[] = [];
@@ -163,6 +182,8 @@ export function rig(brain: Brain | readonly FakeStep[], o: RigOptions = {}): Sea
     gate: o.gate ?? new NoPauseGate(),
     rate,
     policy: { ...LOCKSTEP_POLICY, ...o.policy },
+    ...(o.promptVariant === undefined ? {} : { promptVariant: o.promptVariant }),
+    ...(o.reminders === undefined ? {} : { reminders: o.reminders }),
   });
   return { agent, fake, log, ledger, time, clock, rate, handoffs };
 }
