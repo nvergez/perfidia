@@ -65,9 +65,11 @@ import type { SeatPolicy } from "../seat/agent.ts";
 import { PROFILES, findProfile, profileRef, type Profile } from "../seat/personalities.ts";
 import { seatPrompt, sharedPrompt } from "../seat/prompt.ts";
 import { EFFORT_FACTOR_PCT, centralWakeNanoOf, loggedSpend, scenarioCard } from "./cost.ts";
+import { profilesFor } from "./calibrate.ts";
 import {
   budgetCheck,
   estimateFile,
+  plannedWallMsPerGameDay,
   predict,
   type PlanBudget,
   type Prediction,
@@ -341,6 +343,8 @@ export interface ArenaRequest {
   readonly promptCap?: number | undefined;
   /** `YYYY-MM-DD`: price at that UTC day's start (`--fake` and `arena estimate` only). */
   readonly priceDate?: string | undefined;
+  /** Pass 2: a directory of calibration profiles the prediction draws on; `off` or absent: none. */
+  readonly profiles?: string | undefined;
 }
 
 export const DEFAULT_ARENA_DAYS = 7;
@@ -1224,8 +1228,20 @@ export function planArena(req: ArenaRequest, env: ArenaEnv, o: PlanOptions = {})
         },
         s.promptVariant,
       ),
+      promptVariant: s.promptVariant,
     })),
-    { days, clock: clockKind, cacheTtl, maxTokens, promptCapTokens, priceAt },
+    {
+      days,
+      clock: clockKind,
+      cacheTtl,
+      maxTokens,
+      promptCapTokens,
+      priceAt,
+      profiles: profilesFor(req.profiles),
+      reminders,
+      ruleset: setup.ruleset,
+      wallMsPerGameDay: plannedWallMsPerGameDay(clock, priceFixed),
+    },
   );
   const predicted = new Map(prediction.seats.map((p) => [p.seat, p]));
 
