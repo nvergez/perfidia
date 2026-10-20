@@ -2,9 +2,15 @@ import type { TurnAnnotation } from "@perfidia/protocol/spectator";
 import { Loader2, RefreshCw } from "lucide-react";
 import { NotPublished } from "../common/not-published.tsx";
 import { PlainText } from "../common/plain-text.tsx";
+import { ReasoningKindTag } from "../common/reasoning-kind.tsx";
 import type { PlayerId } from "../lib/ids.ts";
 import { fmtUsd, plural } from "../lib/format.ts";
-import { isFakeSeat } from "../lib/models.ts";
+import {
+  asReasoningKind,
+  isFakeSeat,
+  seatReasoningKind,
+  type ReasoningKind,
+} from "../lib/models.ts";
 import {
   useAnnotation,
   useLiveAnnots,
@@ -18,8 +24,9 @@ import { withLive } from "./live-rounds.ts";
 
 // A turn's reasoning (phase-3 design §4.3 "Thoughts", §2.7 annotations): the reasoning summaries
 // and reply text of each round, with the tools it called, fetched from the annotations route when
-// the viewer opens it. Reasoning is model-authored text: plain text only. A chunk loaded on demand
-// (`thoughts/lazy.ts`); the full turn detail is `turns/` (Pass C).
+// the viewer opens it. Reasoning is model-authored text: plain text only, each round's labelled with
+// what it is (a provider's summary or a raw chain of thought: the round's logged kind, else the
+// seat's). A chunk loaded on demand (`thoughts/lazy.ts`); the full turn detail is `turns/` (Pass C).
 
 /** Text blocks with keys (a round's blocks never reorder; equal blocks may repeat). */
 function keyed(
@@ -37,10 +44,13 @@ function Rounds({
   a,
   fake,
   published,
+  seatKind,
 }: {
   readonly a: TurnAnnotation;
   readonly fake: boolean;
   readonly published: Published;
+  /** What the seat's reasoning is expected to be (a round's logged kind wins). */
+  readonly seatKind: ReasoningKind | null;
 }) {
   const any = a.rounds.some((r) => r.reasoning.length > 0 || r.text.length > 0);
   const cost = turnCost(a);
@@ -58,6 +68,12 @@ function Rounds({
             {r.refusal === null ? null : <span className="text-destructive"> · refused</span>}
             {r.errors.length === 0 ? null : (
               <span className="text-destructive"> · {plural(r.errors.length, "error")}</span>
+            )}
+            {r.reasoning.length === 0 ? null : (
+              <ReasoningKindTag
+                kind={asReasoningKind(r.reasoningKind) ?? seatKind}
+                className="ml-1.5 align-middle"
+              />
             )}
           </h4>
           {keyed(r.reasoning, "r").map((b) => (
@@ -100,6 +116,7 @@ export function TurnReasoning({ seat, turn }: { readonly seat: PlayerId; readonl
   const a = useAnnotation(seat, turn, true);
   const info = useSeat(seat);
   const fake = info !== null && isFakeSeat(info);
+  const seatKind = info === null ? null : seatReasoningKind(info);
   const published = usePublished();
   const live = useLiveAnnots(seat, turn);
   const loading = a === null || a.status === "loading";
@@ -116,7 +133,7 @@ export function TurnReasoning({ seat, turn }: { readonly seat: PlayerId; readonl
   }
   return (
     <div className="flex flex-col gap-2">
-      <Rounds a={shown} fake={fake} published={published} />
+      <Rounds a={shown} fake={fake} published={published} seatKind={seatKind} />
       {loading ? (
         <p className="text-muted-foreground flex items-center gap-2 text-xs">
           <Loader2 className="size-3 motion-safe:animate-spin" aria-hidden="true" /> Loading the

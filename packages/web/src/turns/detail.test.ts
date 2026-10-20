@@ -309,3 +309,26 @@ describe("the feed's side of a turn", () => {
     expect(fmtLatency(120_000)).toBe("2 min");
   });
 });
+
+describe("reasoning kinds (phase 4)", () => {
+  test("a round keeps the kind its annotation logged; a live round adds text, not a kind", () => {
+    const a = annotation([
+      round(0, ["rules"], { reasoningKind: "raw" }),
+      round(1, ["build"], { reasoningKind: "summary" }),
+      round(2, ["end_turn"]),
+    ]);
+    const shaped = shapeRounds({
+      annotation: a,
+      live: [live(1, ["build"]), live(3, ["end_turn"])],
+      results: null,
+    });
+    expect(shaped.rounds.map((r) => [r.key, r.reasoningKind, r.reasoning[0]])).toEqual([
+      ["round:0", "raw", "thinking 0"],
+      ["round:1", "summary", "live 1"],
+      ["round:2", null, "thinking 2"],
+      ["round:3", null, "live 3"],
+    ]);
+    const closed = shapeRounds({ annotation: a, live: [], results: [call(0, "rules")] });
+    expect(closed.rounds.map((r) => r.reasoningKind)).toEqual(["raw", "summary", null]);
+  });
+});

@@ -1,4 +1,4 @@
-# Phase 4: the multi-model arena (Pass 1a, Pass 1b, Pass 2 and Pass 3 stats as built)
+# Phase 4: the multi-model arena (Pass 1a, Pass 1b, Pass 2 and Pass 3 as built)
 
 > **Status.** Roadmap step 4 of `docs/brief.md`, "Multi-model arena": seats with different models
 > and personalities, budgets, per-model stats. Exit criterion: the cost per match is known and
@@ -30,8 +30,12 @@
 >   Plackett–Luce ratings and block-bootstrap intervals (`perfidia-model-stats/1`), the claim
 >   threshold of design §6.4 (no ranking below it), the power simulation, `bun run stats` and three
 >   GET routes of the spectator server (`/api/matches/:id/stats`, `/api/models`, `/api/models/:id`).
-> - **Not built yet:** Pass 3's web pages (agent G: model names, the dossier's model block, the
->   `/models` page, reasoning-kind labels) and the optional red team (agent H).
+> - **Pass 3's web is built** (§49–§54, agent G): display names for every catalog model and
+>   provider ("GPT-6.1 Sol", "Gemini 4 Argon", "GLM-5.3 (Z.AI via OpenRouter)"), efforts in each
+>   vendor's terms, reasoning-kind labels wherever reasoning shows (a provider's summary or a raw
+>   chain of thought), the dossier's model block, and the lazy `/models` page (ratings only above
+>   the claim threshold, otherwise "too few matches: N more needed").
+> - **Not built yet:** the optional red team (agent H).
 > - This document describes what was built. The reviewed phase-4 design (with its `[critic]`
 >   corrections) is the source of the decisions; "design §x" below and in code comments refers to
 >   it. Where this document and the code disagree, the code wins; fix this document. Where
@@ -89,6 +93,12 @@
 46. `bun run stats`
 47. Tests and measurements (Pass 3 statistics)
 48. Deviations and open items (Pass 3 statistics)
+49. What Pass 3's web delivers
+50. Names, efforts and reasoning kinds (`lib/models.ts`)
+51. The dossier's model block
+52. The `/models` page
+53. Tests and measurements (Pass 3 web)
+54. Deviations and open items (Pass 3 web)
 
 ---
 
@@ -1998,6 +2008,229 @@ Open items:
 - The orchestrator's `report.ts` and `arena.json` are unchanged (owned elsewhere): the parallel-call
   share and series grouping are in `bun run stats` and the routes, and the plan's warning still
   says the share is "not reported yet".
-- Web pages (agent G): model names, the dossier's model block, the `/models` page, reasoning-kind
-  labels.
+- Web pages (agent G): built, Part V (§49–§54).
 - No real-model statistics yet: every LLM figure above comes from `--fake` runs.
+
+# Part V: Pass 3, the web (agent G)
+
+## 49. What Pass 3's web delivers
+
+The spectator web app (`packages/web`, docs/phase3.md) on the statistics of Part IV, through the
+three routes of §45 and nothing else (every payload parsed with the `@perfidia/protocol/spectator`
+schemas in `api/client.ts`: `matchStats`, `models`, `model`):
+
+- **Names** (`lib/models.ts`, §50): every model of the arena's catalog and every provider has a
+  display name; an unknown id shows as it is; a fake seat reads "Fake", never a model's name.
+- **Reasoning kinds** (§50): wherever reasoning is shown (the Thoughts column's toggle, a turn's
+  reasoning, the live reasoning, the turn detail's rounds, the dossier) it says what it is: a
+  provider's summary or a raw chain of thought. GLM's raw reasoning is never shown unlabelled.
+- **The dossier's model block** (`players/model-block.tsx`, §51): the seat's model, provider,
+  endpoint, effort in the vendor's terms, reasoning kind, harness, lineup and series, calls,
+  incidents, and its spend and the match's budget when costs are published.
+- **The `/models` page** (`models/**`, §52): the claim state, the ratings with intervals only
+  above the threshold, every model's figures by name, the matches covered, and a page per model.
+- **Links**: "How the models compare" in the match list's header and "Models" in the match header.
+- Everything new loads on demand: the initial JS grows by 1.3 KB gzipped (176.1 → 177.4 KB, budget
+  185). No dependency was added; engine, gateway, bots, sim, orchestrator, server, spectator,
+  protocol and the goldens are untouched.
+
+## 50. Names, efforts and reasoning kinds (`lib/models.ts`)
+
+| Function                              | What it gives                                                                                                                                                                                                                                                                             |
+| ------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `modelName(id)`                       | The short name, for badges: "Opus 5.5", "Fable 5.1", "GPT-6.1 Sol", "GPT-6 Luna", "Gemini 4 Argon", "Gemini 3.5 Flash-Lite", "GLM-5.3", "GLM-5.3 Flash", "Kimi K3", "DeepSeek V4.1 Flash"; Claude, GPT and Gemini ids by family pattern, the open models by table; an unknown id as it is |
+| `fullModelName(m)`                    | "Claude Opus 5.5", "GPT-6.1 Sol", "Gemini 4 Argon"; a routed model with its route: "GLM-5.3 (Z.AI via OpenRouter)", "Kimi K3 (Moonshot AI via OpenRouter)", "x (OpenAI-compatible endpoint)"                                                                                              |
+| `routeWords(m)`, `hostName(endpoint)` | The route from `model.provider` and `model.endpoint`: the endpoint slug's host (`z-ai/fp8` → "Z.AI"; 17 hosts named, an unknown one as its slug) "via OpenRouter"                                                                                                                         |
+| `effortWords(provider, effort)`       | The effort in the vendor's own terms: Anthropic "effort medium", OpenAI and OpenRouter "reasoning effort low", Google "thinking level medium"                                                                                                                                             |
+| `seatReasoningKind(seat)`             | What a seat's reasoning is expected to be, from its provider (a fake seat: its intended model's): `summary` for Anthropic, OpenAI and Google, `raw` for OpenRouter and compat; a logged kind wins                                                                                         |
+| `modelLabel`, `playedBy`              | The badge ("GLM-5.3 · low", "Bot", "Fake") and the tooltip ("GLM-5.3 (Z.AI via OpenRouter), reasoning effort low"; "Claude Opus 5.5 (Anthropic), effort medium")                                                                                                                          |
+| `rehearsalOf(seat)`                   | A fake seat in words that never call it the model: "stands in for GPT-6 Luna (OpenAI)"                                                                                                                                                                                                    |
+
+**Reasoning-kind labels** (`common/reasoning-kind.tsx`, `ReasoningKindTag`): "Reasoning summary",
+"Raw chain of thought" (in gold) or "No reasoning shown", with a tooltip saying what the kind means
+("a summary the provider writes of the model's hidden reasoning, not the reasoning itself"; "the
+model's own reasoning text, as it produced it: unedited"). Where they show:
+
+- the "Reasoning" toggle under a thought (the feed, the Thoughts column, the dossier):
+  "Reasoning (summary)" or "Reasoning (raw chain of thought)", from the seat's kind;
+- a turn's reasoning (`thoughts/turn-reasoning.tsx`) and the turn detail's rounds
+  (`turns/rounds.tsx`): one tag per round with reasoning, from the round's logged `reasoningKind`
+  (`AnnotationRound.reasoningKind`, kept in `RoundRow.reasoningKind` by `turns/detail.ts`), else the
+  seat's;
+- the live reasoning (`thoughts/live.tsx`): the seat's kind (the socket's `annot` messages carry
+  none);
+- the dossier's model block and a model's page: the kind, with the attempts of each kind.
+
+A fake seat's reasoning is the bot's ("Fake reasoning: …") and carries the kind its intended model
+logs (the fake adapter mirrors it), so a rehearsal of GLM shows "Raw chain of thought" too, beside
+its "Fake" badge.
+
+## 51. The dossier's model block
+
+In the dossier's "Who plays it", under the badge, the hand-off and the spend bar, for an LLM seat
+(`players/model-block.tsx`, a chunk of its own through `LazyModelBlock`):
+
+- **Who:** the full name and the provider line ("OpenRouter · endpoint z-ai/fp8 (fp8), served by
+  Z.AI"); a fake seat reads "Rehearsal: a scripted bot stands in for GLM-5.3 (Z.AI via
+  OpenRouter): its play, reasoning and costs are the bot's, priced at that model's card".
+- **Effort** in the vendor's terms, with the level actually sent when it differs (`effortSent`).
+- **Reasoning**: the main kind as a tag and the attempts of each kind (`operations.reasoningKinds`;
+  the counts hidden when the server publishes no reasoning).
+- **Lineup** and series ("budget-mix · series budget-mix, block 1, match 2").
+- **Harness**: profile, the operator channel (system messages, developer messages or `[harness]`
+  text in its user turns) and the reminder cadence.
+- **Calls**: wakes, rounds, tool calls, attempts, the parallel-call share, tool-call errors, and
+  latency (median and p95; left out when no latency was measured, as on fake runs).
+- **Incidents**: hand-off (when, why, to which bot), wake caps, prompt-cap stops, error wakes,
+  refusals by category, fallback share; "none" when nothing happened.
+- **Spent** (costs published): the seat's total, per wake, cache reads, tokens, fees, "(simulated
+  prices)" for a fake; **Match**: every seat's spend together against the match budget. Under
+  `--no-costs`: "Costs not published for this match.", no figure.
+- **Same model**: messages, pacts and alliances with seats on the same model against the others,
+  when the lineup repeats a model (design §3.8).
+
+The figures are the match's statistics (`GET /api/matches/:id/stats`), fetched once per match and
+shared by its dossiers (`players/match-stats.ts`; a running match's are fetched again when a dossier
+opens more than 10 s after the last fetch, the old ones shown meanwhile). They cover the whole match
+(or the match so far), whatever the playhead, and the block says so. Before they come, or when they
+cannot be had, the block shows what the seat list says (name, provider, effort, expected kind).
+
+## 52. The `/models` page
+
+`/models` and `/models/:id` (`lib/router.ts`; `:id` as `ModelIdSchema`, else "Nothing here"), a page
+loaded on demand (`models/lazy.ts`, `models/models-page.tsx`, `models/parts.tsx`, pure formatting in
+`models/format.ts`):
+
+- **The claim state first** (`data-testid="claims"`):
+  - below the threshold: "Too few matches: 70 more needed (power now 0.00)." from `claims.more` and
+    `claims.power`, then "No ranking is shown until then: the models are listed by name, and no
+    rank, rating or win count appears.", the threshold in words ("A ranking is shown once every
+    pair of models has met in 74 rated matches: enough to see a 70/30 head-to-head edge 80% of the
+    time (exact binomial test, α = 0.05 split over 6 pairs)") and the `claims.table` (needed and
+    power now at 80/20, 70/30, 60/40);
+  - `no_comparison`: "No comparison yet: no two models have met in a rated match";
+  - `ok`: "Enough matches for a ranking: …" and the ratings below.
+- **Ratings** (only when `claims.state` is `ok` and `ratings` is served): items by strength, with
+  the Elo-like rating, its 95% interval in figures and as a bar on a common scale, the mean rank
+  with its interval (block bootstrap only), the rated matches; the method in one sentence (MAP
+  Plackett–Luce, prior σ, block bootstrap over N blocks or Laplace); the head-to-head pairs (a
+  ahead of b in k of n, the difference and its interval, "not separated" when it holds 0); the
+  clean-seats sensitivity table.
+- **Per model** (`models-table`): every item by name, never by outcome (models, then rehearsals,
+  then bots): matches, wakes, cost per match and per wake, cache reads (costs published only),
+  tool-call errors, the parallel share, hand-offs, messages, pacts kept and broken, betrayals by and
+  of, battles won; mean rank and wins only above the threshold. A fake item reads "Fake for GPT-6
+  Luna" with "Rehearsal: a scripted bot", and a note says that rehearsal figures test the arena and
+  say nothing about any model.
+- **Matches** (`matches-table`): the series found (planned and found, blocks, Graeco-Latin), then
+  each match (a link to it), its lineup and series place, rated or not, and its seats' models; 50
+  shown, then "Show all".
+- **A model's page** (`/models/:id`, `model-detail`): its name, route and effort, the reasoning it
+  shows, its key; the claim state in short; its rating above the threshold; play, diplomacy,
+  battles, incidents, model calls, cost (with the cost per lineup and its interval) and, above the
+  threshold, the outcome (mean rank, ranks, wins, cities); its seats match by match (a link to each
+  match; the rank above the threshold only).
+- **Errors**: `NO_STATS` ("No model statistics are published on this server yet."),
+  `STATS_NOT_PUBLIC`, `NO_MODEL`, a network failure with "Retry"; a `LOADING` answer is asked again
+  after its `Retry-After` (at most 30 times).
+- **Costs** under `--no-costs`: "Costs not published on this server.", and no cost column or figure.
+
+The page never computes a ranking: it shows the server's (which is null below the threshold) and
+sorts by name otherwise; the web needs no seed and is served none.
+
+## 53. Tests and measurements (Pass 3 web)
+
+Unit tests (pure, no DOM; `bun test packages/web/src`: 213 pass):
+
+- `lib/models.test.ts` (7): the names; **every catalog model** (`MODELS` of the orchestrator, 17)
+  has a name other than its id, a named provider and the provider its id implies; full names and
+  routes; efforts in each vendor's terms; badges and tooltips; fake seats read "Fake" and never the
+  model's name, while `rehearsalOf` says whose seat they stand in for (fast-check, 60 runs);
+  reasoning kinds per provider and per fake, and **the catalog's `capabilities.reasoning` equals the
+  web's expectation for every model**.
+- `models/format.test.ts` (9): sub-cent dollars (fast-check, 300 runs: within $0.00005), shares,
+  intervals, times and tokens; the claim headline and explanation in each state; the display order
+  (models, rehearsals, bots, by name); ratings by strength; words for reasoning kinds, channels,
+  reminders, hand-offs, series and counts.
+- `lib/router.test.ts` (+1): `/models`, `/models/:id` with the `ModelIdSchema` grammar, round trips.
+- `turns/detail.test.ts` (+1): a round keeps its annotation's reasoning kind; a live round adds text,
+  not a kind.
+- `architecture.test.ts`: links may come from `modelHref`; the models page, its formatting and the
+  model block are never in the initial load (checked on the metafile); the initial budget.
+- `lib/cn.test.ts`: model ids (`z-ai/glm-5.3` looks like a z-index class) are not class names.
+
+The smoke test (`bun run test:e2e`, 13 tests, 2 new in `e2e/checks/models.ts`): the fake run now
+plays `budget-mix` (Haiku 5.5, GPT-6 Luna, Gemini 3.8 Flash, GLM-5.3 Flash on OpenRouter; the
+earlier checks pass unchanged on it), and the setup aggregates it with `bun run stats -- aggregate`
+(a subprocess, run while the folds go on) for both servers' `--stats`:
+
+- `/models`: the headline equals "Too few matches: {more} more needed (power now {power})." from
+  `/api/models` (parsed with `ModelsResponseSchema`); no ratings, no "Mean rank" or "Wins" column;
+  the six items by name ("Fake for Claude Haiku 5.5", …, "Fake for GLM-5.3 Flash (Z.AI via
+  OpenRouter)", "Fake for GPT-6 Luna", the two bots); the rehearsal note; a model's link opens its
+  page in place (URL, raw-reasoning tag, a seat linking to `/m/fake1`, no rating); on the
+  `--no-costs` server, "Costs not published on this server." and no `$`.
+- The GLM seat's turn 2 by deep link: every round's reasoning tagged raw, none summary; its dossier's
+  model block ("Rehearsal", "stands in for GLM-5.3 Flash (Z.AI via OpenRouter)", "reasoning effort
+  low", "Raw chain of thought", "budget-mix", a spend with "(simulated prices)"); the Thoughts
+  column's toggles "Reasoning (raw chain of thought)" for GLM and "Reasoning (summary)" for Haiku.
+- Added to existing tests: the list's header links to `/models`; on the `--no-costs` server the
+  model block says "Costs not published for this match." with no figure.
+- Every page: no console error, no CSP violation, no HTML sink.
+
+Measurements (this box, 4 vCPU shared):
+
+- **Smoke test:** 17.5–18.4 s in seven runs (budget 20 s), against 15.2–15.8 s before this pass
+  (the default-lineup fake run; switching it to `budget-mix` alone measured 15.8 s). The models
+  checks take 0.6 s, the reasoning-kind checks 1.1–1.2 s; the aggregation (about 0.7 s) overlaps
+  the folds.
+- **Sizes** (`bun run web:build`): initial JS 177.4 KB gzipped (176.1 KB before; budget 185 in the
+  architecture test, whose own build is 182,356 of 189,440 bytes); lazy JS 65.4 KB (51.5 KB
+  before). New chunks: the models page 8.3 KB gzipped (`models-page.tsx` and `parts.tsx`), its
+  formatting 1.8 KB (shared with the model block), the model block with its loader 3.0 KB, the
+  kind tag 0.3 KB. CSS 10.5 KB.
+- **Looked at** (headless Chromium, 1440 × 900 and 390 × 844, on a scratch server with a 2-day
+  `budget-mix` and a 2-day `mid-tier` fake run, copies of both relabelled as if real providers had
+  served them, for the non-fake names, and a 76-match fake series for the `ok` state): `/models` too
+  few and ok, a model's page (GLM-5.3, and a rehearsal with its outcome), the dossiers of GLM-5.3
+  (real and fake) and Gemini 3.8 Flash, the GLM turn detail with raw reasoning, the Thoughts column,
+  the `NO_STATS` page, the match list on a phone. Fixed from looking: GLM's route printed twice in
+  its table row; fake rows cut to an unreadable "Rehearsal: a bot that stands in for Clau…" (now
+  "Fake for Claude Haiku 5.5"); a sticky first column three quarters of a phone wide; match ids and
+  lineups broken across lines; the power table's caption squeezed into the table's width; the
+  ratings' item names carrying their ids; wrapped intervals; the model block's harness line saying
+  "notes" twice, its cap repeated from the spend bar, and "0 ms" latencies of fake runs.
+- **`bun run check`**: green, 3,796 pass, 36 skip, 0 fail (3,832 tests in 305 files, 9 min 2 s;
+  the two new smoke tests are among the skipped without `PERFIDIA_E2E`). **`bun run test:e2e`**
+  (`PERFIDIA_E2E_PORT=8401 PERFIDIA_E2E_PORT2=8402`): 13 pass in 17.5 and 18.4 s.
+
+## 54. Deviations and open items (Pass 3 web)
+
+Deviations:
+
+- **A fake seat names the model it stands in for**, in words that say it is a rehearsal ("Fake for
+  GPT-6 Luna", "stands in for GLM-5.3 Flash (Z.AI via OpenRouter)"), on the models page and in the
+  dossier's model block. Badges, tooltips and the match views still read "Fake" alone (phase 3's
+  rule); without the model's name, four rehearsal rows of a `budget-mix` series would all read
+  "Fake".
+- **Badges keep the short name and effort** ("GLM-5.3 · low"); the route and the vendor's effort
+  term are in the tooltip, the dossier and the models page.
+- **The live reasoning is labelled with the seat's expected kind**: the socket's `annot` message has
+  no `reasoningKind` (a protocol change, not this pass's); the annotation's logged kind replaces it
+  once the turn's annotation is fetched.
+- **The smoke test's fake run plays `budget-mix`** instead of the default Claude lineup, so that the
+  non-Claude names and the raw reasoning are checked in the browser; every earlier check passes on
+  it.
+- The CLAUDE.md lines for `/models` and `e2e/checks/models.ts` are left to the owner (an agent
+  message cannot authorise CLAUDE.md changes).
+
+Open items:
+
+- **No real-model page has been seen**: every figure looked at comes from `--fake` runs (and
+  relabelled copies of them). Latency, reported costs and fallbacks of real providers will show for
+  the first time after the owner's M2 and M3 runs.
+- **The smoke test's margin is 1.6 to 2.5 s** (17.5–18.4 s of 20 s) on a quiet container.
+- **The rating table** shows rehearsal items and bots among the models when a root mixes them (as
+  the statistics do: fake items are their own items, §48); a root of real matches only has none.
+- **The model block shows whole-match figures** at any playhead (the statistics route has no
+  playhead); the block says so.

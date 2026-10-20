@@ -59,8 +59,9 @@ const LIKELY = `
 function vocabulary(): string[] {
   const out = new Set<string>();
   for (const file of new Bun.Glob("**/*.{ts,tsx}").scanSync({ cwd: SRC })) {
-    // Tests, and this module's group names (not classes).
-    if (/\.test\.tsx?$/.test(file) || file === "lib/cn.ts") continue;
+    // Tests, this module's group names and the model ids of `lib/models.ts` (not classes:
+    // `z-ai/glm-5.3` looks like a z-index).
+    if (/\.test\.tsx?$/.test(file) || file === "lib/cn.ts" || file === "lib/models.ts") continue;
     const text = readFileSync(join(SRC, file), "utf8")
       .replaceAll(/\/\*[\s\S]*?\*\//g, "")
       .replaceAll(/(^|[^:"'`])\/\/.*$/gm, "$1");

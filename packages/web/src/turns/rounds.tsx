@@ -11,8 +11,10 @@ import {
 } from "lucide-react";
 import { useId, useState } from "react";
 import { PlainText } from "../common/plain-text.tsx";
+import { ReasoningKindTag } from "../common/reasoning-kind.tsx";
 import { cn } from "../lib/cn.ts";
 import { fmtInt, fmtUsd, plural } from "../lib/format.ts";
+import type { ReasoningKind } from "../lib/models.ts";
 import type { Published } from "../store/hooks.ts";
 import {
   fmtLatency,
@@ -24,7 +26,8 @@ import {
 } from "./detail.ts";
 
 // A turn's rounds in the turn detail (phase-3 design §4.2 Pass C): per round, its reasoning
-// (collapsible), its reply text, and its tool calls with ✓/✗ and the rejection codes (never an
+// (collapsible, labelled with what it is: a provider's summary or a raw chain of thought, the
+// round's logged kind else the seat's), its reply text, and its tool calls with ✓/✗ and the rejection codes (never an
 // error's text: not served), with the round's attempts, model time, cost and tokens when the
 // server publishes them. Plain text only.
 
@@ -109,15 +112,18 @@ function Round({
   onToggle,
   published,
   live,
+  seatKind,
 }: {
   readonly r: RoundRow;
   readonly open: boolean;
   readonly onToggle: () => void;
   readonly published: Published;
   readonly live: boolean;
+  readonly seatKind: ReasoningKind | null;
 }) {
   const id = useId();
   const hasReasoning = r.reasoning.length > 0;
+  const kind = r.reasoningKind ?? seatKind;
   return (
     <li
       className={cn(
@@ -143,20 +149,23 @@ function Round({
       </h4>
       {hasReasoning ? (
         <div className="flex flex-col gap-1">
-          <button
-            type="button"
-            aria-expanded={open}
-            aria-controls={id}
-            onClick={onToggle}
-            className="text-primary hover:text-primary/80 flex w-fit items-center gap-1 text-xs font-medium"
-          >
-            {open ? (
-              <ChevronDown className="size-3" aria-hidden="true" />
-            ) : (
-              <ChevronRight className="size-3" aria-hidden="true" />
-            )}
-            <Brain className="size-3" aria-hidden="true" /> Reasoning
-          </button>
+          <div className="flex flex-wrap items-center gap-1.5">
+            <button
+              type="button"
+              aria-expanded={open}
+              aria-controls={id}
+              onClick={onToggle}
+              className="text-primary hover:text-primary/80 flex w-fit items-center gap-1 text-xs font-medium"
+            >
+              {open ? (
+                <ChevronDown className="size-3" aria-hidden="true" />
+              ) : (
+                <ChevronRight className="size-3" aria-hidden="true" />
+              )}
+              <Brain className="size-3" aria-hidden="true" /> Reasoning
+            </button>
+            <ReasoningKindTag kind={kind} />
+          </div>
           {open ? (
             <div id={id} className="border-primary/40 flex flex-col gap-1 border-l-2 pl-2.5">
               {keyed(r.reasoning, "r").map((b) => (
@@ -191,11 +200,14 @@ export function RoundList({
   rounds,
   published,
   live = false,
+  seatKind = null,
 }: {
   readonly rounds: readonly RoundRow[];
   readonly published: Published;
   /** Rounds arrive while it is shown (an open turn): new ones fade in (motion allowed). */
   readonly live?: boolean;
+  /** What the seat's reasoning is expected to be (a round's logged kind wins). */
+  readonly seatKind?: ReasoningKind | null;
 }) {
   const [closed, setClosed] = useState<ReadonlySet<string>>(() => new Set());
   const any = rounds.some((r) => r.reasoning.length > 0);
@@ -225,6 +237,7 @@ export function RoundList({
             }}
             published={published}
             live={live}
+            seatKind={seatKind}
           />
         ))}
       </ol>

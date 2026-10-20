@@ -28,7 +28,7 @@ import { seenBy } from "../feed/filter.ts";
 import { LongText } from "../feed/shell.tsx";
 import { fmtInt, fmtUsd, plural } from "../lib/format.ts";
 import type { PlayerId } from "../lib/ids.ts";
-import { isFakeSeat } from "../lib/models.ts";
+import { isFakeSeat, seatReasoningKind, type ReasoningKind } from "../lib/models.ts";
 import { LazyPlayerSheet } from "../players/lazy.ts";
 import {
   useAnnotation,
@@ -284,6 +284,7 @@ function Rounds({
   open,
   seat,
   turn,
+  seatKind,
 }: {
   readonly rounds: TurnRounds;
   readonly item: TurnItem | null;
@@ -292,6 +293,7 @@ function Rounds({
   readonly open: boolean;
   readonly seat: PlayerId;
   readonly turn: number;
+  readonly seatKind: ReasoningKind | null;
 }) {
   const following = useMatch((s) => s.mode === "live");
   const loading = annotation === null || annotation.status === "loading";
@@ -322,7 +324,7 @@ function Rounds({
               : "No round logged yet at this point of the match."}
         </p>
       ) : (
-        <RoundList rounds={rounds.rounds} published={published} live={open} />
+        <RoundList rounds={rounds.rounds} published={published} live={open} seatKind={seatKind} />
       )}
       {incomplete ? (
         <p className="text-muted-foreground flex items-center gap-2 text-xs">
@@ -635,6 +637,7 @@ function Body({
           open={open}
           seat={seat}
           turn={turn}
+          seatKind={seatReasoningKind(info)}
         />
       ) : item === null ? null : (
         <Section title="Actions" icon={ListChecks} testId="turn-rounds">

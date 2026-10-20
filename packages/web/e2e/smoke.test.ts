@@ -4,7 +4,9 @@
 // here, a copy of it with hostile player text planted (markup, script, URLs, bidi; in messages and
 // proposals too, re-hashed), and a run written line by line with its side files while a page
 // follows it live (its reasoning round by round, Pass C's C3); a second server, over a copy of the
-// fake run, publishes neither costs nor reasoning. Every page records CSP violations and console
+// fake run, publishes neither costs nor reasoning. The fake run plays the cross-provider lineup
+// `budget-mix`, and both servers serve its model statistics (`bun run stats -- aggregate`; phase 4
+// Pass 3, `checks/models.ts`). Every page records CSP violations and console
 // errors; the DOM is checked for HTML sinks and bidi controls. Opt-in: `bun run test:e2e`
 // (PERFIDIA_E2E=1); skipped with a printed reason otherwise, or when Chromium is not installed. The
 // servers listen on `PERFIDIA_E2E_PORT` and `PERFIDIA_E2E_PORT2` (default: any free port). Budget:
@@ -27,6 +29,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { dossierChecks } from "./checks/dossier.ts";
+import { modelsChecks } from "./checks/models.ts";
 import { turnChecks } from "./checks/turns.ts";
 import {
   clock,
@@ -50,6 +53,7 @@ import {
   seekWithKeys,
   setEnv,
   skipReason,
+  STATS_CLI,
   WAR_GOLDEN,
 } from "./kit.ts";
 
@@ -102,12 +106,15 @@ describe.skipIf(reason !== null)("the spectator web app in Chromium", () => {
     const report = await build.buildWeb({ outdir: dist, quiet: true });
     bundle = { initial: report.jsGzip, lazy: report.lazyJsGzip, budget: build.JS_BUDGET_GZ };
     const t1 = performance.now();
+    const stats = join(root, "models.json");
     const serve = (dir: string, cache: string, publish: boolean, port: number) =>
       server.startServer(
         {
           runs: dir,
           cache: join(root, cache),
           publish: null,
+          // Phase 4: the model statistics of the fake run (written below, read on request).
+          stats,
           host: "127.0.0.1",
           port,
           hosts: [],
@@ -130,8 +137,17 @@ describe.skipIf(reason !== null)("the spectator web app in Chromium", () => {
       );
     // The war golden folds in a worker while the fake run is generated here.
     const s = serve(runs, "cache", true, Number(process.env.PERFIDIA_E2E_PORT ?? "0"));
+    // The cross-provider lineup (phase 4): Haiku, GPT-6 Luna, Gemini 3.8 Flash and GLM-5.3 Flash
+    // on OpenRouter (raw reasoning), each a fake standing in for its model.
     const plan = orchestrator.planArena(
-      { ruleset: "perfidia-1@1.1.0", fake: true, seed: 3, idKey: "seed", days: 1 },
+      {
+        ruleset: "perfidia-1@1.1.0",
+        fake: true,
+        seed: 3,
+        idKey: "seed",
+        days: 1,
+        lineup: "budget-mix",
+      },
       orchestrator.arenaEnv({}),
     );
     await orchestrator.runArena(plan, {
@@ -140,6 +156,22 @@ describe.skipIf(reason !== null)("the spectator web app in Chromium", () => {
       quiet: true,
     });
     const t2 = performance.now();
+    // The model statistics of the fake run alone (`bun run stats -- aggregate`), while the copies
+    // and folds below go on: one match, so "too few matches" (phase 4 Pass 3).
+    mkdirSync(join(root, "stats-runs"));
+    cpSync(join(stage, "fake1"), join(root, "stats-runs", "fake1"), { recursive: true });
+    const aggregate = Bun.spawn(
+      [
+        process.execPath,
+        STATS_CLI,
+        "aggregate",
+        "--runs",
+        join(root, "stats-runs"),
+        "--out",
+        stats,
+      ],
+      { stdout: "ignore", stderr: "pipe" },
+    );
     cpSync(join(stage, "fake1"), join(stage, "hostile"), { recursive: true });
     plantHostile(join(stage, "hostile"));
     renameSync(join(stage, "hostile"), join(runs, "hostile"));
@@ -161,6 +193,9 @@ describe.skipIf(reason !== null)("the spectator web app in Chromium", () => {
     // The fake runs folded and ended (the hostile copy still verifies: Level E holds); the war
     // golden folds on while the tests of the fake runs go first.
     await Promise.all([ended(s.url, "fake1"), ended(s.url, "hostile"), ended(p.url, "fake1")]);
+    if ((await aggregate.exited) !== 0) {
+      throw new Error(`stats aggregate failed: ${await new Response(aggregate.stderr).text()}`);
+    }
     stopAll = async () => {
       await browser.close();
       await p.stop();
@@ -203,6 +238,8 @@ describe.skipIf(reason !== null)("the spectator web app in Chromium", () => {
     await fake.waitFor();
     expect(await fake.getByTitle(/^Fake models/).count()).toBe(1);
     expect(await war.getByTitle(/^Fake models/).count()).toBe(0);
+    // Phase 4: the way to the model statistics.
+    expect(await page.locator('header a[href="/models"]').count()).toBe(1);
     await domIsClean(page);
   }, 20_000);
 
@@ -290,6 +327,10 @@ describe.skipIf(reason !== null)("the spectator web app in Chromium", () => {
     const sheet = page.getByTestId("player-sheet");
     await sheet.getByText("Spending not published for this match.").waitFor();
     expect(await sheet.getByTestId("spend").count()).toBe(0);
+    // Phase 4: the model block (its match's statistics) says so too, with no figure.
+    const block = sheet.getByTestId("model-block");
+    await block.getByText("Costs not published for this match.").waitFor();
+    expect((await block.textContent()) ?? "").not.toMatch(/\$\d/);
     expect((await sheet.textContent()) ?? "").toContain("(p1)");
     await turnSheet.waitFor({ state: "detached" });
     await page.keyboard.press("Escape");
@@ -307,9 +348,10 @@ describe.skipIf(reason !== null)("the spectator web app in Chromium", () => {
     await domIsClean(page);
   }, 25_000);
 
-  // Pass C (docs/phase3.md §16.4): one file of checks per feature agent.
+  // Pass C (docs/phase3.md §16.4): one file of checks per feature agent; phase 4 Pass 3's models.
   turnChecks();
   dossierChecks();
+  modelsChecks();
 
   test("the war golden: map, leaderboard, blocs, the end; thoughts; moments; the betrayal; dossiers", async () => {
     await ended(current().url, "war");

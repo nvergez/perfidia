@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { matchHref, parsePair, parseRoute, parseTurnRef, routeHref } from "./router.ts";
+import { matchHref, modelHref, parsePair, parseRoute, parseTurnRef, routeHref } from "./router.ts";
 
 describe("the router", () => {
   test("parses the list, a match with its query, and unknown paths", () => {
@@ -51,5 +51,31 @@ describe("the router", () => {
     for (const bad of ["p2", "p0.4", "p2.-1", "p2.4.5", "x2.4", "p2.12345678", "p2.4 ", ""])
       expect(parseTurnRef(bad)).toBeNull();
     expect(parseTurnRef(null)).toBeNull();
+  });
+
+  test("the model statistics and one model's: ids as the protocol's ModelIdSchema", () => {
+    expect(parseRoute("/models", "")).toEqual({ page: "models" });
+    expect(parseRoute("/models/", "")).toEqual({ page: "models" });
+    expect(parseRoute("/models/anthropic.claude-haiku-5-5.medium", "")).toEqual({
+      page: "model",
+      id: "anthropic.claude-haiku-5-5.medium",
+    });
+    expect(parseRoute("/models/bot.conqueror.3/", "")).toEqual({
+      page: "model",
+      id: "bot.conqueror.3",
+    });
+    for (const bad of [
+      "/models/Upper",
+      "/models/a_b",
+      "/models/..%2fx",
+      "/models/a/b",
+      "/models/%E0%A4%A",
+    ]) {
+      expect([bad, parseRoute(bad, "").page]).toEqual([bad, "not-found"]);
+    }
+    const id = "fake.z-ai-glm-5-3-flash.z-ai-fp8.low";
+    expect(modelHref(id)).toBe(`/models/${id}`);
+    expect(routeHref(parseRoute(modelHref(id), ""))).toBe(modelHref(id));
+    expect(routeHref({ page: "models" })).toBe("/models");
   });
 });

@@ -24,6 +24,7 @@ import { useDossier, useFeed, useMatch, usePublished, useSeat, useUi } from "../
 import { loaders } from "../store/session.ts";
 import { uiActions } from "../store/ui.ts";
 import { HourlyCharts, NotebookAt, NotebookHistory, SeatRecord } from "./dossier-extras.tsx";
+import { LazyModelBlock } from "./lazy.ts";
 import { ReasoningToggle } from "../thoughts/reasoning.tsx";
 import { wakeWords } from "../thoughts/wake.ts";
 import { OpenTurnButton } from "../turns/open-turn.tsx";
@@ -32,7 +33,7 @@ import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "
 // The dossier (phase-3 design §4.2.3, Pass B; §4.2 Pass C): its record at the playhead (turns,
 // messages, betrayals) and its score and cities hour by hour (Pass C, `dossier-extras.tsx`), who
 // plays it (model and effort, a bot, or a fake model), whether it was handed to a bot, what it has
-// spent against its cap (when costs are served), who the player is (its profile: goal,
+// spent against its cap (when costs are served), its model block (phase 4: `model-block.tsx`), who the player is (its profile: goal,
 // temperament, attitude to its word, style), its notebook at the playhead and the history of its
 // changes (Pass C), and its public thoughts, each with that turn's reasoning behind an expander.
 
@@ -258,6 +259,7 @@ function Body({ seat }: { readonly seat: SeatInfo }) {
       </Section>
       <Section title="Who plays it" icon={Bot}>
         <WhoPlays seat={seat} dossier={dossier} />
+        {seat.kind === "llm" ? <LazyModelBlock seat={seat} /> : null}
       </Section>
       <Section title="Profile" icon={UserRound}>
         <Profile seat={seat} />

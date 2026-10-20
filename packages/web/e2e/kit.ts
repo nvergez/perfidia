@@ -23,6 +23,8 @@ export const WAR_GOLDEN = join(
   "perfidia-1@1.1.0",
   "lockstep-6p-6d-war.jsonl.gz",
 );
+/** `bun run stats`'s entry (phase 4 Pass 3): the smoke test aggregates the fake run with it. */
+export const STATS_CLI = join(WEB, "..", "server", "src", "stats", "cli.ts");
 export const DAY = 86_400;
 export const HOUR = 3_600;
 
