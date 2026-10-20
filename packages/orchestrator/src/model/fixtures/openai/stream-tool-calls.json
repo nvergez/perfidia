@@ -1,0 +1,133 @@
+{
+  "synthetic": true,
+  "checked": "2026-10-20",
+  "sources": [
+    "https://developers.openai.com/api/reference/resources/responses/streaming-events.md",
+    "https://developers.openai.com/api/reference/resources/responses/methods/create.md",
+    "https://developers.openai.com/api/docs/guides/prompt-caching.md",
+    "https://developers.openai.com/api/docs/guides/reasoning.md"
+  ],
+  "note": "Written from the docs, not recorded: a streamed Responses call of GPT-6.1 Sol that reasons (one summary, encrypted content), writes a commentary message and makes two function calls. The usage splits the prompt into cache reads, cache writes and uncached input as the prompt-caching guide's arithmetic does. Replace with a sanitised recording (arena smoke --record) when one exists.",
+  "status": 200,
+  "headers": { "content-type": "text/event-stream", "x-request-id": "req_synthetic_tool_calls" },
+  "events": [
+    {
+      "type": "response.created",
+      "sequence_number": 0,
+      "response": {
+        "id": "resp_synthetic_1",
+        "object": "response",
+        "status": "in_progress",
+        "model": "gpt-6.1-sol",
+        "output": [],
+        "usage": null
+      }
+    },
+    {
+      "type": "response.in_progress",
+      "sequence_number": 1,
+      "response": {
+        "id": "resp_synthetic_1",
+        "object": "response",
+        "status": "in_progress",
+        "model": "gpt-6.1-sol",
+        "output": [],
+        "usage": null
+      }
+    },
+    {
+      "type": "response.reasoning_summary_text.delta",
+      "sequence_number": 2,
+      "item_id": "rs_synthetic_1",
+      "output_index": 0,
+      "summary_index": 0,
+      "delta": "**Checking the home city**"
+    },
+    {
+      "type": "response.output_text.delta",
+      "sequence_number": 3,
+      "item_id": "msg_synthetic_1",
+      "output_index": 1,
+      "content_index": 0,
+      "delta": "Looking at c1 first."
+    },
+    {
+      "type": "response.function_call_arguments.delta",
+      "sequence_number": 4,
+      "item_id": "fc_synthetic_1",
+      "output_index": 2,
+      "delta": "{\"city\":\"c1\"}"
+    },
+    {
+      "type": "response.completed",
+      "sequence_number": 5,
+      "response": {
+        "id": "resp_synthetic_1",
+        "object": "response",
+        "created_at": 1792540800,
+        "status": "completed",
+        "completed_at": 1792540804,
+        "error": null,
+        "incomplete_details": null,
+        "model": "gpt-6.1-sol",
+        "output": [
+          {
+            "id": "rs_synthetic_1",
+            "type": "reasoning",
+            "summary": [
+              {
+                "type": "summary_text",
+                "text": "**Checking the home city**\n\nI look at c1 before deciding what to build."
+              }
+            ],
+            "encrypted_content": "gAAAAABsynthetic-encrypted-reasoning-1"
+          },
+          {
+            "id": "msg_synthetic_1",
+            "type": "message",
+            "status": "completed",
+            "role": "assistant",
+            "phase": "commentary",
+            "content": [
+              {
+                "type": "output_text",
+                "text": "Looking at c1 first.",
+                "annotations": [],
+                "logprobs": []
+              }
+            ]
+          },
+          {
+            "type": "function_call",
+            "id": "fc_synthetic_1",
+            "call_id": "call_synthetic_1",
+            "name": "view_city",
+            "arguments": "{\"city\":\"c1\"}",
+            "status": "completed"
+          },
+          {
+            "type": "function_call",
+            "id": "fc_synthetic_2",
+            "call_id": "call_synthetic_2",
+            "name": "write_note",
+            "arguments": "{\"mode\":\"append\",\"text\":\"c1 checked\"}",
+            "status": "completed"
+          }
+        ],
+        "parallel_tool_calls": true,
+        "reasoning": { "effort": "medium", "summary": "auto", "context": "all_turns" },
+        "service_tier": "default",
+        "store": false,
+        "tool_choice": "auto",
+        "truncation": "disabled",
+        "usage": {
+          "input_tokens": 12000,
+          "input_tokens_details": { "cached_tokens": 10240, "cache_write_tokens": 1536 },
+          "output_tokens": 900,
+          "output_tokens_details": { "reasoning_tokens": 640 },
+          "total_tokens": 12900
+        }
+      }
+    }
+  ]
+}

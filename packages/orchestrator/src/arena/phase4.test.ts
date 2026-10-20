@@ -143,8 +143,8 @@ describe("arena estimate (phase 4 §5.3, §5.4)", () => {
       );
     }
     expect(existsSync(dir)).toBe(false);
-    // A lineup with a non-Anthropic seat plans (Pass 1b) but runs only on the fake path: this build
-    // has no adapter for it.
+    // A lineup with a non-Anthropic seat plans (Pass 1b) but runs only on the fake path while this
+    // build has no adapter for its provider (Pass 2: OpenAI has one; Google not in this build).
     const bad = join(runDir("lineup"), "..", "mixed.json");
     const mixed = LineupSchema.parse(
       JSON.parse(
@@ -154,20 +154,22 @@ describe("arena estimate (phase 4 §5.3, §5.4)", () => {
     mixed.seats[1] = {
       seat: "p2",
       kind: "llm",
-      provider: "openai",
-      model: "gpt-6-luna",
+      provider: "google",
+      model: "gemini-3.8-flash",
       profile: "achilles@1",
     };
     writeFileSync(bad, JSON.stringify(mixed));
     const planned = await cli(["estimate", "--lineup", bad]);
     expect(planned.code).toBe(0);
-    expect(planned.out).toMatch(/p2 +gpt-6-luna +medium/);
+    expect(planned.out).toMatch(/p2 +gemini-3\.8-flash +medium/);
     const refused = await cli(["run", "--lineup", bad, "--out", dir], {
       PERFIDIA_ANTHROPIC_API_KEY: "k",
-      PERFIDIA_OPENAI_API_KEY: "k",
+      // Loopback, a closed port: were the refusal to fail, nothing would leave the machine.
+      PERFIDIA_ANTHROPIC_BASE_URL: "http://127.0.0.1:9",
+      PERFIDIA_GOOGLE_API_KEY: "k",
     });
     expect(refused.code).toBe(3);
-    expect(refused.err).toContain("p2: openai has no adapter in this build");
+    expect(refused.err).toContain("p2: google has no adapter in this build");
     expect(existsSync(dir)).toBe(false);
   });
 });

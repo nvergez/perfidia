@@ -516,6 +516,7 @@ export class LlmSeatAgent implements SeatAgent {
         ...(maxOutputTokens === undefined ? {} : { maxOutputTokens }),
         signal,
         meta: this.meta(w.input, "round"),
+        promptTokensUpper: promptEstimate(entries, s.known, this.prefixTokens),
       };
       try {
         this.logRequest(s, w, attempt, req);
@@ -686,6 +687,7 @@ export class LlmSeatAgent implements SeatAgent {
       entries,
       signal,
       meta: this.meta(input, "thought"),
+      promptTokensUpper: promptEstimate(entries, s.known, this.prefixTokens),
     };
     let release: (() => void) | null = null;
     const started = o.clock.time.nowMs();

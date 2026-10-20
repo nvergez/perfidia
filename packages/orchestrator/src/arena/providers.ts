@@ -1,14 +1,32 @@
-import type { Provider } from "@perfidia/protocol";
-import type { ModelTool } from "../model/adapter.ts";
+import type { Provider, TimeSource } from "@perfidia/protocol";
+import type { Effort, ModelAdapter, ModelSpec, ModelTool } from "../model/adapter.ts";
 import { endpointInfo as catalogEndpoint, type EndpointInfo } from "../model/catalog.ts";
+import type { HttpFetch } from "../model/http.ts";
 import { toolTransformOf, transformTools } from "../model/tools.ts";
+import { OPENAI_SMOKE, createOpenAIAdapter, openaiBaseUrlProblem } from "./providers/openai.ts";
+
+/** What a provider's adapter factory gets from the arena (Pass 2): the plan's key and URL. */
+export interface AdapterEnv {
+  readonly apiKey: string;
+  /** The checked base URL (`PERFIDIA_<PROVIDER>_BASE_URL` or the provider's default). */
+  readonly baseURL: string;
+  /** The harness clock (latency, the attempt backstop). */
+  readonly time: TimeSource;
+  /** The backstop of one attempt (the plan's attempt timeout). */
+  readonly timeoutMs: number;
+  /** Tests: a stub fetch. */
+  readonly fetch?: HttpFetch;
+}
+
+/** Builds a seat's adapter (Pass 2: one per provider with a raw-fetch adapter). */
+export type AdapterFactory = (spec: ModelSpec, env: AdapterEnv) => ModelAdapter;
 
 // The provider registry of the arena (phase-4 design §2.8, Pass 1b): for each provider, the
 // environment variables the harness reads (`PERFIDIA_<PROVIDER>_*` only, read once by `arenaEnv`),
 // its default base URL, its auth header, whether this build has its adapter, where its price cards
-// live, and how a seat pins it (OpenRouter needs a full endpoint slug). Only Anthropic has an
-// adapter in this build; every other provider plans and runs on the fake path, which mirrors it
-// (Pass 2 adds the OpenAI, Gemini and OpenAI-compatible adapters).
+// live, and how a seat pins it (OpenRouter needs a full endpoint slug). Anthropic and (Pass 2)
+// OpenAI have adapters (`create`: the factory of a raw-fetch adapter); every other provider plans
+// and runs on the fake path, which mirrors it (Pass 2 adds the Gemini and OpenAI-compatible ones).
 
 export interface ProviderInfo {
   readonly id: Exclude<Provider, "fake">;
@@ -30,6 +48,12 @@ export interface ProviderInfo {
   readonly needsEndpoint: boolean;
   /** The tool transform its adapter applies (`none`, or Gemini's, planned for Pass 2). */
   readonly toolTransform: string;
+  /** Pass 2: builds a seat's adapter (Anthropic's is built by the arena on its shared SDK client). */
+  readonly create?: AdapterFactory;
+  /** Pass 2: why a base URL cannot carry the provider's seats (exit 3), or null. */
+  readonly baseUrlProblem?: (base: string) => string | null;
+  /** Pass 2: what `arena smoke --provider <id>` calls by default. */
+  readonly smoke?: { readonly model: string; readonly effort: Effort };
 }
 
 const PRICES_DIR = "packages/orchestrator/src/model/prices";
@@ -54,10 +78,13 @@ export const PROVIDERS: Readonly<Record<Exclude<Provider, "fake">, ProviderInfo>
     defaultBaseUrl: "https://api.openai.com/v1",
     key: "always",
     authHeader: "authorization",
-    adapter: false,
+    adapter: true,
     pricesFile: `${PRICES_DIR}/openai.ts`,
     needsEndpoint: false,
     toolTransform: "none",
+    create: createOpenAIAdapter,
+    baseUrlProblem: openaiBaseUrlProblem,
+    smoke: OPENAI_SMOKE,
   },
   google: {
     id: "google",

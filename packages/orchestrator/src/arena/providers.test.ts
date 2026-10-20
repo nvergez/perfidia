@@ -475,7 +475,15 @@ describe("the presets and the seat grammar (phase 4 Pass 1b)", () => {
       ),
     ).toContain("PERFIDIA_ANTHROPIC_API_KEY is not set: the LLM seats (p1, p2, p3, p4) need it");
     expect(
+      refused(
+        "p1=google:gemini-3.8-flash:low:odysseus",
+        { PERFIDIA_ANTHROPIC_API_KEY: "k" },
+        false,
+      ),
+    ).toContain("p1: google has no adapter in this build");
+    // Pass 2: OpenAI has an adapter; a real run of it needs its own key.
+    expect(
       refused("p1=openai:gpt-6-luna:low:odysseus", { PERFIDIA_ANTHROPIC_API_KEY: "k" }, false),
-    ).toContain("p1: openai has no adapter in this build");
+    ).toContain("PERFIDIA_OPENAI_API_KEY is not set: the LLM seats (p1) need it");
   });
 });
