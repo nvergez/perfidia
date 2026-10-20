@@ -640,8 +640,12 @@ export class LlmSeatAgent implements SeatAgent {
           continue;
         }
         case "pause":
-        case "other":
           throw new AgentError(`${where}: unexpected stop ${res.rawStop}`);
+        case "other":
+          // A malformed call, an unknown finish (Gemini `MALFORMED_FUNCTION_CALL`, `OTHER`, an
+          // OpenRouter or OpenAI reason without a mapping): the turn closes, outside the breaker,
+          // the same for every provider (design §3.5).
+          throw new AgentError(`${where}: unexpected stop ${res.rawStop}`, false);
         case "end_turn":
         case "tool_use":
           return res;

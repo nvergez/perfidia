@@ -1,4 +1,4 @@
-# Phase 4: the multi-model arena (Pass 1a and Pass 1b as built)
+# Phase 4: the multi-model arena (Pass 1a, Pass 1b and Pass 2 as built)
 
 > **Status.** Roadmap step 4 of `docs/brief.md`, "Multi-model arena": seats with different models
 > and personalities, budgets, per-model stats. Exit criterion: the cost per match is known and
@@ -14,12 +14,18 @@
 >   the controller-label grammar with endpoints, the operator-channel variants and reminder cadence,
 >   the tool transform hook, the fake path mirroring each seat's intended provider, and the
 >   `budget-mix`, `mid-tier`, `mid-tier-flash` and `frontier` presets. Seats of every provider plan
->   and run on `--fake`; only `anthropic` seats run for real (this build has no other adapter).
+>   and run on `--fake` (Pass 1b ran only `anthropic` seats for real; Pass 2 runs them all).
 > - **The review's fixes** (§25): a fail-safe kill switch, US-only inference in every Claude bound,
 >   the in-flight reserve of a crashed run's carry, key redaction, and the other findings of the
 >   Pass 1 review, each with its regression test. The figures of §1–§24 are this build's.
-> - **Not built yet:** Pass 2 (the OpenAI, Gemini and OpenAI-compatible adapters, calibration
->   profiles, `arena calibrate`), Pass 3 (per-model stats and their spectator pages).
+> - **Pass 2 is built** (§26–§39): the OpenAI Responses, Gemini `generateContent` and
+>   OpenRouter/OpenAI-compatible adapters on `model/http.ts` (every provider now runs for real),
+>   Gemini's `gemini@1` tool transform, `arena smoke --provider … [--record <dir>]`, calibration
+>   profiles (`arena calibrate`), profile-based predictions and rotated series (`arena series`);
+>   the integration's cross-adapter conformance suite and four-provider wire-stub match. Nothing in
+>   Pass 2 has called a real API: provider behaviour is documented and pinned by synthetic
+>   fixtures until the owner's recorded smokes (§32, §36).
+> - **Not built yet:** Pass 3 (per-model stats and their spectator pages).
 > - This document describes what was built. The reviewed phase-4 design (with its `[critic]`
 >   corrections) is the source of the decisions; "design §x" below and in code comments refers to
 >   it. Where this document and the code disagree, the code wins; fix this document. Where
@@ -54,6 +60,20 @@
 23. Tests and measurements (Pass 1b)
 24. Deviations and open items (Pass 1b)
 25. The review's fixes
+26. What Pass 2 delivers
+27. The adapter contract in Pass 2
+28. OpenAI: the Responses API
+29. Gemini: `generateContent`
+30. OpenRouter and OpenAI-compatible endpoints
+31. The wire mapping at a glance
+32. Synthetic, unverified, and the owner's recordings
+33. Calibration and series
+34. The integration
+35. Commands (Pass 2)
+36. Owner steps: M2 and M3
+37. Tests and measurements (Pass 2)
+38. Deviations (Pass 2)
+39. Open items (Pass 2)
 
 ---
 
@@ -154,8 +174,9 @@ unparseable file (`not a perfidia-lineup/1 file: budgetUsd …`), a missing seat
 lineup (another model could serve its turns, design §3.5), a repeated model in a comparison lineup
 (a warning), the budget checks of §5, and from Pass 1b the seat checks of §18 (endpoint slugs, ZDR, efforts, output
 limits, price cards). Pass 1a refused other providers and `last-round` reminders; Pass 1b plans both
-(§18, §19), and a real run of a provider without an adapter is refused
-(`p2: openai has no adapter in this build (phase 4 Pass 2 adds it): rehearse the lineup with --fake, which mirrors openai at $0`).
+(§18, §19); Pass 1b refused a real run of a provider without an adapter (`p2: openai has no
+adapter in this build …`), and since Pass 2 every provider has one, so a real run needs that
+provider's key instead (§27).
 
 ## 4. The prediction: `arena estimate`
 
@@ -742,8 +763,8 @@ p1–p4, `opportunist@3` and `conqueror@3` on p5–p6. Estimates printed by `are
 | `frontier`       | Fable 5.1, GPT-6 Astra, Gemini 4 Argon, Kimi K3 @`moonshotai/mxfp4` | $37.99 / $139.13 / $548.36 | $19.31  | $570   | $550.69 |
 
 `budget-mix` ($8 calibration day, $40 match) is the cross-provider form of the exit and `mid-tier`
-($40 / $200) the first comparison, both owner defaults; they run for real once Pass 2's adapters
-exist. `mid-tier` is price-matched only until Argon's December card (design §4.3); its reserve
+($40 / $200) the first comparison, both owner defaults; they run for real with Pass 2's adapters
+(§36). `mid-tier` is price-matched only until Argon's December card (design §4.3); its reserve
 already counts that card.
 
 ## 22. The run directory and the spectator (Pass 1b)
@@ -879,3 +900,651 @@ the predictions moved only by their reserves.
 `arena/pins.test.ts`); no dependency. Every new field (`usage[].geo`, `carry.inFlightNanoUsd`,
 `operator.action: exit`, reconcile token `estimated`) is optional or a new enum value, so the
 spectator and the server read old and new run directories alike.
+
+---
+
+# Part III: Pass 2, adapters and calibration
+
+## 26. What Pass 2 delivers
+
+Four agents built Pass 2 in parallel (design §10); an integration step merged them, added the
+cross-adapter conformance suite and the four-provider wire-stub match (§34), and filled the gaps
+listed in §34.4. Every provider of the registry now runs for real:
+
+| Provider     | Adapter (raw `fetch` through `model/http.ts`)                               | Wire schemas           | Registry `create`                     | Smoke                                         |
+| ------------ | --------------------------------------------------------------------------- | ---------------------- | ------------------------------------- | --------------------------------------------- |
+| `anthropic`  | `model/anthropic.ts` (the SDK on the guarded fetch, unchanged since Pass 1) | the SDK's types        | built by `arena/run.ts` on its client | `arena smoke` (phase 2's, `--record` added)   |
+| `openai`     | `model/openai.ts`: the Responses API, streamed                              | `model/wire/openai.ts` | `arena/providers/openai.ts`           | `arena smoke --provider openai`               |
+| `google`     | `model/gemini.ts`: `generateContent`, `streamGenerateContent?alt=sse`       | `model/wire/gemini.ts` | `arena/providers/gemini.ts`           | `arena smoke --provider google` (or `gemini`) |
+| `openrouter` | `model/compat.ts` (mode `openrouter`): Chat Completions, pinned endpoint    | `model/wire/compat.ts` | `arena/providers/compat.ts`           | `arena smoke --provider openrouter`           |
+| `compat`     | `model/compat.ts` (mode `compat`): any OpenAI-compatible base URL           | `model/wire/compat.ts` | `arena/providers/compat.ts`           | none (no card ships: §30.6)                   |
+
+And, from agent E: calibration profiles (`arena calibrate`, `packages/orchestrator/profiles/`),
+profile-based predictions (`measured-point` and `calibrated` sources) and rotated series
+(`arena series`, seeded Latin and Graeco-Latin squares), §33.
+
+What did not change: the engine, gateway, bots and sim; goldens, fingerprints and the existing
+fixtures (new fixture files only); the Anthropic request bytes and labels (`arena/pins.test.ts`
+passes unchanged); `package.json` and `bun.lock` (no dependency, no `bun install`). Protocol
+changes are additive: the seats file's `effortSent` (OpenRouter), the profile round's
+`cacheWriteTokens`, and `SeriesManifestSchema` (`perfidia-series/1`).
+
+No real API was called while building Pass 2: no key exists in the build container. Everything
+below that concerns a provider's behaviour comes from its documentation, read on 2026-10-20 and
+cited per adapter, and is pinned by fixtures marked `synthetic: true` until the owner's recorded
+smokes replace them (§32). One stray request happened while the OpenAI adapter was built (a Pass
+1b test whose "no adapter" refusal stopped holding reached `api.anthropic.com` with the dummy key
+`k`: one models request, HTTP 401, nothing billed); that test now uses loopback base URLs only.
+
+## 27. The adapter contract in Pass 2
+
+- **The registry builds every seat** (`arena/providers.ts`): `ProviderInfo.create(spec, env)` with
+  `AdapterEnv {apiKey, baseURL, time, timeoutMs, fetch?}`. The key is the plan's
+  (`PERFIDIA_<PROVIDER>_API_KEY`, null only for `compat` on loopback), the base URL the plan's
+  checked one (`PERFIDIA_<PROVIDER>_BASE_URL` or the default), `timeoutMs` the plan's attempt
+  timeout, `fetch` a test stub (the guard still applies). `arena/run.ts` builds Anthropic seats on
+  its SDK client and every other real seat through `create`; `arena smoke --provider openai` uses
+  the same factory. `baseUrlProblem` (OpenAI: the regional hosts) and `smoke` (default model and
+  effort) are optional registry fields.
+- **The plan checks every base URL** (`arena/plan.ts`): `https:`, or `http:` on loopback, for every
+  provider (exit 3), then the provider's own `baseUrlProblem`.
+- **`ChatRequest.promptTokensUpper`** (additive): the seat's prompt-cap estimate of the request,
+  at most the cap. An adapter whose provider reports usage only at the end of a stream (OpenAI)
+  charges a broken stream this prompt at its dearest prompt-side price plus the full output limit,
+  which stays inside the attempt bound.
+- **Money rules, the same for every adapter** (MONEY SAFETY first: the ledger's charge is never
+  below what the provider bills):
+
+| Case                                        | Anthropic                                 | OpenAI                                              | Gemini                                                         | OpenRouter / compat                                                                             |
+| ------------------------------------------- | ----------------------------------------- | --------------------------------------------------- | -------------------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
+| Final usage                                 | mapped (Pass 1)                           | mapped (§28.3)                                      | mapped (§29.4)                                                 | mapped (§30.3); `usage.cost` recorded, output topped up if it exceeds the card                  |
+| Usage missing, unparseable or contradictory | attempt bound (`invalidUsage`)            | attempt bound (`unknown`, `invalidUsage`)           | estimate: prompt count or request bytes + full output limit    | attempt bound (non-finite marker → `invalidUsage`)                                              |
+| Stream accepted, broken before its usage    | `message_start` usage + full `max_tokens` | `promptTokensUpper` at the write price + full limit | estimate as above                                              | the turn's last measured prompt + appended entries, else the attempt bound; + full `max_tokens` |
+| HTTP error before a body                    | nothing (phase 2)                         | nothing                                             | nothing; a 504 is charged the estimate                         | nothing; a timeout or abort before the headers is charged                                       |
+| Served model or tier other than the card's  | refused at preflight (Pass 1 review M7)   | refused at preflight (unpriced id)                  | billed at the dearest card (unpriced id), refused at preflight | dated `-YYYYMMDD` id accepted; another endpoint refused (`bad_request`)                         |
+
+The conformance suite (§34.1) checks the broken-stream row on all four adapters.
+
+## 28. OpenAI: the Responses API (`model/openai.ts`)
+
+### 28.1 Request
+
+`POST {PERFIDIA_OPENAI_BASE_URL or https://api.openai.com/v1}/responses`, streamed, `authorization:
+Bearer <key>`:
+
+- `store: false`; `include: ["reasoning.encrypted_content"]`; `service_tier: "default"`;
+  `truncation: "disabled"`; `max_output_tokens`; no sampling parameter.
+- `reasoning: {effort, summary: "auto"}`, plus `context: "all_turns"` only where the catalog pins it
+  (GPT-6.1 Sol). An effort the model does not take is refused by the plan (exit 3) and by the
+  adapter, naming the accepted levels.
+- Tools with an explicit `strict: false` (else Responses normalises the schema to strict mode);
+  `tool_choice: "auto"`; `parallel_tool_calls: true`.
+- `prompt_cache_options: {mode: "implicit", ttl: "30m"}` (a deviation from design §2.3, §38).
+- `input`: a `developer` message with the shared block, a `developer` message with the seat block
+  (with an explicit `prompt_cache_breakpoint`), then the turn: the briefing as a `user`
+  `input_text`, results as `function_call_output` items (string output), operator entries as
+  `developer` messages, replies echoed as their output items verbatim (encrypted reasoning and
+  `phase` kept).
+
+### 28.2 Stops and errors
+
+- `completed` → `tool_use` or `end_turn` (`refusal` when the output has a refusal part).
+  `incomplete` with `max_output_tokens` → `max_tokens` (the seat retries once at 65,536);
+  `content_filter` → refusal; other incomplete reasons → `other`. A cut reply keeps what it got
+  (§34.4).
+- `failed` and in-stream `error` events, by code: `misalignment_policy_violation` (category
+  `misalignment`), `bio_policy` and `invalid_prompt` → refusal; `rate_limit_exceeded`/`slow_down` →
+  `rate_limit`; `server_error`, `vector_store_timeout` → `server`; `server_is_overloaded` →
+  `overloaded`; quota and spend codes → `billing`; `data_residency_mismatch` → `auth`; image codes →
+  `bad_request`; else `unknown`.
+- HTTP errors (`classifyHttpError`, code before status): 429 with `credit_balance_exhausted`,
+  `project_spend_limit_exceeded`, `organization_spend_limit_exceeded`,
+  `organization_usage_limit_exceeded` or type `insufficient_quota` → `billing` (operator pause);
+  other 429s → `rate_limit` with `Retry-After`; 403 `misalignment_policy_violation` → refusal, no
+  charge, not retried; 503 `server_is_overloaded` → `overloaded`; 401/403 → `auth`; 404 →
+  `not_found`. An error naming `reasoning.summary` (or a 400/403 about organisation verification)
+  → `auth` with the help URL (its shape is unverified).
+- Arguments that are not JSON are passed raw, so the gateway answers `INVALID_ARGS`.
+
+### 28.3 Usage
+
+`input = input_tokens − cached_tokens − cache_write_tokens` (the prompt-caching guide's own cost
+formula: `input_tokens` includes cached and written tokens, which settles the design's
+"unverified"); `cacheWrite5m = cache_write_tokens` (the 30-minute writes, in the short bucket);
+`cacheRead = cached_tokens`; `output = output_tokens` (reasoning included); `reasoning =
+reasoning_tokens`. A usage that is missing, fails the schema, contradicts itself (cached + written
+
+> input, reasoning > output) or comes from a non-default tier fails `unknown` and is charged the
+> attempt bound.
+
+### 28.4 Preflight, count, plan
+
+`GET /models/{id}`, then the production shape at `max_output_tokens: 16`, streamed and charged (a
+refusal fails it). `countTokens`: `POST /responses/input_tokens` with `{model, input, tools,
+tool_choice, parallel_tool_calls, reasoning, truncation}`. The plan refuses `us.` and
+`eu.api.openai.com` (regional processing bills +10% and no card exists for it).
+
+Sources (read 2026-10-20, fetched as `.md`): `developers.openai.com/api/reference/resources/responses/methods/create`,
+`…/responses/streaming-events`, `…/responses` ("Get input token counts"), `…/models/methods/retrieve`,
+`api/reference/overview`, `docs/guides/{prompt-caching, reasoning, function-calling, error-codes,
+rate-limits, spend-limits, safety-checks/misalignment-monitoring, conversation-state, your-data,
+streaming-responses}`, `docs/pricing`, `docs/models/*`. Price cards re-checked against the four
+model pages and the pricing page's Standard table (long-context columns included): no difference.
+
+## 29. Gemini: `generateContent` (`model/gemini.ts`)
+
+### 29.1 Request
+
+`POST {PERFIDIA_GOOGLE_BASE_URL or https://generativelanguage.googleapis.com}/v1beta/models/{model}:streamGenerateContent?alt=sse`,
+key in `x-goog-api-key` only (never in a URL; redacted raw and URL-encoded from every error):
+
+- `systemInstruction.parts`: the shared block, then the seat block.
+- `tools[0].functionDeclarations` with `parametersJsonSchema` through the `gemini@1` transform
+  (§29.2); `toolConfig.functionCallingConfig.mode: "AUTO"`.
+- `generationConfig: {maxOutputTokens (≤ 65,536), thinkingConfig: {thinkingLevel: LOW|MEDIUM|HIGH
+  from the seat's effort, includeThoughts: true}}`; `store: false`.
+- Not sent: sampling parameters, `cachedContent`, `serviceTier` (omitted means standard; Flex and
+  Priority are off).
+- Model turns are replayed exactly as received (parts never merged or reordered, thought
+  signatures kept); results are `functionResponse` parts `{id (when the model gave one), name,
+  response}` (the gateway's JSON object, else `{result: …}`); operator text is a `[harness] ` text
+  part appended to the same user content; an empty model reply is not replayed.
+
+### 29.2 The `gemini@1` tool transform (`model/gemini-tools.ts`)
+
+`const` → `enum: [v]`; an integer `exclusiveMinimum n` → `minimum n+1` (on other types it moves
+into the description); `pattern` and `propertyNames.pattern` move into the description; any keyword
+outside Gemini's documented subset fails the build naming `gemini@1`; `anyOf`/`oneOf` pass (they
+are in the subset). Idempotent. `toolsHash` of perfidia-1@1.1.0 and @1.0.0 for Google seats, real
+and fake: `39f0993453961cc79f3e9824a302377c5117f66e236e7cc90ead46f488428dc3`; every other
+provider keeps the neutral list's.
+
+### 29.3 Finish reasons and errors
+
+`STOP` → `end_turn`/`tool_use`; `MAX_TOKENS` → `max_tokens` (one retry at the model's maximum);
+`SAFETY`, `RECITATION`, `PROHIBITED_CONTENT`, `SPII`, `BLOCKLIST`, `IMAGE_SAFETY` and a
+`promptFeedback.blockReason` → refusal with an empty reply; `MALFORMED_FUNCTION_CALL` and other
+reasons → `other` (outside the breaker since the integration, §34.4); `MISSING_THOUGHT_SIGNATURE` →
+`bad_request` (usage kept); `PUP_LIMITED_DISABLED` → `auth`. `classifyGeminiError` adds to
+`classifyHttpError("google")`: `ErrorInfo.reason` `API_KEY_*` → `auth`; `FAILED_PRECONDITION` →
+`billing`; `RetryInfo.retryDelay` when there is no `Retry-After`; 402 (Prepay at $0) → `billing`;
+429 → `rate_limit`.
+
+### 29.4 Usage
+
+`input = promptTokenCount − cachedContentTokenCount + toolUsePromptTokenCount`; `cacheRead =
+cachedContentTokenCount` (the implicit-cache price); `output = candidatesTokenCount +
+thoughtsTokenCount + whatever part of totalTokenCount the known counts do not explain`; `reasoning
+= thoughtsTokenCount`. Usage counts as final only with or after the finish reason. A served model
+(`modelVersion`) other than the one requested, or a tier other than standard/unspecified, is billed
+under an unpriced id (the dearest card) and refused at preflight.
+
+### 29.5 Preflight and count
+
+`models.get` must list `generateContent` and an `outputTokenLimit` at least the seat's caps; then
+one non-streaming `generateContent` at 16 output tokens, charged. `countTokens` is implemented (the
+billing page says it is not billed; the smoke's bound counts it as input anyway).
+
+Sources (read 2026-10-20, `.md.txt`): `ai.google.dev/api/generate-content`, `…/api/models`,
+`…/api/tokens`, `gemini-api/docs/generate-content/{thinking, thought-signatures, api-errors}`,
+`…/docs/{billing, rate-limits, text-generation, structured-output, pricing}`,
+`…/docs/models/gemini-4-argon`, the caching page, and `googleapis/google/rpc/error_details.proto`.
+Cards re-checked: Gemini 4 Argon $2 / $10 / $0.10 per MTok through Nov 30 ($4 / $20 / $0.20 from
+the change), Gemini 3.8 Flash $0.75 / $3.75 / $0.075 through Dec 31 ($1.50 / $7.50 / $0.15 after);
+no long-context tier. On the free tier, 3.8 Flash data is used for training: use a paid key.
+
+## 30. OpenRouter and OpenAI-compatible endpoints (`model/compat.ts`)
+
+### 30.1 Request (mode `openrouter`)
+
+`POST {PERFIDIA_OPENROUTER_BASE_URL or https://openrouter.ai/api/v1}/chat/completions`, streamed,
+`authorization: Bearer <key>`, `X-OpenRouter-Metadata: enabled`:
+
+- `model`, `messages`, `tools`, `tool_choice: "auto"`, `max_tokens`, `reasoning: {effort}` (the
+  level sent, §30.4), `stream: true`, and `provider: {only: [full slug], allow_fallbacks: false,
+  require_parameters: true, data_collection: "deny", zdr: true when the pin is ZDR-listed}`.
+- `parallel_tool_calls` only when the pinned endpoint lists it (`z-ai/fp8` does not). No
+  `max_price`: the ledger and the plan-time price check bound spend.
+- Messages: `system` (shared), `system` (seat), the briefing as a `user` message, the turn header
+  as a separate `user` message `[harness] …`, results as `{role: "tool", tool_call_id, content}`,
+  operator entries as `user` messages `[harness] …`, assistant replies echoed verbatim
+  (`reasoning_details` unmodified; plain `reasoning` only when there are no details).
+- Mode `compat`: `PERFIDIA_COMPAT_BASE_URL` required, no key on loopback,
+  `stream_options.include_usage`, no `provider` object, no reasoning echo.
+
+### 30.2 The served-endpoint check
+
+The routing metadata on the final chunk must show exactly one selected endpoint whose provider is
+the pin's (`ENDPOINT_PROVIDERS` in `arena/providers/compat.ts`: `z-ai/fp8` → Z.AI,
+`moonshotai/mxfp4` → Moonshot AI, `together` → Together; read 2026-10-20) and whose model is the
+seat's (a dated `-YYYYMMDD` suffix is accepted). A mismatch or missing metadata is charged its usage
+and fails `bad_request`, not retried.
+
+### 30.3 Usage and the reported cost
+
+`input = prompt_tokens − cached_tokens − cache_write_tokens` (inconsistent fields: `input =
+max(prompt, cached + written)`, nothing counted as a read); `cacheRead = cached_tokens`;
+`cacheWrite5m = cache_write_tokens`; `output = completion_tokens`, raised to `reasoning_tokens` when
+a provider reports more reasoning than completion. `usage.cost` (credits = USD) →
+`reportedCostNanoUsd = ceil(cost × 10⁹)`; when it exceeds the card cost (fee excluded) by more than
+1 nano, output tokens are added (at the output price, rounded up) and the entry is `estimated`.
+The 5.5% fee is charged by the card and logged apart (`feeNanoUsd`).
+
+### 30.4 Efforts (C9 settled as built)
+
+`effortSent(provider, model, effort)`: the nearest level the model lists on the `EFFORTS` ladder; a
+tie goes to the lower level (the harness's rule: OpenRouter documents only "the nearest supported
+level"); never `none` unless asked. GLM-5.3 and GLM-5.3 Flash list max, high and low: `medium` is
+sent as `low` (`xhigh` as `high`, `minimal` as `low`). Recorded as `seats.json` `effortSent` (real
+runs only), in the plan warning and in the smoke line; unverified until a smoke records the
+reasoning tokens. The prediction keeps medium's output factor (1.0 against low's 0.6), an upper
+bound.
+
+### 30.5 Plan time: `planLive`
+
+A real `arena run` (and, since the integration, a real `arena series`) with OpenRouter seats fetches
+`GET {base}/endpoints/zdr` and `GET {base}/models/{id}/endpoints` (public, no key) and re-plans on
+them. Refused (exit 3, nothing written, nothing sent to a model): a live price above the card in
+any kind (prompt, completion, cache read, cache write, 1-hour write, overrides included) or any
+per-request price; another provider name; a sent or required parameter no longer listed;
+`tool_choice` auto not supported; context under 200K; `max_completion_tokens` under twice
+`maxTokens`; a pin missing from the ZDR list while `zdr` is set; a metadata request that fails.
+Warnings: a cheaper live price (the ledger over-charges; `arena reconcile` shows by how much), a
+negative status, another quantization. `arena estimate`, `--fake` and the tests use the 2026-10-20
+snapshot.
+
+### 30.6 Errors, preflight, cards
+
+Errors: `limit_source`, 402, 503 or moderation → `classifyHttpError`; then the typed
+`metadata.error_type`; then the status (400, 401, 402, 403, 404, 408, 413, 429, 500, 502, 503, 524,
+529 all mapped). Mid-stream `error` events are classified the same way; an error event before any
+output is not charged (zero-completion insurance); a 200 JSON body holding only an error is not
+billed. `finish_reason` `length` (or a `max_tokens_exceeded` error) → `max_tokens`;
+`content_filter` → refusal; anything else → `other`. Preflight: `GET /models/{id}/endpoints` must
+list the pin, then one shape check at `max_tokens` 16. Cards (`model/prices/openrouter.ts`)
+re-verified against the live endpoints JSON of 2026-10-20: GLM-5.3 1.40/4.40/0.26, GLM-5.3 Flash
+0.15/0.50/0.03, Kimi K3 3/15/0.30, DeepSeek V4.1 Flash 1017 on `together` 0.30/1.20/0.006 USD per
+MTok; no difference. `model/prices/compat.ts` ships no card: a `compat` seat stays refused at plan
+time until the owner adds one.
+
+Sources (OpenRouter docs, read 2026-10-20): API reference overview, streaming,
+errors-and-debugging, router-metadata, reasoning-tokens, provider-selection, zdr, usage accounting,
+zero-completion insurance, FAQ (5.5% fee), the chat completions OpenAPI; the endpoints JSON.
+
+## 31. The wire mapping at a glance
+
+| Need             | Anthropic (SDK)                          | OpenAI Responses                                 | Gemini                                          | OpenRouter / compat                                   |
+| ---------------- | ---------------------------------------- | ------------------------------------------------ | ----------------------------------------------- | ----------------------------------------------------- |
+| Endpoint         | `/v1/messages?beta=true`, streamed       | `/responses`, streamed                           | `:streamGenerateContent?alt=sse`                | `/chat/completions`, streamed                         |
+| Key              | `x-api-key`                              | `authorization: Bearer`                          | `x-goog-api-key`                                | `authorization: Bearer` (none for compat on loopback) |
+| Stable blocks    | two `system` blocks with `cache_control` | two `developer` messages (seat: breakpoint)      | two `systemInstruction` parts                   | two `system` messages                                 |
+| Operator channel | mid-conversation `system` message        | mid-input `developer` message (`-dev`)           | `[harness]` text part (`-env`)                  | `[harness]` user message (`-env`)                     |
+| Results          | `tool_result` blocks                     | `function_call_output` items                     | `functionResponse` parts (id, name)             | `tool` messages                                       |
+| Reply echo       | content blocks (thinking signed)         | output items (encrypted reasoning)               | parts verbatim (thought signatures)             | assistant message verbatim (`reasoning_details`)      |
+| Cache            | explicit, 5 min / 1 h                    | implicit, 30 min, plus the seat-block breakpoint | implicit only (no writes)                       | the endpoint's                                        |
+| Prompt in usage  | `input + cache_creation + cache_read`    | `input_tokens` (includes read and written)       | `promptTokenCount` (includes cached) + tool-use | `prompt_tokens` (includes read and written)           |
+| Reasoning tokens | not split (null)                         | `reasoning_tokens`                               | `thoughtsTokenCount` (billed as output)         | `reasoning_tokens`                                    |
+| Max-output stop  | `max_tokens`                             | `incomplete: max_output_tokens`                  | `MAX_TOKENS`                                    | `length`                                              |
+| Reasoning shown  | summary                                  | summary                                          | summary (`thought: true` parts)                 | raw text, or a summary when the provider sends one    |
+
+## 32. Synthetic, unverified, and the owner's recordings
+
+**Fixtures.** `model/fixtures/openai/*.json`, `model/fixtures/gemini/*.json` and the OpenRouter
+`stream-*.json`, `errors.json`, `json-200-error.json` and `compat/stream-openai-style.json` are
+written from the documentation and marked `synthetic: true`, each with its sources and read date.
+OpenRouter's `endpoints-*.json` and `zdr.json` are real responses (`synthetic: false`, fetched
+2026-10-20, trimmed).
+
+**Unverified until a real call** (each pinned only by synthetic fixtures; the first recorded smoke
+settles most of them):
+
+- OpenAI: acceptance and turn semantics of mid-input `developer` messages; `max_output_tokens: 16`
+  in the preflight; whether `prompt_cache_options` implicit mode plus the seat breakpoint caches as
+  the guide says on GPT-6 models; the organisation-verification error's shape; whether a broken
+  stream or a 403 misalignment block is billed (we charge the estimate for the first, nothing for
+  the second); whether `response.model` is the alias or a dated id (a dated id has no card: the
+  preflight would refuse the run); whether `reasoning.context` is echoed. The usage policies page
+  was not readable (403).
+- Gemini: implicit cached tokens inside `promptTokenCount`; upper-case `thinkingLevel` over REST and
+  MINIMAL refused by Argon and 3.8 Flash; text parts next to `functionResponse` parts; replaying
+  many small streamed parts unmerged; `modelVersion` equal to the requested id (else every attempt
+  is priced at the dearest card and the preflight refuses); the tier spend-cap error's shape; the
+  shape of an error inside the SSE body; billing of aborted or timed-out requests; `countTokens`
+  being free; every keyword `gemini@1` sends being accepted; the 16-token preflight when thinking
+  takes the whole budget; the cost of replayed signatures.
+- OpenRouter: `openrouter_metadata` on streamed responses with the opt-in header (the adapter
+  refuses a reply without it: if absent, every call fails at once and the smoke shows it); two
+  `system` then two `user` messages in round 0; `reasoning_details` versus plain `reasoning` from
+  GLM; what `low` does on GLM-5.3 (C9); `require_parameters` at run time; 404 or 503 for a pinned
+  endpoint that is down; `pricing.discount`; whether `usage.cost` includes the fee (assumed not, per
+  the FAQ); dated model ids; `cache_write_tokens` on `z-ai/fp8`.
+
+**`arena smoke --record <dir>`** (built by the integration, §34.4) writes every exchange of a smoke
+as one `perfidia-recording/1` file (`arena/record.ts`), numbered in arrival order: the request
+(method, URL, body) and the response (status, content type, body or, for a stream, its events),
+with every key (raw and URL-encoded) replaced by `<key>`, every id field (response, message, call,
+generation, request, organisation, project and user ids) replaced by `<id-N>` consistently across
+the recording (a call and its result still match; the provider's model ids are kept), and no
+header kept but the content type. `recordedResponse(file)` serves a recorded response again, so a
+contract test can replay it through the real adapter (`arena/record.test.ts` does, for each
+provider). How the recordings replace the synthetic fixtures: the owner commits the directory under
+`packages/orchestrator/src/model/fixtures/<provider>/recorded/` and sends it back; the next step
+points each contract test that pins an unverified item at the recorded exchange, and fixes the
+adapter where the recording disagrees with its synthetic twin.
+
+## 33. Calibration and series (agent E)
+
+### 33.1 `arena calibrate`
+
+`bun run arena -- calibrate <run-dir>... [--profiles <dir>]` writes one `perfidia-profile/1` file
+per key (provider, model, endpoint, effort, prompt variant, cadence, `maxTokens`, `PROMPT_VERSION`,
+ruleset major) into `packages/orchestrator/profiles/` (default):
+
+- Seat-days come only from real lockstep runs, `ended` or `stopped` at a day boundary
+  (`--stop-after`), Level E ok; only complete game days count, each seat until its hand-off day. A
+  wake keeps every attempt of its turn (rounds, retries, thought calls) with its prompt, output,
+  cache-read and cache-write tokens; a line charged without usable tokens counts 0, with a warning.
+- Fake runs never give seat-days. A `--fake` run of 7 days or more gives only the briefing growth:
+  the mean round-0 briefing bytes per day (`--transcripts full`, the default), at 3 bytes per token
+  (an assumption). A growth-only call with no profile yet of that ruleset major keeps nothing (pass
+  the 7-day fake run together with the real runs).
+- Profiles accumulate; a run calibrated again replaces its own seat-days; two files with the same
+  key are refused; nothing measurable: exit 3 with each skip reason.
+
+### 33.2 Prediction sources (lockstep plans only; a real-time plan keeps the scenario)
+
+- **`measured-point`** (1–2 seat-days): central = `projectSpend` (+15%) of one seat's measured
+  spend, re-priced at the plan's cards (per card group when several are valid in the window);
+  low/high = central × the scenario's low/central and high/central ratios. No percentiles.
+- **`calibrated`** (3 or more seat-days): a seeded bootstrap (2,000 replicates, seed 20261019). Per
+  game day, a wake count from that day's seat-days, then whole wakes; a day not measured scales the
+  count by `BOT_DAY_PROFILE` and grows each prompt by the measured briefing growth. Each day is
+  priced at the dearer card of its planned wall window (15/7 wall hours per game day in lockstep,
+  an assumption). Output p10/p50/p90 (nearest rank).
+- The match interval is the bootstrap of the sum only when every seat is calibrated; otherwise the
+  sum of the seat bounds, labelled with the weakest seat source. The source appears per seat and
+  for the match in `estimate.json`, in `arena.json` `budget.estimate.source` and in the printed
+  table. `--profiles <dir>|off` on `run`, `estimate` and `series`; `off` keeps the scenario.
+- Default seat caps (2 × high, at least $5) follow a calibrated p90 when one exists; wake caps keep
+  the scenario's central wake cost. `arena.json` `seats[].estimate` and the report's "estimate for
+  N days" line stay scenario figures.
+
+### 33.3 `arena series`
+
+`bun run arena -- series --lineup <x> --out <dir> [--blocks N] [--seed S] [--fake] [run flags]`:
+seeded random Latin squares rotate the lineup's LLM seat entries over its positions and an
+orthogonal square rotates the profiles (Graeco-Latin for odd orders and 4, 8, 16: cyclic `(i + j,
+2i + j)` or GF(2^m) `(i⊕j, 2·i⊕j)`, then random rows, columns and symbols; orders 2 and 6 fall back
+to an independent square with a warning and `orthogonal: false`). Game seed = series seed + block.
+Every match is planned before anything is written (a refusal exits 3, nothing written; real matches
+plan with `planLive`), then `series.json` (`perfidia-series/1`), `lineups/mNN.json` and one run
+directory per match; matches run one at a time, the manifest rewritten after each, and the series
+stops at the first non-zero exit or operator signal. It prints Σ predicted low/central/high and Σ
+budgets, and warns when the series' Google high exceeds $250 (Gemini Tier 1).
+
+## 34. The integration
+
+### 34.1 The cross-adapter conformance suite (`model/conformance.test.ts`)
+
+One loopback stub per provider (`model/wire-stubs.test.ts`) decodes each request back to the seat's
+conversation and encodes a provider-neutral reply (text, calls, reasoning, a natural or
+`max_tokens` stop, a neutral usage) in the provider's wire format. One scripted turn goes through
+each real adapter as the seat agent sends it: round 0 (briefing and header; two calls), round 1
+(their results) cut at `max_tokens`, its retry at 65,536 (an `end_turn` call), then the
+out-of-band thought call (the queued result and the ask; a text). Checked for all four:
+
+- the same calls (names and arguments), text, reasoning text and stops on every attempt;
+- per attempt, the same prompt total, cache reads and output (and reasoning where the provider
+  splits it out; Anthropic reports none); Gemini's writes appear as plain input, the others' as
+  `cacheWrite5m`; the sums over the turn: prompt 22,963, cache reads 16,646, output 35,556 tokens;
+- every attempt priced at its provider's card; OpenRouter's served endpoint and reported cost;
+- prefix stability: the tools and both stable blocks byte-identical in all four requests; each
+  request's conversation extends the previous one item by item (the retry resends it unchanged);
+- one request per attempt and nothing else; each key in its own header only, never in a URL;
+- a stream cut after two events is charged, estimated, on all four: the prompt and the full output
+  limit (Anthropic, OpenAI, Gemini), or the attempt-bound marker that the pricer refuses and the
+  ledger charges at the attempt bound (OpenRouter in round 0, nothing measured yet).
+
+### 34.2 The four-provider wire-stub match (`arena/wire-match.test.ts`)
+
+`budget-mix` for 2 game days in lockstep, every LLM seat on its real adapter against its stub,
+driven by the bot-backed brain (the seats' own bots), planned by `planLive` (OpenRouter's metadata
+from its stub) and run by `runArena`; keys and base URLs come from the plan's environment only.
+Checked: status `ended`, Level E, the gateway rebuild equal to the run's gateway state; every
+`llm_call` line re-priced from its usage at its wall start equals its logged cost, each seat at its
+own provider's card; OpenRouter lines with the pin, the fee and a reported cost; four preflight
+lines; the budget block (total = Σ logged lines, under the $40 budget, no kill); `exit4` computed
+with every part (`models` 4, `met` false: a stub run is never reconciled); no key in any run file
+or in what the run printed, each key only in its own stub's header. A second run against fresh
+stubs is identical apart from the wall fields (`wallStart`, `latencyMs`, `ttftMs`, `wallMs`, the
+price instant `priceAt`, think times, the recommended speed, the wall window, the estimate's sha,
+`summary.json`) and the order of lines between seats in `llm_calls.jsonl` and `replies.jsonl` (two
+seats' attempts at one game time finish in the order the network answers; each seat's own sequence
+is identical). Then the kill switch: a budget one cent above the plan's refusal threshold ($1.89)
+and replies that spend 20,000 more output tokens: the kill fires (game time 600), all four LLM
+seats are handed off `match_budget`, no attempt starts after the kill, spend $0.599 ≤ $1.89, the
+match ends with the bots, Level E holds.
+
+Measured (4-vCPU container): one 2-day run 2.4–3.2 s, 377 attempts (requests: Anthropic 95, OpenAI
+107, Gemini 76, OpenRouter 103, preflight included), $0.281304 at the cards (the stub's usage is a
+model, a token per 4 bytes; these dollars are illustrative); the kill run 1.3 s.
+
+### 34.3 What the merge resolved
+
+- **One factory mechanism.** OpenAI's agent put `create` on the registry; Gemini's agent an
+  `ADAPTER_FACTORIES` map; OpenRouter's agent a dispatch in `run.ts`. The registry's `create` is
+  kept for all three (`AdapterEnv.apiKey` widened to `string | null`); the OpenRouter pin
+  (`openrouterPin`, `ENDPOINT_PROVIDERS`) moved to `arena/providers/compat.ts` so the registry
+  imports no plan code (re-exported from `providers/openrouter.ts`).
+- **`arena smoke --provider`** takes anthropic, openai, google (alias gemini) and openrouter, and
+  `--endpoint` for openrouter only; the CLI usage says every provider runs for real.
+- **Tests.** The Pass 1b "no adapter" refusals became "a real run of that provider needs its key",
+  with loopback base URLs so a failing refusal never leaves the machine; the three live tests are
+  kept side by side.
+
+### 34.4 What the integration added or changed
+
+- **`arena smoke --record`**, `model/http.ts` `recordingFetch` and `arena/record.ts` (§32); the
+  design's §8.2 had them, no agent built them.
+- **The bare Bearer key is refused in a URL** (`guardedFetch`): the URL check compared the whole
+  header value (`Bearer <key>`), so a URL holding the bare key passed (the OpenAI agent's finding);
+  tested raw and URL-encoded.
+- **A cut OpenAI reply keeps its content** (`incomplete` with `max_output_tokens`): it was an empty
+  reply, while the other three keep what they got; the conformance suite found the difference. The
+  seat still never runs a cut reply's calls; its reasoning summaries now reach `replies.jsonl`.
+- **`stop: "other"` is outside the breaker** (`seat/agent.ts`): design §3.5 says a malformed call
+  or unknown finish closes the turn, non-systemic, for every provider (Gemini's
+  `MALFORMED_FUNCTION_CALL`, unmapped OpenRouter and OpenAI reasons); it counted toward the breaker
+  (the Gemini agent's finding). `pause` stays systemic. Anthropic's request bytes are unchanged.
+- **`arena series` plans with `planLive`** (as `arena run`), so a real series with OpenRouter seats
+  is checked against the live metadata; fake series keep the snapshot.
+
+## 35. Commands (Pass 2)
+
+| Command                                                                                                | What it does                                                                                                      |
+| ------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------- |
+| `bun run arena -- smoke --provider openai\|google\|openrouter [--model …] [--effort …] [--endpoint …]` | One live check per provider: preflight, a count, one streamed call ≤ 4,000 output tokens; the bound printed first |
+| `bun run arena -- smoke … --record <dir>`                                                              | The same, every exchange written sanitised as `perfidia-recording/1` files                                        |
+| `bun run arena -- calibrate <run-dir>... [--profiles <dir>]`                                           | Profiles from real lockstep runs (and briefing growth from 7-day fake runs)                                       |
+| `bun run arena -- series --lineup <x> --out <dir> [--blocks N] [--seed S] [--fake] [run flags]`        | A rotated series of matches (Latin / Graeco-Latin squares), `series.json`                                         |
+| `--profiles <dir>\|off` on `run`, `estimate`, `series`                                                 | The profiles the prediction draws on (default `packages/orchestrator/profiles/`)                                  |
+
+Smoke bounds printed before anything is sent (2026-10-20 cards; each is the most the smoke can
+cost, the expected cost is a fraction): Claude Haiku 5.5 $0.010969, GPT-6 Luna low $0.009973,
+Gemini 3.8 Flash low $0.189510 (every price kind of every card valid from now, the January card
+included, and the count charged as input), GLM-5.3 Flash on `z-ai/fp8` $0.012266 (fee included);
+for M3: Claude Sonnet 5.5 medium $0.219392, GPT-6.1 Sol medium $0.199462, Gemini 4 Argon medium
+$0.505396, GLM-5.3 $0.113360. Without the key each exits 3 with its bound and "Nothing was sent."
+
+Environment (read in `src/arena/` only): `PERFIDIA_ANTHROPIC_API_KEY`, `PERFIDIA_OPENAI_API_KEY`,
+`PERFIDIA_GOOGLE_API_KEY`, `PERFIDIA_OPENROUTER_API_KEY`, `PERFIDIA_COMPAT_API_KEY` (optional on
+loopback), each with its `_BASE_URL`, and `PERFIDIA_LIVE`.
+
+## 36. Owner steps: M2 and M3
+
+Defaults (the owner said "go" with every default of the design's decisions): OpenRouter pinned to
+`z-ai/fp8` with `data_collection: "deny"` and `zdr: true`; medium effort; Anthropic fallbacks off;
+`last-round` reminders; 32,768 output tokens; a 15-minute timeout; the native operator channel;
+Flex off. Every step below is bounded by the printed bound or the run's budget; M2 spends at most
+$0.23 (the four smokes' bounds) + $8 + $40.
+
+**M2, the cross-provider exit with `budget-mix`** (Claude Haiku 5.5, GPT-6 Luna, Gemini 3.8 Flash,
+GLM-5.3 Flash on Z.AI):
+
+1. **Accounts, keys and spend limits** (one dedicated account per provider, used for nothing else):
+   - Anthropic: the M1 workspace (Console spend limit, global inference geo).
+   - OpenAI: a dedicated project with a **hard** spend limit (e.g. $50; enforcement is not
+     instantaneous, a 429 `project_spend_limit_exceeded` pauses the run), and organisation
+     verification for reasoning summaries (else the preflight fails `auth`).
+   - Google AI Studio: a project on a **paid** tier (Prepay with a small balance, e.g. $50; Tier 1
+     caps at $250 a month; the free tier trains on 3.8 Flash data).
+   - OpenRouter: a key with a key limit (e.g. $20; credits carry the 5.5% fee).
+   ```
+   export PERFIDIA_ANTHROPIC_API_KEY=…  PERFIDIA_OPENAI_API_KEY=…
+   export PERFIDIA_GOOGLE_API_KEY=…     PERFIDIA_OPENROUTER_API_KEY=…
+   ```
+2. **Smokes with recordings** (≤ $0.011, $0.010, $0.19, $0.012; each prints its bound first):
+   ```
+   bun run arena -- smoke --record recordings/anthropic-haiku
+   bun run arena -- smoke --provider openai --record recordings/openai-luna
+   bun run arena -- smoke --provider google --record recordings/gemini-3.8-flash
+   bun run arena -- smoke --provider openrouter --record recordings/openrouter-glm-5.3-flash
+   ```
+   Read each output: the stop, the served model (a dated id would have no card), usage and cost,
+   the cache read after the preflight, OpenRouter's served endpoint, reported cost and reasoning
+   tokens (C9: what `low` does). Send the four `recordings/` directories back (§32). Then
+   `PERFIDIA_LIVE=1 bun run test:live` runs one live test per provider whose key is set (each under
+   $0.05; the Claude test of phase 2 too, under $0.20).
+3. **Rehearse for free**, then **the 1-day calibration** (central $1.00, high $4.53, budget $8, K
+   $6.61):
+   ```
+   bun run arena -- run --fake --lineup budget-mix --stop-after 1 --budget-usd 8 --out runs/budget-mix-rehearsal
+   bun run arena -- estimate --lineup budget-mix --stop-after 1 --budget-usd 8
+   bun run arena -- run --lineup budget-mix --stop-after 1 --budget-usd 8 --out runs/budget-mix-cal --watch
+   ```
+   Read `arena.json`: per-seat cost and cache reads, `promptCaps`, refusals, errors by kind, no
+   hand-off; `seats.json` `effortSent` for p4.
+4. **Calibrate** (one seat-day per model: `measured-point` profiles, a wide interval):
+   ```
+   bun run arena -- calibrate runs/budget-mix-cal
+   bun run arena -- estimate --lineup budget-mix --budget-usd 40
+   ```
+5. **The 7-day match** (scenario before calibration: central $6.97, high $31.73, budget $40, K
+   $38.61; the estimate after step 4 is what `estimate.json` stores):
+   ```
+   bun run arena -- run --lineup budget-mix --budget-usd 40 --out runs/budget-mix-1 --watch
+   ```
+   About 10–15 wall hours in lockstep. After a crash: `--budget-carry runs/budget-mix-1` into a new
+   directory.
+6. **After 48 hours, reconcile** with each provider's usage page for the run's wall window
+   (`arena.json` `budget.wall`), pre-tax, OpenRouter without its fee:
+   ```
+   bun run arena -- reconcile runs/budget-mix-1 --usd anthropic=<usd> --usd openai=<usd> --usd google=<usd> --usd openrouter=<usd>
+   ```
+   Exit 0 and `exit4.met: true` in `arena.json` is the cross-provider form of the exit.
+
+**M3, the first comparison with `mid-tier`** (Claude Sonnet 5.5, GPT-6.1 Sol, Gemini 4 Argon,
+GLM-5.3 on Z.AI), **before 2026-11-30** (Argon's card doubles at the change; the plan bounds every
+card valid from the start):
+
+1. Smokes with recordings (≤ $0.22, $0.20, $0.51, $0.11):
+   ```
+   bun run arena -- smoke --model sonnet-5-5 --effort medium --record recordings/anthropic-sonnet
+   bun run arena -- smoke --provider openai --model gpt-6.1-sol --effort medium --record recordings/openai-sol
+   bun run arena -- smoke --provider google --model gemini-4-argon --effort medium --record recordings/gemini-argon
+   bun run arena -- smoke --provider openrouter --model z-ai/glm-5.3 --record recordings/openrouter-glm-5.3
+   ```
+2. The 1-day calibration (central $6.01, high $25.50, budget $40, K $34.08), then calibrate:
+   ```
+   bun run arena -- run --lineup mid-tier --stop-after 1 --budget-usd 40 --out runs/mid-tier-cal --watch
+   bun run arena -- calibrate runs/mid-tier-cal
+   ```
+3. The first comparison match (scenario: central $42.06, high $178.53, budget $200, K $194.08), and
+   its reconciliation 48 hours later:
+   ```
+   bun run arena -- estimate --lineup mid-tier --budget-usd 200
+   bun run arena -- run --lineup mid-tier --budget-usd 200 --out runs/mid-tier-1 --watch
+   bun run arena -- reconcile runs/mid-tier-1 --usd anthropic=<usd> --usd openai=<usd> --usd google=<usd> --usd openrouter=<usd>
+   ```
+
+## 37. Tests and measurements (Pass 2)
+
+No test touches the network: stub fetches and `Bun.serve` stubs on 127.0.0.1 only; the live tests
+are skipped with a printed reason unless `PERFIDIA_LIVE=1` and that provider's key are set.
+
+| File                                                                                                    | Tests | What                                                                                               |
+| ------------------------------------------------------------------------------------------------------- | ----- | -------------------------------------------------------------------------------------------------- |
+| `model/openai.test.ts`                                                                                  | 47    | The OpenAI contract suite (request bytes, stops, errors by code, usage, broken streams, preflight) |
+| `arena/providers/openai.test.ts`                                                                        | 8     | A 1-day wire-stub match through `arena run`, the smoke, the plan's base-URL refusals               |
+| `model/gemini.test.ts`, `gemini-tools.test.ts`, `gemini-stub.test.ts`, `arena/providers/gemini.test.ts` | 40    | The Gemini contract suite, the transform hash, the wire stub, a 1-day match, the smoke             |
+| `model/compat.test.ts`                                                                                  | 61    | The OpenRouter and compat contract suite                                                           |
+| `arena/providers/openrouter.test.ts`                                                                    | 20    | `planLive` refusals, a 1-day match on the stub, the smoke                                          |
+| `arena/calibrate.test.ts`, `arena/series.test.ts`                                                       | 14    | Profiles, sources, bootstrap determinism, squares (fast-check, 300 runs), a 4-match fake series    |
+| `model/conformance.test.ts`                                                                             | 8     | §34.1 (plus the stub's own test)                                                                   |
+| `arena/wire-match.test.ts`                                                                              | 2     | §34.2                                                                                              |
+| `arena/record.test.ts`                                                                                  | 6     | The sanitiser; `--record` against each provider's stub, replayed through the adapter               |
+
+Mutation checks by the agents: OpenAI 7 of 7 money mutants killed, Gemini 10 of 10, calibration 15
+of 15.
+
+Measured on the shared 4-vCPU container after the integration: `bun run check` green (typecheck,
+lint, format, then 3,695 tests pass, 34 skipped, 0 fail, in 295 files: 495 s of tests, 8 min 29 s
+in all); the orchestrator suite alone 482 pass, 9 skipped, 0 fail in 51 files,
+60 s (the skips: 5 opt-in live tests and 4 exit tests that run under `test:exit`); `bun run test:exit` green (14 tests, 267 s); the four-provider 2-day match 2.4–2.6 s per run.
+
+## 38. Deviations (Pass 2)
+
+The code wins where the design and the code disagree:
+
+- **OpenAI caching** is implicit mode plus one explicit breakpoint after the seat block, not
+  explicit-only with a tail breakpoint (design §2.3): in explicit-only mode the lookup boundaries
+  are only the explicit breakpoints present in the request, so a tail marker moved to the new tail
+  would never be read on the next round. Implicit mode writes at the latest eligible message and
+  looks up to 20 earlier message endings; each request of a turn extends the previous one.
+- **OpenAI broken streams** are charged the seat's prompt estimate at the write price plus the full
+  limit (Anthropic charges nothing before `message_start`): OpenAI reports no usage until the end.
+- **Gemini error additions** live in `model/gemini.ts` `classifyGeminiError`, not in `http.ts`
+  (design §2.2 placed the classification there).
+- **Gemini `anyOf`/`oneOf`** pass through `gemini@1`: they are in the documented subset.
+- **Gemini served-model or tier mismatches** are priced at the dearest card under an unpriced id
+  (and refused at preflight) rather than refused at run time.
+- **OpenRouter efforts**: `medium` is sent as `low` on GLM-5.3 (the nearest listed level; a tie goes
+  down); the prediction keeps medium's factor. Recorded as `effortSent`.
+- **OpenRouter plan time** refuses a run when the live metadata cannot be fetched (no fallback to
+  the snapshot), and replies without routing metadata are refused (strict pin).
+- **Calibration**: profile rounds gained an optional `cacheWriteTokens`; calibration reads lockstep
+  runs only and profiles apply to lockstep plans only; `measured-point` re-prices per planned
+  card group; briefing growth assumes 3 bytes per token; default seat caps follow a calibrated p90.
+
+## 39. Open items (Pass 2)
+
+- **The calibrated prediction is biased low and narrow** (agent E's finding, measured on bot-shaped
+  fake data only): from 3 seat-days of day 1, a 7-day fake `budget-mix` was predicted $1.51 / $1.56
+  / $1.61 (p10/p50/p90) and spent $1.81–$1.96 (16–26% over central, above p90): prompts per attempt
+  grow 10.3K → 13.8K tokens and attempts per wake 3.45 → 3.95 over a week, which briefing growth
+  alone does not explain, and the bootstrap has no between-seat or between-match correlation (±3%).
+  `exit4.withinPrediction` needs the total inside [low, high], so an exit match predicted
+  `calibrated` from a 1-day calibration could fail it. M2 is safe as planned (each of its four
+  models has one seat-day after the 1-day calibration: `measured-point`, a wide interval); a lineup
+  with 3 seats of one model (`claude-duo`'s Haiku) would turn `calibrated`. Options for the owner,
+  each a departure from the reviewed design: calibrate from multi-day runs, grow whole prompts per
+  attempt, keep the +15% margin in calibrated mode, or widen the band (block bootstrap by seat-day,
+  p5/p95). Until one is chosen, run exit matches with `--profiles off` when the estimate says
+  `calibrated`.
+- **Committed profiles change the default prediction**: `arena calibrate` writes into
+  `packages/orchestrator/profiles/`, read by default; the CLI tests that pin scenario figures
+  (`arena/phase4.test.ts`, `providers.test.ts`, `review.test.ts`, `cli.test.ts`) would then need
+  `--profiles off`. Keep owner profiles uncommitted, or pass them with `--profiles <dir>`, or update
+  those tests in the same commit.
+- **Everything of §32's "unverified" list**, settled by the recorded smokes; a dated served model id
+  (OpenAI or Gemini) would be refused at preflight until a card or an alias rule is added with
+  evidence.
+- **Contract tests on recorded fixtures**: the recordings exist only after the owner's smokes; the
+  switch of each contract test from its synthetic fixture to the recorded exchange is the next step.
+- **The cadence A/B** of design §3.2 (both reminder cadences on the cheap models) is not automated:
+  a 1-day `--fake` rehearsal costs nothing, a real one about the calibration day's cost.
+- **`compat` seats** stay refused at plan time until the owner adds a card to
+  `model/prices/compat.ts`; compat mode is exercised by its contract suite only.
+- **`arena.json` `seats[].estimate`** and the report's "estimate for N days" stay scenario figures;
+  `report.ts` and the server do not read `series.json` yet (Pass 3's stats).
+- Pass 3: per-model stats (`@perfidia/spectator/stats`), ratings and the spectator's model pages.

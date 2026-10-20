@@ -392,6 +392,8 @@ describe("stops", () => {
       // oxlint-disable-next-line no-await-in-loop -- one rig per stop
       const e = await r.time.run(() => rejection(r.agent.round(inputOf(1, 0))));
       expect(e.message).toBe(`llm p1 turn 1 round 0: unexpected stop ${raw}`);
+      // Pass 2 (design §3.5): an unknown or malformed finish is outside the breaker.
+      expect([stop, e instanceof AgentError && e.systemic]).toEqual([stop, stop === "pause"]);
     }
   });
 
