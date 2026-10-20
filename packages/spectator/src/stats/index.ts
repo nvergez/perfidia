@@ -4,7 +4,10 @@
 // server package (`packages/server/src/stats/`).
 
 export {
+  ID_MAX,
+  PART_MAX,
   botIdOf,
+  boundedId,
   idPart,
   itemOf,
   modelIdOf,
@@ -15,8 +18,11 @@ export {
   type SeatKeyParts,
 } from "./keys.ts";
 export {
+  NAME_MAX_CHARS,
   SELF_ID,
+  malformedCall,
   matchStats,
+  nameOf,
   percentiles,
   type CostByKind,
   type FoldedMatch,

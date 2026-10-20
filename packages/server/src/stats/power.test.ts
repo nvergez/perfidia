@@ -20,8 +20,11 @@ describe("the exact binomial test", () => {
     expect(binomialPower(20, 0.7, 0.05)).toBeCloseTo(0.42, 2);
     expect(binomialPower(90, 0.6, 0.05)).toBeCloseTo(0.46, 2);
     expect(binomialPower(49, 0.7, 0.05)).toBeGreaterThanOrEqual(0.8);
-    // Above the threshold the exact test can dip under 80% again (n = 50).
+    // Above the threshold the exact test can dip under 80% again: n = 50 and 53, not 51 or 52.
     expect(binomialPower(50, 0.7, 0.05)).toBeLessThan(0.8);
+    expect(binomialPower(51, 0.7, 0.05)).toBeGreaterThanOrEqual(0.8);
+    expect(binomialPower(52, 0.7, 0.05)).toBeGreaterThanOrEqual(0.8);
+    expect(binomialPower(53, 0.7, 0.05)).toBeLessThan(0.8);
     expect(binomialPower(0, 0.7, 0.05)).toBe(0);
   });
 });
@@ -63,7 +66,10 @@ describe("the claim state", () => {
       ...Array.from({ length: 3 }, () => [0, 2, 4, 5]),
     ];
     const c = claimsOf(rated, new Set([0, 1, 2]));
-    expect([c.state, c.pairs, c.matches]).toEqual(["too_few_matches", 2, 3]);
+    // 1 and 2 never met: three pairs, the least met in 0 matches.
+    expect([c.state, c.pairs, c.unmet, c.matches]).toEqual(["too_few_matches", 3, 1, 0]);
+    const met = claimsOf([...rated, [1, 2, 4, 5]], new Set([0, 1, 2]));
+    expect([met.pairs, met.unmet, met.matches]).toEqual([3, 0, 1]);
     expect(claimsOf([[0, 4, 5]], new Set([0])).state).toBe("no_comparison");
     expect(claimsOf([], llm).state).toBe("no_comparison");
   });
@@ -79,5 +85,17 @@ describe("the simulated power of the rating pipeline", () => {
     // The simulated binomial test estimates the exact power within sampling error (40 series).
     expect(Math.abs((row?.binomial.one ?? 0) - (row?.exact.one ?? 0))).toBeLessThan(0.25);
     expect(row?.bootstrap).toBeNull();
+    expect(row?.served).toBeNull();
+  });
+
+  test("p = 0.5 measures the size: the served intervals' false claims stay near 5%", () => {
+    const [row] = simulatePower({ p: 0.5, matches: [20], reps: 120, replicates: 60, seed: 8 });
+    if (row === undefined) throw new Error("no row");
+    // Two equal models: every claim is false. The exact test holds its level by construction.
+    expect(row.exact.one).toBeLessThanOrEqual(0.05);
+    expect(row.laplace.one).toBeLessThanOrEqual(0.1);
+    expect(row.served ?? 1).toBeLessThanOrEqual(0.1);
+    // The served interval is never narrower than Laplace's: it claims no more often.
+    expect(row.served ?? 1).toBeLessThanOrEqual(row.laplace.one);
   });
 });

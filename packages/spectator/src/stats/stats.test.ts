@@ -16,6 +16,7 @@ import {
   type AllianceId,
   type ArenaReportAny,
   type FeedItem,
+  type LlmCallLine,
   type LlmLogLine,
   type LogLine,
   type MatchStats,
@@ -26,9 +27,16 @@ import {
 import { foldLog, type SpectatorFold } from "../fold/fold.ts";
 import { seatTally } from "../reduce/index.ts";
 import { WAR_GOLDEN, fakeRun, golden, type FakeRun } from "../testkit.test.ts";
-import { modelIdOf, parseLabel } from "./keys.ts";
+import { ID_MAX, PART_MAX, idPart, modelIdOf, parseLabel } from "./keys.ts";
 import { foldedOf, statsOfLog } from "./log.ts";
-import { SELF_ID, matchStats, type FoldedMatch } from "./match.ts";
+import {
+  NAME_MAX_CHARS,
+  SELF_ID,
+  malformedCall,
+  matchStats,
+  nameOf,
+  type FoldedMatch,
+} from "./match.ts";
 
 const LONG = 120_000;
 
@@ -415,6 +423,33 @@ const call = (seat: string, turn: number, calls: number, cost: number): LlmLogLi
     error: null,
   });
 
+/** A `seats.json` without seats, and one LLM seat of it (the hostile-strings test). */
+const SEATS_BASE = {
+  harness: "perfidia-harness@2",
+  promptVersion: 2,
+  prompts: { shared: "s", operator: "o", tools: "t" },
+  seats: [],
+};
+const LLM_SEAT = {
+  kind: "llm",
+  label: "llm:compat/m/medium:odysseus@1:p2",
+  effort: "medium",
+  maxTokens: 16_000,
+  capNanoUsd: 5_000_000_000,
+  profile: {
+    id: "odysseus",
+    version: 1,
+    name: "Odysseus, the schemer",
+    goal: "g",
+    temperament: "t",
+    word: "w",
+    style: "s",
+    handoffBot: "bot:opportunist@3",
+  },
+  handoffBot: "bot:opportunist@3",
+  prompt: "0".repeat(64),
+} as const;
+
 describe("hand-made feeds", () => {
   const LABELS = {
     p1: "llm:anthropic/claude-haiku-5-5/medium:odysseus@1:p2",
@@ -512,8 +547,9 @@ describe("hand-made feeds", () => {
     // p1 and p2 share Haiku: one same-model pair; the other four LLM pairs are cross-model.
     expect(stats.collusion.samePairs).toBe(1);
     expect(stats.collusion.crossPairs).toBe(5);
-    expect(d("p1")?.sameModel).toEqual({ messages: 1, pacts: 1, alliances: 1 });
-    expect(d("p1")?.crossModel).toEqual({ messages: 1, pacts: 1, alliances: 1 });
+    // p1's partners: p2 on its own model, p3 and p4 on others (rates are counts ÷ partners).
+    expect(d("p1")?.sameModel).toEqual({ messages: 1, pacts: 1, alliances: 1, partners: 1 });
+    expect(d("p1")?.crossModel).toEqual({ messages: 1, pacts: 1, alliances: 1, partners: 2 });
     expect(stats.collusion.same).toEqual({ messages: 1, pacts: 1, alliances: 1 });
     // Pacts p1–p3 and p3–p4 (p4–p5 has a bot); alliance pairs p1–p3, p2–p3; p1→p3 and p4→p1..p3.
     expect(stats.collusion.cross).toEqual({ messages: 4, pacts: 2, alliances: 2 });
@@ -660,5 +696,118 @@ describe("hand-made feeds", () => {
       null,
     ]);
     expect(stats.seats.find((s) => s.seat === "p5")?.cost).toBeNull();
+  });
+
+  test("a pact superseded by an alliance of the two is kept, not broken (review fix)", () => {
+    const items: FeedItem[] = [
+      diplomacy("1:0", 10, "pact_signed", ["p1", "p3"]),
+      diplomacy("2:0", 20, "alliance_formed", ["p1", "p3"], { alliance: "a1" }),
+      diplomacy("3:0", 20, "pact_ended", ["p1", "p3"], { cause: "superseded" }),
+      diplomacy("4:0", 30, "pact_signed", ["p2", "p4"]),
+      diplomacy("5:0", 40, "pact_ended", ["p2", "p4"], { cause: "left" }),
+    ];
+    const stats = matchStats(handMade(LABELS, items), {}, { match: "hand", status: "ended" });
+    const d = (seat: string) => stats.seats.find((s) => s.seat === seat)?.diplomacy;
+    expect(["p1", "p2", "p3", "p4"].map((p) => [p, d(p)?.pactsKept, d(p)?.pactEnds])).toEqual([
+      ["p1", 1, { superseded: 1 }],
+      ["p2", 0, { left: 1 }],
+      ["p3", 1, { superseded: 1 }],
+      ["p4", 0, { left: 1 }],
+    ]);
+  });
+
+  test("tool-call errors: only a malformed call counts, not every stop `other` (review fix)", () => {
+    const other = (rawStop: string | null, calls = 0): LlmCallLine => {
+      const line = LlmLogLineSchema.parse({ ...call("p1", 1, calls, 1), stop: "other", rawStop });
+      if (line.k !== "llm_call") throw new Error("not a call");
+      return line;
+    };
+    // Gemini's malformed call and an OpenAI-compatible tool_calls finish without a parsed call.
+    expect(malformedCall(other("MALFORMED_FUNCTION_CALL"))).toBe(true);
+    expect(malformedCall(other("tool_calls"))).toBe(true);
+    expect(malformedCall(other("function_call"))).toBe(true);
+    // Provider failures and other finishes are not the model's tool calling.
+    for (const raw of [
+      null,
+      "null",
+      "error",
+      "OTHER",
+      "MALFORMED_RESPONSE",
+      "TOO_MANY_TOOL_CALLS",
+      "UNEXPECTED_TOOL_CALL",
+      "incomplete:content_filter",
+      "model_context_window_exceeded",
+    ]) {
+      expect([raw, malformedCall(other(raw))]).toEqual([raw, false]);
+    }
+    expect(malformedCall({ stop: "tool_use", rawStop: "MALFORMED_FUNCTION_CALL", calls: 0 })).toBe(
+      false,
+    );
+    const lines = [
+      other("MALFORMED_FUNCTION_CALL"),
+      other("error"),
+      other(null),
+      call("p1", 2, 1, 1),
+    ];
+    const stats = matchStats(
+      handMade(LABELS, []),
+      { calls: lines },
+      { match: "hand", status: "ended" },
+    );
+    const ops = stats.seats.find((s) => s.seat === "p1")?.operations;
+    expect(ops?.toolErrors.malformed).toBe(1);
+    expect(ops?.stops).toEqual({ other: 3, tool_use: 1 });
+  });
+
+  test("operator strings are cleaned and cut; long ids stay valid and distinct (review fix)", () => {
+    const bidi = "\u202e";
+    const seats = SeatsFileSchema.parse({
+      ...SEATS_BASE,
+      lineup: `budget${bidi}-mix\u200b\u0007`,
+      seats: [
+        {
+          ...LLM_SEAT,
+          seat: "p1",
+          provider: "compat",
+          model: `<img src=x>${bidi}gnp.x${"m".repeat(300)}`,
+          endpoint: `${bidi}z-ai/fp8\u2066`,
+          quantization: `fp8${bidi}<b>x</b>\u200b`,
+        },
+        { ...LLM_SEAT, seat: "p2", provider: "compat", model: `${"m".repeat(300)}2` },
+      ],
+    });
+    const stats = MatchStatsSchema.parse(
+      matchStats(handMade(LABELS, []), { seats }, { match: "hand", status: "ended" }),
+    );
+    const [p1, p2] = stats.seats;
+    const bad = {
+      test: (t: string): boolean => {
+        for (let i = 0; i < t.length; i += 1) {
+          const c = t.charCodeAt(i);
+          if (c < 0x20 || c === 0x200b || (c >= 0x202a && c <= 0x202e)) return true;
+          if (c >= 0x2066 && c <= 0x2069) return true;
+        }
+        return false;
+      },
+    };
+    for (const text of [
+      p1?.model?.model,
+      p1?.model?.endpoint,
+      p1?.model?.quantization,
+      p1?.key,
+      stats.lineup,
+    ]) {
+      expect([text, bad.test(text ?? "")]).toEqual([text, false]);
+    }
+    expect(p1?.model?.model.length).toBeLessThanOrEqual(NAME_MAX_CHARS);
+    // The bell (U+0007) becomes a space, then the line is trimmed.
+    expect(stats.lineup).toBe("budget-mix");
+    // Two long model ids that share their first characters: bounded, valid and still distinct.
+    expect(p1?.id.length).toBeLessThanOrEqual(ID_MAX);
+    expect(p2?.id.length).toBeLessThanOrEqual(ID_MAX);
+    expect(p1?.id).not.toBe(p2?.id);
+    expect(idPart("x".repeat(400)).length).toBe(PART_MAX);
+    expect(idPart("x".repeat(400))).not.toBe(idPart(`${"x".repeat(399)}y`));
+    expect(nameOf(" a\n\tb ")).toBe("a b");
   });
 });

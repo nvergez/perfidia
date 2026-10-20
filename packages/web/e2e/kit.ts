@@ -174,18 +174,36 @@ export const HOSTILE_TOOL = `${HOSTILE.img}${HOSTILE.bidi}`;
 export const HOSTILE_LOGGED_TOOL = `${HOSTILE.script}${HOSTILE.bidi}`;
 export const HOSTILE_LABEL = `<b>cat</b>${HOSTILE.bidi}`;
 
+/** Invisible and bidi characters planted in the operator's strings of `seats.json` (phase 4). */
+export const INVISIBLE = "\u202e\u200b\u2066";
+/** The quantization planted on the OpenRouter seat: markup and bidi (cleaned by the fold). */
+export const HOSTILE_QUANT = `fp8${HOSTILE.bidi.slice(0, 1)}<b>x</b>\u200b`;
+
 /**
  * Plants hostile text in a copy of a fake run: p1's profile, messages and proposals (re-hashed),
  * p1's thoughts and notes (each note a new version), its replies' reasoning and text; in p1's
  * turn 1, a tool name in its first reply and in its first read (`obs`) line, and a refusal's
- * category and an error's kind in its first model call.
+ * category and an error's kind in its first model call. Phase 4: the operator's strings of
+ * `seats.json` get bidi and zero-width characters (the lineup, the GPT seat's model id, the
+ * OpenRouter seat's endpoint) and markup (its quantization): cleaned, they read as the originals.
  */
 export function plantHostile(dir: string): void {
   const seatsPath = join(dir, "seats.json");
   const seats: unknown = JSON.parse(readFileSync(seatsPath, "utf8"));
   const list = isObject(seats) && Array.isArray(seats.seats) ? seats.seats : [];
+  if (isObject(seats) && typeof seats.lineup === "string") {
+    seats.lineup = `${INVISIBLE}${seats.lineup}${INVISIBLE}`;
+  }
   for (const seat of list) {
-    if (!isObject(seat) || seat.seat !== "p1" || !isObject(seat.profile)) continue;
+    if (!isObject(seat)) continue;
+    if (seat.provider === "openai" && typeof seat.model === "string") {
+      seat.model = `${seat.model}${INVISIBLE}`;
+    }
+    if (seat.provider === "openrouter" && typeof seat.endpoint === "string") {
+      seat.endpoint = `${INVISIBLE}${seat.endpoint}`;
+      seat.quantization = HOSTILE_QUANT;
+    }
+    if (seat.seat !== "p1" || !isObject(seat.profile)) continue;
     seat.profile.goal = `${HOSTILE.img} goal`;
     seat.profile.temperament = HOSTILE.script;
     seat.profile.word = `${HOSTILE.js} ${HOSTILE.url}`;
@@ -425,7 +443,13 @@ const DIRTY_DOM = `(() => {
   const walk = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
   while (walk.nextNode()) {
     const v = walk.currentNode.nodeValue ?? "";
-    if (/[\\u202A-\\u202E\\u2066-\\u2069]/.test(v)) out.push("bidi control in text: " + v.slice(0, 40));
+    if (/[\\u202A-\\u202E\\u2066-\\u2069\\u200B]/.test(v)) out.push("bidi control in text: " + v.slice(0, 40));
+  }
+  for (const el of document.querySelectorAll("[title], [aria-label]")) {
+    for (const a of ["title", "aria-label"]) {
+      const v = el.getAttribute(a) ?? "";
+      if (/[\\u202A-\\u202E\\u2066-\\u2069\\u200B]/.test(v)) out.push("bidi control in " + a + ": " + v.slice(0, 40));
+    }
   }
   if (window.__xss !== undefined) out.push("planted handler ran: " + window.__xss);
   for (const v of window.__csp ?? []) out.push("CSP violation: " + v);

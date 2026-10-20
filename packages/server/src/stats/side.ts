@@ -21,8 +21,11 @@ import type { SeriesSummary } from "./aggregate.ts";
 // run directories under a root into the series' blocks. Files are read without following a link.
 
 export const SERIES_FILE = "series.json";
-/** The largest `llm_calls.jsonl` read whole (a 7-day match writes a few megabytes). */
-export const MAX_CALLS_BYTES = 256 * 1024 * 1024;
+/**
+ * The largest `llm_calls.jsonl` read whole: a 7-day fake match writes about 2 MB (1,623 lines);
+ * 64 MB leaves room for thirty times as many calls.
+ */
+export const MAX_CALLS_BYTES = 64 * 1024 * 1024;
 
 const decoder = new TextDecoder("utf-8", { fatal: false });
 

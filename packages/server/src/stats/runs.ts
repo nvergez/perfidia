@@ -1,6 +1,7 @@
 import { basename, join } from "node:path";
 import {
   LogLineSchema,
+  MatchStatsSchema,
   type LogLine,
   type MatchStats,
   type StatsSeriesRef,
@@ -20,7 +21,11 @@ import { readCalls, readCostByKind, readSeries, seriesSummary } from "./side.ts"
 // side files, its status as the server would show it (`store/status.ts`), and its series match when
 // the root is a rotation series (`series.json`). A root is read as the server reads it
 // (`store/discover.ts`: its subdirectories holding a log), so a statistics file's match ids are the
-// server's; with a `publish.json`, only the matches it lists, an `after_end` one once it ended.
+// server's. With a `publish.json`, only the matches the server would show (`store/publish.ts`,
+// `service/matches.ts`): listed, verified (level E), and `live` or ended; the others are left out
+// with a warning, so a file written with `--publish` is one the server serves. Each run's
+// statistics are checked against `perfidia-stats/1` on their own: a run that does not fit is left
+// out with a warning, never the whole aggregate.
 
 const decoder = new TextDecoder("utf-8", { fatal: false });
 
@@ -135,11 +140,25 @@ export function statsOfRoot(
         costs: o.costs !== false,
         series: series.byRun.get(ref.id) ?? null,
       });
+      if (entry !== null && !r.stats.verified) {
+        warnings.push(
+          `${ref.id}: its log does not verify (level E): the server hides it: left out`,
+        );
+        continue;
+      }
       if (entry?.visibility === "after_end" && r.stats.result === null) {
         warnings.push(`${ref.id}: published after its end, and it has not ended: left out`);
         continue;
       }
-      runs.push(r);
+      const fits = MatchStatsSchema.safeParse(r.stats);
+      if (!fits.success) {
+        const where = fits.error.issues[0]?.path.join(".") ?? "";
+        warnings.push(
+          `${ref.id}: its statistics do not fit perfidia-stats/1 (at ${where}): left out`,
+        );
+        continue;
+      }
+      runs.push({ ...r, stats: fits.data });
       warnings.push(...r.warnings);
     } catch (e) {
       warnings.push(`${ref.id}: ${e instanceof Error ? e.message : String(e)}: left out`);

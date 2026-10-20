@@ -1,7 +1,7 @@
 import { mulberry32, streamRng, type Rng } from "@perfidia/engine/core";
 import { samplePlackettLuce } from "./pl.ts";
 import { CLAIM_ALPHA, binomialPower } from "./power.ts";
-import { rateMatches, type RankedMatch } from "./rate.ts";
+import { MIN_BOOTSTRAP_BLOCKS, rateMatches, type RankedMatch } from "./rate.ts";
 
 // The power simulation of design §6.4, over synthetic strengths: series of matches drawn from a
 // Plackett–Luce model with known log-strengths (four LLM models and two bots, one seat each, as in a
@@ -13,9 +13,12 @@ import { rateMatches, type RankedMatch } from "./rate.ts";
 // - binomial: the exact two-sided binomial test on A's head-to-head record against B rejects
 //   p = 0.5 at α (one pair) or α / 6 (six pairs, Bonferroni);
 // - pipeline: the interval of the strength difference A − B excludes 0, at 95% (one pair) or
-//   1 − 0.05 / 6 (six pairs), from the block bootstrap (blocks of 4 matches, as a rotation series'),
-//   or from Laplace intervals.
-// The fraction of series with a claim is the power. Deterministic for a seed.
+//   1 − 0.05 / 6 (six pairs), from Laplace intervals; (one pair) from the block bootstrap's own
+//   percentile interval (blocks of 4 matches, as a rotation series'), at any number of blocks; and
+//   (one pair) from the interval the statistics serve: Laplace below `MIN_BOOTSTRAP_BLOCKS` blocks,
+//   the union of Laplace and the bootstrap from there (`rate.ts`).
+// The fraction of series with a claim is the power. At p = 0.5 (A and B equal) the same fractions
+// are the false-claim rates (the size, 0.05 nominal). Deterministic for a seed.
 
 export interface PowerOptions {
   /** A's head-to-head probability against B (0.7 for 70/30). */
@@ -38,8 +41,10 @@ export interface PowerRow {
   readonly binomial: { readonly one: number; readonly six: number };
   /** Simulated: the pipeline's Laplace intervals on the difference. */
   readonly laplace: { readonly one: number; readonly six: number };
-  /** Simulated: the pipeline's block-bootstrap interval (one pair, 95%); null without replicates. */
+  /** Simulated: the block bootstrap's own percentile interval (one pair, 95%); null without replicates. */
   readonly bootstrap: number | null;
+  /** Simulated: the served interval (one pair, 95%; Laplace, widened by the bootstrap from 5 blocks). */
+  readonly served: number | null;
 }
 
 /** Items: A, B, C, D (LLM models), then two bots. */
@@ -84,6 +89,8 @@ export function simulatePower(o: PowerOptions): PowerRow[] {
     let lapOne = 0;
     let lapSix = 0;
     let bootOne = 0;
+    let servedOne = 0;
+    const blocks = Math.ceil(n / block);
     for (let r = 0; r < o.reps; r += 1) {
       const matches: RankedMatch[] = [];
       let ahead = 0;
@@ -100,11 +107,13 @@ export function simulatePower(o: PowerOptions): PowerRow[] {
       if (rejects(ahead, n, six)) binSix += 1;
       const lap = rateMatches(6, LLM, matches, boot, 0);
       if (excludes(lap.pairs[0]?.interval ?? null)) lapOne += 1;
-      const lap6 = rateMatches(6, LLM, matches, boot, 0, 1 - six);
+      const lap6 = rateMatches(6, LLM, matches, boot, 0, { pairLevel: 1 - six });
       if (excludes(lap6.pairs[0]?.interval ?? null)) lapSix += 1;
       if (o.replicates > 0) {
-        const bs = rateMatches(6, LLM, matches, boot, o.replicates);
-        if (excludes(bs.pairs[0]?.interval ?? null)) bootOne += 1;
+        const bs = rateMatches(6, LLM, matches, boot, o.replicates, { minBlocks: 1 });
+        if (excludes(bs.bootstrap?.pairs[0] ?? null)) bootOne += 1;
+        const served = blocks >= MIN_BOOTSTRAP_BLOCKS ? bs : lap;
+        if (excludes(served.pairs[0]?.interval ?? null)) servedOne += 1;
       }
     }
     const share = (k: number): number => Math.round((k * 1000) / Math.max(1, o.reps)) / 1000;
@@ -117,6 +126,7 @@ export function simulatePower(o: PowerOptions): PowerRow[] {
       binomial: { one: share(binOne), six: share(binSix) },
       laplace: { one: share(lapOne), six: share(lapSix) },
       bootstrap: o.replicates > 0 ? share(bootOne) : null,
+      served: o.replicates > 0 ? share(servedOne) : null,
     };
   });
 }

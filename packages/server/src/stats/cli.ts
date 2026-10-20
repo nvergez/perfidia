@@ -9,7 +9,7 @@ import {
 } from "@perfidia/protocol";
 import { PublishList } from "../store/publish.ts";
 import { DEFAULT_REPLICATES, DEFAULT_SEED, aggregate } from "./aggregate.ts";
-import { formatMatch, formatModels, formatPower } from "./report.ts";
+import { formatMatch, formatModels, formatPower, terminalText } from "./report.ts";
 import { statsOfRoot, statsOfRunDir } from "./runs.ts";
 import { readSeries } from "./side.ts";
 import { simulatePower } from "./simulate.ts";
@@ -40,6 +40,7 @@ export const USAGE = [
   "      (--exploratory: outcomes and ratings below the threshold too, never servable)",
   "  power [--p 0.7] [--matches 12,20,32,48,76] [--reps 200] [--replicates 200] [--seed N] [--json]",
   "      matches a head-to-head claim needs (exact binomial) and the rating pipeline's simulated power",
+  "      (--p 0.5: equal models, so the rates are false claims: the size)",
   "",
 ].join("\n");
 
@@ -79,9 +80,15 @@ function matchCommand(args: readonly string[], io: CliIo): number {
     costs: values["no-costs"] !== true,
     series: series.byRun.get(name) ?? null,
   });
-  for (const w of r.warnings) io.err(`warning: ${w}\n`);
-  if (values.json === true) io.out(`${JSON.stringify(MatchStatsSchema.parse(r.stats), null, 2)}\n`);
-  else io.out(formatMatch(r.stats));
+  for (const w of r.warnings) io.err(`warning: ${terminalText(w)}\n`);
+  const fits = MatchStatsSchema.safeParse(r.stats);
+  if (!fits.success) {
+    const where = fits.error.issues[0]?.path.join(".") ?? "";
+    io.err(`stats: ${name}: its statistics do not fit perfidia-stats/1 (at ${where})\n`);
+    return EXIT.run;
+  }
+  if (values.json === true) io.out(`${JSON.stringify(fits.data, null, 2)}\n`);
+  else io.out(formatMatch(fits.data));
   return EXIT.ok;
 }
 
@@ -125,7 +132,7 @@ function aggregateCommand(args: readonly string[], io: CliIo): number {
   }
   const costs = values["no-costs"] !== true;
   const root = statsOfRoot(values.runs, { costs, publish });
-  for (const w of root.warnings) io.err(`warning: ${w}\n`);
+  for (const w of root.warnings) io.err(`warning: ${terminalText(w)}\n`);
   const file = ModelStatsFileSchema.parse(
     aggregate(
       root.runs.map((r) => r.stats),
@@ -165,7 +172,9 @@ function powerCommand(args: readonly string[], io: CliIo): number {
   });
   if (positionals.length > 0) throw new UsageError("power takes no positional argument");
   const p = values.p === undefined ? 0.7 : Number(values.p);
-  if (!(p > 0.5 && p < 1)) throw new UsageError("--p must be a probability above 0.5 and below 1");
+  if (!(p >= 0.5 && p < 1)) {
+    throw new UsageError("--p must be a probability from 0.5 (the size: equal models) to below 1");
+  }
   const matches = (values.matches ?? "12,20,32,48,76")
     .split(",")
     .map((m) => intFlag(m, "matches", 0, 1));

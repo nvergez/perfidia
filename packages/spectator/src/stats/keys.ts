@@ -1,3 +1,4 @@
+import { fnv1a64 } from "@perfidia/engine/core";
 import {
   EffortSchema,
   type Effort,
@@ -11,7 +12,9 @@ import {
 // as URL path segments: lowercase letters and digits, runs of anything else as `-`, parts joined by
 // `.` (`openrouter.z-ai-glm-5-3.z-ai-fp8.low`, `bot.conqueror.3`). Labels are parsed as the
 // orchestrator writes them: model and endpoint ids escape `%`, `/` and `@` (`%25`, `%2F`, `%40`), the
-// prompt version may carry the operator channel (`-dev`, `-env`).
+// prompt version may carry the operator channel (`-dev`, `-env`). Ids are bounded: a part longer
+// than `PART_MAX` and an id longer than `ID_MAX` are cut and end with a hash of what was cut, so a
+// long model id (a compat seat may name any) still gives a valid, distinct id.
 
 export interface LabelModel {
   readonly provider: string;
@@ -69,13 +72,30 @@ export function modelKey(m: {
   return `${m.provider}/${m.model}${m.endpoint === null ? "" : `@${m.endpoint}`}/${m.effort}`;
 }
 
-/** A part of an id: lowercase letters and digits, every other run as one `-`, trimmed. */
+/** The longest id part kept whole. */
+export const PART_MAX = 48;
+/** The longest id: room for the `-2`, `-3` an aggregate adds to two keys that slug alike (160 in all). */
+export const ID_MAX = 150;
+
+/** `text` within `max` characters: cut, and ended by 12 hex digits of the whole text's hash. */
+function bounded(text: string, max: number): string {
+  if (text.length <= max) return text;
+  const head = text.slice(0, max - 13).replaceAll(/[-.]+$/g, "");
+  return `${head}-${fnv1a64(text).slice(0, 12)}`;
+}
+
+/** A part of an id: lowercase letters and digits, every other run as one `-`, trimmed, bounded. */
 export function idPart(text: string): string {
   const out = text
     .toLowerCase()
     .replaceAll(/[^a-z0-9]+/g, "-")
     .replaceAll(/^-+|-+$/g, "");
-  return out === "" ? "x" : out;
+  return out === "" ? "x" : bounded(out, PART_MAX);
+}
+
+/** An id within `ID_MAX` characters. */
+export function boundedId(id: string): string {
+  return bounded(id, ID_MAX);
 }
 
 /** The id of a model key's parts. */
@@ -86,14 +106,16 @@ export function modelIdOf(m: {
   readonly effort: string;
 }): string {
   const parts = [m.provider, m.model, ...(m.endpoint === null ? [] : [m.endpoint]), m.effort];
-  return parts.map(idPart).join(".");
+  return boundedId(parts.map(idPart).join("."));
 }
 
 /** `bot:conqueror@3` → `bot.conqueror.3`; any other label → `bot.<label>`. */
 export function botIdOf(label: string): string {
   const m = /^bot:([a-z][a-z0-9-]*)(?:@([0-9]+))?$/.exec(label);
-  if (m?.[1] === undefined) return `bot.${idPart(label.replace(/^bot:/, ""))}`;
-  return m[2] === undefined ? `bot.${idPart(m[1])}` : `bot.${idPart(m[1])}.${m[2]}`;
+  if (m?.[1] === undefined) return boundedId(`bot.${idPart(label.replace(/^bot:/, ""))}`);
+  return boundedId(
+    m[2] === undefined ? `bot.${idPart(m[1])}` : `bot.${idPart(m[1])}.${idPart(m[2])}`,
+  );
 }
 
 /** `odysseus@1` → `odysseus.1`. */
@@ -123,12 +145,12 @@ export function itemOf(s: SeatKeyParts, grouping: StatsGrouping): { key: string;
   if (grouping === "profile") {
     return s.profile === null
       ? { key: "profile:unknown", id: "profile.unknown" }
-      : { key: `profile:${s.profile}`, id: `profile.${profileIdOf(s.profile)}` };
+      : { key: `profile:${s.profile}`, id: boundedId(`profile.${profileIdOf(s.profile)}`) };
   }
   if (grouping === "variant") {
     const v = s.variant ?? "system";
     return { key: `variant:${v}`, id: `variant.${v}` };
   }
   const p = s.profile ?? "unknown";
-  return { key: `${s.key} as ${p}`, id: `${s.id}.as.${profileIdOf(p)}` };
+  return { key: `${s.key} as ${p}`, id: boundedId(`${s.id}.as.${profileIdOf(p)}`) };
 }

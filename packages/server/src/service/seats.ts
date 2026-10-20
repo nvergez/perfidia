@@ -1,6 +1,7 @@
 import { EffortSchema, type Effort, type HeaderLine, type SeatsFile } from "@perfidia/protocol";
 import type { SeatInfo } from "@perfidia/protocol/spectator";
 import { cleanText } from "@perfidia/spectator";
+import { nameOf } from "@perfidia/spectator/stats";
 import type { ArenaInfo } from "../store/rundir.ts";
 
 // Who plays each seat (phase-3 design §2.6, §3.3): from the header's controller labels, `seats.json`
@@ -75,11 +76,12 @@ export function seatInfos(
         label: cleanText(label),
         color,
         fake: runFake || file.provider === "fake",
+        // The operator's strings, cleaned like player text (bidi and invisible controls) and cut.
         model: {
-          provider: file.provider,
-          model: file.model,
+          provider: nameOf(file.provider),
+          model: nameOf(file.model),
           effort: file.effort,
-          ...(file.endpoint === undefined ? {} : { endpoint: file.endpoint }),
+          ...(file.endpoint === undefined ? {} : { endpoint: nameOf(file.endpoint) }),
         },
         profile: {
           id: p.id,
@@ -103,10 +105,10 @@ export function seatInfos(
         color,
         fake: runFake || llm.provider === "fake",
         model: {
-          provider: llm.provider,
-          model: llm.model,
+          provider: nameOf(llm.provider),
+          model: nameOf(llm.model),
           effort: llm.effort,
-          ...(llm.endpoint === null ? {} : { endpoint: llm.endpoint }),
+          ...(llm.endpoint === null ? {} : { endpoint: nameOf(llm.endpoint) }),
         },
         profile: null,
         handoffBot: null,

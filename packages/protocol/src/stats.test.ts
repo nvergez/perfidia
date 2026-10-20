@@ -44,21 +44,30 @@ test("model ids are URL path segments", () => {
   expect(StatsGroupingSchema.options).toEqual(["model", "profile", "variant", "model-profile"]);
 });
 
-test("counts never carry a __proto__ key; a claim state is one of three", () => {
+test("counts never carry a __proto__ key; a claim state is one of four", () => {
   const claims = {
     state: "too_few_matches",
     gap: "70/30",
     models: 4,
     pairs: 6,
+    unmet: 0,
     alpha: 0.05 / 6,
     matches: 4,
     needed: 74,
     more: 70,
     power: 0.1,
     table: [{ gap: "70/30", needed: 74, power: 0.1 }],
+    balance: { ok: true, items: [] },
   };
   expect(ClaimsSchema.safeParse(claims).success).toBe(true);
+  expect(ClaimsSchema.safeParse({ ...claims, state: "unbalanced" }).success).toBe(true);
   expect(ClaimsSchema.safeParse({ ...claims, state: "ranked" }).success).toBe(false);
+  expect(ClaimsSchema.shape.state.options).toEqual([
+    "ok",
+    "too_few_matches",
+    "unbalanced",
+    "no_comparison",
+  ]);
   const counts = MatchStatsSchema.shape.seats.element.shape.play.shape.rejections;
   expect(counts.safeParse({ INVALID_ARGS: 1 }).success).toBe(true);
   expect(counts.safeParse(JSON.parse('{"__proto__": 1}')).success).toBe(false);

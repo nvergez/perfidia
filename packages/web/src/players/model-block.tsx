@@ -1,6 +1,6 @@
 import type { SeatInfo, SeatStats } from "@perfidia/protocol/spectator";
-import { Cpu, Loader2 } from "lucide-react";
-import type { ReactNode } from "react";
+import { Cpu, Eye, Loader2 } from "lucide-react";
+import { useState, type ReactNode } from "react";
 import { GameTime } from "../common/game-time.tsx";
 import { NotPublished } from "../common/not-published.tsx";
 import { ReasoningKindTag } from "../common/reasoning-kind.tsx";
@@ -12,6 +12,7 @@ import {
   hostName,
   isFakeSeat,
   providerName,
+  reasoningKindHint,
   rehearsalOf,
   seatReasoningKind,
   servingProvider,
@@ -26,10 +27,13 @@ import {
   fmtUsdFine,
   handoffWords,
   mainReasoningKind,
+  perPartner,
   reasoningKindsWords,
   remindersWords,
+  atStatsEnd,
   seriesWords,
   total,
+  wholeMatchShown,
 } from "../models/format.ts";
 import { useMatch, usePublished } from "../store/hooks.ts";
 import { isRunningStatus } from "../store/session.ts";
@@ -43,6 +47,12 @@ import { useMatchStats } from "./match-stats.ts";
 // what went wrong. A fake seat reads as a rehearsal, never as the model it stands in for. From
 // `GET /api/matches/:id/stats`, shared by the match's dossiers; before it comes (or without it),
 // what the seat list says. A chunk loaded on demand with the dossier.
+//
+// The statistics cover the whole match (or a running match so far), so in a replay they would tell
+// what happens after the time shown (a hand-off, the spend, the calls): phase 3 §16.8 keeps the
+// dossier at the playhead. Who the model is, its effort, reasoning kind, harness and lineup show
+// always; the whole-match figures only at the end of the match, while following it live, or once
+// the viewer asks for them ("Show the whole match's figures").
 
 function Row({ label, children }: { readonly label: string; readonly children: ReactNode }) {
   return (
@@ -104,7 +114,28 @@ function incidentsOf(s: SeatStats): ReactNode {
   ));
 }
 
-function Details({ s, fake }: { readonly s: SeatStats; readonly fake: boolean }) {
+function Harness({ s }: { readonly s: SeatStats }) {
+  if (s.profile === null && s.promptVariant === null) return null;
+  return (
+    <Row label="Harness">
+      {s.profile === null ? null : (
+        <>
+          profile <span className="font-mono">{s.profile}</span>
+        </>
+      )}
+      {s.promptVariant === null ? null : (
+        <>
+          {s.profile === null ? null : " · "}
+          operator notes as {channelWords(s.promptVariant)}
+        </>
+      )}
+      {s.reminders === null ? null : <> · {remindersWords(s.reminders)}</>}
+    </Row>
+  );
+}
+
+/** The whole match's figures (or a running match's so far): shown only as `wholeMatchShown` says. */
+function Figures({ s, fake }: { readonly s: SeatStats; readonly fake: boolean }) {
   const published = usePublished();
   const running = useMatch((st) => isRunningStatus(st.status));
   const ops = s.operations;
@@ -114,22 +145,6 @@ function Details({ s, fake }: { readonly s: SeatStats; readonly fake: boolean })
   const tools = ops === null ? null : ops.toolErrors.malformed + ops.toolErrors.invalidArgs;
   return (
     <>
-      {s.profile === null && s.promptVariant === null ? null : (
-        <Row label="Harness">
-          {s.profile === null ? null : (
-            <>
-              profile <span className="font-mono">{s.profile}</span>
-            </>
-          )}
-          {s.promptVariant === null ? null : (
-            <>
-              {s.profile === null ? null : " · "}
-              operator notes as {channelWords(s.promptVariant)}
-            </>
-          )}
-          {s.reminders === null ? null : <> · {remindersWords(s.reminders)}</>}
-        </Row>
-      )}
       <Row label="Calls">
         {plural(s.play.wakes, "wake")} · {plural(s.play.rounds, "round")} ·{" "}
         {plural(s.play.calls, "tool call")}
@@ -151,40 +166,38 @@ function Details({ s, fake }: { readonly s: SeatStats; readonly fake: boolean })
         )}
       </Row>
       <Row label="Incidents">{incidentsOf(s)}</Row>
-      {published.costs ? (
-        cost === null ? null : (
-          <Row label={running ? "Spent so far" : "Spent"}>
-            <span data-testid="model-spend">
-              {fmtUsdFine(cost.nanoUsd)}
-              {cost.perWakeNanoUsd === null ? null : (
-                <> · {fmtUsdFine(cost.perWakeNanoUsd)} a wake</>
-              )}{" "}
-              · cache reads {fmtPermille(cost.cacheReadPermille)} of the prompt ·{" "}
-              {fmtTokens(
-                cost.tokens.input +
-                  cost.tokens.cacheWrite5m +
-                  cost.tokens.cacheWrite1h +
-                  cost.tokens.cacheRead +
-                  cost.tokens.output,
-              )}{" "}
-              tokens
-              {cost.feesNanoUsd > 0 ? <> · fees {fmtUsdFine(cost.feesNanoUsd)}</> : null}
-              {fake ? <span className="text-muted-foreground"> (simulated prices)</span> : null}
-            </span>
-          </Row>
-        )
-      ) : (
-        <Row label="Spent">
-          <NotPublished what="Costs" />
+      {!published.costs || cost === null ? null : (
+        <Row label={running ? "Spent so far" : "Spent"}>
+          <span data-testid="model-spend">
+            {fmtUsdFine(cost.nanoUsd)}
+            {cost.perWakeNanoUsd === null ? null : (
+              <> · {fmtUsdFine(cost.perWakeNanoUsd)} a wake</>
+            )}{" "}
+            · cache reads {fmtPermille(cost.cacheReadPermille)} of the prompt ·{" "}
+            {fmtTokens(
+              cost.tokens.input +
+                cost.tokens.cacheWrite5m +
+                cost.tokens.cacheWrite1h +
+                cost.tokens.cacheRead +
+                cost.tokens.output,
+            )}{" "}
+            tokens
+            {cost.feesNanoUsd > 0 ? <> · fees {fmtUsdFine(cost.feesNanoUsd)}</> : null}
+            {fake ? <span className="text-muted-foreground"> (simulated prices)</span> : null}
+          </span>
         </Row>
       )}
       {same === null ||
       cross === null ||
+      same.partners === 0 ||
       same.messages + same.pacts + same.alliances === 0 ? null : (
         <Row label="Same model">
-          {plural(same.messages, "message")}, {plural(same.pacts, "pact")},{" "}
-          {plural(same.alliances, "alliance")} with seats on its own model; {fmtInt(cross.messages)}
-          , {fmtInt(cross.pacts)}, {fmtInt(cross.alliances)} with the others
+          {plural(same.messages, "message")} sent, {plural(same.pacts, "pact")},{" "}
+          {plural(same.alliances, "alliance")} with its {plural(same.partners, "seat")} on its own
+          model ({perPartner(same.messages + same.pacts + same.alliances, same.partners)}); with its{" "}
+          {plural(cross.partners, "seat")} on others {fmtInt(cross.messages)}, {fmtInt(cross.pacts)}
+          , {fmtInt(cross.alliances)} (
+          {perPartner(cross.messages + cross.pacts + cross.alliances, cross.partners)})
         </Row>
       )}
     </>
@@ -196,8 +209,14 @@ export function ModelBlock({ seat }: { readonly seat: SeatInfo }) {
   const match = useMatch((s) => s.id);
   const running = useMatch((s) => isRunningStatus(s.status));
   const published = usePublished();
-  const state = useMatchStats(match, running);
+  const status = useMatch((s) => s.status);
+  const state = useMatchStats(match, status);
   const stats = state?.status === "ok" ? state.value : null;
+  const [asked, setAsked] = useState(false);
+  const lastT = stats?.lastT ?? Number.POSITIVE_INFINITY;
+  const live = useMatch((s) => s.mode === "live");
+  const atEnd = useMatch((s) => atStatsEnd(s.playhead, lastT));
+  const whole = wholeMatchShown({ atEnd, live, asked });
   const s = stats?.seats.find((x) => x.seat === seat.seat) ?? null;
   const fake = isFakeSeat(seat);
   const m: ModelRef | null =
@@ -260,7 +279,10 @@ export function ModelBlock({ seat }: { readonly seat: SeatInfo }) {
         <Row label="Reasoning">
           <span className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5">
             {kind === null ? "not logged" : <ReasoningKindTag kind={kind} />}
-            {kinds === null || !published.reasoning ? null : (
+            {kind === null ? null : (
+              <span className="text-muted-foreground">{reasoningKindHint(kind)}</span>
+            )}
+            {kinds === null || !published.reasoning || !whole ? null : (
               <span className="text-muted-foreground">attempts: {reasoningKindsWords(kinds)}</span>
             )}
           </span>
@@ -271,8 +293,14 @@ export function ModelBlock({ seat }: { readonly seat: SeatInfo }) {
             {stats.series === null ? null : <> · {seriesWords(stats.series)}</>}
           </Row>
         )}
-        {s === null ? null : <Details s={s} fake={fake} />}
-        {stats === null || stats.cost === null || !published.costs ? null : (
+        {s === null ? null : <Harness s={s} />}
+        {s === null || published.costs ? null : (
+          <Row label="Spent">
+            <NotPublished what="Costs" />
+          </Row>
+        )}
+        {s === null || !whole ? null : <Figures s={s} fake={fake} />}
+        {stats === null || stats.cost === null || !published.costs || !whole ? null : (
           <Row label="Match">
             {fmtUsdFine(stats.cost.nanoUsd)} spent by every seat together
             {stats.cost.budgetNanoUsd === null ? null : (
@@ -281,7 +309,9 @@ export function ModelBlock({ seat }: { readonly seat: SeatInfo }) {
           </Row>
         )}
       </dl>
-      {state === null || state.status === "loading" ? (
+      {state === null ||
+      state.status === "loading" ||
+      (state.status === "error" && state.code === "LOADING") ? (
         <p className="text-muted-foreground flex items-center gap-1.5 text-xs">
           <Loader2 className="size-3 motion-safe:animate-spin" aria-hidden="true" /> Loading the
           match's statistics…
@@ -290,10 +320,25 @@ export function ModelBlock({ seat }: { readonly seat: SeatInfo }) {
         <p className="text-muted-foreground text-xs">
           The match's statistics are not available ({state.message}).
         </p>
-      ) : s === null ? null : (
-        <p className="text-muted-foreground text-[0.7rem]">
-          {running ? "So far in this match" : "Over the whole match"}, whatever the playhead.
+      ) : s === null ? null : whole ? (
+        <p className="text-muted-foreground text-[0.7rem]" data-testid="model-whole">
+          {running ? "So far in this match" : "Over the whole match"}
+          {asked && !live ? ", whatever the time shown" : ""}.
         </p>
+      ) : (
+        <div className="flex flex-col items-start gap-1" data-testid="model-later">
+          <p className="text-muted-foreground text-[0.7rem]">
+            Its calls, incidents and spending cover the whole match: they would tell what happens
+            after the time shown.
+          </p>
+          <button
+            type="button"
+            onClick={() => setAsked(true)}
+            className="text-primary hover:text-primary/80 flex items-center gap-1 text-xs font-medium"
+          >
+            <Eye className="size-3" aria-hidden="true" /> Show the whole match's figures
+          </button>
+        </div>
       )}
     </section>
   );

@@ -1,7 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import type { Claims, ModelAggregate, RatingItem } from "@perfidia/protocol/spectator";
+import type { Claims, ModelAggregate, RatingItem, Ratings } from "@perfidia/protocol/spectator";
 import fc from "fast-check";
 import {
+  atStatsEnd,
+  balanceWords,
   botName,
   channelWords,
   claimExplanation,
@@ -16,15 +18,21 @@ import {
   fmtTokens,
   fmtUsdFine,
   handoffWords,
+  intervalWords,
   itemName,
   mainReasoningKind,
+  perPartner,
   rankingShown,
   ratingOrder,
   reasoningKindsWords,
   remindersWords,
   scalePercent,
+  separated,
   seriesWords,
+  shownClaim,
+  shownRatings,
   total,
+  wholeMatchShown,
 } from "./format.ts";
 
 const claims = (o: Partial<Claims> = {}): Claims => ({
@@ -32,6 +40,7 @@ const claims = (o: Partial<Claims> = {}): Claims => ({
   gap: "70/30",
   models: 4,
   pairs: 6,
+  unmet: 0,
   alpha: 0.05 / 6,
   matches: 4,
   needed: 74,
@@ -42,6 +51,7 @@ const claims = (o: Partial<Claims> = {}): Claims => ({
     { gap: "70/30", needed: 74, power: 0 },
     { gap: "60/40", needed: 303, power: 0 },
   ],
+  balance: { ok: true, items: [] },
   ...o,
 });
 
@@ -84,18 +94,21 @@ describe("money, shares and numbers", () => {
     expect(fmtUsdFine(20_700_000)).toBe("$0.0207");
     expect(fmtUsdFine(140_300_000)).toBe("$0.1403");
     expect(fmtUsdFine(999_940_000)).toBe("$0.9999");
+    // Just under a dollar rounds up to one (not "$0.10000", ten times too low).
+    expect(fmtUsdFine(999_950_000)).toBe("$1.00");
+    expect(fmtUsdFine(999_999_999)).toBe("$1.00");
     expect(fmtUsdFine(1_000_000_000)).toBe("$1.00");
     expect(fmtUsdFine(12_050_000_000)).toBe("$12.05");
   });
 
   test("sub-dollar amounts round to the nearest ten-thousandth of a dollar", () => {
     fc.assert(
-      fc.property(fc.integer({ min: 100_000, max: 999_949_999 }), (nano) => {
+      fc.property(fc.integer({ min: 100_000, max: 999_999_999 }), (nano) => {
         const s = fmtUsdFine(nano);
-        expect(s).toMatch(/^\$0\.\d{4}$/);
+        expect(s).toMatch(/^\$(0\.\d{4}|1\.00)$/);
         expect(Math.abs(Number(s.slice(1)) * 1e9 - nano)).toBeLessThanOrEqual(50_000);
       }),
-      { numRuns: 300 },
+      { numRuns: 300, examples: [[999_950_000], [999_999_999], [999_949_999]] },
     );
   });
 
@@ -116,6 +129,15 @@ describe("money, shares and numbers", () => {
     expect(fmtTokens(950)).toBe("950");
     expect(fmtTokens(12_400)).toBe("12.4K");
     expect(fmtTokens(1_234_567)).toBe("1.23M");
+    // 999,950 rounds up to a million, never "1000.0K".
+    expect(fmtTokens(999_949)).toBe("999.9K");
+    expect(fmtTokens(999_950)).toBe("1.00M");
+    fc.assert(
+      fc.property(fc.integer({ min: 1000, max: 9_999_999 }), (n) => {
+        expect(fmtTokens(n)).toMatch(/^(\d{1,3}\.\dK|\d+\.\d{2}M)$/);
+      }),
+      { numRuns: 200, examples: [[999_950], [999_999]] },
+    );
     expect(scalePercent(5, 0, 10)).toBe(50);
     expect(scalePercent(-100, 0, 10)).toBe(0);
     expect(scalePercent(3, 3, 3)).toBe(50);
@@ -128,8 +150,81 @@ describe("the claim state", () => {
     expect(claimHeadline(c)).toBe("Too few matches: 70 more needed (power now 0.00)");
     expect(rankingShown(c)).toBe(false);
     expect(claimExplanation(c)).toBe(
-      "A ranking is shown once every pair of models has met in 74 rated matches: enough to see a 70/30 head-to-head edge 80% of the time (exact binomial test, α = 0.05 split over 6 pairs). 4 models, 6 pairs; the pair that met least has met in 4 rated matches.",
+      "A ranking is shown once every pair of models has met in 74 rated matches: enough to see a 70/30 head-to-head edge 80% of the time (exact binomial test, α = 0.05 split over 6 pairs), and once each model has played each profile and seat about equally often. 4 models, 6 pairs; the pair that met least has met in 4 rated matches.",
     );
+    // Pairs that never met are said.
+    expect(claimExplanation(claims({ models: 8, pairs: 28, unmet: 16, matches: 0 }))).toContain(
+      "16 pairs of models never met",
+    );
+  });
+
+  test("unbalanced: enough matches, not rotated; the worst imbalance in words", () => {
+    const c = claims({
+      state: "unbalanced",
+      matches: 76,
+      more: 0,
+      balance: {
+        ok: false,
+        items: [
+          { id: "a", factor: "profile", min: 0, max: 76, levels: 4 },
+          { id: "b", factor: "seat", min: 0, max: 76, levels: 4 },
+        ],
+      },
+    });
+    expect(rankingShown(c)).toBe(false);
+    expect(claimHeadline(c)).toBe(
+      "Enough matches, but not rotated: the models did not play each profile and seat about equally often",
+    );
+    expect(balanceWords(c, (id) => id.toUpperCase())).toStartWith(
+      "A played one profile 0 times and another 76 times (and 1 other imbalance)",
+    );
+    expect(balanceWords(claims(), (id) => id)).toBeNull();
+  });
+
+  test("below the threshold nothing ranked is shown, whatever was served", () => {
+    const iv = { lo: 0, hi: 1 };
+    const ratings: Ratings = {
+      method: "map-plackett-luce",
+      priorSigma: 1.5,
+      intervals: {
+        method: "laplace+block-bootstrap",
+        level: 0.95,
+        pairLevel: 1 - 0.05 / 6,
+        blocks: 19,
+        replicates: 1000,
+        bootstrapSeed: 1,
+      },
+      headline: { matches: 1, seats: 1, items: [], pairs: [] },
+      clean: { matches: 1, seats: 1, items: [], pairs: [] },
+    };
+    for (const state of ["too_few_matches", "unbalanced", "no_comparison"] as const) {
+      expect(shownRatings(claims({ state }), ratings)).toBeNull();
+      expect(shownClaim(claims({ state }), iv)).toBeNull();
+    }
+    expect(shownRatings(claims({ state: "ok" }), ratings)).toBe(ratings);
+    expect(shownClaim(claims({ state: "ok" }), iv)).toBe(iv);
+    expect(intervalWords(ratings)).toBe(
+      "95% intervals by Laplace intervals, widened where a block bootstrap over 19 blocks (1,000 replicates) is wider; pairs at 99.2% (α = 0.05 split over the pairs, as the claim)",
+    );
+    expect(
+      intervalWords({
+        ...ratings,
+        intervals: { ...ratings.intervals, method: "laplace", blocks: 3 },
+      }),
+    ).toStartWith("95% intervals by Laplace intervals (fewer than 5 blocks: 3)");
+    expect([separated({ lo: 0.1, hi: 1 }), separated({ lo: -1, hi: -0.1 })]).toEqual([true, true]);
+    expect(separated({ lo: -0.1, hi: 1 })).toBe(false);
+  });
+
+  test("the model block at the playhead: whole-match figures only at the end, live, or asked", () => {
+    expect(atStatsEnd(100, 100)).toBe(true);
+    expect(atStatsEnd(99, 100)).toBe(false);
+    expect(wholeMatchShown({ atEnd: false, live: false, asked: false })).toBe(false);
+    expect(wholeMatchShown({ atEnd: true, live: false, asked: false })).toBe(true);
+    expect(wholeMatchShown({ atEnd: false, live: true, asked: false })).toBe(true);
+    expect(wholeMatchShown({ atEnd: false, live: false, asked: true })).toBe(true);
+    expect(perPartner(3, 2)).toBe("1.50 a partner");
+    expect(perPartner(3, 0)).toBe("–");
   });
 
   test("ok: a ranking may be shown; no comparison: says so", () => {
@@ -206,6 +301,21 @@ describe("words", () => {
     expect(mainReasoningKind({ summary: 2, raw: 1 })).toBe("summary");
     expect(mainReasoningKind({ none: 3 })).toBe("none");
     expect(mainReasoningKind({})).toBeNull();
+  });
+
+  test("labels named like Object's members read as themselves (no inherited lookup)", () => {
+    for (const k of ["__proto__", "constructor", "toString", "hasOwnProperty"]) {
+      expect([channelWords(k), remindersWords(k), handoffWords(k)]).toEqual([k, k, k]);
+    }
+    expect(
+      mainReasoningKind(
+        Object.fromEntries([
+          ["__proto__", 3],
+          ["raw", 1],
+        ]),
+      ),
+    ).toBe("raw");
+    expect(mainReasoningKind({ constructor: 2 })).toBeNull();
   });
 
   test("channel, reminders, hand-off, series, counts", () => {

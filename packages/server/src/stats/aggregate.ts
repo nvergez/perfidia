@@ -23,23 +23,31 @@ import {
   MIN_BOOTSTRAP_BLOCKS,
   percentileInterval,
   rateMatches,
+  smallSampleFactor,
   type RankedMatch,
 } from "./rate.ts";
 
 // Per-model statistics across matches (phase-4 design §6.2, §6.4): every seat of every match is an
 // item (its model by default; or its profile, prompt variant, model × profile; a bot is always its
 // bot), as it started (intention to treat). Descriptive figures (wakes, messages, pacts, battles,
-// errors, cost) are summed per item; cost per match is also given per lineup, since social and
-// urgent wakes depend on the opponents. Outcomes (final ranks, wins) and the ratings are claims: they
-// are computed only once every compared pair of LLM items met in the rated matches a 70/30
-// head-to-head claim needs (`power.ts`), or with `exploratory` (the command line only).
+// errors, cost) are summed per item; cost per match is taken over rated matches (an unfinished
+// match's spend is partial) and also given per lineup, since social and urgent wakes depend on the
+// opponents. Outcomes (final ranks, wins) and the ratings are claims: they are computed only once
+// every pair of compared items met in the rated matches a 70/30 head-to-head claim needs
+// (`power.ts`) and the rotation is balanced (each compared model on each profile and seat about
+// equally often, design §3.7), or with `exploratory` (the command line only).
 //
-// Ratings: a MAP Plackett–Luce fit of each rated match's full ranking (`pl.ts`), LLM strengths summed
-// to zero, also on an Elo-like scale; the headline keeps every seat as it started, the clean
+// The compared items are the LLM items of the rated matches; in a root that holds a real (not fake)
+// rated LLM seat, fake items are reference players like the bots (a rehearsal neither blocks nor
+// joins a claim about real models); a root of bots only compares its bots (the power check).
+//
+// Ratings: a MAP Plackett–Luce fit of each rated match's full ranking (`pl.ts`), compared strengths
+// summed to zero, also on an Elo-like scale; the headline keeps every seat as it started, the clean
 // sensitivity drops handed-off seats from their rankings. Intervals: a block bootstrap over rotation
-// blocks (a series' block of matches, else a match alone), seeded and deterministic, from 5 blocks;
-// below, Laplace posterior intervals (strengths and differences only). Everything is sorted by id,
-// never by outcome.
+// Laplace posterior intervals, widened from `MIN_BOOTSTRAP_BLOCKS` blocks to the union with a block
+// bootstrap over rotation blocks (a series' block of matches, else a match alone), seeded and
+// deterministic (`rate.ts`); mean ranks have the bootstrap's interval only. Pair differences are at
+// the claim's Bonferroni level. Everything is sorted by id, never by outcome.
 
 export type SeriesSummary = ModelStatsFile["series"][number];
 
@@ -83,6 +91,76 @@ interface SeatRef {
   readonly item: number;
 }
 
+type Imbalance = Claims["balance"]["items"][number];
+type Factor = Imbalance["factor"];
+
+/** The factors a grouping leaves to the rotation (design §3.7): what must be balanced. */
+const FACTORS: Readonly<Record<StatsGrouping, readonly Factor[]>> = {
+  model: ["profile", "seat"],
+  profile: ["model", "seat"],
+  variant: ["model", "profile", "seat"],
+  "model-profile": ["seat"],
+};
+
+/** A seat's level of a factor (null: not known, left out). */
+function levelOf(r: SeatRef, f: Factor): string | null {
+  if (f === "seat") return r.seat.seat;
+  if (f === "profile") return r.seat.profile;
+  return r.seat.key;
+}
+
+/** The most two counts of a balanced item may differ by: one, or a tenth of the larger. */
+export const balanceSlack = (most: number): number => Math.max(1, Math.ceil(most / 10));
+
+/** Imbalances shown at most. */
+const IMBALANCES_SHOWN = 12;
+
+/**
+ * The rotation's balance over the rated seats (design §3.7): for each compared item and factor, its
+ * seats per level of the factor (the levels the compared seats of its matches took) differ by at
+ * most `balanceSlack`. A Graeco-Latin series gives equal counts per block; a lineup played without
+ * rotation (each model always on one profile and seat) fails.
+ */
+export function balanceOf(
+  rated: readonly SeatRef[],
+  compared: ReadonlySet<number>,
+  factors: readonly Factor[],
+  idOf: (item: number) => string,
+): Claims["balance"] {
+  const byMatch = new Map<string, SeatRef[]>();
+  for (const r of rated) {
+    if (!compared.has(r.item)) continue;
+    byMatch.set(r.match.match, [...(byMatch.get(r.match.match) ?? []), r]);
+  }
+  const out: Imbalance[] = [];
+  for (const item of [...compared].toSorted((a, b) => byText(idOf(a), idOf(b)))) {
+    const mine = [...byMatch.values()].filter((seats) => seats.some((r) => r.item === item));
+    for (const factor of factors) {
+      const counts = new Map<string, number>();
+      for (const seats of mine) {
+        for (const r of seats) {
+          const level = levelOf(r, factor);
+          if (level === null) continue;
+          counts.set(level, (counts.get(level) ?? 0) + (r.item === item ? 1 : 0));
+        }
+      }
+      if (counts.size < 2) continue;
+      const values = [...counts.values()];
+      const min = Math.min(...values);
+      const max = Math.max(...values);
+      if (max - min > balanceSlack(max)) {
+        out.push({ id: idOf(item), factor, min, max, levels: counts.size });
+      }
+    }
+  }
+  return {
+    ok: out.length === 0,
+    items: out
+      .toSorted((a, b) => b.max - b.min - (a.max - a.min) || byText(a.id, b.id))
+      .slice(0, IMBALANCES_SHOWN),
+  };
+}
+
 function merge(into: Map<string, number>, rec: Readonly<Record<string, number>>): void {
   for (const [k, v] of Object.entries(rec)) into.set(k, (into.get(k) ?? 0) + v);
 }
@@ -104,27 +182,51 @@ function assignIds(items: Item[]): void {
   }
 }
 
-/** The claim state of the rated matches (design §6.4). */
-export function claimsOf(rated: readonly (readonly number[])[], llm: ReadonlySet<number>): Claims {
-  const pairs = new Map<string, number>();
+const BALANCED: Claims["balance"] = { ok: true, items: [] };
+
+/**
+ * The claim state of the rated matches (design §6.4): every pair of the compared items present in
+ * a rated match counts, met or not (a pair that never met has met in 0 matches), so the threshold
+ * holds for every pair a ranking would order; then the rotation's balance.
+ */
+export function claimsOf(
+  rated: readonly (readonly number[])[],
+  compared: ReadonlySet<number>,
+  balance: Claims["balance"] = BALANCED,
+): Claims {
+  const met = new Map<string, number>();
   const present = new Set<number>();
   for (const items of rated) {
-    const mine = [...new Set(items.filter((i) => llm.has(i)))].toSorted((a, b) => a - b);
+    const mine = [...new Set(items.filter((i) => compared.has(i)))].toSorted((a, b) => a - b);
     for (const i of mine) present.add(i);
     for (const [k, a] of mine.entries()) {
-      for (const b of mine.slice(k + 1)) pairs.set(`${a}|${b}`, (pairs.get(`${a}|${b}`) ?? 0) + 1);
+      for (const b of mine.slice(k + 1)) met.set(`${a}|${b}`, (met.get(`${a}|${b}`) ?? 0) + 1);
     }
   }
-  const compared = pairs.size;
-  const matches = compared === 0 ? 0 : Math.min(...pairs.values());
-  const alpha = CLAIM_ALPHA / Math.max(1, compared);
-  const needed = neededFor(CLAIM_GAP.p, Math.max(1, compared));
-  const state = compared === 0 ? "no_comparison" : matches >= needed ? "ok" : "too_few_matches";
+  const order = [...present].toSorted((a, b) => a - b);
+  const counts: number[] = [];
+  for (const [k, a] of order.entries()) {
+    for (const b of order.slice(k + 1)) counts.push(met.get(`${a}|${b}`) ?? 0);
+  }
+  const pairs = counts.length;
+  const unmet = counts.filter((c) => c === 0).length;
+  const matches = pairs === 0 ? 0 : Math.min(...counts);
+  const alpha = CLAIM_ALPHA / Math.max(1, pairs);
+  const needed = neededFor(CLAIM_GAP.p, Math.max(1, pairs));
+  const state =
+    pairs === 0
+      ? "no_comparison"
+      : matches < needed
+        ? "too_few_matches"
+        : balance.ok
+          ? "ok"
+          : "unbalanced";
   return {
     state,
     gap: CLAIM_GAP.label,
     models: present.size,
-    pairs: compared,
+    pairs,
+    unmet,
     alpha: r6(alpha),
     matches,
     needed,
@@ -132,9 +234,10 @@ export function claimsOf(rated: readonly (readonly number[])[], llm: ReadonlySet
     power: r6(binomialPower(matches, CLAIM_GAP.p, alpha)),
     table: GAPS.map((g) => ({
       gap: g.label,
-      needed: neededFor(g.p, Math.max(1, compared)),
+      needed: neededFor(g.p, Math.max(1, pairs)),
       power: r6(binomialPower(matches, g.p, alpha)),
     })),
+    balance,
   };
 }
 
@@ -172,19 +275,29 @@ const TOKEN_KINDS = [
   "reasoning",
 ] as const;
 
+/** The pairs' interval level: 1 − 0.05 / pairs, the claim state's Bonferroni α. */
+export const pairLevelOf = (compared: number): number =>
+  1 - CLAIM_ALPHA / Math.max(1, (compared * (compared - 1)) / 2);
+
 /** A rating set of the items `fitItems` (by item index) over ranked matches using fit indices. */
 function ratingSet(
   items: readonly Item[],
   fitItems: readonly number[],
+  compared: ReadonlySet<number>,
   matches: readonly RankedMatch[],
   rng: Rng,
   replicates: number,
-): { set: RatingSet; method: "block-bootstrap" | "laplace"; blocks: number } {
+): {
+  set: RatingSet;
+  method: "laplace+block-bootstrap" | "laplace";
+  blocks: number;
+  pairLevel: number;
+} {
   const n = fitItems.length;
-  // The compared items: the LLM ones; a run of bots only compares its bots (the power check).
-  const llmOnly = fitItems.flatMap((it, i) => (items[it]?.kind === "llm" ? [i] : []));
-  const llm = llmOnly.length > 0 ? llmOnly : fitItems.map((_, i) => i);
-  const rated = rateMatches(n, llm, matches, rng, replicates);
+  // The compared items (centred, paired); the others (bots, a mixed root's rehearsals) are references.
+  const llm = fitItems.flatMap((it, i) => (compared.has(it) ? [i] : []));
+  const pairLevel = pairLevelOf(llm.length);
+  const rated = rateMatches(n, llm, matches, rng, replicates, { pairLevel });
   const counts = Array.from({ length: n }, () => 0);
   for (const m of matches) for (const i of new Set(m.ranking)) counts[i] = (counts[i] ?? 0) + 1;
   const ratingItems: RatingItem[] = fitItems.map((it, i): RatingItem => {
@@ -233,6 +346,7 @@ function ratingSet(
     },
     method: rated.method,
     blocks: rated.blocks,
+    pairLevel,
   };
 }
 
@@ -240,6 +354,7 @@ function ratingSet(
 function ratingsOf(
   items: readonly Item[],
   refs: readonly SeatRef[],
+  compared: ReadonlySet<number>,
   seed: number,
   replicates: number,
 ): Ratings | null {
@@ -282,19 +397,34 @@ function ratingsOf(
   const h = reindex(headline);
   if (h.fitItems.length < 2) return null;
   const c = reindex(clean);
-  const hs = ratingSet(items, h.fitItems, h.matches, streamRng(seed >>> 0, "headline"), replicates);
+  const hs = ratingSet(
+    items,
+    h.fitItems,
+    compared,
+    h.matches,
+    streamRng(seed >>> 0, "headline"),
+    replicates,
+  );
   const cs =
     c.fitItems.length < 2
-      ? { set: { matches: 0, seats: 0, items: [], pairs: [] }, method: hs.method, blocks: 0 }
-      : ratingSet(items, c.fitItems, c.matches, streamRng(seed >>> 0, "clean"), replicates);
+      ? { set: { matches: 0, seats: 0, items: [], pairs: [] } }
+      : ratingSet(
+          items,
+          c.fitItems,
+          compared,
+          c.matches,
+          streamRng(seed >>> 0, "clean"),
+          replicates,
+        );
   return {
     method: "map-plackett-luce",
     priorSigma: PRIOR_SIGMA,
     intervals: {
       method: hs.method,
       level: LEVEL,
+      pairLevel: r6(hs.pairLevel),
       blocks: hs.blocks,
-      replicates: hs.method === "block-bootstrap" ? replicates : 0,
+      replicates: hs.method === "laplace" ? 0 : replicates,
       bootstrapSeed: seed >>> 0,
     },
     headline: hs.set,
@@ -311,7 +441,7 @@ const zeroTokens = (): StatsTokens => ({
   reasoning: 0,
 });
 
-/** The mean cost per match of one item in one lineup, with its block-bootstrap interval. */
+/** The mean cost per match of one item in one lineup, with its block-bootstrap interval (from `MIN_BOOTSTRAP_BLOCKS`). */
 function lineupCost(
   perMatch: readonly { readonly block: string; readonly cost: number }[],
   rng: Rng,
@@ -335,9 +465,15 @@ function lineupCost(
     means.push(count === 0 ? 0 : sum / count);
   }
   const within = percentileInterval(means);
+  if (within === null) return { mean, interval: null };
+  // The percentile interval of a mean over few blocks runs narrow: widened about the mean.
+  const k = smallSampleFactor(blocks.length);
   return {
     mean,
-    interval: within === null ? null : { lo: Math.floor(within.lo), hi: Math.ceil(within.hi) },
+    interval: {
+      lo: Math.max(0, Math.floor(mean - k * Math.max(0, mean - within.lo))),
+      hi: Math.ceil(mean + k * Math.max(0, within.hi - mean)),
+    },
   };
 }
 
@@ -393,8 +529,12 @@ function aggregateOf(
   let latency = false;
   let costSeen = false;
   let costTotal = 0;
-  const costMatches = new Set<string>();
+  let costWakes = 0;
+  const ratedCost = new Map<string, number>();
   const tokens = zeroTokens();
+  const llm = item.kind === "llm";
+  const same = { messages: 0, pacts: 0, alliances: 0, partners: 0 };
+  const cross = { messages: 0, pacts: 0, alliances: 0, partners: 0 };
   const perLineup = new Map<string, Map<string, { block: string; cost: number }>>();
   for (const { match, seat } of refs) {
     if (seat.incidents.handoff !== null) {
@@ -407,6 +547,16 @@ function aggregateOf(
     thoughts += seat.play.thoughts;
     merge(rejections, seat.play.rejections);
     for (const k of DIPLOMACY_SUMS) d[k] += seat.diplomacy[k];
+    for (const [into, from] of [
+      [same, seat.diplomacy.sameModel],
+      [cross, seat.diplomacy.crossModel],
+    ] as const) {
+      if (from === null) continue;
+      into.messages += from.messages;
+      into.pacts += from.pacts;
+      into.alliances += from.alliances;
+      into.partners += from.partners;
+    }
     for (const k of MILITARY_SUMS) mil[k] += seat.military[k];
     wakeCaps += seat.incidents.wakeCaps;
     promptCaps += seat.incidents.promptCaps;
@@ -433,13 +583,17 @@ function aggregateOf(
     if (costs && c !== null && match.published.costs) {
       costSeen = true;
       costTotal += c.nanoUsd;
-      costMatches.add(match.match);
+      costWakes += seat.play.wakes;
       for (const k of TOKEN_KINDS) tokens[k] += c.tokens[k];
-      const lineup = match.lineup ?? "none";
-      const byMatch = perLineup.get(lineup) ?? new Map<string, { block: string; cost: number }>();
-      const prev = byMatch.get(match.match);
-      byMatch.set(match.match, { block: blockOf(match), cost: (prev?.cost ?? 0) + c.nanoUsd });
-      perLineup.set(lineup, byMatch);
+      // Per match: rated matches only (a stopped or crashed match's spend is partial).
+      if (match.rated) {
+        ratedCost.set(match.match, (ratedCost.get(match.match) ?? 0) + c.nanoUsd);
+        const lineup = match.lineup ?? "none";
+        const byMatch = perLineup.get(lineup) ?? new Map<string, { block: string; cost: number }>();
+        const prev = byMatch.get(match.match);
+        byMatch.set(match.match, { block: blockOf(match), cost: (prev?.cost ?? 0) + c.nanoUsd });
+        perLineup.set(lineup, byMatch);
+      }
     }
   }
   const prompt = tokens.input + tokens.cacheWrite5m + tokens.cacheWrite1h + tokens.cacheRead;
@@ -463,7 +617,7 @@ function aggregateOf(
     rated: rated.length,
     handoffs: record(handoffs),
     play: { wakes, rounds, calls, thoughts, rejections: record(rejections) },
-    diplomacy: d,
+    diplomacy: { ...d, sameModel: llm ? same : null, crossModel: llm ? cross : null },
     military: mil,
     incidents: {
       wakeCaps,
@@ -489,8 +643,11 @@ function aggregateOf(
       ? null
       : {
           nanoUsd: costTotal,
-          perMatchNanoUsd: Math.floor(costTotal / Math.max(1, costMatches.size)),
-          perWakeNanoUsd: wakes === 0 ? null : Math.floor(costTotal / wakes),
+          perMatchNanoUsd:
+            ratedCost.size === 0
+              ? null
+              : Math.floor([...ratedCost.values()].reduce((a, b) => a + b, 0) / ratedCost.size),
+          perWakeNanoUsd: costWakes === 0 ? null : Math.floor(costTotal / costWakes),
           cacheReadPermille: prompt === 0 ? 0 : Math.round((tokens.cacheRead * 1000) / prompt),
           tokens,
           byLineup: [...perLineup.keys()].toSorted(byText).map((lineup) => {
@@ -571,11 +728,20 @@ export function aggregate(stats: readonly MatchStats[], o: AggregateOptions = {}
     }
   }
   assignIds(items);
-  const llmItems = items.flatMap((it, i) => (it.kind === "llm" ? [i] : []));
-  const ratedSeats = new Set(ratedItemsOf(matches, refs).flat());
-  // A run of bots only (the power check of design §6.4) compares its bots.
-  const llm = new Set(llmItems.some((i) => ratedSeats.has(i)) ? llmItems : items.map((_, i) => i));
-  const claims = claimsOf(ratedItemsOf(matches, refs), llm);
+  const ratedRefs = refs.filter((r) => r.match.rated);
+  const ratedSeats = new Set(ratedRefs.map((r) => r.item));
+  // The compared items: the rated LLM items, the fake ones only in a root without a real rated LLM
+  // seat (a rehearsal); a root of bots only (the power check of design §6.4) compares its bots.
+  const real = ratedRefs.some((r) => r.seat.kind === "llm" && !r.seat.fake);
+  const llmItems = items.flatMap((it, i) =>
+    it.kind === "llm" && (!real || !it.fake) && ratedSeats.has(i) ? [i] : [],
+  );
+  const botsOnly = llmItems.length === 0 && !ratedRefs.some((r) => r.seat.kind === "llm");
+  const compared = new Set(botsOnly ? [...ratedSeats] : llmItems);
+  const balance = botsOnly
+    ? BALANCED
+    : balanceOf(ratedRefs, compared, FACTORS[grouping], (i) => items[i]?.id ?? "x");
+  const claims = claimsOf(ratedItemsOf(matches, refs), compared, balance);
   const show = claims.state === "ok" || o.exploratory === true;
   const order = items
     .map((_, i) => i)
@@ -628,7 +794,7 @@ export function aggregate(stats: readonly MatchStats[], o: AggregateOptions = {}
     blocks: ratedBlocks.size,
     models,
     claims,
-    ratings: show ? ratingsOf(items, refs, seed, replicates) : null,
+    ratings: show ? ratingsOf(items, refs, compared, seed, replicates) : null,
     exploratory: o.exploratory === true && claims.state !== "ok",
     seats,
   };

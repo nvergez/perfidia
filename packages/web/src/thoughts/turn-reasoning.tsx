@@ -9,6 +9,7 @@ import {
   asReasoningKind,
   isFakeSeat,
   seatReasoningKind,
+  shownReasoningKind,
   type ReasoningKind,
 } from "../lib/models.ts";
 import {
@@ -71,7 +72,7 @@ function Rounds({
             )}
             {r.reasoning.length === 0 ? null : (
               <ReasoningKindTag
-                kind={asReasoningKind(r.reasoningKind) ?? seatKind}
+                kind={shownReasoningKind(asReasoningKind(r.reasoningKind), seatKind)}
                 className="ml-1.5 align-middle"
               />
             )}

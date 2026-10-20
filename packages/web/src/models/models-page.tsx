@@ -18,7 +18,7 @@ import { NotPublished } from "../common/not-published.tsx";
 import { ReasoningKindTag } from "../common/reasoning-kind.tsx";
 import { cn } from "../lib/cn.ts";
 import { fmtInt, plural } from "../lib/format.ts";
-import { providerReasoning, reasoningKindHint, servingProvider } from "../lib/models.ts";
+import { own, providerReasoning, reasoningKindHint, servingProvider } from "../lib/models.ts";
 import { matchHref } from "../lib/router.ts";
 import { Button, buttonVariants } from "../ui/button.tsx";
 import { Skeleton } from "../ui/skeleton.tsx";
@@ -33,8 +33,10 @@ import {
   fmtTokens,
   fmtUsdFine,
   itemName,
+  perPartner,
   rankingShown,
   rehearsedModel,
+  shownClaim,
   total,
 } from "./format.ts";
 import {
@@ -173,7 +175,7 @@ function Problem({
   readonly state: Extract<Load<unknown>, { status: "error" }>;
   readonly onRetry: () => void;
 }) {
-  const known = PROBLEMS[state.code];
+  const known = own(PROBLEMS, state.code);
   return (
     <div
       role="alert"
@@ -237,10 +239,8 @@ function Overview({ data }: { readonly data: ModelsResponse }) {
         </p>
       </header>
       {fakes === 0 ? null : <RehearsalNote all={fakes === llm.length} />}
-      <ClaimsPanel claims={data.claims} />
-      {data.ratings === null ? null : (
-        <RatingsSection ratings={data.ratings} claims={data.claims} names={names} />
-      )}
+      <ClaimsPanel claims={data.claims} names={names} />
+      <RatingsSection ratings={data.ratings} claims={data.claims} names={names} />
       <Section
         title="Per model"
         icon={ListChecks}
@@ -289,7 +289,10 @@ function Detail({ data }: { readonly data: ModelDetail }) {
   const costs = data.published.costs;
   const ops = m.operations;
   const cost = m.cost;
-  const rating = ok ? data.rating : null;
+  const rating = shownClaim(data.claims, data.rating);
+  const outcome = shownClaim(data.claims, m.outcome);
+  const same = m.diplomacy.sameModel;
+  const cross = m.diplomacy.crossModel;
   const [allSeats, setAllSeats] = useState(false);
   const seats = allSeats ? data.seats : data.seats.slice(0, SEATS_SHOWN);
   const kind =
@@ -374,6 +377,18 @@ function Detail({ data }: { readonly data: ModelDetail }) {
               {fmtInt(m.diplomacy.selfIdentification)}
             </Stat>
           )}
+          {same === null || cross === null || same.partners === 0 ? null : (
+            <>
+              <Stat label="With seats on its own model: messages, pacts, alliances">
+                {fmtInt(same.messages)}, {fmtInt(same.pacts)}, {fmtInt(same.alliances)} (
+                {perPartner(same.messages + same.pacts + same.alliances, same.partners)})
+              </Stat>
+              <Stat label="With seats on other models">
+                {fmtInt(cross.messages)}, {fmtInt(cross.pacts)}, {fmtInt(cross.alliances)} (
+                {perPartner(cross.messages + cross.pacts + cross.alliances, cross.partners)})
+              </Stat>
+            </>
+          )}
         </Card>
         <Card title="Battles" icon={Swords}>
           <Stat label="Attacked · defended">
@@ -405,7 +420,7 @@ function Detail({ data }: { readonly data: ModelDetail }) {
             <Stat label="Tool-call errors (malformed · invalid)">
               {fmtInt(ops.toolErrors.malformed)} · {fmtInt(ops.toolErrors.invalidArgs)}
             </Stat>
-            <Stat label="Latency (median · p95)">
+            <Stat label="Latency (mean of its seats' medians · p95s)">
               {ops.latencyMs === null ? (
                 costs ? (
                   "–"
@@ -431,14 +446,16 @@ function Detail({ data }: { readonly data: ModelDetail }) {
             ) : (
               <>
                 <Stat label="In all">{fmtUsdFine(cost.nanoUsd)}</Stat>
-                <Stat label="A match">{fmtUsdFine(cost.perMatchNanoUsd)}</Stat>
+                <Stat label="A rated match, all its seats, every lineup">
+                  {cost.perMatchNanoUsd === null ? "–" : fmtUsdFine(cost.perMatchNanoUsd)}
+                </Stat>
                 <Stat label="A wake">
                   {cost.perWakeNanoUsd === null ? "–" : fmtUsdFine(cost.perWakeNanoUsd)}
                 </Stat>
                 <Stat label="Cache reads of the prompt">{fmtPermille(cost.cacheReadPermille)}</Stat>
                 <Stat label="Tokens">{fmtTokens(tokens)}</Stat>
                 {cost.byLineup.map((l) => (
-                  <Stat key={l.lineup} label={`A match in ${l.lineup}`}>
+                  <Stat key={l.lineup} label={`A rated match in ${l.lineup}`}>
                     {fmtUsdFine(l.meanNanoUsd)}
                     {l.interval === null ? null : (
                       <span className="text-muted-foreground">
@@ -456,17 +473,17 @@ function Detail({ data }: { readonly data: ModelDetail }) {
             )}
           </Card>
         )}
-        {!ok || m.outcome === null ? null : (
+        {outcome === null ? null : (
           <Card title="Outcome" icon={Trophy}>
-            <Stat label="Rated seats">{fmtInt(m.outcome.rated)}</Stat>
-            <Stat label="Mean rank">{fmtFixed(m.outcome.meanRank, 2)}</Stat>
+            <Stat label="Rated seats">{fmtInt(outcome.rated)}</Stat>
+            <Stat label="Mean rank">{fmtFixed(outcome.meanRank, 2)}</Stat>
             <Stat label="Finished 1st, 2nd, …">
-              {m.outcome.ranks.map((n) => fmtInt(n)).join(" · ")}
+              {outcome.ranks.map((n) => fmtInt(n)).join(" · ")}
             </Stat>
             <Stat label="Wins (by domination)">
-              {fmtInt(m.outcome.wins)} ({fmtInt(m.outcome.dominationWins)})
+              {fmtInt(outcome.wins)} ({fmtInt(outcome.dominationWins)})
             </Stat>
-            <Stat label="Cities at the end, mean">{fmtFixed(m.outcome.citiesMean, 1)}</Stat>
+            <Stat label="Cities at the end, mean">{fmtFixed(outcome.citiesMean, 1)}</Stat>
           </Card>
         )}
       </div>

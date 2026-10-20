@@ -88,8 +88,8 @@ const llmSeat: SeatStats = {
     pactEnds: { betrayal: 1 },
     betrayalsCommitted: 1,
     betrayalsSuffered: 0,
-    sameModel: { messages: 4, pacts: 1, alliances: 1 },
-    crossModel: { messages: 8, pacts: 1, alliances: 0 },
+    sameModel: { messages: 4, pacts: 1, alliances: 1, partners: 1 },
+    crossModel: { messages: 8, pacts: 1, alliances: 0, partners: 2 },
     selfIdentification: 0,
   },
   military: {
@@ -209,6 +209,7 @@ const claims: Claims = {
   gap: "70/30",
   models: 4,
   pairs: 6,
+  unmet: 0,
   alpha: 0.05 / 6,
   matches: 4,
   needed: 74,
@@ -219,6 +220,7 @@ const claims: Claims = {
     { gap: "70/30", needed: 74, power: 0.02 },
     { gap: "60/40", needed: 303, power: 0.01 },
   ],
+  balance: { ok: true, items: [] },
 };
 
 const ratingItem: RatingItem = {
@@ -266,8 +268,9 @@ const ratings: Ratings = {
   method: "map-plackett-luce",
   priorSigma: 1.5,
   intervals: {
-    method: "block-bootstrap",
+    method: "laplace+block-bootstrap",
     level: 0.95,
+    pairLevel: 1 - 0.05 / 6,
     blocks: 20,
     replicates: 1000,
     bootstrapSeed: 20_261_019,
@@ -298,6 +301,8 @@ const aggregate: ModelAggregate = {
     alliancesFounded: 2,
     alliancesJoined: 1,
     selfIdentification: 0,
+    sameModel: { messages: 0, pacts: 0, alliances: 0, partners: 0 },
+    crossModel: { messages: 30, pacts: 6, alliances: 2, partners: 12 },
   },
   military: {
     battlesAttacked: 20,
@@ -480,8 +485,41 @@ export const STATS_CASES: Record<string, SchemaCase> = {
       claims,
       { ...claims, state: "ok", matches: 80, more: 0, power: 0.83 },
       { ...claims, state: "no_comparison", models: 1, pairs: 0, alpha: 0.05, matches: 0 },
+      {
+        ...claims,
+        state: "unbalanced",
+        matches: 80,
+        more: 0,
+        balance: {
+          ok: false,
+          items: [
+            {
+              id: "anthropic.claude-haiku-5-5.medium",
+              factor: "profile",
+              min: 0,
+              max: 80,
+              levels: 4,
+            },
+          ],
+        },
+      },
+      { ...claims, models: 8, pairs: 28, unmet: 16, matches: 0 },
     ],
-    invalid: [bad(claims, ["state"], "maybe"), bad(claims, ["more"], -1), extra(claims, [])],
+    invalid: [
+      bad(claims, ["state"], "maybe"),
+      bad(claims, ["more"], -1),
+      bad(claims, ["unmet"], -1),
+      extra(claims, []),
+      extra(claims, ["balance"]),
+      {
+        value: withAt(
+          claims,
+          ["balance", "items"],
+          [{ id: "x", factor: "weather", min: 0, max: 1, levels: 2 }],
+        ),
+        path: ["balance", "items", 0, "factor"],
+      },
+    ],
   },
   RatingItemSchema: {
     schema: protocol.RatingItemSchema,
@@ -496,10 +534,16 @@ export const STATS_CASES: Record<string, SchemaCase> = {
         ...ratings,
         intervals: { ...ratings.intervals, method: "laplace", blocks: 3, replicates: 0 },
       },
+      {
+        ...ratings,
+        intervals: { ...ratings.intervals, pairLevel: 0.95 },
+      },
     ],
     invalid: [
       bad(ratings, ["method"], "elo"),
       bad(ratings, ["intervals", "method"], "jackknife"),
+      bad(ratings, ["intervals", "method"], "block-bootstrap"),
+      bad(ratings, ["intervals", "pairLevel"], "high"),
       { value: withAt(ratings, ["intervals", "seed"], 5), path: ["intervals"] },
       bad(ratings, ["headline", "pairs", 0, "a"], "Bad Id"),
     ],
@@ -510,6 +554,8 @@ export const STATS_CASES: Record<string, SchemaCase> = {
       aggregate,
       ranked,
       { ...aggregate, operations: null, cost: null },
+      // Costs without a rated match: no cost per match.
+      { ...aggregate, cost: { ...aggregate.cost!, perMatchNanoUsd: null, byLineup: [] } },
       {
         ...aggregate,
         id: "bot.conqueror.3",
@@ -518,12 +564,14 @@ export const STATS_CASES: Record<string, SchemaCase> = {
         model: null,
         operations: null,
         cost: null,
+        diplomacy: { ...aggregate.diplomacy, sameModel: null, crossModel: null },
       },
     ],
     invalid: [
       bad(aggregate, ["incidents", "parallelPermille"], -1),
       bad(ranked, ["outcome", "ranks", 0], -1),
       extra(aggregate, ["cost"]),
+      extra(aggregate, ["diplomacy", "sameModel"]),
     ],
   },
   ModelSeatRowSchema: {

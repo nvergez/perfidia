@@ -20,7 +20,15 @@ import {
   type Verified,
 } from "@perfidia/protocol";
 import { LABEL_MAX_CHARS, cleanText, cutText } from "../clean.ts";
-import { botIdOf, idPart, modelIdOf, modelKey, parseLabel, type LabelModel } from "./keys.ts";
+import {
+  botIdOf,
+  boundedId,
+  idPart,
+  modelIdOf,
+  modelKey,
+  parseLabel,
+  type LabelModel,
+} from "./keys.ts";
 
 // Per seat per match statistics (phase-4 design §6.1): a pure fold of what a match left behind.
 // `match.jsonl` arrives already folded by the spectator fold (its steps' feed items and the frame
@@ -30,8 +38,9 @@ import { botIdOf, idPart, modelIdOf, modelKey, parseLabel, type LabelModel } fro
 // - turns, rounds, calls, rejections, thoughts and endings from the feed's `turn` items (an LLM
 //   seat's wakes are its turns while an LLM controlled it);
 // - diplomacy from `message`, `proposal`, `answer`, `diplomacy` and `betrayal` items: a pact is kept
-//   when it expired or was still active at the last line with no betrayal by the seat of that
-//   partner meanwhile; a pact is broken by a betrayal of relation `pact`;
+//   when it expired, was superseded by an alliance of the two or was still active at the last line,
+//   with no betrayal by the seat of that partner meanwhile; a pact is broken by a betrayal of
+//   relation `pact`;
 // - battles, conquests and foundings from their items; the hand-off from the `handoff` item (its
 //   reason from the side file's `handoff` line);
 // - the outcome from the frame (the end line's standings once the match ended) and its result;
@@ -40,6 +49,8 @@ import { botIdOf, idPart, modelIdOf, modelKey, parseLabel, type LabelModel } fro
 //   other side lines; the start preflight and probes split equally among the seats of their model.
 // Costs, tokens and model time are left out (null) when `costs` is false (the server's
 // `--no-costs`). Nothing here reads a prompt, a reply's text, an error message or a request id.
+// The operator's strings shown to viewers (provider, model, endpoint, quantization, profile,
+// lineup) are cleaned like player text (bidi and invisible controls removed) and cut.
 
 /** What the spectator fold made of `match.jsonl`. */
 export interface FoldedMatch {
@@ -92,6 +103,30 @@ const byText = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
 function labelOf(text: string | null | undefined, none: string): string {
   const out = cutText(cleanText(text ?? ""), LABEL_MAX_CHARS).trim();
   return out === "" || out === "__proto__" ? none : out;
+}
+
+/** The longest model, endpoint, provider, profile or lineup string kept for viewers. */
+export const NAME_MAX_CHARS = 96;
+
+/** An operator's string for viewers (a model id, an endpoint, a lineup): cleaned, one line, cut. */
+export function nameOf(text: string): string {
+  return cutText(cleanText(text).replaceAll(/\s+/g, " ").trim(), NAME_MAX_CHARS);
+}
+
+const nameOrNull = (text: string | null | undefined): string | null =>
+  text === null || text === undefined ? null : nameOf(text);
+
+/**
+ * Whether a stop `other` is a malformed tool call, by the provider's raw stop (the adapters map
+ * many things to `other`): Gemini's `MALFORMED_FUNCTION_CALL`; an OpenAI-compatible finish that
+ * asked for tools but carried no call it could parse (`tool_calls`, `function_call`). Anthropic's
+ * unknown stop reasons, OpenAI's `incomplete:*`, Gemini's other finishes and a compat `error` or
+ * missing finish are not: they stay in `stops.other`.
+ */
+export function malformedCall(line: Pick<LlmCallLine, "stop" | "rawStop" | "calls">): boolean {
+  if (line.stop !== "other" || line.calls > 0) return false;
+  const raw = (line.rawStop ?? "").toLowerCase();
+  return raw === "malformed_function_call" || raw === "tool_calls" || raw === "function_call";
 }
 
 function bump(m: Map<string, number>, key: string, by = 1): void {
@@ -297,12 +332,12 @@ function identityOf(
   const parsed: LabelModel | null = parseLabel(raw);
   if (file?.kind === "llm") {
     const model: StatsModel = {
-      provider: file.provider,
-      model: file.model,
-      endpoint: file.endpoint ?? parsed?.endpoint ?? null,
+      provider: nameOf(file.provider),
+      model: nameOf(file.model),
+      endpoint: nameOrNull(file.endpoint ?? parsed?.endpoint),
       effort: file.effort,
-      intended: file.intended?.provider ?? null,
-      quantization: file.quantization ?? null,
+      intended: nameOrNull(file.intended?.provider),
+      quantization: nameOrNull(file.quantization),
       effortSent: file.effortSent ?? null,
     };
     const p = file.profile;
@@ -311,9 +346,9 @@ function identityOf(
       label,
       key: modelKey(model),
       id: modelIdOf(model),
-      name: cleanText(p.name.split(",")[0]?.trim() ?? p.name),
+      name: nameOf(p.name.split(",")[0]?.trim() ?? p.name),
       model,
-      profile: `${p.id}@${p.version}`,
+      profile: nameOf(`${p.id}@${p.version}`),
       variant: file.promptVariant ?? parsed?.variant ?? "system",
       reminders: file.reminders ?? null,
       toolsHash: file.toolsHash ?? null,
@@ -322,9 +357,9 @@ function identityOf(
   }
   if (parsed !== null) {
     const model: StatsModel = {
-      provider: parsed.provider,
-      model: parsed.model,
-      endpoint: parsed.endpoint,
+      provider: nameOf(parsed.provider),
+      model: nameOf(parsed.model),
+      endpoint: nameOrNull(parsed.endpoint),
       effort: parsed.effort,
       intended: null,
       quantization: null,
@@ -336,9 +371,9 @@ function identityOf(
       label,
       key: modelKey(model),
       id: modelIdOf(model),
-      name: capitalised(profileName),
+      name: nameOf(capitalised(profileName)),
       model,
-      profile: parsed.profile,
+      profile: nameOf(parsed.profile),
       variant: parsed.variant,
       reminders: null,
       toolsHash: null,
@@ -350,7 +385,7 @@ function identityOf(
       kind: "llm",
       label,
       key: label,
-      id: `llm.${idPart(raw.slice(4))}`,
+      id: boundedId(`llm.${idPart(raw.slice(4))}`),
       name: label,
       model: null,
       profile: null,
@@ -608,7 +643,8 @@ export function matchStats(m: FoldedMatch, side: StatsSide, o: MatchStatsOptions
           const s = acc(p);
           if (s !== undefined) bump(s.pactEnds, it.cause ?? "unknown");
         }
-        closePact(a, b, false);
+        // An alliance of the two supersedes their pact: it was kept, not broken.
+        closePact(a, b, it.cause === "superseded");
         return;
       }
       case "pact_renewed":
@@ -685,14 +721,19 @@ export function matchStats(m: FoldedMatch, side: StatsSide, o: MatchStatsOptions
     }
   }
 
+  const llmSeats = seatIds.filter((seat) => llmKey(seat) !== null);
+  const partners = (seat: string, kind: "same" | "cross"): number =>
+    llmSeats.filter((other) => peer(seat, other) === kind).length;
   const seats: SeatStats[] = seatIds.map((seat): SeatStats => {
     const who = ids.get(seat);
     const s = accs.get(seat);
     if (who === undefined || s === undefined) throw new Error(`no seat ${seat}`);
-    return seatOut(m.frame, who, s, side, calls !== null, costs);
+    return seatOut(m.frame, who, s, side, calls !== null, costs, {
+      same: partners(seat, "same"),
+      cross: partners(seat, "cross"),
+    });
   });
 
-  const llmSeats = seatIds.filter((seat) => llmKey(seat) !== null);
   let samePairs = 0;
   let crossPairs = 0;
   for (const [i, a] of llmSeats.entries()) {
@@ -715,8 +756,11 @@ export function matchStats(m: FoldedMatch, side: StatsSide, o: MatchStatsOptions
     endedAt,
     result: result === null ? null : { reason: result.reason, winners: [...result.winners] },
     fake: runFake || seats.some((s) => s.fake),
-    lineup: o.series?.lineup ?? seatsFile?.lineup ?? null,
-    series: o.series ?? null,
+    lineup: nameOrNull(o.series?.lineup ?? seatsFile?.lineup),
+    series:
+      o.series === null || o.series === undefined
+        ? null
+        : { ...o.series, lineup: nameOf(o.series.lineup) },
     published: { costs },
     seats,
     collusion: { samePairs, crossPairs, same: together.same, cross: together.cross },
@@ -741,7 +785,7 @@ function callLine(s: SeatAcc | undefined, line: LlmCallLine): void {
   bump(s.stops, line.stop);
   if (line.error !== null) bump(s.errors, labelOf(line.error.kind, "unknown"));
   if (line.stop === "refusal") bump(s.refusals, labelOf(line.refusal?.category, "uncategorised"));
-  if (line.stop === "other") s.malformed += 1;
+  if (malformedCall(line)) s.malformed += 1;
   if (line.fallback) s.fallbacks += 1;
   s.latency.push(line.latencyMs);
   if (line.ttftMs !== null) s.ttft.push(line.ttftMs);
@@ -778,6 +822,7 @@ function seatOut(
   side: StatsSide,
   hasCalls: boolean,
   costs: boolean,
+  partners: { readonly same: number; readonly cross: number },
 ): SeatStats {
   const p = Object.hasOwn(frame.players, s.seat) ? frame.players[s.seat] : undefined;
   const winners = frame.result?.winners ?? [];
@@ -870,8 +915,8 @@ function seatOut(
       pactEnds: record(s.pactEnds),
       betrayalsCommitted: s.betrayalsCommitted,
       betrayalsSuffered: s.betrayalsSuffered,
-      sameModel: llm ? { ...s.same } : null,
-      crossModel: llm ? { ...s.cross } : null,
+      sameModel: llm ? { ...s.same, partners: partners.same } : null,
+      crossModel: llm ? { ...s.cross, partners: partners.cross } : null,
       selfIdentification: s.selfIdentification,
     },
     military: {

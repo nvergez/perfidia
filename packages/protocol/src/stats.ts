@@ -94,6 +94,15 @@ export type StatsSeriesRef = z.infer<typeof StatsSeriesRefSchema>;
 const PeerCountsSchema = z.strictObject({ messages: Int, pacts: Int, alliances: Int });
 export type PeerCounts = z.infer<typeof PeerCountsSchema>;
 
+/**
+ * A seat's dealings with LLM seats on its own model or on another one (design §3.8): messages it
+ * sent them (one per recipient), pacts it signed with them and alliance memberships it shared with
+ * them, and `partners`, how many such seats the match had. A rate per partner is a count ÷
+ * `partners` (across matches: the sums' quotient).
+ */
+const SeatPeersSchema = z.strictObject({ ...PeerCountsSchema.shape, partners: Int });
+export type SeatPeers = z.infer<typeof SeatPeersSchema>;
+
 const PercentilesSchema = z.strictObject({ n: Int, p50: Int, p95: Int });
 export type StatsPercentiles = z.infer<typeof PercentilesSchema>;
 
@@ -158,20 +167,24 @@ const SeatDiplomacySchema = z.strictObject({
   alliancesJoined: Int,
   alliancesLeft: Int,
   pactsSigned: Int,
-  /** Pacts that expired or were active at the end, with no betrayal by the seat of that partner meanwhile. */
+  /**
+   * Pacts that expired, were active at the end or were superseded by an alliance of the two, with
+   * no betrayal by the seat of that partner meanwhile.
+   */
   pactsKept: Int,
   /** Betrayals of a pact partner by the seat (`betrayal` with relation `pact`). */
   pactsBroken: Int,
-  /** The seat's pacts that ended early, by cause (`left`, `betrayal`, `eliminated`, `superseded`). */
+  /** The seat's pacts that ended early, by cause (`left`, `betrayal`, `eliminated`, `superseded`), as is. */
   pactEnds: Counts,
   betrayalsCommitted: Int,
   betrayalsSuffered: Int,
   /**
    * With LLM seats that started on the same model, and on another model (design §3.8): messages
-   * sent, pacts signed, alliance memberships shared. Null for a bot seat.
+   * sent, pacts signed, alliance memberships shared, and how many such seats there were. Null for a
+   * bot seat.
    */
-  sameModel: PeerCountsSchema.nullable(),
-  crossModel: PeerCountsSchema.nullable(),
+  sameModel: SeatPeersSchema.nullable(),
+  crossModel: SeatPeersSchema.nullable(),
   /** Sent messages that name a model, a vendor or "language model" (self-identification, counted only). */
   selfIdentification: Int,
 });
@@ -214,7 +227,12 @@ const SeatOperationsSchema = z.strictObject({
   stops: Counts,
   /** Failed attempts by error kind. */
   errors: Counts,
-  /** Tool-call errors (design §3.5): malformed calls (`stop: "other"`) and the gateway's `INVALID_ARGS`. */
+  /**
+   * Tool-call errors (design §3.5): malformed calls (a stop `other` whose raw stop is a tool call
+   * the provider could not parse: Gemini's `MALFORMED_FUNCTION_CALL`, an OpenAI-compatible
+   * `tool_calls` finish without a call; every other `other` stays in `stops` only) and the
+   * gateway's `INVALID_ARGS`.
+   */
   toolErrors: z.strictObject({ malformed: Int, invalidArgs: Int }),
   /** Attempts a fallback model served. */
   fallbacks: Int,
@@ -330,22 +348,38 @@ export type MatchStats = z.infer<typeof MatchStatsSchema>;
 const IntervalSchema = z.strictObject({ lo: z.number(), hi: z.number() });
 export type StatsInterval = z.infer<typeof IntervalSchema>;
 
+/** What the rotation left unequal: a compared model's counts over a factor's levels (§3.7). */
+const ImbalanceSchema = z.strictObject({
+  id: ModelIdSchema,
+  /** `profile`, `seat` or (grouped by profile or prompt variant) `model`. */
+  factor: z.enum(["profile", "seat", "model"]),
+  /** Its fewest and most rated seats on one level of the factor. */
+  min: Int,
+  max: Int,
+  levels: Int,
+});
+
 /**
  * Whether a ranking claim may be shown (design §6.4): a 70/30 head-to-head needs `needed` rated
  * matches per pair of compared models (exact two-sided binomial test at α = 0.05, Bonferroni over
- * the pairs, 80% power). `too_few_matches`: outcomes and ratings are withheld; `no_comparison`:
- * fewer than two models were compared.
+ * the pairs, 80% power), and the rotation must be balanced (design §3.7: each compared model on
+ * each profile and each seat about equally often, so a profile's or a seat's edge is not read as
+ * the model's). `too_few_matches`: outcomes and ratings are withheld; `unbalanced`: enough matches,
+ * but not rotated; `no_comparison`: fewer than two models were compared.
  */
 export const ClaimsSchema = z.strictObject({
-  state: z.enum(["ok", "too_few_matches", "no_comparison"]),
+  state: z.enum(["ok", "too_few_matches", "unbalanced", "no_comparison"]),
   /** The claimed head-to-head gap: `70/30`. */
   gap: z.string(),
-  /** LLM items compared, and their pairs that met in a rated match. */
+  /** LLM items compared (a rehearsal's fake items only in a root without a real match). */
   models: Int,
+  /** Their pairs, met or not: every pair needs `needed` rated matches. */
   pairs: Int,
+  /** Pairs that never met in a rated match. */
+  unmet: Int,
   /** The per-pair significance level: 0.05 / pairs. */
   alpha: z.number(),
-  /** Rated matches of the pair that met least. */
+  /** Rated matches of the pair that met least (0 while a pair never met). */
   matches: Int,
   needed: Int,
   /** Rated matches still needed (0 when `ok`). */
@@ -354,6 +388,12 @@ export const ClaimsSchema = z.strictObject({
   power: z.number(),
   /** The same at the design's three gaps (80/20, 70/30, 60/40). */
   table: z.array(z.strictObject({ gap: z.string(), needed: Int, power: z.number() })),
+  /**
+   * The rotation's balance over the rated matches: each compared model's rated seats per profile
+   * and per seat (and per model, grouped by profile or variant) differ by at most
+   * max(1, ⌈most ÷ 10⌉); `items` lists the worst imbalances (at most 12).
+   */
+  balance: z.strictObject({ ok: z.boolean(), items: z.array(ImbalanceSchema) }),
 });
 export type Claims = z.infer<typeof ClaimsSchema>;
 
@@ -370,7 +410,7 @@ export const RatingItemSchema = z.strictObject({
   elo: z.number(),
   eloInterval: IntervalSchema,
   meanRank: z.number(),
-  /** Null with Laplace intervals (fewer than 5 blocks). */
+  /** Null with Laplace intervals only (fewer than 5 blocks). */
   meanRankInterval: IntervalSchema.nullable(),
 });
 export type RatingItem = z.infer<typeof RatingItemSchema>;
@@ -380,7 +420,10 @@ const RatingSetSchema = z.strictObject({
   seats: Int,
   /** Sorted by id, never by strength. */
   items: z.array(RatingItemSchema),
-  /** Pairs of LLM items: matches they met in, how often `a` finished ahead, strength difference a − b. */
+  /**
+   * Pairs of compared items: matches they met in, how often `a` finished ahead, strength difference
+   * a − b and its interval at `intervals.pairLevel` (the claim's Bonferroni level).
+   */
   pairs: z.array(
     z.strictObject({
       a: ModelIdSchema,
@@ -399,9 +442,16 @@ export const RatingsSchema = z.strictObject({
   /** The Gaussian prior's standard deviation on log-strengths. */
   priorSigma: z.number(),
   intervals: z.strictObject({
-    /** A block bootstrap over rotation blocks; Laplace intervals below 5 blocks. */
-    method: z.enum(["block-bootstrap", "laplace"]),
+    /**
+     * `laplace`: Laplace posterior intervals (fewer than 5 blocks, or no replicates);
+     * `laplace+block-bootstrap`: from 5 blocks, each strength and difference interval is the wider
+     * of the Laplace interval and the block bootstrap's (the bootstrap alone runs narrow with few
+     * blocks), and mean ranks get the bootstrap's interval, small-sample corrected.
+     */
+    method: z.enum(["laplace+block-bootstrap", "laplace"]),
     level: z.number(),
+    /** The level of the pairs' intervals: 1 − 0.05 / pairs (the claim state's α). */
+    pairLevel: z.number(),
     blocks: Int,
     replicates: Int,
     /** The bootstrap's own seed (not a game's). */
@@ -446,6 +496,9 @@ export const ModelAggregateSchema = z.strictObject({
     alliancesFounded: Int,
     alliancesJoined: Int,
     selfIdentification: Int,
+    /** With seats on its own model and on others, summed over its seats (null for a bot). */
+    sameModel: SeatPeersSchema.nullable(),
+    crossModel: SeatPeersSchema.nullable(),
   }),
   military: z.strictObject({
     battlesAttacked: Int,
@@ -468,19 +521,31 @@ export const ModelAggregateSchema = z.strictObject({
       stops: Counts,
       errors: Counts,
       toolErrors: z.strictObject({ malformed: Int, invalidArgs: Int }),
-      /** The seats' p50 and p95 averaged, weighted by their attempts; null under `--no-costs`. */
+      /**
+       * The seats' p50 and p95 averaged, weighted by their attempts (a mean of per-seat medians and
+       * p95s, not pooled percentiles); null under `--no-costs`.
+       */
       latencyMs: PercentilesSchema.nullable(),
     })
     .nullable(),
   /** Null under `--no-costs` and when no seat of it has a cost. */
   cost: z
     .strictObject({
+      /** Every costed seat of it, in every match. */
       nanoUsd: Int,
-      perMatchNanoUsd: Int,
+      /**
+       * Its seats' spend per rated match (all its seats in a match together), over every lineup;
+       * null without a rated match. Unfinished matches are left out (their spend is partial).
+       */
+      perMatchNanoUsd: Int.nullable(),
+      /** Its costed seats' spend over their wakes. */
       perWakeNanoUsd: Int.nullable(),
       cacheReadPermille: Permille,
       tokens: TokensSchema,
-      /** Per lineup (social and urgent wakes depend on the opponents), with a block-bootstrap interval from 5 blocks. */
+      /**
+       * Per lineup (social and urgent wakes depend on the opponents), over rated matches, with a
+       * block-bootstrap interval from 5 blocks (small-sample corrected).
+       */
       byLineup: z.array(
         z.strictObject({
           lineup: z.string(),

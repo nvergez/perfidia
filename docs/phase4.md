@@ -1742,16 +1742,16 @@ result, fake, lineup, series, published, seats[], collusion, cost}`.
 
 Each seat (`SeatStatsSchema`):
 
-| Block        | Fields and definitions                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
-| ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| who          | `kind` as it started (`llm`, or `bot`; a handed-off seat stays `llm`: intention to treat), `label`, `key` (`provider/model[@endpoint]/effort`, or the bot label `bot:conqueror@3`), `id` (the key as a URL-safe model id: `anthropic.claude-haiku-5-5.medium`, `openrouter.z-ai-glm-5-3.z-ai-fp8.low`, `bot.conqueror.3`; two keys that slug alike get `-2`, `-3` in the aggregate), `name` (profile first name, `Conqueror (bot)`), `model` `{provider, model, endpoint, effort, intended, quantization, effortSent}`, `profile`, `promptVariant`, `reminders`, `toolsHash`, `fake` (a bot behind the LLM pipe: provider `fake`, never a model's play)                                                                                                                   |
-| `outcome`    | the end line's `result.standings` (the ruleset's standings at the last line of a match that did not end): `rank` (1-based, no shared ranks), `score`, `cities`, `alive`, `eliminatedAt`, `winner` (among the end line's winners)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
-| `play`       | `turns` (every turn the seat ended, equal to the dossier's `counts.turns`), `wakes` (turns ended while an LLM controlled it), `rounds`, `calls`, `accepted`, `rejections` by code, `thoughts` (wakes with a public thought), `endings` by kind                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
-| `diplomacy`  | `messagesSent`, `messagesReceived` (to the seat or to everyone, from another seat), `publicSent`, `proposalsSent/Received`, `accepted`, `refused`, `alliancesFounded/Joined/Left`, `pactsSigned`; **`pactsKept`** = pacts that expired or were active at the end with no betrayal by the seat of that partner meanwhile; **`pactsBroken`** = `betrayal {by: seat, relation: "pact"}`; `pactEnds` = early ends by `pact_ended.cause` as is; `betrayalsCommitted` / `Suffered` from `betrayal {by, against}`; `sameModel` / `crossModel` `{messages, pacts, alliances}` with LLM seats that started on the same model / another one (design §3.8; null for a bot); `selfIdentification` = sent messages naming a model, a vendor or "language model" (counted, never shown) |
-| `military`   | `battlesAttacked`, `battlesDefended`, `battlesWon`, `citiesConquered`, `citiesLost`, `citiesFounded`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
-| `incidents`  | `handoff {t, reason, label}` (reason from `seats.json`, null when absent), `wakeCaps`, `promptCaps`, `fallbackPermille` (attempts a fallback served), `errorWakes`, `refusals` by category, **`parallelPermille`** = round attempts that called ≥ 2 tools ÷ round attempts that called ≥ 1, ‰ (null without one)                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
-| `operations` | null for a bot or without `llm_calls.jsonl`: `attempts`, `thoughtCalls`, `stops`, `errors` by kind, `toolErrors {malformed (stop "other"), invalidArgs (gateway INVALID_ARGS)}`, `fallbacks`, `toolRounds`, `parallelRounds`, `textChars`, `reasoningChars`, `reasoningKinds`, `latencyMs` / `ttftMs` `{n, p50, p95}` (nearest rank; null under `--no-costs`)                                                                                                                                                                                                                                                                                                                                                                                                             |
-| `cost`       | null for a bot, without `llm_calls.jsonl` and under `--no-costs`: `nanoUsd` (every attempt and thought call, fees included), `perWakeNanoUsd` (floor), `preflightNanoUsd` (the start preflight and probes split equally among seats of the same provider, model and endpoint; the remainder to the first), `feesNanoUsd`, `reportedNanoUsd` (OpenRouter, when every line has one), `estimatedNanoUsd`, `byKind` (from `arena.json`), `tokens {input, cacheWrite5m, cacheWrite1h, cacheRead, output, reasoning}`, `cacheReadPermille` = cacheRead ÷ (input + writes + cacheRead), `priceCards`, `capNanoUsd`                                                                                                                                                               |
+| Block        | Fields and definitions                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| ------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| who          | `kind` as it started (`llm`, or `bot`; a handed-off seat stays `llm`: intention to treat), `label`, `key` (`provider/model[@endpoint]/effort`, or the bot label `bot:conqueror@3`), `id` (the key as a URL-safe model id: `anthropic.claude-haiku-5-5.medium`, `openrouter.z-ai-glm-5-3.z-ai-fp8.low`, `bot.conqueror.3`; two keys that slug alike get `-2`, `-3` in the aggregate), `name` (profile first name, `Conqueror (bot)`), `model` `{provider, model, endpoint, effort, intended, quantization, effortSent}`, `profile`, `promptVariant`, `reminders`, `toolsHash`, `fake` (a bot behind the LLM pipe: provider `fake`, never a model's play)                                                                                                                                                                                                                                                  |
+| `outcome`    | the end line's `result.standings` (the ruleset's standings at the last line of a match that did not end): `rank` (1-based, no shared ranks), `score`, `cities`, `alive`, `eliminatedAt`, `winner` (among the end line's winners)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| `play`       | `turns` (every turn the seat ended, equal to the dossier's `counts.turns`), `wakes` (turns ended while an LLM controlled it), `rounds`, `calls`, `accepted`, `rejections` by code, `thoughts` (wakes with a public thought), `endings` by kind                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| `diplomacy`  | `messagesSent`, `messagesReceived` (to the seat or to everyone, from another seat), `publicSent`, `proposalsSent/Received`, `accepted`, `refused`, `alliancesFounded/Joined/Left`, `pactsSigned`; **`pactsKept`** = pacts that expired, were superseded by an alliance of the two (§55) or were active at the end, with no betrayal by the seat of that partner meanwhile; **`pactsBroken`** = `betrayal {by: seat, relation: "pact"}`; `pactEnds` = early ends by `pact_ended.cause` as is; `betrayalsCommitted` / `Suffered` from `betrayal {by, against}`; `sameModel` / `crossModel` `{messages, pacts, alliances, partners}` with LLM seats that started on the same model / another one, `partners` the number of such seats (a rate is a count ÷ partners; design §3.8; null for a bot); `selfIdentification` = sent messages naming a model, a vendor or "language model" (counted, never shown) |
+| `military`   | `battlesAttacked`, `battlesDefended`, `battlesWon`, `citiesConquered`, `citiesLost`, `citiesFounded`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| `incidents`  | `handoff {t, reason, label}` (reason from `seats.json`, null when absent), `wakeCaps`, `promptCaps`, `fallbackPermille` (attempts a fallback served), `errorWakes`, `refusals` by category, **`parallelPermille`** = round attempts that called ≥ 2 tools ÷ round attempts that called ≥ 1, ‰ (null without one)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| `operations` | null for a bot or without `llm_calls.jsonl`: `attempts`, `thoughtCalls`, `stops`, `errors` by kind, `toolErrors {malformed (a stop "other" whose raw stop is a call the provider could not parse: Gemini's MALFORMED_FUNCTION_CALL, an OpenAI-compatible tool_calls or function_call finish without a parsed call; §55), invalidArgs (gateway INVALID_ARGS)}`, `fallbacks`, `toolRounds`, `parallelRounds`, `textChars`, `reasoningChars`, `reasoningKinds`, `latencyMs` / `ttftMs` `{n, p50, p95}` (nearest rank; null under `--no-costs`)                                                                                                                                                                                                                                                                                                                                                              |
+| `cost`       | null for a bot, without `llm_calls.jsonl` and under `--no-costs`: `nanoUsd` (every attempt and thought call, fees included), `perWakeNanoUsd` (floor), `preflightNanoUsd` (the start preflight and probes split equally among seats of the same provider, model and endpoint; the remainder to the first), `feesNanoUsd`, `reportedNanoUsd` (OpenRouter, when every line has one), `estimatedNanoUsd`, `byKind` (from `arena.json`), `tokens {input, cacheWrite5m, cacheWrite1h, cacheRead, output, reasoning}`, `cacheReadPermille` = cacheRead ÷ (input + writes + cacheRead), `priceCards`, `capNanoUsd`                                                                                                                                                                                                                                                                                              |
 
 `collusion` sums the same-model and cross-model pairs (`samePairs`, `crossPairs`, `same`, `cross`);
 `cost` of the match is `{nanoUsd (attempts, preflight, probes), preflightNanoUsd, probeNanoUsd,
@@ -1774,11 +1774,14 @@ public ones with `--publish <file>` (an `after_end` match only once it has ended
   `profile`, `variant`, `model-profile`. Sorted by id, never by outcome.
 - **Per item** (`ModelAggregateSchema`): `matches`, `seats`, `rated`, `handoffs` by reason, sums of
   `play`, `diplomacy`, `military` and `incidents`, the item's `parallelPermille`, `operations`
-  (`latencyMs` = the seats' p50 and p95 averaged, weighted by their attempts), `cost` (`nanoUsd`,
-  `perMatchNanoUsd`, `perWakeNanoUsd`, `cacheReadPermille`, `tokens`, **`byLineup`**: mean cost per
-  match in each lineup with a block-bootstrap interval from 5 blocks, since social and urgent
-  wakes depend on the opponents), and `outcome` (`rated`, `meanRank`, `ranks[]` = seats per final
-  rank, `wins`, `dominationWins`, `citiesMean`) — **null until the claim threshold is met**.
+  (`latencyMs` = the seats' p50 and p95 averaged, weighted by their attempts), `cost` (`nanoUsd`
+  over every costed seat; `perMatchNanoUsd` = all its seats' spend per **rated** match, null
+  without one; `perWakeNanoUsd` = the costed seats' spend over their own wakes; `cacheReadPermille`,
+  `tokens`, **`byLineup`**: mean cost per rated match in each lineup with a block-bootstrap interval
+  from 5 blocks, small-sample corrected, since social and urgent wakes depend on the opponents),
+  `diplomacy.sameModel` / `crossModel` summed with their partners, and `outcome` (`rated`,
+  `meanRank`, `ranks[]` = seats per final rank, `wins`, `dominationWins`, `citiesMean`) — **null
+  until the claim state is `ok`**.
 - **Blocks.** A series match's block is `series:<lineup>#<block>` (four matches of a rotation
   square); any other match is its own block (`match:<id>`). `blocks` counts the rated ones.
 - **Ratings: MAP Plackett–Luce** (`pl.ts`). Each item i has a log-strength θᵢ; a match's full
@@ -1790,80 +1793,116 @@ public ones with `--publish <file>` (an `after_end` match only once it has ended
   the inverse negative Hessian. Strengths are centred on the LLM items' mean (sum to zero over
   LLM items; over all items in a bots-only root) and also shown on an Elo-like scale, 1500 + 400 ·
   θ / ln 10. Under Plackett–Luce, P(i ahead of j) = exp(θᵢ) / (exp(θᵢ) + exp(θⱼ)).
-- **Intervals** (`rate.ts`). From 5 blocks: a block bootstrap (blocks drawn with replacement,
-  `--replicates` refits from the mode, default 1000; percentile intervals, linear between order
-  statistics, 95%) for strengths, Elo, mean rank, every LLM pair's difference and the cost per
-  lineup. Below 5 blocks: Laplace intervals for strengths and differences (mean rank has none).
+- **Intervals** (`rate.ts`; changed by the review, §55). Laplace posterior intervals for strengths,
+  Elo and every compared pair's difference, always. From 5 blocks, a block bootstrap too (blocks
+  drawn with replacement, `--replicates` refits from the mode, default 1000; percentile intervals,
+  linear between order statistics), and each strength or difference interval is the **union** of
+  the two (`intervals.method` `laplace+block-bootstrap`): the percentile bootstrap alone runs
+  narrow with blocks of four (§55). Mean ranks and the cost per lineup have the bootstrap's
+  interval widened about the estimate by t(B − 1)/z · √(B/(B − 1)) for B blocks; below 5 blocks
+  they have none. Strengths are at 95%, **pairs at 1 − 0.05/pairs** (`intervals.pairLevel`, the
+  claim's Bonferroni level).
   `bootstrapSeed` (default 20261019, `--seed`) feeds the engine's `streamRng` with the streams
   `headline`, `clean` and `cost:<id>:<lineup>`: the same seed gives byte-identical output.
 - **Headline and sensitivity.** `headline` ranks every seat as it started (intention to treat,
   handed-off seats included); `clean` leaves handed-off seats out of each ranking.
-- **Pairs.** For each pair of LLM items: matches they met in, `aAhead` (a's best seat ahead of b's
-  best seat), the strength difference a − b and its interval.
-- **The claim state** (`ClaimsSchema`, `power.ts`): `pairs` = LLM item pairs that met in a rated
-  match, `matches` = rated matches of the pair that met least, `alpha` = 0.05 / pairs (Bonferroni),
-  `needed` = the smallest n at which the exact two-sided binomial test of p = 0.5 at `alpha` has
-  80% power against a 70/30 head-to-head, `more` = needed − matches, `power` = the test's achieved
-  power at `matches`, and `table` the same at 80/20, 70/30 and 60/40. `state`: `ok` when matches ≥
-  needed; `too_few_matches` otherwise; `no_comparison` when no two LLM items met. A root of bots
-  only compares its bots (the power check). Below `ok`, `outcome`, `ratings` and the seats' `rank`
-  are null; `--exploratory` fills them for the operator (`exploratory: true`), and the server never
-  serves such a file.
+- **Pairs.** For each pair of compared items: matches they met in, `aAhead` (a's best seat ahead of
+  b's best seat), the strength difference a − b and its interval at `pairLevel`.
+- **The claim state** (`ClaimsSchema`, `power.ts`; review fixes in §55). The compared items are the
+  LLM items of the rated matches; in a root holding a real (not fake) rated LLM seat, fake items
+  are reference players like the bots. `pairs` = every pair of compared items, met or not
+  (`unmet` = pairs that never met), `matches` = rated matches of the pair that met least (0 while
+  one never met), `alpha` = 0.05 / pairs (Bonferroni), `needed` = the smallest n at which the exact
+  two-sided binomial test of p = 0.5 at `alpha` has 80% power against a 70/30 head-to-head, `more`
+  = needed − matches, `power` = the test's achieved power at `matches`, `table` the same at 80/20,
+  70/30 and 60/40, and `balance` the rotation's balance (design §3.7): each compared model's rated
+  seats per profile and per seat (per model too, grouped by profile or variant) within
+  max(1, ⌈most/10⌉) of each other, the worst imbalances listed. `state`: `no_comparison` when no
+  two compared items took part; `too_few_matches` when matches < needed; `unbalanced` when there
+  are enough matches but the rotation is not balanced; `ok` otherwise. A root of bots only compares
+  its bots (the power check; no balance check). Below `ok`, `outcome`, `ratings` and the seats'
+  `rank` are null; `--exploratory` fills them for the operator (`exploratory: true`), and the
+  server never serves such a file (and drops them from any file whose state is not `ok`).
 - **Seats** (`ModelSeatRowSchema`): `{id, match, seat, rated, lineup, profile, promptVariant,
   handedOff, wakes, costNanoUsd, rank}` per seat, for `/api/models/:id`.
 - **Series** (`series[]`): `{lineup, fake, order, blocks, orthogonal, planned, found}` per manifest
   (planned matches against those found and aggregated).
 
-Thresholds in one place: prior σ 1.5; bootstrap from 5 blocks; 95% intervals; 1000 replicates;
-claim gap 70/30 at 80% power, α 0.05 Bonferroni over the compared pairs (one pair 49 matches; six
-pairs, four models, 74; ten pairs 80).
+Thresholds in one place: prior σ 1.5; Laplace intervals, widened by a block bootstrap from 5
+blocks; 95% for strengths, 1 − 0.05/pairs for pairs; 1000 replicates; claim gap 70/30 at 80%
+power, α 0.05 Bonferroni over the compared pairs (one pair 49 matches; six pairs, four models, 74;
+ten pairs 80), and a balanced rotation (counts within max(1, ⌈most/10⌉)).
 
 ## 44. How many matches before a claim: the power simulation
 
 **Exact table** (`power.ts`, pinned by `power.test.ts`; design §6.4 reproduced): one pair 20 / 49 /
 199 and six pairs 32 / 74 / 303 matches for 80/20, 70/30, 60/40; the draft's power 0.38 at 10, 0.42
 at 20, 0.46 at 90. The exact test's power is a sawtooth in n (70/30, one pair: 0.810 at 49 but
-below 0.80 at 50–53), so the achieved power is reported as it is.
+below 0.80 at 50 and 53, while 51 and 52 reach it: 0.782, 0.836, 0.811, 0.784), so the achieved
+power is reported as it is.
 
 **Pipeline simulation** (`simulate.ts`, method): six items with one seat each, as in a comparison
-lineup (four LLM models A–D, two bots); θ_A = δ/2, θ_B = −δ/2, the rest 0, δ = ln(0.7 / 0.3), so A
-finishes ahead of B with probability 0.7. For each series length, 400 series are drawn from
-Plackett–Luce (the engine's seeded PRNG), grouped in blocks of 4 matches, and rated by the same code
-as real matches (`rateMatches`); power is the share of series where the claim is made: the exact
-binomial test on A's head-to-head record rejects (α 0.05 one pair, 0.05/6 six pairs), or A − B's
-interval excludes 0 (Laplace at 95% or 1 − 0.05/6; block bootstrap at 95% with 200 replicates).
+lineup (four LLM models A–D, two bots); θ_A = δ/2, θ_B = −δ/2, the rest 0, δ = ln(p / (1 − p)), so A
+finishes ahead of B with probability p (0.7 for power; 0.5, two equal models, for the size: every
+rate is then a false claim). For each series length, 400 series are drawn from Plackett–Luce (the
+engine's seeded PRNG), grouped in blocks of 4 matches, and rated by the same code as real matches
+(`rateMatches`); a column is the share of series where the claim is made: the exact binomial test on
+A's head-to-head record rejects (α 0.05 one pair, 0.05/6 six pairs), or A − B's interval excludes 0:
+Laplace (at 95%, or 1 − 0.05/6 for six pairs), the raw block bootstrap (95%, 200 replicates, at
+every block count) and the **served** interval (Laplace below 5 blocks, the union of Laplace and
+the bootstrap from there, §43; review fix, §55).
 
-`bun run stats -- power --matches 12,20,32,49,52,74,76,100 --reps 400 --replicates 200` (3 min 16 s
-on the 4-vCPU box):
+`bun run stats -- power --matches 12,20,32,49,52,74,76,100 --reps 400 --replicates 200` (4 min 6 s
+on the 4-vCPU box), power at p = 0.7:
 
-| matches | exact, 1 pair | binomial sim, 1 | Laplace, 1 | bootstrap, 1 | exact, 6 pairs | binomial sim, 6 | Laplace, 6 |
-| ------: | ------------: | --------------: | ---------: | -----------: | -------------: | --------------: | ---------: |
-|      12 |         0.253 |           0.248 |      0.418 |        0.418 |          0.085 |           0.070 |      0.180 |
-|      20 |         0.416 |           0.398 |      0.580 |        0.695 |          0.107 |           0.083 |      0.295 |
-|      32 |         0.495 |           0.493 |      0.815 |        0.868 |          0.344 |           0.343 |      0.563 |
-|      49 |         0.810 |           0.798 |      0.913 |        0.925 |          0.484 |           0.493 |      0.808 |
-|      52 |         0.811 |           0.763 |      0.940 |        0.940 |          0.614 |           0.598 |      0.798 |
-|      74 |         0.943 |           0.920 |      0.993 |        0.988 |          0.800 |           0.788 |      0.945 |
-|      76 |         0.921 |           0.933 |      0.995 |        0.993 |          0.823 |           0.830 |      0.948 |
-|     100 |         0.979 |           0.985 |      1.000 |        0.998 |          0.920 |           0.925 |      0.988 |
+| matches | exact, 1 pair | binomial sim, 1 | Laplace, 1 | bootstrap, 1 | served, 1 | exact, 6 pairs | binomial sim, 6 | Laplace, 6 |
+| ------: | ------------: | --------------: | ---------: | -----------: | --------: | -------------: | --------------: | ---------: |
+|      12 |         0.253 |           0.248 |      0.418 |        0.648 |     0.418 |          0.085 |           0.070 |      0.180 |
+|      20 |         0.416 |           0.398 |      0.580 |        0.695 |     0.530 |          0.107 |           0.083 |      0.295 |
+|      32 |         0.495 |           0.493 |      0.815 |        0.868 |     0.790 |          0.344 |           0.343 |      0.563 |
+|      49 |         0.810 |           0.798 |      0.913 |        0.925 |     0.895 |          0.484 |           0.493 |      0.808 |
+|      52 |         0.811 |           0.763 |      0.940 |        0.940 |     0.923 |          0.614 |           0.598 |      0.798 |
+|      74 |         0.943 |           0.920 |      0.993 |        0.988 |     0.985 |          0.800 |           0.788 |      0.945 |
+|      76 |         0.921 |           0.933 |      0.995 |        0.993 |     0.993 |          0.823 |           0.830 |      0.948 |
+|     100 |         0.979 |           0.985 |      1.000 |        0.998 |     0.998 |          0.920 |           0.925 |      0.988 |
 
-Reading: the simulated binomial column matches the exact one (the simulation is sound); the rating
-pipeline, which uses every match's full ranking and not only the A–B result, reaches 80% earlier
-(one pair at about 32 matches, six pairs at about 49). The threshold stays the design's exact
-binomial count (74 for four models): conservative, simple to explain, and the simulated advantage
-holds only when the models really follow Plackett–Luce. Wider lineups need more (ten pairs: 80).
+The same with `--p 0.5` (3 min 59 s), the size (nominal 0.05 for one pair, 0.0083 per pair for six):
+
+| matches | exact, 1 pair | binomial sim, 1 | Laplace, 1 | bootstrap, 1 | served, 1 | exact, 6 pairs | binomial sim, 6 | Laplace, 6 |
+| ------: | ------------: | --------------: | ---------: | -----------: | --------: | -------------: | --------------: | ---------: |
+|      12 |         0.039 |           0.043 |      0.040 |        0.253 |     0.040 |          0.006 |           0.005 |      0.010 |
+|      20 |         0.041 |           0.060 |      0.050 |        0.178 |     0.043 |          0.003 |           0.003 |      0.003 |
+|      32 |         0.020 |           0.025 |      0.050 |        0.130 |     0.043 |          0.007 |           0.010 |      0.010 |
+|      49 |         0.044 |           0.025 |      0.038 |        0.070 |     0.035 |          0.004 |           0.005 |      0.008 |
+|      52 |         0.036 |           0.035 |      0.055 |        0.090 |     0.048 |          0.008 |           0.008 |      0.013 |
+|      74 |         0.047 |           0.058 |      0.055 |        0.078 |     0.043 |          0.007 |           0.005 |      0.003 |
+|      76 |         0.029 |           0.023 |      0.048 |        0.110 |     0.043 |          0.008 |           0.013 |      0.008 |
+|     100 |         0.035 |           0.040 |      0.063 |        0.080 |     0.045 |          0.007 |           0.010 |      0.013 |
+
+Reading: the simulated binomial column matches the exact one (the simulation is sound). The raw
+block bootstrap does not hold its level with blocks of four (size 0.253 at 3 blocks, 0.178 at 5,
+0.130 at 8, still 0.070–0.110 at 12 to 25 blocks), so its p = 0.7 column is not a power: much of it
+is false claims, which is why it is no longer served alone (§55). Laplace holds its level (0.038 to
+0.063), and so does the served interval at every length (0.035 to 0.048). The rating pipeline as
+served, which uses every match's full ranking and not only the A–B result, reaches 80% power
+earlier than the exact test: one pair at about 32 matches (served 0.790, Laplace 0.815), six pairs
+at about 49 (Laplace at the corrected level, 0.808). The threshold stays the design's exact binomial
+count (74 for four models): conservative, simple to explain, and the simulated advantage holds only
+when the models really follow Plackett–Luce. Wider lineups need more (ten pairs: 80).
 
 **The bot batch** (design §6.4: bots of known strength through the same pipeline): `bun run sim --
 batch --variant "v: perfidia-1@1.1.0" --seeds 1-48 --players 6 --out <scratch>` (48 matches of
 conqueror@3, two expander@2, opportunist@3, rusher@3, turtle@3; 7 days) then `bun run stats --
-aggregate --runs <scratch> --exploratory` (2 min 54 s for 48 matches, 288 seats, 1000 replicates):
-48 blocks, block bootstrap. Strengths (95%): expander@2 1.687 [1.428, 2.011], opportunist@3 1.677
-[1.268, 2.131], conqueror@3 1.322 [0.973, 1.678], rusher@3 −2.060 [−2.518, −1.592], turtle@3 −2.626
-[−3.107, −2.233]. The pipeline separates the two tiers by more than 3 log-units and, inside the
-bottom tier, rusher@3 from turtle@3 (31 of 48 ahead, difference 0.565 [0.078, 1.226]); it does not
-separate conqueror@3 from expander@2 (13 of 48, −0.365 [−0.842, 0.044]) or expander@2 from
-opportunist@3 (28 of 48, 0.010 [−0.455, 0.492]). The claim state on that root is honest: five items,
-ten pairs, α 0.005, 48 matches, a 70/30 claim needs 80 (power now 0.40): `too_few_matches`, 32 more.
+aggregate --runs <scratch> --exploratory` (2 min 55 s for 48 matches, 288 seats, 1000 replicates;
+re-run after the review's fixes): 48 blocks, Laplace widened to the block bootstrap. Strengths
+(95%): expander@2 1.687 [1.254, 2.119], opportunist@3 1.677 [1.204, 2.150], conqueror@3 1.322
+[0.858, 1.787], rusher@3 −2.060 [−2.667, −1.454], turtle@3 −2.626 [−3.269, −1.982]. At the corrected
+pair level (99.5%, ten pairs) the pipeline separates the two tiers by more than 3 log-units (the
+closest cross-tier pair 3.383 [1.965, 4.800]); it does not separate rusher@3 from turtle@3 (31 of
+48 ahead, 0.565 [−0.252, 1.416]; the bootstrap alone at 95% did, [0.078, 1.226]), conqueror@3 from
+expander@2 (13 of 48, −0.365 [−1.004, 0.265]) or expander@2 from opportunist@3 (28 of 48, 0.010
+[−0.708, 0.646]). The claim state on that root is honest: five items, ten pairs, α 0.005, 48
+matches, a 70/30 claim needs 80 (power now 0.40): `too_few_matches`, 32 more.
 
 ## 45. The routes (the web's contract)
 
@@ -1880,14 +1919,18 @@ hint}`.
 
 - **Per-match statistics** are computed on the main thread from the steps the fold workers already
   made and the frame at the tail (never a fold on the request thread), with the side files read
-  whole; kept per match (up to 32) while the timeline and the side files are unchanged, and
-  recomputed at most every 5 s for a running match. They equal `bun run stats -- match` of the
-  same directory (test on both adapters).
+  whole (`llm_calls.jsonl` up to 64 MB). Until a match's first fold reaches its log's tail the
+  route answers 503 `LOADING` (review fix, §55: never figures of a half-folded log). A finished
+  match's statistics are kept (up to 512, about 10 KB each) while its timeline id and side files
+  are unchanged, without reading its timeline back; a running match's (up to 32) at most every
+  5 s. They equal `bun run stats -- match` of the same directory (test on both adapters).
 - **Model statistics** are the file `bun run stats -- aggregate --out <file>` wrote, served with
   `serve --stats <file>` (re-read when it changes). Served only when every match it aggregates is
   public now: an unlisted or hidden match makes it `STATS_NOT_PUBLIC` (fail closed), one still
   loading `LOADING`. No `--stats`, an unreadable or invalid file, or an `--exploratory` file:
-  `NO_STATS` (the server logs a warning when it reads such a file). `/api/models` drops the file's `seats` and `exploratory`;
+  `NO_STATS` (the server logs a warning when it reads such a file). A file whose claim state is not
+  `ok` is served without ratings, outcomes or ranks, whatever it holds (defence in depth, §55).
+  `/api/models` drops the file's `seats` and `exploratory`;
   `/api/models/:id` carries that model's seats and its headline rating item (null below the
   threshold).
 - **`--no-costs`** (the owner's default is costs published): `published.costs: false`, and every
@@ -1897,12 +1940,13 @@ hint}`.
 What the web uses:
 
 - the claim state: `claims.state`, `claims.matches`, `claims.needed`, `claims.more`,
-  `claims.power`, `claims.pairs`, `claims.table` — "too few matches: N more needed" when
-  `state !== "ok"`, never a ranking; `ratings === null` and every `outcome === null` then;
+  `claims.power`, `claims.pairs`, `claims.unmet`, `claims.table`, `claims.balance` — "too few
+  matches: N more needed" (or "not rotated" when `unbalanced`) when `state !== "ok"`, never a
+  ranking; `ratings === null` and every `outcome === null` then;
 - ratings when `ok`: `ratings.headline.items[] {id, strength, interval, elo, eloInterval,
   meanRank, meanRankInterval}` (sorted by id; the web chooses the display order),
   `ratings.headline.pairs[]`, `ratings.clean` for the sensitivity view, `ratings.intervals
-  {method, blocks, replicates, level}` to say how intervals were made;
+  {method, blocks, replicates, level, pairLevel}` to say how intervals were made;
 - per model: `id`, `key`, `kind`, `model {provider, model, endpoint, effort, intended,
   quantization, effortSent}`, `fake`, `matches`, `seats`, `handoffs`, `play`, `diplomacy`,
   `military`, `incidents.parallelPermille`, `operations.toolErrors`, `cost.perMatchNanoUsd`,
@@ -1918,15 +1962,21 @@ bun run stats -- match <run-dir> [--json] [--no-costs]
 bun run stats -- aggregate --runs <dir> [--publish <publish.json>] [--group model|profile|variant|model-profile] \
   [--seed N] [--replicates N] [--no-costs] [--exploratory] [--json] [--out <file>]
 bun run stats -- power [--p 0.7] [--matches 12,20,32,48,76] [--reps 200] [--replicates 200] [--seed N] [--json]
+# --p 0.5: two equal models, so every rate is a false claim (the size)
 ```
 
 - `match`: one match as a seat table, or the `perfidia-stats/1` document with `--json`; a
   `series.json` next to the run directory gives its series match.
-- `aggregate`: the claim line ("claims: too few matches, no ranking shown: … 70 more"), the model
+- `aggregate`: with `--publish`, only the matches the server would show (listed, verified, and
+  `live` or ended; the others left out with a warning); a run whose statistics do not fit
+  `perfidia-stats/1` is left out with a warning. The claim line ("claims: too few matches, no
+  ranking shown: … 70 more"), the model
   table, the series found, and, once the threshold is met (or with `--exploratory`, labelled
   EXPLORATORY), the headline and clean ratings with their pairs. `--out` writes the file atomically
   (temporary file and rename) for `serve --stats`.
-- `power`: the exact table and the simulated rows of §44.
+- `power`: the exact table and the simulated rows of §44 (`--p 0.5`: the size).
+- Every table cell and warning goes through `terminalText`: C0, C1, DEL and bidi controls print as
+  `?` (a run directory's strings cannot drive the terminal).
 - Exit codes: 0 ok, 2 a run directory cannot be read, 3 usage. Only the run directories (and
   `series.json`, `publish.json`) are read; nothing is sent anywhere.
 
@@ -1994,12 +2044,15 @@ Deviations from design §6:
 - Mean-rank intervals exist only with the block bootstrap (from 5 blocks); Laplace intervals cover
   strengths and differences only.
 - The claim threshold is the exact binomial count, although the simulated pipeline reaches 80%
-  power earlier (§44).
+  power earlier (§44), and it also asks for a balanced rotation (design §3.7 relies on it; §55).
+- Intervals are Laplace's widened to the block bootstrap's (their union), not the block bootstrap
+  alone: measured, the percentile block bootstrap runs narrow (§55).
 - Pair `aAhead` compares each item's best seat when an item holds two seats in a match.
 - An item's latency is the attempt-weighted mean of its seats' p50 and p95, not a pooled
   percentile (the per-attempt latencies are not kept in the aggregate).
-- Fake LLM seats are their own items (provider `fake`), counted in the claim state of a fake root:
-  a fake root is a rehearsal, never a claim about models.
+- Fake LLM seats are their own items (provider `fake`), compared in the claim state of a root
+  without a real rated LLM seat (a rehearsal, never a claim about models); in a root with one they
+  are reference players like the bots (§55).
 
 Open items:
 
@@ -2086,14 +2139,22 @@ In the dossier's "Who plays it", under the badge, the hand-off and the spend bar
 - **Spent** (costs published): the seat's total, per wake, cache reads, tokens, fees, "(simulated
   prices)" for a fake; **Match**: every seat's spend together against the match budget. Under
   `--no-costs`: "Costs not published for this match.", no figure.
-- **Same model**: messages, pacts and alliances with seats on the same model against the others,
-  when the lineup repeats a model (design §3.8).
+- **Same model**: messages sent, pacts and alliances with its seats on the same model and with the
+  others, each with its count of partner seats and the rate per partner, when the lineup repeats a
+  model (design §3.8).
 
 The figures are the match's statistics (`GET /api/matches/:id/stats`), fetched once per match and
-shared by its dossiers (`players/match-stats.ts`; a running match's are fetched again when a dossier
-opens more than 10 s after the last fetch, the old ones shown meanwhile). They cover the whole match
-(or the match so far), whatever the playhead, and the block says so. Before they come, or when they
-cannot be had, the block shows what the seat list says (name, provider, effort, expected kind).
+shared by its dossiers (`players/match-stats.ts`), and fetched again when they no longer describe
+the match (review fix, §55): the match's status moved on from the one they were made at (it was
+loading or running and has ended), a running match's are older than 10 s, or the route answered
+`LOADING` (asked again after its `Retry-After`, at most 30 times); the old ones are shown meanwhile.
+**They are cut at the playhead** (review fix, §55; phase 3 §16.8: a replay learns nothing ahead of
+the clock): who the model is, its effort, reasoning kind, harness and lineup show always, and
+"Costs not published for this match." under `--no-costs`; the whole-match rows (Calls,
+Incidents, Spent, Match, Same model, the attempts by reasoning kind) show only at the statistics'
+end, while following a live match, or once the viewer presses "Show the whole match's figures"
+("Over the whole match, whatever the time shown."). Before they come, or when they cannot be had,
+the block shows what the seat list says (name, provider, effort, expected kind).
 
 ## 52. The `/models` page
 
@@ -2106,18 +2167,25 @@ loaded on demand (`models/lazy.ts`, `models/models-page.tsx`, `models/parts.tsx`
     `claims.power`, then "No ranking is shown until then: the models are listed by name, and no
     rank, rating or win count appears.", the threshold in words ("A ranking is shown once every
     pair of models has met in 74 rated matches: enough to see a 70/30 head-to-head edge 80% of the
-    time (exact binomial test, α = 0.05 split over 6 pairs)") and the `claims.table` (needed and
-    power now at 80/20, 70/30, 60/40);
+    time (exact binomial test, α = 0.05 split over 6 pairs), and once each model has played each
+    profile and seat about equally often"; pairs that never met are counted in words) and the
+    `claims.table` (needed and power now at 80/20, 70/30, 60/40);
+  - `unbalanced` (review fix, §55): "Enough matches, but not rotated: the models did not play each
+    profile and seat about equally often", and the worst imbalance in words ("X played one profile
+    0 times and another 76 times…");
   - `no_comparison`: "No comparison yet: no two models have met in a rated match";
   - `ok`: "Enough matches for a ranking: …" and the ratings below.
 - **Ratings** (only when `claims.state` is `ok` and `ratings` is served): items by strength, with
   the Elo-like rating, its 95% interval in figures and as a bar on a common scale, the mean rank
-  with its interval (block bootstrap only), the rated matches; the method in one sentence (MAP
-  Plackett–Luce, prior σ, block bootstrap over N blocks or Laplace); the head-to-head pairs (a
-  ahead of b in k of n, the difference and its interval, "not separated" when it holds 0); the
-  clean-seats sensitivity table.
+  with its interval (from 5 blocks only), the rated matches; the method in one sentence (MAP
+  Plackett–Luce, prior σ, Laplace intervals widened where a block bootstrap over N blocks is
+  wider, pairs at the corrected level); the head-to-head pairs (a ahead of b in k of n, the
+  difference and its interval at 1 − 0.05/pairs, "separated at the corrected level" or "not
+  separated"; review fix, §55); the clean-seats sensitivity table. The guards are pure helpers
+  (`shownRatings`, `shownClaim`): nothing ranked shows unless the state is `ok`, whatever is served.
 - **Per model** (`models-table`): every item by name, never by outcome (models, then rehearsals,
-  then bots): matches, wakes, cost per match and per wake, cache reads (costs published only),
+  then bots): matches, wakes, cost per rated match (all its seats in a match, every lineup) and per
+  wake, cache reads (costs published only), with a visible legend of the columns (review fix),
   tool-call errors, the parallel share, hand-offs, messages, pacts kept and broken, betrayals by and
   of, battles won; mean rank and wins only above the threshold. A fake item reads "Fake for GPT-6
   Luna" with "Rehearsal: a scripted bot", and a note says that rehearsal figures test the arena and
@@ -2127,7 +2195,9 @@ loaded on demand (`models/lazy.ts`, `models/models-page.tsx`, `models/parts.tsx`
   shown, then "Show all".
 - **A model's page** (`/models/:id`, `model-detail`): its name, route and effort, the reasoning it
   shows, its key; the claim state in short; its rating above the threshold; play, diplomacy,
-  battles, incidents, model calls, cost (with the cost per lineup and its interval) and, above the
+  battles, incidents, model calls (latency labelled "mean of its seats' medians · p95s"), cost (per
+  rated match, all its seats, and per lineup with its interval), same-model and cross-model
+  dealings per partner and, above the
   threshold, the outcome (mean rank, ranks, wins, cities); its seats match by match (a link to each
   match; the rank above the threshold only).
 - **Errors**: `NO_STATS` ("No model statistics are published on this server yet."),
@@ -2180,7 +2250,9 @@ earlier checks pass unchanged on it), and the setup aggregates it with `bun run 
 
 Measurements (this box, 4 vCPU shared):
 
-- **Smoke test:** 17.5–18.4 s in seven runs (budget 20 s), against 15.2–15.8 s before this pass
+- **Smoke test:** 17.5–18.4 s in seven runs (budget 20 s; the review measured 18.7–19.1 s on a
+  quiet box and 20.8 s with three idle servers, and §55 has the time after its fixes), against
+  15.2–15.8 s before this pass
   (the default-lineup fake run; switching it to `budget-mix` alone measured 15.8 s). The models
   checks take 0.6 s, the reasoning-kind checks 1.1–1.2 s; the aggregation (about 0.7 s) overlaps
   the folds.
@@ -2229,8 +2301,57 @@ Open items:
 - **No real-model page has been seen**: every figure looked at comes from `--fake` runs (and
   relabelled copies of them). Latency, reported costs and fallbacks of real providers will show for
   the first time after the owner's M2 and M3 runs.
-- **The smoke test's margin is 1.6 to 2.5 s** (17.5–18.4 s of 20 s) on a quiet container.
+- **The smoke test's time** is printed, not asserted (each test has its own 20 s timeout); §55 has
+  it after the review's fixes.
 - **The rating table** shows rehearsal items and bots among the models when a root mixes them (as
   the statistics do: fake items are their own items, §48); a root of real matches only has none.
-- **The model block shows whole-match figures** at any playhead (the statistics route has no
-  playhead); the block says so.
+- **The model block's whole-match figures** wait for the end of the match, live following, or the
+  viewer's "Show the whole match's figures" (§55); the statistics route itself has no playhead.
+
+## 55. The Pass 3 review's fixes
+
+Twenty-three findings (two lenses: statistics, and security and web), each verified on the code
+before the fix, with the reviewer's probes re-run where they exist (`confound.ts`, `mixed.ts`, the
+cold-fold poll, the `fmtUsdFine` edge, the hostile and `__proto__` runs, the long model id, the
+tampered root, the control-character lineup, the 36-match CPU probe). Every fix of a wrong statistic
+or a security finding has a regression test that fails on the code before it: 24 mutants of the
+fixes (12 in the server's statistics, 4 in the fold, 8 in the web), 24 killed; two of them (the mean
+ranks' small-sample widening, `terminalText`) survived a first pass and are killed by the synthetic
+coverage test and a `terminalText` unit test added for them.
+
+| Finding                                                                                     | Verdict  | What changed                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| ------------------------------------------------------------------------------------------- | -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| A folding match's statistics answered 200 with wrong figures, kept after its end (major)    | fixed    | `service.ts`: 503 `LOADING` (`Retry-After`) while the match's first fold runs or its status is `loading`, never figures of a half-folded log (contract test on both adapters: a cold war-golden fold polled, 503 then the ended statistics). `match-stats.ts`: `statsStale` asks again when the held statistics' status differs from the match's (loading or live, then ended), a live match's after 10 s, and after a `LOADING` answer's `Retry-After` (at most 30 times); unit-tested.                                                                                                                                                                    |
+| The block bootstrap is too narrow with few blocks; §44 gave its power, not its size (major) | fixed    | Measured (`simulate.ts`, 400 series, four equal models and two bots, blocks of 4): the raw percentile block bootstrap's A–B size 0.170 / 0.100 / 0.060 at 5 / 10 / 19 blocks, strength coverage 0.835 / 0.896 / 0.910, still 0.92–0.93 at 40–60 blocks (no cut-off fixes it). `rate.ts` now serves Laplace always and, from 5 blocks, the union of Laplace and the bootstrap: size 0.025 / 0.045 / 0.035, coverage 0.964 / 0.963 / 0.959; mean ranks and cost per lineup widened by t(B − 1)/z · √(B/(B − 1)) (mean-rank coverage 0.816 → 0.932 at 5 blocks). `stats -- power --p 0.5` gives the size; §44 has both tables; `pl.test.ts` pins the coverage. |
+| Pairs marked separated at plain 95% while the claim is Bonferroni-corrected (major)         | fixed    | Pair intervals are served at `intervals.pairLevel` = 1 − 0.05/pairs; the page says "separated at the corrected level" or "not separated". Four equal models, 74 matches, 400 series: at least one of the six equal pairs separated in 0.330 of the series before (bootstrap at 95%), 0.180 with Laplace at 95%, 0.020 as served.                                                                                                                                                                                                                                                                                                                            |
+| The claim ignores rotation: rankings confounded with profiles and seats (major)             | fixed    | New claim state `unbalanced` (after `no_comparison` and `too_few_matches`, before `ok`): each compared model's rated seats per profile and per seat (per model under the profile or variant grouping) must lie within max(1, ⌈most/10⌉) of each other; `claims.balance` lists the worst imbalances, which the page says in words. The reviewer's confound root (76 matches, each model always on one seat and profile): `unbalanced`, no ranking; a GF(4) Graeco-Latin series of 76 matches: `ok`.                                                                                                                                                          |
+| Mixed roots: fake rehearsals block real claims; never-met pairs left out (minor)            | fixed    | In a root holding a real rated LLM seat, fake items are reference players like the bots; `pairs` counts every pair of compared items, met or not (`claims.unmet`), and `matches` is 0 while a pair never met; the page counts unmet pairs in words. The reviewer's roots: 84 rotated real matches with the 8 rehearsals `ok`, 6 pairs (as without them); two disjoint real lineups `too_few_matches`, 28 pairs of which 16 never met, 98 needed.                                                                                                                                                                                                            |
+| `perWakeNanoUsd` divided costed spend by every wake (minor)                                 | fixed    | The costed seats' spend over those seats' wakes; `perMatchNanoUsd` over rated matches only (null without one); unit test with a seat without `llm_calls.jsonl` and an unrated match.                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| "Tool-call errors (malformed)" counted every stop `other` (minor)                           | fixed    | `malformedCall`: a stop `other` without a call whose raw stop is Gemini's `MALFORMED_FUNCTION_CALL` or an OpenAI-compatible `tool_calls` (or `function_call`) finish; every other `other` (provider failures, unknown finishes) stays in `stops` only. Documented in `SeatOperationsSchema`; unit test per provider's raw stop.                                                                                                                                                                                                                                                                                                                             |
+| `fmtUsdFine` showed amounts just under $1 as "$0.10000" (minor; two findings)               | fixed    | Rounds first and carries to `fmtUsd` from $1 (999,950,000 nUSD reads "$1.00"); `fmtTokens` carries to M (999,950 reads "1.00M"); the property test now draws up to 999,999,999 nUSD.                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| Cost columns mislabelled, mixing lineups and unfinished matches (minor)                     | fixed    | "Cost per match" is every seat of the item in a **rated** match, every lineup, said in the table's visible legend; the model page has "A rated match, all its seats, every lineup" and "A rated match in budget-mix" (per lineup) with its interval; `byLineup` counts rated matches only (a crashed or stopped run is not rated); latency reads "mean of its seats' medians · p95s".                                                                                                                                                                                                                                                                       |
+| The sawtooth claim "below 0.80 at 50–53" was wrong (nit)                                    | fixed    | "Below 0.80 at 50 and 53, while 51 and 52 reach it" (`power.ts`, §44; `power.test.ts` pins 0.782, 0.836, 0.811, 0.784); §44's reading restated in terms of Laplace and the served interval, with the size table.                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| Same-model and cross-model counts raw, never combined (nit)                                 | fixed    | `sameModel` / `crossModel` carry `partners` (the partner seats of each kind); the model block and the model page show the rate per partner; `ModelAggregate.diplomacy` sums both across matches (null for bots); `messages` documented as sent; a pact `superseded` by an alliance of the same two counts as kept.                                                                                                                                                                                                                                                                                                                                          |
+| The model block revealed the future at any playhead (major)                                 | fixed    | Cut at the playhead (phase 3 §16.8): who the model is, its effort, reasoning kind, harness and lineup always; the whole-match rows (calls, incidents and the hand-off, spend, the match budget, same model, attempts by kind) only at the statistics' end, while following live, or after "Show the whole match's figures". Unit test (`wholeMatchShown`); e2e (C2): at D1 06:00 none of them shows until the button is pressed.                                                                                                                                                                                                                            |
+| Bidi and zero-width characters in operator strings reached the DOM (minor)                  | fixed    | The fold cleans and cuts (96 characters, `nameOf`) provider, model, endpoint, intended model, quantization, profile, name and lineup; the server's `SeatInfo.model` too. The e2e plants bidi and zero-width characters and markup in the hostile copy's lineup, OpenAI model, OpenRouter endpoint and quantization and aggregates it; the DOM check (now also U+200B, `title` and `aria-label`) finds none on `/models`, the model page or the dossier.                                                                                                                                                                                                     |
+| Model ids like `__proto__` or `constructor` crashed `/models` (minor)                       | fixed    | Every table lookup goes through `own` (`Object.hasOwn`): names, providers, hosts, channels, reminders, hand-offs, problems; unit tests with `__proto__`, `constructor` and `toString`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| `aggregate --publish` kept listed but unverifiable matches (minor)                          | fixed    | The server's rule (listed, verified, live or ended): a listed match whose log does not verify is left out with a warning; cli test with a tampered checkpoint.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| One seat with a long model id broke every stats command (minor)                             | fixed    | Id parts cut at 48 characters plus 12 hex digits of the whole part's FNV-1a, ids at 150 (`boundedId`); each run's statistics are checked against `perfidia-stats/1` and a failing run is left out with a warning; `stats -- match` on one exits 2 with a one-line message. Test: a 300-character model id aggregates, its ids valid and distinct.                                                                                                                                                                                                                                                                                                           |
+| Mutants survived in the threshold guards and the reasoning-kind precedence (minor)          | fixed    | Pure helpers, each unit-tested with a disagreeing input: `shownRatings` and `shownClaim` (nothing ranked below `ok`, whatever is served), `shownReasoningKind` (the logged kind wins), `statsStale`; the live-follow e2e asserts live round 0's `[data-reasoning-kind]`. The reviewer's M1, M2, M13, M4, M5 and M10 are our W5, W6, W1 and W4: killed.                                                                                                                                                                                                                                                                                                      |
+| Thoughts and live labels used the provider's expected kind (nit)                            | deferred | The logged kind wins wherever the web has one (turn detail, thought rounds, live rounds once annotated). The socket's `annot` carries no kind (a protocol change), and the catalog test pins every model's kind to its provider's, so no seat is mislabelled today; a per-model table from the catalog waits for the first model whose kind differs from its provider's.                                                                                                                                                                                                                                                                                    |
+| The smoke test left little margin under its 20 s budget (nit)                               | fixed    | Re-measured, docs corrected (below). The review's new checks run inside existing pages (C2, the hostile run) rather than new ones (3.8 s → 1.6–1.9 s for the reasoning-kind test); the total is still about 1 s over the printed 20 s target, which is not asserted (each test has its own 20 s timeout).                                                                                                                                                                                                                                                                                                                                                   |
+| Each uncached stats request cost about 38 ms of main-thread work (nit)                      | fixed    | A finished match's statistics are kept (up to 512, about 10 KB each) while its timeline id and side files are unchanged, checked before the timeline is read; `llm_calls.jsonl` read up to 64 MB (was 256). The reviewer's probe (36 ended matches, 100 requests cycling): p50 0.6 ms on the first pass (p95 57.7 ms, the first answer of each), p50 0.7 ms / p95 1.3 ms after, `/api/health` p95 1.9 ms meanwhile (reviewer: 38 / 61 ms, health p95 71 ms).                                                                                                                                                                                                |
+| `bun run stats` printed control characters to the terminal (nit)                            | fixed    | `terminalText` prints C0, C1, DEL and bidi controls as `?` in every table cell, head line and warning (unit test); the server drops ratings, outcomes and ranks from any file whose claim state is not `ok` (`withoutClaims`; routes test on both adapters with a crafted file).                                                                                                                                                                                                                                                                                                                                                                            |
+| Some explanations lived only in `title` tooltips (nit)                                      | fixed    | The models table has a visible legend of its columns (`models-legend`); the dossier's model block says what its reasoning kind means inline, as the model page does; tags elsewhere keep their tooltip next to text that already names the kind.                                                                                                                                                                                                                                                                                                                                                                                                            |
+
+Measurements after the fixes (this box, 4 vCPU shared):
+
+- `bun run stats -- power` at p = 0.7 and 0.5 (§44): 4 min 6 s and 3 min 59 s; the bot batch
+  aggregated again in 2 min 55 s.
+- Web: `bun test packages/web/src` 220 pass; initial JS 177.4 → 177.6 KB gzipped (budget 185), lazy
+  65.4 → 66.9 KB.
+- **Smoke test** (`PERFIDIA_E2E_PORT=8411 PERFIDIA_E2E_PORT2=8412 bun run test:e2e`): 13 pass in
+  20.1, 20.5, 21.0 and 21.1 s (20.8 and 24.1 s while the new checks opened pages of their own), against
+  18.9 and 20.1 s for `de7aa74` measured on the same box in the same hour.
+- `bun run check`: green, 3,823 pass, 36 skip, 0 fail (3,859 tests in 306 files, 9 min 11 s);
+  the architecture test's own build 182,350 of 189,440 bytes gzipped.

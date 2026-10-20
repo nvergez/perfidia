@@ -14,6 +14,7 @@ import { fmtInt, plural } from "../lib/format.ts";
 import { effortWords, modelName, providerName, servingProvider } from "../lib/models.ts";
 import { matchHref, modelHref } from "../lib/router.ts";
 import {
+  balanceWords,
   claimExplanation,
   claimHeadline,
   countsWords,
@@ -23,12 +24,16 @@ import {
   fmtPermille,
   fmtProb,
   fmtUsdFine,
+  intervalWords,
   itemName,
   rankingShown,
   ratingOrder,
   rehearsedModel,
   scalePercent,
+  separated,
   seriesWords,
+  shownClaim,
+  shownRatings,
   total,
 } from "./format.ts";
 
@@ -93,11 +98,15 @@ export function Section({
 export function ClaimsPanel({
   claims,
   compact = false,
+  names,
 }: {
   readonly claims: Claims;
   readonly compact?: boolean;
+  /** Display names by model id (for the rotation's imbalances). */
+  readonly names?: ReadonlyMap<string, string>;
 }) {
   const ok = rankingShown(claims);
+  const balance = balanceWords(claims, (id) => names?.get(id) ?? id);
   return (
     <div
       role="note"
@@ -122,6 +131,7 @@ export function ClaimsPanel({
           count appears.
         </p>
       )}
+      {balance === null ? null : <p data-testid="claims-balance">{balance}</p>}
       {compact ? null : (
         <>
           <p className="text-muted-foreground">{claimExplanation(claims)}</p>
@@ -276,27 +286,23 @@ function RatingTable({
 
 /** The ratings, their method and the head-to-head pairs: only when the claim state is `ok`. */
 export function RatingsSection({
-  ratings,
+  ratings: served,
   claims,
   names,
 }: {
-  readonly ratings: Ratings;
+  readonly ratings: Ratings | null;
   readonly claims: Claims;
   readonly names: ReadonlyMap<string, string>;
 }) {
-  if (!rankingShown(claims)) return null;
-  const iv = ratings.intervals;
-  const how =
-    iv.method === "block-bootstrap"
-      ? `a block bootstrap over ${plural(iv.blocks, "block")} (${fmtInt(iv.replicates)} replicates)`
-      : `Laplace intervals (fewer than 5 blocks: ${fmtInt(iv.blocks)})`;
+  const ratings = shownRatings(claims, served);
+  if (ratings === null) return null;
   const h = ratings.headline;
   return (
     <Section
       title="Ratings"
       icon={Scale}
       testId="ratings"
-      note={`MAP Plackett–Luce over each rated match's full ranking (prior σ ${fmtFixed(ratings.priorSigma, 1)}), on an Elo-like scale centred on 1,500 for the models; ${fmtInt(Math.round(iv.level * 100))}% intervals by ${how}. Every seat counts as it started, handed-off seats included.`}
+      note={`MAP Plackett–Luce over each rated match's full ranking (prior σ ${fmtFixed(ratings.priorSigma, 1)}), on an Elo-like scale centred on 1,500 for the models; ${intervalWords(ratings)}. Every seat counts as it started, handed-off seats included.`}
     >
       <RatingTable
         items={h.items}
@@ -308,9 +314,14 @@ export function RatingsSection({
           <summary className="text-primary hover:text-primary/80 cursor-pointer text-sm font-medium select-none">
             Head to head ({plural(h.pairs.length, "pair")})
           </summary>
+          <p className="text-muted-foreground mt-2 text-xs">
+            Each difference's interval is at {fmtFixed(ratings.intervals.pairLevel * 100, 1)}%: the
+            0.05 the ranking claim allows, split over the {plural(h.pairs.length, "pair")}, so a
+            pair reads as separated only at the level the ranking is claimed at.
+          </p>
           <ul className="mt-2 flex flex-col gap-1 text-sm">
             {h.pairs.map((p) => {
-              const clear = p.interval.lo > 0 || p.interval.hi < 0;
+              const clear = separated(p.interval);
               return (
                 <li key={`${p.a}|${p.b}`} data-pair={`${p.a}|${p.b}`}>
                   <span className="font-medium">{names.get(p.a) ?? p.a}</span> finished ahead of{" "}
@@ -318,7 +329,7 @@ export function RatingsSection({
                   of {plural(p.matches, "match", "matches")}; strength difference{" "}
                   {fmtFixed(p.difference)} {fmtInterval(p.interval)}
                   {clear ? (
-                    <span className="text-primary"> (the interval excludes 0)</span>
+                    <span className="text-primary"> (separated at the corrected level)</span>
                   ) : (
                     <span className="text-muted-foreground"> (not separated)</span>
                   )}
@@ -387,6 +398,14 @@ export function ModelsTable({
   return (
     <div className="flex flex-col gap-2">
       {costs ? null : <NotPublished what="Costs" where="on this server" />}
+      <p className="text-muted-foreground text-xs" data-testid="models-legend">
+        {costs
+          ? "Cost per rated match: all of a model's seats in a match together, over every lineup (its page gives it per lineup); cost per wake: its spend over its wakes. "
+          : null}
+        Tool-call errors: calls the provider could not parse and arguments the game refused.
+        Parallel: of its tool rounds, those with two or more calls at once. Hand-offs: seats handed
+        to their bot (budget, cap, outage, operator).
+      </p>
       <div className="bg-card overflow-x-auto rounded-xl border">
         <table className="w-full min-w-[56rem] text-sm" data-testid="models-table">
           <thead>
@@ -401,8 +420,10 @@ export function ModelsTable({
               <Th title="Turns an LLM controlled">Wakes</Th>
               {costs ? (
                 <>
-                  <Th title="Mean cost of its seats per match (fees included)">Cost a match</Th>
-                  <Th title="Cost per wake">Cost a wake</Th>
+                  <Th title="All its seats in a rated match together, over every lineup (fees included)">
+                    Cost per match
+                  </Th>
+                  <Th title="Its spend over its wakes">Cost per wake</Th>
                   <Th title="Prompt tokens read from the cache">Cache reads</Th>
                 </>
               ) : null}
@@ -423,6 +444,7 @@ export function ModelsTable({
           </thead>
           <tbody>
             {displayOrder(models).map((m) => {
+              const result = shownClaim(claims, m.outcome);
               const battles = m.military.battlesAttacked + m.military.battlesDefended;
               const tools =
                 m.operations === null
@@ -454,7 +476,11 @@ export function ModelsTable({
                   </Num>
                   {costs ? (
                     <>
-                      <Num>{m.cost === null ? "–" : fmtUsdFine(m.cost.perMatchNanoUsd)}</Num>
+                      <Num>
+                        {m.cost === null || m.cost.perMatchNanoUsd === null
+                          ? "–"
+                          : fmtUsdFine(m.cost.perMatchNanoUsd)}
+                      </Num>
                       <Num>
                         {m.cost === null || m.cost.perWakeNanoUsd === null
                           ? "–"
@@ -482,13 +508,13 @@ export function ModelsTable({
                   </Num>
                   {outcome ? (
                     <>
-                      <Num>{m.outcome === null ? "–" : fmtFixed(m.outcome.meanRank, 2)}</Num>
+                      <Num>{result === null ? "–" : fmtFixed(result.meanRank, 2)}</Num>
                       <Num>
-                        {m.outcome === null ? "–" : fmtInt(m.outcome.wins)}
-                        {m.outcome === null || m.outcome.dominationWins === 0 ? null : (
+                        {result === null ? "–" : fmtInt(result.wins)}
+                        {result === null || result.dominationWins === 0 ? null : (
                           <span className="text-muted-foreground">
                             {" "}
-                            ({fmtInt(m.outcome.dominationWins)})
+                            ({fmtInt(result.dominationWins)})
                           </span>
                         )}
                       </Num>

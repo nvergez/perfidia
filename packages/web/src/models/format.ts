@@ -2,6 +2,7 @@ import type {
   Claims,
   ModelAggregate,
   RatingItem,
+  Ratings,
   StatsInterval,
   StatsSeriesRef,
 } from "@perfidia/protocol/spectator";
@@ -9,6 +10,7 @@ import { fmtInt, fmtUsd, plural } from "../lib/format.ts";
 import {
   asReasoningKind,
   fullModelName,
+  own,
   reasoningKindWords,
   type ModelRef,
   type ReasoningKind,
@@ -23,12 +25,11 @@ import {
 /** Nano-dollars as dollars, with sub-cent figures kept: `$0.0207`, `$0.14`, `$12.05`. */
 export function fmtUsdFine(nanoUsd: number): string {
   if (nanoUsd === 0) return "$0.00";
-  if (nanoUsd >= 1_000_000_000) return fmtUsd(nanoUsd);
   if (nanoUsd < 100_000) return "<$0.0001";
-  // Four decimals: tenths of a hundredth of a cent, rounded.
+  // Four decimals: tenths of a hundredth of a cent, rounded; $0.99995 and up round to a dollar.
   const units = Math.round(nanoUsd / 100_000);
-  const s = String(units).padStart(4, "0");
-  return `$0.${s}`;
+  if (units >= 10_000) return fmtUsd(nanoUsd);
+  return `$0.${String(units).padStart(4, "0")}`;
 }
 
 /** A permille as a percentage with one decimal: `617` → `61.7%`; null → "–". */
@@ -68,10 +69,11 @@ export function fmtMs(ms: number): string {
   return `${fmtInt(Math.round(ms / 1000))} s`;
 }
 
-/** A token count: `950`, `12.4K`, `1.23M`. */
+/** A token count: `950`, `12.4K`, `1.23M` (999,950 rounds up to `1.00M`, never `1000.0K`). */
 export function fmtTokens(n: number): string {
   if (n < 1000) return fmtInt(n);
-  if (n < 1_000_000) return `${(Math.round(n / 100) / 10).toFixed(1)}K`;
+  const tenths = Math.round(n / 100);
+  if (tenths < 10_000) return `${(tenths / 10).toFixed(1)}K`;
   return `${(Math.round(n / 10_000) / 100).toFixed(2)}M`;
 }
 
@@ -84,22 +86,70 @@ export function claimHeadline(c: Claims): string {
   }
   if (c.state === "no_comparison")
     return "No comparison yet: no two models have met in a rated match";
+  if (c.state === "unbalanced") {
+    return "Enough matches, but not rotated: the models did not play each profile and seat about equally often";
+  }
   return `Too few matches: ${fmtInt(c.more)} more needed (power now ${fmtProb(c.power)})`;
+}
+
+const FACTOR: Readonly<Record<string, string>> = Object.freeze({
+  profile: "profile",
+  seat: "seat",
+  model: "model",
+});
+
+/** What the rotation left unequal, in a sentence; null when it is balanced. */
+export function balanceWords(c: Claims, name: (id: string) => string): string | null {
+  const worst = c.balance.items[0];
+  if (c.balance.ok || worst === undefined) return null;
+  const factor = own(FACTOR, worst.factor) ?? worst.factor;
+  const more = c.balance.items.length - 1;
+  return `${name(worst.id)} played one ${factor} ${plural(worst.min, "time")} and another ${plural(worst.max, "time")}${more > 0 ? ` (and ${plural(more, "other imbalance")})` : ""}: a profile's or a seat's edge would be read as the model's. A rotation series (arena series) plays each model on each profile and seat in turn.`;
 }
 
 /** What the threshold is and where the statistics stand, in two sentences. */
 export function claimExplanation(c: Claims): string {
   const alpha = c.pairs > 1 ? `α = 0.05 split over ${fmtInt(c.pairs)} pairs` : "α = 0.05";
-  const rule = `A ranking is shown once every pair of models has met in ${plural(c.needed, "rated match", "rated matches")}: enough to see a ${c.gap} head-to-head edge 80% of the time (exact binomial test, ${alpha}).`;
+  const rule = `A ranking is shown once every pair of models has met in ${plural(c.needed, "rated match", "rated matches")}: enough to see a ${c.gap} head-to-head edge 80% of the time (exact binomial test, ${alpha}), and once each model has played each profile and seat about equally often.`;
   if (c.state === "no_comparison") {
     return `${rule} So far ${plural(c.models, "model")} took part, and no two met in a rated match.`;
   }
-  return `${rule} ${plural(c.models, "model")}, ${plural(c.pairs, "pair")}; the pair that met least has met in ${plural(c.matches, "rated match", "rated matches")}.`;
+  const unmet =
+    c.unmet === 0
+      ? ""
+      : ` ${plural(c.unmet, "pair")} of models never met: they are compared only once they play each other.`;
+  return `${rule} ${plural(c.models, "model")}, ${plural(c.pairs, "pair")}; the pair that met least has met in ${plural(c.matches, "rated match", "rated matches")}.${unmet}`;
 }
 
 /** Whether rankings, ratings and outcomes may be shown (the server withholds them otherwise). */
 export function rankingShown(c: Claims): boolean {
   return c.state === "ok";
+}
+
+/** The ratings to show: none unless the claim state is `ok`, whatever was served. */
+export function shownRatings(c: Claims, r: Ratings | null): Ratings | null {
+  return rankingShown(c) ? r : null;
+}
+
+/** An item's rating or outcome to show: none unless the claim state is `ok`. */
+export function shownClaim<T>(c: Claims, value: T | null): T | null {
+  return rankingShown(c) ? value : null;
+}
+
+/** Whether a pair's interval (at the claim's corrected level) separates the two: it excludes 0. */
+export function separated(i: StatsInterval): boolean {
+  return i.lo > 0 || i.hi < 0;
+}
+
+/** How the intervals were made, in words. */
+export function intervalWords(r: Ratings): string {
+  const iv = r.intervals;
+  const pairs = `pairs at ${fmtFixed(iv.pairLevel * 100, 1)}% (α = 0.05 split over the pairs, as the claim)`;
+  const how =
+    iv.method === "laplace"
+      ? `Laplace intervals (fewer than 5 blocks: ${fmtInt(iv.blocks)})`
+      : `Laplace intervals, widened where a block bootstrap over ${plural(iv.blocks, "block")} (${fmtInt(iv.replicates)} replicates) is wider`;
+  return `${fmtInt(Math.round(iv.level * 100))}% intervals by ${how}; ${pairs}`;
 }
 
 // Display order ----------------------------------------------------------------------------------
@@ -178,14 +228,14 @@ export function mainReasoningKind(kinds: Readonly<Record<string, number>>): Reas
   let best: ReasoningKind | null = null;
   let most = 0;
   for (const k of ["raw", "summary"] as const) {
-    const n = kinds[k] ?? 0;
+    const n = Object.hasOwn(kinds, k) ? (kinds[k] ?? 0) : 0;
     if (n > most) {
       best = k;
       most = n;
     }
   }
   if (best !== null) return best;
-  return (kinds["none"] ?? 0) > 0 ? "none" : null;
+  return Object.hasOwn(kinds, "none") && (kinds["none"] ?? 0) > 0 ? "none" : null;
 }
 
 const CHANNEL: Readonly<Record<string, string>> = Object.freeze({
@@ -196,7 +246,7 @@ const CHANNEL: Readonly<Record<string, string>> = Object.freeze({
 
 /** How harness text reaches the model (the prompt variant). */
 export function channelWords(variant: string): string {
-  return CHANNEL[variant] ?? variant;
+  return own(CHANNEL, variant) ?? variant;
 }
 
 const REMINDERS: Readonly<Record<string, string>> = Object.freeze({
@@ -206,7 +256,7 @@ const REMINDERS: Readonly<Record<string, string>> = Object.freeze({
 
 /** The reminder cadence of the lineup. */
 export function remindersWords(r: string): string {
-  return REMINDERS[r] ?? r;
+  return own(REMINDERS, r) ?? r;
 }
 
 const HANDOFF: Readonly<Record<string, string>> = Object.freeze({
@@ -219,7 +269,7 @@ const HANDOFF: Readonly<Record<string, string>> = Object.freeze({
 /** Why a seat went to its bot. */
 export function handoffWords(reason: string | null): string {
   if (reason === null) return "reason not recorded";
-  return HANDOFF[reason] ?? reason;
+  return own(HANDOFF, reason) ?? reason;
 }
 
 /** A series match: "series budget-mix, block 1, match 2" (blocks shown from 1). */
@@ -246,4 +296,27 @@ export function total(c: Readonly<Record<string, number>>): number {
 /** A model reference for a fake item: the model it rehearses (its intended provider's). */
 export function rehearsedModel(m: NonNullable<ModelAggregate["model"]>): ModelRef {
   return { provider: m.intended ?? m.provider, model: m.model, endpoint: m.endpoint };
+}
+
+/** Dealings per partner seat: "0.50 a partner" (count ÷ partners); "–" without a partner. */
+export function perPartner(count: number, partners: number): string {
+  return partners <= 0 ? "–" : `${fmtFixed(count / partners, 2)} a partner`;
+}
+
+/** The playhead is at or past the last time the statistics cover: they tell nothing ahead of it. */
+export function atStatsEnd(playhead: number, statsLastT: number): boolean {
+  return playhead >= statsLastT;
+}
+
+/**
+ * The model block's view at the playhead (phase 3 §16.8: a replay learns nothing ahead of the
+ * clock): whole-match figures show at the statistics' end, while following a live match, or once
+ * the viewer asked for them.
+ */
+export function wholeMatchShown(o: {
+  readonly atEnd: boolean;
+  readonly live: boolean;
+  readonly asked: boolean;
+}): boolean {
+  return o.asked || o.live || o.atEnd;
 }

@@ -1,8 +1,10 @@
 // Phase 4 Pass 3 checks of the web (agent G; docs/phase4.md "Pass 3: web as built"). Registered
 // inside the smoke test's `describe` by `smoke.test.ts`; the environment, `open` and the DOM checks
 // come from `../kit.ts`. The fake run plays the cross-provider lineup `budget-mix` (Haiku, GPT-6
-// Luna, Gemini 3.8 Flash, GLM-5.3 Flash on OpenRouter), and both servers serve its model
-// statistics (one match: too few for a claim):
+// Luna, Gemini 3.8 Flash, GLM-5.3 Flash on OpenRouter), and both servers serve the model
+// statistics of it and its hostile copy (two matches: too few for a claim; the copy's operator
+// strings carry bidi and zero-width characters and markup, and once cleaned they name the same
+// models):
 // - `/models` (a chunk loaded on demand) says "Too few matches: N more needed (power now …)" with
 //   N and the power from the route, and shows no ranking, rating, rank or win; every model is
 //   listed by name, each fake as "Fake for <model>"; a model's link opens its page, whose seats
@@ -11,6 +13,8 @@
 //   summary), its dossier's model block calls it a rehearsal standing in for GLM-5.3 Flash (Z.AI
 //   via OpenRouter) with its effort in OpenRouter's terms, and the Thoughts column's toggles say
 //   "Reasoning (raw chain of thought)" for it and "Reasoning (summary)" for the Claude seat.
+// The model block's cut at the playhead is checked in `dossier.ts` (C2), its cleaned operator
+// strings in the smoke test's hostile run (review fixes, docs/phase4.md §55).
 
 import { expect, test } from "bun:test";
 import { MatchMetaSchema, ModelsResponseSchema, type SeatInfo } from "@perfidia/protocol/spectator";
@@ -32,7 +36,9 @@ export function modelsChecks(): void {
     const data = ModelsResponseSchema.parse(await (await fetch(`${url}/api/models`)).json());
     expect(data.claims.state).toBe("too_few_matches");
     expect(data.ratings).toBeNull();
-    expect(data.matches.map((m) => m.match)).toEqual(["fake1"]);
+    expect(data.matches.map((m) => m.match)).toEqual(["fake1", "hostile"]);
+    // The hostile copy's lineup, cleaned, is the run's.
+    expect(data.matches.map((m) => m.lineup)).toEqual(["budget-mix", "budget-mix"]);
     const page = await open("/models");
     const claims = page.getByTestId("claims");
     await claims.waitFor();
@@ -44,7 +50,7 @@ export function modelsChecks(): void {
     expect(await page.getByTestId("ratings").count()).toBe(0);
     const table = page.getByTestId("models-table");
     const head = (await table.locator("thead").textContent()) ?? "";
-    expect(head).toContain("Cost a match");
+    expect(head).toContain("Cost per match");
     expect(head).not.toMatch(/Mean rank|Wins/);
     expect(await table.locator("tbody [data-model]").count()).toBe(data.models.length);
     const names = await table.locator("tbody [data-model] th a").allTextContents();
@@ -77,7 +83,7 @@ export function modelsChecks(): void {
     await quiet.getByText("Costs not published on this server.").waitFor();
     const quietTable = (await quiet.getByTestId("models-table").textContent()) ?? "";
     expect(quietTable).not.toContain("$");
-    expect(quietTable).not.toContain("Cost a match");
+    expect(quietTable).not.toContain("Cost per match");
     await domIsClean(quiet);
     console.log(`web e2e models checks: ${Math.round(performance.now() - t0)} ms`);
   }, 20_000);
@@ -101,7 +107,11 @@ export function modelsChecks(): void {
     // Its dossier: the model block calls it a rehearsal of GLM-5.3 Flash, in OpenRouter's terms.
     await sheet.getByTestId("turn-dossier").dispatchEvent("click");
     const block = page.getByTestId("player-sheet").getByTestId("model-block");
-    await block.getByText("Over the whole match, whatever the playhead.").waitFor();
+    await block.locator("[data-testid=model-whole], [data-testid=model-later]").first().waitFor();
+    if ((await block.getByTestId("model-later").count()) > 0) {
+      await block.getByRole("button", { name: "Show the whole match's figures" }).click();
+    }
+    await block.getByTestId("model-whole").waitFor();
     const text = (await block.textContent()) ?? "";
     for (const want of [
       "Rehearsal",

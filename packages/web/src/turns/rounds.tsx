@@ -14,7 +14,7 @@ import { PlainText } from "../common/plain-text.tsx";
 import { ReasoningKindTag } from "../common/reasoning-kind.tsx";
 import { cn } from "../lib/cn.ts";
 import { fmtInt, fmtUsd, plural } from "../lib/format.ts";
-import type { ReasoningKind } from "../lib/models.ts";
+import { shownReasoningKind, type ReasoningKind } from "../lib/models.ts";
 import type { Published } from "../store/hooks.ts";
 import {
   fmtLatency,
@@ -123,7 +123,7 @@ function Round({
 }) {
   const id = useId();
   const hasReasoning = r.reasoning.length > 0;
-  const kind = r.reasoningKind ?? seatKind;
+  const kind = shownReasoningKind(r.reasoningKind, seatKind);
   return (
     <li
       className={cn(

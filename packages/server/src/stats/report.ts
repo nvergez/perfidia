@@ -5,13 +5,35 @@ import { CLAIM_ALPHA, GAPS, neededFor } from "./power.ts";
 
 // The `stats` command line's text: one match's seats, the per-model aggregate with its claim state
 // and (when shown) its ratings, and the power table. Money in dollars from integer nano-dollars;
-// figures withheld (`--no-costs`, or below the claim threshold) print as `-`.
+// figures withheld (`--no-costs`, or below the claim threshold) print as `-`. Every cell is
+// `terminalText`: a run directory's strings (a lineup, a model id) cannot drive the terminal.
+
+/** A character a terminal acts on or shows misleadingly: C0, DEL and C1 controls, bidi controls. */
+export function controlChar(c: number): boolean {
+  return (
+    c < 0x20 ||
+    (c >= 0x7f && c <= 0x9f) ||
+    c === 0x200e ||
+    c === 0x200f ||
+    c === 0x061c ||
+    (c >= 0x202a && c <= 0x202e) ||
+    (c >= 0x2066 && c <= 0x2069)
+  );
+}
+
+/** Text safe for a terminal: C0 and C1 controls (escape sequences), DEL and bidi controls as `?`. */
+export function terminalText(s: string): string {
+  let out = "";
+  for (const ch of s) out += controlChar(ch.codePointAt(0) ?? 0) ? "?" : ch;
+  return out;
+}
 
 /** A cell that reads as a number (aligned right). */
 const numeric = (s: string): boolean => /^[-+$]?[0-9][0-9.,%‰/ -]*$/.test(s) || s === "-";
 
 /** A table: headers then rows, columns padded; numeric-looking cells aligned right. */
-export function table(head: readonly string[], rows: readonly (readonly string[])[]): string {
+export function table(head: readonly string[], raw: readonly (readonly string[])[]): string {
+  const rows = raw.map((r) => r.map(terminalText));
   const widths = head.map((h, i) => Math.max(h.length, ...rows.map((r) => (r[i] ?? "").length)));
   const line = (cells: readonly string[]): string =>
     cells
@@ -100,7 +122,7 @@ export function formatMatch(m: MatchStats): string {
     c.samePairs + c.crossPairs === 0
       ? ""
       : `same-model pairs ${c.samePairs} (messages ${c.same.messages}, pacts ${c.same.pacts}, alliances ${c.same.alliances}); cross-model pairs ${c.crossPairs} (messages ${c.cross.messages}, pacts ${c.cross.pacts}, alliances ${c.cross.alliances})\n`;
-  return `${head.join("\n")}\n${t}${collusion}`;
+  return `${head.map(terminalText).join("\n")}\n${t}${collusion}`;
 }
 
 function formatRatings(name: string, set: RatingSet): string {
@@ -158,7 +180,7 @@ export function formatModels(f: ModelStatsFile): string {
     `${f.matches.length} match(es), ${rated} rated, ${f.blocks} block(s); grouping ${f.grouping}; costs ${f.published.costs ? "published" : "withheld (--no-costs)"}${f.exploratory ? "; EXPLORATORY: outcomes and ratings below the claim threshold, not a claim" : ""}`,
   ];
   for (const s of f.series) lines.push(seriesText(s));
-  const head = lines.join("\n");
+  const head = lines.map(terminalText).join("\n");
   const models = table(
     [
       "id",
@@ -220,7 +242,7 @@ export function formatModels(f: ModelStatsFile): string {
   const ratings =
     r === null
       ? ""
-      : `ratings: MAP Plackett–Luce (prior σ ${r.priorSigma}), ${r.intervals.method === "block-bootstrap" ? `block bootstrap over ${r.intervals.blocks} blocks, ${r.intervals.replicates} replicates, bootstrap seed ${r.intervals.bootstrapSeed}` : `Laplace intervals (${r.intervals.blocks} block(s): fewer than 5)`}, ${Math.round(r.intervals.level * 100)}%\n${formatRatings("headline (every seat as it started)", r.headline)}${formatRatings("clean (handed-off seats left out)", r.clean)}`;
+      : `ratings: MAP Plackett–Luce (prior σ ${r.priorSigma}), ${r.intervals.method === "laplace" ? `Laplace intervals (${r.intervals.blocks} block(s): fewer than 5)` : `Laplace intervals widened to a block bootstrap's over ${r.intervals.blocks} blocks, ${r.intervals.replicates} replicates, bootstrap seed ${r.intervals.bootstrapSeed}`}, ${Math.round(r.intervals.level * 100)}%; pairs at ${(r.intervals.pairLevel * 100).toFixed(2)}% (α ${(1 - r.intervals.pairLevel).toFixed(4)} per pair)\n${formatRatings("headline (every seat as it started)", r.headline)}${formatRatings("clean (handed-off seats left out)", r.clean)}`;
   return `${head}\n${claimText(f)}${models}${costs}${ratings}`;
 }
 
@@ -245,6 +267,7 @@ export function formatPower(
       "binomial 1",
       "laplace 1",
       "bootstrap 1",
+      "served 1",
       "exact 6",
       "binomial 6",
       "laplace 6",
@@ -255,10 +278,15 @@ export function formatPower(
       r.binomial.one.toFixed(3),
       r.laplace.one.toFixed(3),
       r.bootstrap === null ? "-" : r.bootstrap.toFixed(3),
+      r.served === null ? "-" : r.served.toFixed(3),
       r.exact.six.toFixed(3),
       r.binomial.six.toFixed(3),
       r.laplace.six.toFixed(3),
     ]),
   );
-  return `matches needed for 80% power, exact two-sided binomial test, α ${CLAIM_ALPHA}:\n${exact}power at p = ${p} (head-to-head of the pair), ${o.reps} simulated series per length, 4 models + 2 bots per match, blocks of 4${o.replicates > 0 ? `, ${o.replicates} bootstrap replicates` : ""}:\n${sim}`;
+  const what =
+    p === 0.5
+      ? `size at p = 0.5 (two equal models: every rate is a false claim, 0.05 nominal)`
+      : `power at p = ${p} (head-to-head of the pair)`;
+  return `matches needed for 80% power, exact two-sided binomial test, α ${CLAIM_ALPHA}:\n${exact}${what}, ${o.reps} simulated series per length, 4 models + 2 bots per match, blocks of 4${o.replicates > 0 ? `, ${o.replicates} bootstrap replicates (the bootstrap at every block count)` : ""}:\n${sim}`;
 }

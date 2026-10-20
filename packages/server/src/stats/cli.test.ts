@@ -3,10 +3,13 @@
 // orchestrator's `arena.json`; `aggregate` over a rotated fake series groups its matches by
 // `series.json` (one block of four), says how many more matches a claim needs and shows no ranking;
 // old run directories (`perfidia-arena/1`, bots only) aggregate without error; `--no-costs`,
-// `--publish`, `--out`, usage errors; `power` prints the design's table.
+// `--publish`, `--out`, usage errors; `power` prints the design's table. Review fixes: `--publish`
+// leaves out a listed match the server would hide (its log does not verify); a run with a 300-
+// character model id aggregates (bounded ids); a run's control characters never reach the terminal;
+// `power --p 0.5` measures the size.
 
 import { beforeAll, describe, expect, setDefaultTimeout, test } from "bun:test";
-import { readFileSync, writeFileSync } from "node:fs";
+import { cpSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   ArenaReportAnySchema,
@@ -18,6 +21,7 @@ import {
 import { tempDir } from "../testkit.test.ts";
 import { mixedRoot, seriesRoot } from "./fixtures.test.ts";
 import { main } from "./cli.ts";
+import { controlChar, table as tableText, terminalText } from "./report.ts";
 import { statsOfRunDir } from "./runs.ts";
 
 const LONG = 180_000;
@@ -229,6 +233,124 @@ describe("stats aggregate", () => {
   });
 });
 
+/** A copy of series match `from` as `to` in `root`, its `seats.json` passed through `edit`. */
+function copy(
+  root: string,
+  from: string,
+  to: string,
+  edit?: (seats: Record<string, unknown>) => void,
+): void {
+  cpSync(join(series, from), join(root, to), { recursive: true });
+  if (edit === undefined) return;
+  const path = join(root, to, "seats.json");
+  const seats: unknown = JSON.parse(readFileSync(path, "utf8"));
+  if (!isRecord(seats)) throw new Error(`${path}: not an object`);
+  edit(seats);
+  writeFileSync(path, JSON.stringify(seats));
+}
+
+function isRecord(v: unknown): v is Record<string, unknown> {
+  return typeof v === "object" && v !== null && !Array.isArray(v);
+}
+
+describe("review fixes", () => {
+  test("--publish leaves out a listed match whose log does not verify, as the server hides it", () => {
+    const root = join(tempDir("stats-publish"), "runs");
+    mkdirSync(root, { recursive: true });
+    copy(root, "m01", "pub1");
+    copy(root, "m02", "tamper1");
+    const log = join(root, "tamper1", "match.jsonl");
+    const lines = readFileSync(log, "utf8").split("\n");
+    const at = lines.findIndex((l) => l.includes('"k":"ckpt"'));
+    lines[at] = (lines[at] ?? "").replace(/"h":"[0-9a-f]+"/, '"h":"0000000000000000"');
+    writeFileSync(log, lines.join("\n"));
+    const publish = join(root, "..", "publish.json");
+    writeFileSync(
+      publish,
+      JSON.stringify({
+        format: "perfidia-publish/1",
+        matches: [
+          { id: "pub1", title: "one" },
+          { id: "tamper1", title: "two" },
+        ],
+      }),
+    );
+    const r = run([
+      "aggregate",
+      "--runs",
+      root,
+      "--publish",
+      publish,
+      "--json",
+      "--replicates",
+      "0",
+    ]);
+    expect(r.code).toBe(0);
+    expect(r.err).toContain("tamper1: its log does not verify (level E): the server hides it");
+    const f = ModelStatsFileSchema.parse(JSON.parse(r.out));
+    expect(f.matches.map((m) => m.match)).toEqual(["pub1"]);
+    // Without --publish (a development root), the unverifiable match stays, unrated.
+    const all = ModelStatsFileSchema.parse(
+      JSON.parse(run(["aggregate", "--runs", root, "--json", "--replicates", "0"]).out),
+    );
+    expect(all.matches.map((m) => [m.match, m.rated])).toEqual([
+      ["pub1", true],
+      ["tamper1", false],
+    ]);
+  });
+
+  test("a 300-character model id: bounded ids, the aggregate and the match still work", () => {
+    const root = join(tempDir("stats-long"), "runs");
+    mkdirSync(root, { recursive: true });
+    copy(root, "m01", "long1", (seats) => {
+      const list = seats["seats"];
+      if (!Array.isArray(list)) throw new Error("no seats");
+      const first: unknown = list.find(
+        (x: unknown) => typeof x === "object" && x !== null && "provider" in x,
+      );
+      if (typeof first !== "object" || first === null) throw new Error("no llm seat");
+      Object.assign(first, { provider: "compat", model: `${"very-long-model-".repeat(19)}x` });
+    });
+    const m = run(["match", join(root, "long1"), "--json"]);
+    expect([m.code, m.err]).toEqual([0, ""]);
+    const stats = MatchStatsSchema.parse(JSON.parse(m.out));
+    const long = stats.seats.find((s) => s.model?.provider === "compat");
+    expect(long?.id.length).toBeLessThanOrEqual(150);
+    const r = run(["aggregate", "--runs", root, "--json", "--replicates", "0"]);
+    expect(r.code).toBe(0);
+    const f = ModelStatsFileSchema.parse(JSON.parse(r.out));
+    expect(f.models.some((x) => x.id === long?.id)).toBe(true);
+  });
+
+  test("terminal text: C0, C1, DEL and bidi controls print as ?", () => {
+    expect(terminalText("a\u001b]0;x\u0007b\u009bc\u007fd\u202ee\u2066f")).toBe("a?]0;x?b?c?d?e?f");
+    expect(terminalText("plain text, $1.00 ‰")).toBe("plain text, $1.00 ‰");
+    expect(tableText(["h"], [["x\u001b[2Jy"]])).toBe("h\nx?[2Jy\n");
+  });
+
+  test("control characters of a run's strings never reach the terminal", () => {
+    const root = join(tempDir("stats-ctl"), "runs");
+    mkdirSync(root, { recursive: true });
+    copy(root, "m01", "ctl1", (seats) => {
+      seats["lineup"] = "x\u001b]0;pwned\u0007\u001b[2Jy";
+    });
+    for (const argv of [
+      ["match", join(root, "ctl1")],
+      ["aggregate", "--runs", root, "--replicates", "0"],
+    ]) {
+      const r = run(argv);
+      expect(r.code).toBe(0);
+      const text = r.out + r.err;
+      const shown: number[] = [];
+      for (let i = 0; i < text.length; i += 1) {
+        const c = text.charCodeAt(i);
+        if (c !== 0x0a && controlChar(c)) shown.push(c);
+      }
+      expect(shown).toEqual([]);
+    }
+  });
+});
+
 test("stats power: the design's table and a deterministic simulation", () => {
   const r = run(["power", "--matches", "8", "--reps", "4", "--replicates", "0", "--json"]);
   expect(r.code).toBe(0);
@@ -240,4 +362,9 @@ test("stats power: the design's table and a deterministic simulation", () => {
   expect(t.out).toMatch(/70\/30 +49 +74/);
   expect(t.out).toMatch(/80\/20 +20 +32/);
   expect(t.out).toMatch(/60\/40 +199 +303/);
+  // --p 0.5: two equal models, the rates are false claims (the size).
+  const size = run(["power", "--p", "0.5", "--matches", "8", "--reps", "4", "--replicates", "0"]);
+  expect(size.code).toBe(0);
+  expect(size.out).toContain("size at p = 0.5");
+  expect(run(["power", "--p", "0.49"]).code).toBe(3);
 });

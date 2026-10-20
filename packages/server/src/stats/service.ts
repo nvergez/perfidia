@@ -21,17 +21,23 @@ import { SERIES_FILE, readCalls, readCostByKind, readSeries } from "./side.ts";
 // - `GET /api/matches/:id/stats`: one match's statistics (`perfidia-stats/1`), from the steps its
 //   fold workers made (never a fold on this thread), the frame at its tail, and its side files read
 //   whole (`llm_calls.jsonl`, `seats.json`, `arena.json`'s cost by kind, the root's `series.json`);
-//   kept per match while its timeline and side files are unchanged, and at most every
-//   `LIVE_REFRESH_MS` for a running match;
+//   a 503 `LOADING` until the first fold has reached the log's tail (statistics of a half-folded log
+//   would mix its first hours with the whole side files); a finished match's are kept (up to
+//   `MEMO_FINAL`, without reading its timeline back) while its timeline and side files are
+//   unchanged, a running match's at most every `LIVE_REFRESH_MS`;
 // - `GET /api/models` and `GET /api/models/:id`: the file `bun run stats -- aggregate --out <file>`
 //   wrote (`--stats <file>`), re-read when it changes; served only when every match it aggregates is
 //   public now (else a 404, or a 503 while one of them loads), never an `--exploratory` file.
-// Under `--no-costs`, every cost, token and model-time figure is withheld (null).
+// Under `--no-costs`, every cost, token and model-time figure is withheld (null). As defence in
+// depth, a models file whose claim state is not `ok` is served without ratings, outcomes or ranks,
+// whatever it holds.
 
 /** A running match's statistics are recomputed at most this often (wall ms). */
 export const LIVE_REFRESH_MS = 5_000;
-/** Matches whose statistics are kept. */
+/** Running matches whose statistics are kept. */
 const MEMO_MATCHES = 32;
+/** Finished matches whose statistics are kept (about 10 KB each for six seats). */
+export const MEMO_FINAL = 512;
 /** The largest statistics file read. */
 const MAX_STATS_BYTES = 64 * 1024 * 1024;
 
@@ -50,6 +56,17 @@ export interface StatsServiceOptions {
 
 const decoder = new TextDecoder("utf-8", { fatal: false });
 
+/** A models file without ratings, outcomes or ranks unless its claim state is `ok` (defence in depth). */
+export function withoutClaims(f: ModelStatsFile): ModelStatsFile {
+  if (f.claims.state === "ok") return f;
+  return {
+    ...f,
+    ratings: null,
+    models: f.models.map((m) => (m.outcome === null ? m : { ...m, outcome: null })),
+    seats: f.seats.map((s) => (s.rank === null ? s : { ...s, rank: null })),
+  };
+}
+
 /** A models file with costs withheld (`--no-costs`). */
 export function withoutCosts(f: ModelStatsFile): ModelStatsFile {
   return {
@@ -64,10 +81,22 @@ export function withoutCosts(f: ModelStatsFile): ModelStatsFile {
   };
 }
 
+/** `value` as the newest entry of a map kept to `max` entries (the oldest dropped). */
+function remember<V>(memo: Map<MatchId, V>, id: MatchId, value: V, max: number): void {
+  memo.delete(id);
+  memo.set(id, value);
+  while (memo.size > max) {
+    const oldest = memo.keys().next();
+    if (oldest.done === true) break;
+    memo.delete(oldest.value);
+  }
+}
+
 export class StatsService {
   private readonly registry: Registry;
   private readonly o: StatsServiceOptions;
   private readonly memo = new Map<MatchId, { key: string; at: number; stats: MatchStats }>();
+  private readonly finalMemo = new Map<MatchId, { key: string; stats: MatchStats }>();
   private file: { stamp: string; value: ModelStatsFile | null } | null = null;
 
   constructor(registry: Registry, o: StatsServiceOptions) {
@@ -79,20 +108,29 @@ export class StatsService {
   match(id: MatchId): ApiResult {
     const e = this.registry.get(id);
     if (e === null) return notFound(id);
-    const t = this.registry.timelineOf(e);
-    const tail = t?.tail() ?? null;
-    if (t === null || t.lastSeq < 0 || tail === null || e.header === null) return loading(id);
+    // Until the first fold reaches the tail, the steps cover only the log's start.
+    if (e.loading || e.status.status === "loading") return loading(id);
     const dir = e.ref.dir;
     const final = isFinal(e.status.status);
-    const key = [
-      t.timeline,
-      t.version,
+    const stamps = [
       e.status.status,
       fileStamp(join(dir, CALLS_FILE)),
       fileStamp(join(dir, SEATS_FILE)),
       fileStamp(join(dir, ARENA_FILE)),
       fileStamp(join(this.o.runs, SERIES_FILE)),
     ].join("|");
+    // A finished match's statistics change only with its timeline id (a replaced log) or a side file.
+    const finalKey = final && e.timelineId !== null ? `${e.timelineId}|${stamps}` : null;
+    const kept = finalKey === null ? undefined : this.finalMemo.get(id);
+    if (kept !== undefined && kept.key === finalKey) {
+      this.finalMemo.delete(id);
+      this.finalMemo.set(id, kept);
+      return { status: 200, body: kept.stats, cache: maxAge(3600) };
+    }
+    const t = this.registry.timelineOf(e);
+    const tail = t?.tail() ?? null;
+    if (t === null || t.lastSeq < 0 || tail === null || e.header === null) return loading(id);
+    const key = [t.timeline, t.version, stamps].join("|");
     const now = this.o.now();
     const held = this.memo.get(id);
     const fresh =
@@ -117,12 +155,11 @@ export class StatsService {
           series: readSeries(this.o.runs).byRun.get(id) ?? null,
         },
       );
-      this.memo.delete(id);
-      this.memo.set(id, { key, at: now, stats });
-      while (this.memo.size > MEMO_MATCHES) {
-        const oldest = this.memo.keys().next();
-        if (oldest.done === true) break;
-        this.memo.delete(oldest.value);
+      if (finalKey === null) {
+        remember(this.memo, id, { key, at: now, stats }, MEMO_MATCHES);
+      } else {
+        this.memo.delete(id);
+        remember(this.finalMemo, id, { key: finalKey, stats }, MEMO_FINAL);
       }
     }
     return { status: 200, body: stats, cache: final ? maxAge(3600) : maxAge(10) };
@@ -196,7 +233,8 @@ export class StatsService {
         "the operator regenerates them with bun run stats -- aggregate --publish <publish.json>",
       );
     }
-    return { file: this.o.costs ? file : withoutCosts(file) };
+    const shown = withoutClaims(file);
+    return { file: this.o.costs ? shown : withoutCosts(shown) };
   }
 
   private read(path: string): ModelStatsFile | null {

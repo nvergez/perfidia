@@ -4,8 +4,8 @@
 // compared); its power at a true head-to-head p is the probability of rejecting. The matches a gap
 // needs are the smallest n whose power reaches 80% (the design's 20 / 49 / 199 for one pair at
 // 80/20, 70/30, 60/40; 32 / 74 / 303 for six pairs). The power of the exact test is a sawtooth in n:
-// a few n above the threshold fall back under 80% (70/30, one pair: 50–53), so the achieved power
-// is reported as it is.
+// a few n above the threshold fall back under 80% (70/30, one pair: 50 and 53, while 51 and 52
+// reach it), so the achieved power is reported as it is.
 
 /** The design's claimed gap and the power it asks for. */
 export const CLAIM_GAP = { label: "70/30", p: 0.7 } as const;

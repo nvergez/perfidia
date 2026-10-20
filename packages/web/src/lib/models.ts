@@ -19,6 +19,14 @@ export interface ModelRef {
 
 export type ReasoningKind = "summary" | "raw" | "none";
 
+/**
+ * A table lookup that never reads an inherited member: a model, provider or host id is the
+ * operator's string (`__proto__`, `constructor` and `toString` are ids like any other).
+ */
+export function own(table: Readonly<Record<string, string>>, key: string): string | undefined {
+  return Object.hasOwn(table, key) ? table[key] : undefined;
+}
+
 /** Names no family pattern gives. */
 const KNOWN: Readonly<Record<string, string>> = Object.freeze({
   "claude-opus-5-5": "Opus 5.5",
@@ -48,7 +56,7 @@ function claudeName(model: string): string | null {
  * (`z-ai/glm-5.3`); an unknown id as it is.
  */
 export function modelName(model: string): string {
-  const known = KNOWN[model];
+  const known = own(KNOWN, model);
   if (known !== undefined) return known;
   const claude = claudeName(model);
   if (claude !== null) return claude;
@@ -72,7 +80,7 @@ const PROVIDERS: Readonly<Record<string, string>> = Object.freeze({
 
 /** A provider's name: "Anthropic", "OpenAI", "Google", "OpenRouter"; an unknown one as it is. */
 export function providerName(provider: string): string {
-  return PROVIDERS[provider] ?? provider;
+  return own(PROVIDERS, provider) ?? provider;
 }
 
 /** Who serves an OpenRouter endpoint (its slug's first part), as the vendor writes its name. */
@@ -99,7 +107,7 @@ const HOSTS: Readonly<Record<string, string>> = Object.freeze({
 /** The host of an endpoint slug: `z-ai/fp8` → "Z.AI"; an unknown host as its slug says. */
 export function hostName(endpoint: string): string {
   const head = endpoint.split("/")[0] ?? endpoint;
-  return HOSTS[head] ?? head;
+  return own(HOSTS, head) ?? head;
 }
 
 /** The variant an endpoint slug pins after its host (`z-ai/fp8` → "fp8"), or null. */
@@ -174,6 +182,17 @@ export function providerReasoning(provider: string): ReasoningKind | null {
 }
 
 type SeatKind = Pick<SeatInfo, "kind" | "fake" | "model">;
+
+/**
+ * The kind a reasoning text is labelled with: the one its line logged (a round's
+ * `reasoningKind`), else the one its seat is expected to show. The logged kind always wins.
+ */
+export function shownReasoningKind(
+  logged: ReasoningKind | null | undefined,
+  expected: ReasoningKind | null,
+): ReasoningKind | null {
+  return logged ?? expected;
+}
 
 /**
  * What a seat's reasoning is expected to be, from its model (the logged kind of a round wins):

@@ -11,6 +11,7 @@ import {
   modelLabel,
   modelName,
   modelWithRoute,
+  own,
   playedBy,
   providerName,
   providerOfModel,
@@ -19,6 +20,7 @@ import {
   rehearsalOf,
   routeWords,
   seatReasoningKind,
+  shownReasoningKind,
 } from "./models.ts";
 
 const EFFORTS = ["none", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
@@ -173,6 +175,31 @@ describe("model names", () => {
     expect(rehearsalOf({ fake: true, model: { provider: "fake", model: "anything" } })).toBe(
       "stands in for anything",
     );
+  });
+
+  test("ids named like Object's members are names like any other (no inherited lookup)", () => {
+    for (const id of ["__proto__", "constructor", "toString", "valueOf"]) {
+      expect([modelName(id), providerName(id), hostName(`${id}/fp8`)]).toEqual([id, id, id]);
+      expect(typeof fullModelName({ provider: id, model: id })).toBe("string");
+      expect(
+        modelLabel({
+          kind: "llm",
+          fake: false,
+          model: { provider: "compat", model: id, effort: "medium" },
+        }),
+      ).toBe(`${id} · medium`);
+    }
+    expect(own({ a: "b" }, "a")).toBe("b");
+    expect(own({ a: "b" }, "__proto__")).toBeUndefined();
+  });
+
+  test("the logged reasoning kind wins over the seat's expected one", () => {
+    expect(shownReasoningKind("summary", "raw")).toBe("summary");
+    expect(shownReasoningKind("raw", "summary")).toBe("raw");
+    expect(shownReasoningKind("none", "raw")).toBe("none");
+    expect(shownReasoningKind(null, "raw")).toBe("raw");
+    expect(shownReasoningKind(undefined, "summary")).toBe("summary");
+    expect(shownReasoningKind(null, null)).toBeNull();
   });
 
   test("reasoning kinds: a summary from the first-party APIs, raw text from open models", () => {

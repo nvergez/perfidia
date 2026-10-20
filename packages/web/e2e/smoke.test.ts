@@ -21,6 +21,7 @@ import {
   cpSync,
   mkdirSync,
   mkdtempSync,
+  readFileSync,
   renameSync,
   rmSync,
   statSync,
@@ -156,10 +157,14 @@ describe.skipIf(reason !== null)("the spectator web app in Chromium", () => {
       quiet: true,
     });
     const t2 = performance.now();
-    // The model statistics of the fake run alone (`bun run stats -- aggregate`), while the copies
-    // and folds below go on: one match, so "too few matches" (phase 4 Pass 3).
+    cpSync(join(stage, "fake1"), join(stage, "hostile"), { recursive: true });
+    plantHostile(join(stage, "hostile"));
+    // The model statistics of the fake run and its hostile copy (`bun run stats -- aggregate`),
+    // while the copies and folds below go on: two matches, so "too few matches" (phase 4 Pass 3);
+    // the copy's operator strings, cleaned, name the same models as the run's.
     mkdirSync(join(root, "stats-runs"));
     cpSync(join(stage, "fake1"), join(root, "stats-runs", "fake1"), { recursive: true });
+    cpSync(join(stage, "hostile"), join(root, "stats-runs", "hostile"), { recursive: true });
     const aggregate = Bun.spawn(
       [
         process.execPath,
@@ -172,8 +177,6 @@ describe.skipIf(reason !== null)("the spectator web app in Chromium", () => {
       ],
       { stdout: "ignore", stderr: "pipe" },
     );
-    cpSync(join(stage, "fake1"), join(stage, "hostile"), { recursive: true });
-    plantHostile(join(stage, "hostile"));
     renameSync(join(stage, "hostile"), join(runs, "hostile"));
     // Into the runs root by a rename (the server never sees half a copy).
     cpSync(join(stage, "fake1"), join(stage, "fake1-copy"), { recursive: true });
@@ -183,6 +186,9 @@ describe.skipIf(reason !== null)("the spectator web app in Chromium", () => {
     const privateRuns = join(root, "runs-private");
     mkdirSync(privateRuns);
     cpSync(join(stage, "fake1"), join(privateRuns, "fake1"), { recursive: true });
+    // The model statistics cover the hostile copy too: a server serves them only when it shows
+    // every match they aggregate.
+    cpSync(join(root, "stats-runs", "hostile"), join(privateRuns, "hostile"), { recursive: true });
     const p = serve(
       privateRuns,
       "cache-private",
@@ -192,7 +198,12 @@ describe.skipIf(reason !== null)("the spectator web app in Chromium", () => {
     const browser = await chromium.launch({ headless: true });
     // The fake runs folded and ended (the hostile copy still verifies: Level E holds); the war
     // golden folds on while the tests of the fake runs go first.
-    await Promise.all([ended(s.url, "fake1"), ended(s.url, "hostile"), ended(p.url, "fake1")]);
+    await Promise.all([
+      ended(s.url, "fake1"),
+      ended(s.url, "hostile"),
+      ended(p.url, "fake1"),
+      ended(p.url, "hostile"),
+    ]);
     if ((await aggregate.exited) !== 0) {
       throw new Error(`stats aggregate failed: ${await new Response(aggregate.stderr).text()}`);
     }
@@ -266,6 +277,11 @@ describe.skipIf(reason !== null)("the spectator web app in Chromium", () => {
     const text = (await sheet.textContent()) ?? "";
     expect(text).toContain(HOSTILE.js);
     expect(text).toContain(HOSTILE.url);
+    // Its model block at the end (phase 4 Pass 3): the planted lineup reads cleaned (the DOM checks
+    // below find no bidi or zero-width character in it, its titles or its labels).
+    const block = sheet.getByTestId("model-block");
+    await block.getByTestId("model-whole").waitFor();
+    expect((await block.textContent()) ?? "").toContain("Lineupbudget-mixHarness");
     // Hovering what an attribute payload would have hooked (the events a hover sends, dispatched:
     // no wait for the sheet's opening slide to end).
     const hooked = sheet.getByText(HOSTILE.attr.trim(), { exact: false }).first();
@@ -549,6 +565,16 @@ describe.skipIf(reason !== null)("the spectator web app in Chromium", () => {
     const round0 = page.locator(live0);
     await round0.waitFor();
     expect(String(await page.evaluate(animation(live0)))).toBe("enter");
+    // Its reasoning is labelled with the seat's kind (phase 4): raw for the OpenRouter seat.
+    const reasoning0 = plan[reply(0)]?.o.reasoning;
+    if (Array.isArray(reasoning0) && reasoning0.length > 0) {
+      const seats: unknown = JSON.parse(readFileSync(join(fakeDir, "seats.json"), "utf8"));
+      const list = isObject(seats) && Array.isArray(seats.seats) ? seats.seats : [];
+      const mine: unknown = list.find((x: unknown) => isObject(x) && x.seat === seat);
+      const kind = isObject(mine) && mine.provider === "openrouter" ? "raw" : "summary";
+      await round0.locator(`[data-reasoning-kind="${kind}"]`).waitFor();
+      expect(await round0.locator("[data-reasoning-kind]").count()).toBe(1);
+    }
     // The second round arrives on the socket before its calls reach the log: the column and the
     // leaderboard both say round 2. With reduced motion, it does not fade in.
     await page.emulateMedia({ reducedMotion: "reduce" });

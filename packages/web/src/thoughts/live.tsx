@@ -6,7 +6,7 @@ import { ReasoningKindTag } from "../common/reasoning-kind.tsx";
 import { cn } from "../lib/cn.ts";
 import { fmtInt, plural } from "../lib/format.ts";
 import type { PlayerId } from "../lib/ids.ts";
-import { seatReasoningKind } from "../lib/models.ts";
+import { seatReasoningKind, shownReasoningKind } from "../lib/models.ts";
 import { useLiveAnnots, usePublished, useSeat } from "../store/hooks.ts";
 import { OpenTurnButton } from "../turns/open-turn.tsx";
 import { roundTitle, type RoundRow } from "../turns/detail.ts";
@@ -78,7 +78,7 @@ export function LiveReasoning({ seat, turn }: LiveReasoningProps) {
                   {roundTitle(r)}
                 </span>
                 {r.reasoning.length === 0 ? null : (
-                  <ReasoningKindTag kind={r.reasoningKind ?? kind} />
+                  <ReasoningKindTag kind={shownReasoningKind(r.reasoningKind, kind)} />
                 )}
                 {r.calls.length === 0 ? null : (
                   <span className="truncate font-mono">

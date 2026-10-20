@@ -3,15 +3,35 @@ import type { StatsInterval } from "@perfidia/protocol";
 import { PRIOR_SIGMA, fitPlackettLuce, type Ranking } from "./pl.ts";
 
 // Ratings of ranked matches with their intervals (phase-4 design §6.2): the MAP Plackett–Luce fit
-// (`pl.ts`), strengths centred on the LLM items' mean (every item's without one), the mean rank of
-// each item's seats, and the strength difference of every pair of LLM items. Intervals: a block
-// bootstrap from `MIN_BOOTSTRAP_BLOCKS` blocks (whole blocks drawn with replacement, each replicate
-// refitted from the full fit; percentile intervals, linear between order statistics), else Laplace
-// posterior intervals from the fit's covariance (strengths and differences only).
+// (`pl.ts`), strengths centred on the compared items' mean (every item's without one), the mean
+// rank of each item's seats, and the strength difference of every pair of compared items.
+//
+// Intervals. Laplace posterior intervals from the fit's covariance always; from
+// `MIN_BOOTSTRAP_BLOCKS` blocks, a block bootstrap too (whole blocks drawn with replacement, each
+// replicate refitted from the full fit; percentile intervals, linear between order statistics), and
+// a strength or difference interval is the wider of the two (their union). The percentile
+// bootstrap alone is too narrow with blocks of four matches: in simulation (docs/phase4.md §55) a
+// 95% interval of two equal models' difference excludes 0 in 16–20% of series at 5 blocks and still
+// 6–9% at 30–60 blocks (strength coverage 85% rising to only 92–93%), while Laplace intervals hold
+// their level at every length (4–6.5%; coverage 94.6–95.8%). The union keeps Laplace's level and
+// still widens where the blocks disagree more than independent matches would (a block plays one
+// map). Mean ranks have no Laplace interval: theirs is the bootstrap's, widened about the estimate
+// by t(B − 1) / z · √(B / (B − 1)) for B blocks (the small-sample correction of a mean's interval).
+// Pair differences carry their own level (`pairLevel`: the claim state's Bonferroni level,
+// 1 − 0.05 / pairs), so a pair is "separated" only at the level a ranking claim is made at.
 
-/** Blocks from which intervals come from the bootstrap (design §6.2). */
+/** Blocks from which a block bootstrap widens the intervals (design §6.2). */
 export const MIN_BOOTSTRAP_BLOCKS = 5;
 export const LEVEL = 0.95;
+
+export interface RateOptions {
+  /** The level of strength and mean-rank intervals (and, by default, pair intervals). */
+  readonly level?: number;
+  /** The level of the pair differences' intervals (default `level`). */
+  readonly pairLevel?: number;
+  /** Blocks from which the bootstrap runs (default `MIN_BOOTSTRAP_BLOCKS`). */
+  readonly minBlocks?: number;
+}
 
 /** One rated match: its bootstrap block, its ranking (item indices, best first) and their ranks. */
 export interface RankedMatch {
@@ -34,8 +54,13 @@ export interface Rated {
     readonly difference: number;
     readonly interval: StatsInterval | null;
   }[];
-  readonly method: "block-bootstrap" | "laplace";
+  readonly method: "laplace+block-bootstrap" | "laplace";
   readonly blocks: number;
+  /** The bootstrap's own percentile intervals, before the union (the power simulation reads them). */
+  readonly bootstrap: {
+    readonly strengthIv: readonly (StatsInterval | null)[];
+    readonly pairs: readonly (StatsInterval | null)[];
+  } | null;
 }
 
 const byText = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
@@ -94,6 +119,34 @@ export function normalQuantile(p: number): number {
   );
 }
 
+/** The quantile of Student's t with `df` degrees of freedom at `p` (Cornish–Fisher, |error| < 0.01 from 4 df). */
+export function tQuantile(p: number, df: number): number {
+  const z = normalQuantile(p);
+  const z3 = z ** 3;
+  const z5 = z ** 5;
+  const z7 = z ** 7;
+  return (
+    z +
+    (z3 + z) / (4 * df) +
+    (5 * z5 + 16 * z3 + 3 * z) / (96 * df ** 2) +
+    (3 * z7 + 19 * z5 + 17 * z3 - 15 * z) / (384 * df ** 3)
+  );
+}
+
+/** How much a percentile bootstrap interval over `blocks` blocks is widened (1 at many blocks). */
+export function smallSampleFactor(blocks: number, level = LEVEL): number {
+  if (blocks < 2) return 1;
+  const p = 1 - (1 - level) / 2;
+  return (tQuantile(p, blocks - 1) / normalQuantile(p)) * Math.sqrt(blocks / (blocks - 1));
+}
+
+/** The union of two intervals (either may be missing). */
+function union(a: StatsInterval | null, b: StatsInterval | null): StatsInterval | null {
+  if (a === null) return b;
+  if (b === null) return a;
+  return { lo: Math.min(a.lo, b.lo), hi: Math.max(a.hi, b.hi) };
+}
+
 /** Strengths minus the mean over the LLM items (over every item without one). */
 function centred(theta: readonly number[], llm: readonly number[]): number[] {
   const over = llm.length > 0 ? llm : theta.map((_, i) => i);
@@ -124,8 +177,10 @@ export function rateMatches(
   matches: readonly RankedMatch[],
   rng: Rng,
   replicates: number,
-  level = LEVEL,
+  o: RateOptions = {},
 ): Rated {
+  const level = o.level ?? LEVEL;
+  const pairLevel = o.pairLevel ?? level;
   const fit = fitPlackettLuce(
     n,
     matches.map((m) => m.ranking),
@@ -138,65 +193,85 @@ export function rateMatches(
   for (const m of matches) byBlock.set(m.block, [...(byBlock.get(m.block) ?? []), m]);
   const pairs: [number, number][] = [];
   for (const [k, a] of llm.entries()) for (const b of llm.slice(k + 1)) pairs.push([a, b]);
-  const bootstrap = blocks.length >= MIN_BOOTSTRAP_BLOCKS && replicates > 0;
-  if (bootstrap) {
-    const samples: number[][] = Array.from({ length: n }, () => []);
-    const rankSamples: number[][] = Array.from({ length: n }, () => []);
-    const pairSamples: number[][] = pairs.map(() => []);
-    for (let r = 0; r < replicates; r += 1) {
-      const drawn: RankedMatch[] = [];
-      for (let b = 0; b < blocks.length; b += 1) {
-        drawn.push(...(byBlock.get(blocks[randInt(rng, 0, blocks.length - 1)] ?? "") ?? []));
-      }
-      const f = fitPlackettLuce(
-        n,
-        drawn.map((m) => m.ranking),
-        { sigma: PRIOR_SIGMA, start: fit.theta, covariance: false },
-      );
-      const s = centred(f.theta, llm);
-      const mr = meanRanks(n, drawn);
-      for (let i = 0; i < n; i += 1) {
-        samples[i]?.push(s[i] ?? 0);
-        rankSamples[i]?.push(mr[i] ?? Number.NaN);
-      }
-      for (const [k, [a, b]] of pairs.entries()) pairSamples[k]?.push((s[a] ?? 0) - (s[b] ?? 0));
-    }
-    return {
-      strength,
-      strengthIv: samples.map((v) => percentileInterval(v, level)),
-      rank,
-      rankIv: rankSamples.map((v) => percentileInterval(v, level)),
-      pairs: pairs.map(([a, b], k) => ({
-        a,
-        b,
-        difference: (strength[a] ?? 0) - (strength[b] ?? 0),
-        interval: percentileInterval(pairSamples[k] ?? [], level),
-      })),
-      method: "block-bootstrap",
-      blocks: blocks.length,
-    };
-  }
   // Laplace: the covariance of the centred strengths, A Σ Aᵀ with A = I − (1/L) 1 e_Lᵀ.
   const z = normalQuantile(1 - (1 - level) / 2);
+  const zPair = normalQuantile(1 - (1 - pairLevel) / 2);
   const cov = fit.cov;
   const over = llm.length > 0 ? llm : Array.from({ length: n }, (_, i) => i);
   const c = (i: number, j: number): number => cov[i]?.[j] ?? 0;
   const rowMean = (i: number): number => over.reduce((s, l) => s + c(i, l), 0) / over.length;
   const all = over.reduce((s, l) => s + rowMean(l), 0) / over.length;
+  const laplace = strength.map((s, i): StatsInterval => {
+    const sd = Math.sqrt(Math.max(0, c(i, i) - 2 * rowMean(i) + all));
+    return { lo: s - z * sd, hi: s + z * sd };
+  });
+  const laplacePairs = pairs.map(([a, b]): StatsInterval => {
+    const sd = Math.sqrt(Math.max(0, c(a, a) + c(b, b) - 2 * c(a, b)));
+    const d = (strength[a] ?? 0) - (strength[b] ?? 0);
+    return { lo: d - zPair * sd, hi: d + zPair * sd };
+  });
+  const difference = ([a, b]: readonly [number, number]): number =>
+    (strength[a] ?? 0) - (strength[b] ?? 0);
+  const bootstrap = blocks.length >= (o.minBlocks ?? MIN_BOOTSTRAP_BLOCKS) && replicates > 0;
+  if (!bootstrap) {
+    return {
+      strength,
+      strengthIv: laplace,
+      rank,
+      rankIv: strength.map(() => null),
+      pairs: pairs.map((ab, k) => ({
+        a: ab[0],
+        b: ab[1],
+        difference: difference(ab),
+        interval: laplacePairs[k] ?? null,
+      })),
+      method: "laplace",
+      blocks: blocks.length,
+      bootstrap: null,
+    };
+  }
+  const samples: number[][] = Array.from({ length: n }, () => []);
+  const rankSamples: number[][] = Array.from({ length: n }, () => []);
+  const pairSamples: number[][] = pairs.map(() => []);
+  for (let r = 0; r < replicates; r += 1) {
+    const drawn: RankedMatch[] = [];
+    for (let b = 0; b < blocks.length; b += 1) {
+      drawn.push(...(byBlock.get(blocks[randInt(rng, 0, blocks.length - 1)] ?? "") ?? []));
+    }
+    const f = fitPlackettLuce(
+      n,
+      drawn.map((m) => m.ranking),
+      { sigma: PRIOR_SIGMA, start: fit.theta, covariance: false },
+    );
+    const s = centred(f.theta, llm);
+    const mr = meanRanks(n, drawn);
+    for (let i = 0; i < n; i += 1) {
+      samples[i]?.push(s[i] ?? 0);
+      rankSamples[i]?.push(mr[i] ?? Number.NaN);
+    }
+    for (const [k, [a, b]] of pairs.entries()) pairSamples[k]?.push((s[a] ?? 0) - (s[b] ?? 0));
+  }
+  const bootStrength = samples.map((v) => percentileInterval(v, level));
+  const bootPairs = pairs.map((_, k) => percentileInterval(pairSamples[k] ?? [], pairLevel));
+  const widen = smallSampleFactor(blocks.length, level);
   return {
     strength,
-    strengthIv: strength.map((s, i) => {
-      const sd = Math.sqrt(Math.max(0, c(i, i) - 2 * rowMean(i) + all));
-      return { lo: s - z * sd, hi: s + z * sd };
-    }),
+    strengthIv: strength.map((_, i) => union(laplace[i] ?? null, bootStrength[i] ?? null)),
     rank,
-    rankIv: strength.map(() => null),
-    pairs: pairs.map(([a, b]) => {
-      const sd = Math.sqrt(Math.max(0, c(a, a) + c(b, b) - 2 * c(a, b)));
-      const d = (strength[a] ?? 0) - (strength[b] ?? 0);
-      return { a, b, difference: d, interval: { lo: d - z * sd, hi: d + z * sd } };
+    rankIv: rankSamples.map((v, i) => {
+      const iv = percentileInterval(v, level);
+      const x = rank[i] ?? Number.NaN;
+      if (iv === null || !Number.isFinite(x)) return iv;
+      return { lo: x - widen * Math.max(0, x - iv.lo), hi: x + widen * Math.max(0, iv.hi - x) };
     }),
-    method: "laplace",
+    pairs: pairs.map((ab, k) => ({
+      a: ab[0],
+      b: ab[1],
+      difference: difference(ab),
+      interval: union(laplacePairs[k] ?? null, bootPairs[k] ?? null),
+    })),
+    method: "laplace+block-bootstrap",
     blocks: blocks.length,
+    bootstrap: { strengthIv: bootStrength, pairs: bootPairs },
   };
 }

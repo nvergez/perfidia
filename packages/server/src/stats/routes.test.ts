@@ -5,12 +5,16 @@
 // `GET /api/models` and `/api/models/:id` serve the `--stats` file without its seat list, say how
 // many more matches a claim needs and show no ranking; `--no-costs` withholds every cost, token and
 // model-time figure; `publish.json` visibility holds (an unlisted match is a 404, a statistics file
-// that aggregates one is not served, an `--exploratory` file never is); errors are data.
+// that aggregates one is not served, an `--exploratory` file never is); errors are data. Review
+// fixes: while a match's first fold runs its statistics are a 503 `LOADING`, never figures of a
+// half-folded log; a file whose claim state is not `ok` is served without ratings, outcomes or
+// ranks whatever it holds.
 
 // oxlint-disable no-await-in-loop -- the requests follow each other on purpose
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { writeFileSync } from "node:fs";
+import { copyFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { ModelStatsFileSchema } from "@perfidia/protocol";
 import {
   ApiErrorSchema,
   MatchStatsSchema,
@@ -18,6 +22,7 @@ import {
   ModelsResponseSchema,
 } from "@perfidia/protocol/spectator";
 import {
+  WAR_GOLDEN,
   getJson,
   metaOf,
   serve,
@@ -40,6 +45,7 @@ let statsFile = "";
 let publicStats = "";
 let exploratoryStats = "";
 let publish = "";
+let craftedStats = "";
 
 function aggregateTo(out: string, extra: readonly string[] = []): void {
   const code = main(["aggregate", "--runs", root, "--out", out, "--replicates", "0", ...extra], {
@@ -67,6 +73,11 @@ beforeAll(async () => {
   aggregateTo(publicStats, ["--publish", publish]);
   exploratoryStats = join(dir, "exploratory.json");
   aggregateTo(exploratoryStats, ["--exploratory"]);
+  // An exploratory file passed off as servable: its claim state is too_few_matches, yet it holds
+  // ratings, outcomes and ranks (a hand-edited or buggy file).
+  const crafted = ModelStatsFileSchema.parse(JSON.parse(readFileSync(exploratoryStats, "utf8")));
+  craftedStats = join(dir, "crafted.json");
+  writeFileSync(craftedStats, JSON.stringify({ ...crafted, exploratory: false }));
 }, LONG);
 
 async function error(url: string, status: number, code: string): Promise<void> {
@@ -180,6 +191,22 @@ for (const adapter of ["elysia", "raw"] as const) {
       expect(models.matches.map((m) => m.match)).toEqual(["m01", "m02", "m03"]);
     });
 
+    test("a file below the threshold is served without ratings, outcomes or ranks (defence in depth)", async () => {
+      const crafted = ModelStatsFileSchema.parse(JSON.parse(readFileSync(craftedStats, "utf8")));
+      expect(crafted.claims.state).toBe("too_few_matches");
+      expect(crafted.ratings).not.toBeNull();
+      expect(crafted.seats.some((x) => x.rank !== null)).toBe(true);
+      const c = serve(testConfig({ runs: root, cache, adapter, stats: craftedStats }));
+      await settled(c, ["m01", "m02", "m03", "m04"]);
+      const models = await getJson(`${c.url}/api/models`, ModelsResponseSchema);
+      expect(models.ratings).toBeNull();
+      expect(models.models.every((m) => m.outcome === null)).toBe(true);
+      const detail = await getJson(`${c.url}/api/models/fake.gpt-6-luna.medium`, ModelDetailSchema);
+      expect(detail.rating).toBeNull();
+      expect(detail.model.outcome).toBeNull();
+      expect(detail.seats.every((x) => x.rank === null)).toBe(true);
+    });
+
     test("no --stats, or an --exploratory file: no model statistics", async () => {
       const none = serve(testConfig({ runs: root, cache, adapter }));
       await settled(none, ["m01"]);
@@ -193,3 +220,34 @@ for (const adapter of ["elysia", "raw"] as const) {
     });
   });
 }
+
+test(
+  "while a match's first fold runs, its statistics are 503 LOADING, never a half-folded log's",
+  async () => {
+    const runs = tempDir("stats-cold");
+    mkdirSync(join(runs, "war"));
+    copyFileSync(WAR_GOLDEN, join(runs, "war", "match.jsonl.gz"));
+    const s = serve(testConfig({ runs, cache: tempDir("stats-cold-cache") }));
+    const seen: string[] = [];
+    let first: unknown = null;
+    for (const end = performance.now() + LONG; performance.now() < end;) {
+      const res = await fetch(`${s.url}/api/matches/war/stats`);
+      const body: unknown = await res.json();
+      if (res.status === 200) {
+        first = body;
+        break;
+      }
+      seen.push(`${res.status} ${ApiErrorSchema.parse(body).code}`);
+      await Bun.sleep(20);
+    }
+    // The fold of the war golden (16,253 lines) takes seconds: the route said LOADING meanwhile.
+    expect(seen).toContain("503 LOADING");
+    expect(seen.every((x) => x === "503 LOADING" || x === "404 NOT_FOUND")).toBe(true);
+    const stats = MatchStatsSchema.parse(first);
+    expect(stats.status).toBe("ended");
+    expect(stats.lastT).toBe(stats.endedAt ?? -1);
+    // The first statistics served are the final ones.
+    expect(await getJson(`${s.url}/api/matches/war/stats`, MatchStatsSchema)).toEqual(stats);
+  },
+  LONG,
+);
