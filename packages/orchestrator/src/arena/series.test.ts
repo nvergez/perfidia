@@ -16,10 +16,14 @@ import {
   type Lineup,
 } from "@perfidia/protocol";
 import { memoryIo } from "@perfidia/sim";
-import { main } from "./cli.ts";
+import { main as arenaMain } from "./cli.ts";
 import { loadLineup } from "./lineup.ts";
 import { randomSquares, rotationOf, seriesMatches, type Square } from "./series.ts";
 import { runDir } from "./rig.test.ts";
+
+/** `arena` as the CLI runs it, with no calibration profile unless a test passes `--profiles`. */
+const main = (...[argv, io, env, o]: Parameters<typeof arenaMain>) =>
+  arenaMain(argv, io, env, { profilesDir: "off", ...o });
 
 const LONG = 120_000;
 const byName = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
@@ -192,7 +196,7 @@ describe("arena series --fake", () => {
         ["anthropic", "claude-haiku-5-5", null, "medium"],
         ["openai", "gpt-6-luna", null, "medium"],
         ["google", "gemini-3.8-flash", null, "medium"],
-        ["openrouter", "z-ai/glm-5.3-flash", "z-ai/fp8", "medium"],
+        ["openrouter", "z-ai/glm-5.3-flash", "z-ai/fp8", "low"],
       ]);
       expect(manifest.matches.map((m) => [m.run, m.seed, m.status, m.code, m.levelE])).toEqual([
         ["m01", 5, "ended", 0, true],

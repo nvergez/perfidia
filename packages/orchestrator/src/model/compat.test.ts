@@ -21,6 +21,7 @@ import { BudgetLedger } from "../budget/ledger.ts";
 import { ENTRY_OVERHEAD_TOKENS, promptEstimate } from "../seat/agent.ts";
 import {
   ModelError,
+  completionUpper,
   promptTokens,
   retryOutputTokens,
   type ChatRequest,
@@ -708,7 +709,8 @@ describe("a reply", () => {
     );
     expect(res.stop).toBe("max_tokens");
     expect(res.usage[0]?.estimated).toBe(true);
-    expect(res.usage[0]?.tokens.output).toBe(32_768);
+    // The full max_tokens and OpenRouter's completion slack (1% + 16: a completion may exceed it).
+    expect(res.usage[0]?.tokens.output).toBe(32_768 + 328 + 16);
   });
 
   test("a refusal produced as output closes the turn and is billed", async () => {
@@ -1027,7 +1029,13 @@ describe("broken streams, charged at max_tokens", () => {
       {
         model: "z-ai/glm-5.3",
         kind: "message",
-        tokens: { input: agent, cacheWrite5m: 0, cacheWrite1h: 0, cacheRead: 0, output: 32_768 },
+        tokens: {
+          input: agent,
+          cacheWrite5m: 0,
+          cacheWrite1h: 0,
+          cacheRead: 0,
+          output: 32_768 + 328 + 16,
+        },
         estimated: true,
       },
     ]);
@@ -1165,7 +1173,7 @@ describe("the preflight", () => {
           cacheWrite5m: 0,
           cacheWrite1h: 0,
           cacheRead: 0,
-          output: 16,
+          output: 16 + 1 + 16,
         },
         estimated: true,
       },
@@ -1206,5 +1214,81 @@ describe("prefix stability", () => {
     expect(m1[m0.length]).toEqual(r0.reply.native);
     const raw = JSON.stringify(calls[1]?.body);
     expect(raw.indexOf(JSON.stringify(m0).slice(1, -1))).toBeGreaterThan(0);
+  });
+});
+
+/** A respond function serving `events` as a 200 event stream. */
+const streamOf = (events: readonly unknown[]) => () =>
+  new Response(sse(events), { headers: { "content-type": "text/event-stream" } });
+
+describe("the Pass 2 review's money cases", () => {
+  const METADATA = {
+    endpoints: {
+      total: 1,
+      available: [{ provider: "Z.AI", model: "z-ai/glm-5.3", selected: true }],
+    },
+  };
+
+  test("C1: a usage too large to price exactly, with a cost, is charged the attempt bound (not 0)", async () => {
+    const { a } = adapterWith(
+      streamOf([
+        {
+          id: "gen-c1",
+          model: "z-ai/glm-5.3",
+          choices: [{ index: 0, delta: { content: "ok" }, finish_reason: "stop" }],
+          usage: { prompt_tokens: 7_000_000_000, completion_tokens: 5, cost: 0.01 },
+          openrouter_metadata: METADATA,
+        },
+        "[DONE]",
+      ]),
+    );
+    const e = await rejection(a.chat(request()));
+    expect(e.kind).toBe("unknown");
+    expect(isBound(e.spent)).toBe(true);
+    const charge = ledger(540_538_112).charge("p1", 1, 0, e.spent, AT);
+    expect([charge.costNanoUsd, charge.invalidUsage]).toEqual([540_538_112, true]);
+  });
+
+  test("C5: an error event before any output is free on OpenRouter only, never in compat mode", async () => {
+    const only = fixture("openrouter", "stream-error-first.json").events ?? [];
+    const free = await rejection(adapterWith(streamOf(only)).a.chat(request()));
+    expect(free.spent).toEqual([]);
+    const compat = await rejection(
+      adapterWith(streamOf(only), { spec: specOf({ mode: "compat", model: "local/glm" }) }).a.chat(
+        request(),
+      ),
+    );
+    // Round 0: no measured prompt yet, so the attempt bound.
+    expect(isBound(compat.spent)).toBe(true);
+  });
+
+  test("C5: max_tokens_exceeded before any output is a billed generation: charged, never 0", async () => {
+    const events = (fixture("openrouter", "stream-max-tokens-error.json").events ?? []).slice(1);
+    const { a } = adapterWith(streamOf(events));
+    const e = await rejection(a.chat(request()));
+    expect([e.kind, isBound(e.spent)]).toEqual(["unknown", true]);
+    // A 200 JSON body holding a length-type error is charged too (the estimate: here the bound).
+    const json = adapterWith(
+      () =>
+        new Response(
+          JSON.stringify({
+            error: {
+              code: 400,
+              message: "max tokens reached",
+              metadata: { error_type: "max_tokens_exceeded" },
+            },
+          }),
+          { headers: { "content-type": "application/json" } },
+        ),
+    );
+    const j = await rejection(json.a.chat(request()));
+    expect(isBound(j.spent)).toBe(true);
+  });
+
+  test("OpenRouter's completion slack: 1% + 16 tokens over max_tokens in the broken-stream charge", () => {
+    expect(completionUpper("openrouter", 300)).toBe(319);
+    expect(completionUpper("openrouter", 32_768)).toBe(33_112);
+    expect(completionUpper("compat", 32_768)).toBe(32_768);
+    expect(completionUpper("openai", 32_768)).toBe(32_768);
   });
 });

@@ -388,7 +388,10 @@ const duration = (text: string | undefined, flag: string) =>
 type Flags = ReturnType<typeof parseFlags>;
 
 /** The request and output directory of an `arena run` command line. */
-export function runRequestOf(argv: readonly string[]): {
+export function runRequestOf(
+  argv: readonly string[],
+  profilesDir: string = PROFILES_DIR,
+): {
   readonly req: ArenaRequest;
   readonly out: string;
   readonly quiet: boolean;
@@ -396,11 +399,11 @@ export function runRequestOf(argv: readonly string[]): {
   const f = parseFlags(argv, RUN_FLAGS, RUN_USAGE, { min: 0, max: 0, name: "positional" });
   const out = f.string("out");
   if (out === undefined) throw new UsageError(`--out <dir> is required\n\n${RUN_USAGE}`);
-  return { req: requestOf(f), out, quiet: f.bool("quiet") };
+  return { req: requestOf(f, profilesDir), out, quiet: f.bool("quiet") };
 }
 
-/** The plan request of `arena run` or `arena estimate` flags. */
-function requestOf(f: Flags): ArenaRequest {
+/** The plan request of `arena run` or `arena estimate` flags (`--profiles` default: `profilesDir`). */
+function requestOf(f: Flags, profilesDir: string): ArenaRequest {
   const speed = f.string("speed");
   const latency = f.string("bot-latency");
   const req: ArenaRequest = {
@@ -442,7 +445,7 @@ function requestOf(f: Flags): ArenaRequest {
     budgetCarry: f.string("budget-carry"),
     promptCap: int(f.string("prompt-cap"), "--prompt-cap", 1_000, 1_000_000),
     priceDate: f.string("price-date"),
-    profiles: f.string("profiles") ?? PROFILES_DIR,
+    profiles: f.string("profiles") ?? profilesDir,
   };
   return req;
 }
@@ -453,8 +456,9 @@ async function runCommand(
   env: ArenaEnv,
   signals: SignalSource | undefined,
   nowMs: () => number,
+  profilesDir: string,
 ): Promise<number> {
-  const { req, out, quiet } = runRequestOf(argv);
+  const { req, out, quiet } = runRequestOf(argv, profilesDir);
   // OpenRouter seats of a real run are planned on OpenRouter's live endpoint metadata (Pass 2).
   const plan = await planLive(req, env, { now: nowMs });
   assertFreeRunDir(out);
@@ -503,6 +507,7 @@ function estimateCommand(
   io: CliIo,
   env: ArenaEnv,
   nowMs: () => number,
+  profilesDir: string,
 ): number {
   const f = parseFlags(argv, ESTIMATE_FLAGS, ESTIMATE_USAGE, {
     min: 0,
@@ -513,7 +518,7 @@ function estimateCommand(
     io.out(formatCardTable());
     return EXIT.ok;
   }
-  const plan = planArena(requestOf(f), env, { requireKey: false, now: nowMs });
+  const plan = planArena(requestOf(f, profilesDir), env, { requireKey: false, now: nowMs });
   io.out(formatEstimate(plan.estimate));
   for (const w of plan.warnings) io.out(`warning: ${w}\n`);
   return EXIT.ok;
@@ -547,16 +552,14 @@ function reconcileCommand(argv: readonly string[], io: CliIo, nowMs: number): nu
 }
 
 /** `arena calibrate`: measures run directories into the profiles. */
-function calibrateCommand(argv: readonly string[], io: CliIo): number {
+function calibrateCommand(argv: readonly string[], io: CliIo, profilesDir: string): number {
   const f = parseFlags(argv, CALIBRATE_FLAGS, CALIBRATE_USAGE, {
     min: 1,
     max: Infinity,
     name: "run",
   });
   io.out(
-    formatCalibrate(
-      calibrate(f.positionals, { profilesDir: f.string("profiles") ?? PROFILES_DIR }),
-    ),
+    formatCalibrate(calibrate(f.positionals, { profilesDir: f.string("profiles") ?? profilesDir })),
   );
   return EXIT.ok;
 }
@@ -568,6 +571,7 @@ function seriesCommand(
   env: ArenaEnv,
   signals: SignalSource | undefined,
   nowMs: () => number,
+  profilesDir: string,
 ): Promise<number> {
   const f = parseFlags(argv, SERIES_FLAGS, SERIES_USAGE, { min: 0, max: 0, name: "positional" });
   const lineup = f.string("lineup");
@@ -584,7 +588,7 @@ function seriesCommand(
     blocks: int(f.string("blocks"), "--blocks", 1, 1000) ?? 1,
     seed,
     // Each match's lineup file and game seed replace the request's.
-    request: requestOf(f),
+    request: requestOf(f, profilesDir),
     env,
     io,
     quiet: f.bool("quiet"),
@@ -599,6 +603,11 @@ export interface MainOptions {
   readonly signals?: SignalSource;
   /** The wall clock in ms (`arena reconcile`'s 48-hour check). */
   readonly nowMs?: () => number;
+  /**
+   * The profiles directory when no `--profiles` is given (default `PROFILES_DIR`): the tests pass
+   * `off`, so profiles an owner calibrates into the source tree never change pinned figures.
+   */
+  readonly profilesDir?: string;
 }
 
 /** `arena smoke`: one provider's live check, recorded when `--record` names a directory. */
@@ -657,7 +666,12 @@ async function smoke(
         ? await geminiSmokeCommand(common)
         : await smokeCommand({ ...common, ...(id === "anthropic" ? {} : { provider: id }) });
   if (recording !== null && dir !== undefined) {
-    io.out(`recorded ${await recording.done()} exchange(s), sanitised, in ${dir}\n`);
+    const n = await recording.done();
+    io.out(
+      n === 0
+        ? `nothing recorded: ${dir} was not created\n`
+        : `recorded ${n} exchange(s), sanitised, in ${dir}\n`,
+    );
   }
   return code;
 }
@@ -669,17 +683,18 @@ function dispatch(
   env: ArenaEnv,
   o: MainOptions,
 ): Promise<number> | number {
+  const profilesDir = o.profilesDir ?? PROFILES_DIR;
   switch (command) {
     case "run":
-      return runCommand(argv, io, env, o.signals, o.nowMs ?? Date.now);
+      return runCommand(argv, io, env, o.signals, o.nowMs ?? Date.now, profilesDir);
     case "estimate":
-      return estimateCommand(argv, io, env, o.nowMs ?? Date.now);
+      return estimateCommand(argv, io, env, o.nowMs ?? Date.now, profilesDir);
     case "reconcile":
       return reconcileCommand(argv, io, (o.nowMs ?? Date.now)());
     case "calibrate":
-      return calibrateCommand(argv, io);
+      return calibrateCommand(argv, io, profilesDir);
     case "series":
-      return seriesCommand(argv, io, env, o.signals, o.nowMs ?? Date.now);
+      return seriesCommand(argv, io, env, o.signals, o.nowMs ?? Date.now, profilesDir);
     case "cost": {
       const f = parseFlags(argv, COST_FLAGS, COST_USAGE, { min: 1, max: 1, name: "run" });
       io.out(

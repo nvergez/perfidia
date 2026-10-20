@@ -226,6 +226,8 @@ export const EndpointPricingSchema = z.looseObject({
   input_cache_read: PriceText.optional(),
   input_cache_write: PriceText.optional(),
   input_cache_write_1h: PriceText.optional(),
+  /** "Price in USD per internal reasoning token" (endpoints list, read 2026-10-20). */
+  internal_reasoning: PriceText.optional(),
   request: PriceText.optional(),
   discount: z.number().optional(),
   overrides: z.array(PricingOverrideSchema).optional(),

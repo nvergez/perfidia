@@ -147,7 +147,17 @@ export interface InputTokensRequest {
  */
 export const UsageSchema = z.looseObject({
   input_tokens: Count,
-  input_tokens_details: z.looseObject({ cached_tokens: Count, cache_write_tokens: Count }),
+  input_tokens_details: z.looseObject({
+    cached_tokens: Count,
+    cache_write_tokens: Count,
+    /**
+     * The writes by lifetime (prompt-caching guide, read 2026-10-20: "breaks writes into
+     * `ttl_30m_tokens` and `ttl_12h_tokens`", which "sum to `cache_write_tokens`").
+     */
+    cache_write_tokens_details: z
+      .looseObject({ ttl_30m_tokens: Count, ttl_12h_tokens: Count })
+      .optional(),
+  }),
   output_tokens: Count,
   output_tokens_details: z.looseObject({ reasoning_tokens: Count }),
 });

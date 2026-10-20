@@ -2,6 +2,7 @@ import type { PlayerId, PromptVariant, ReminderCadence, TokenProfile } from "@pe
 import type { EstimateFile, PredictionSource } from "../log/schema.ts";
 import {
   attemptBoundNano,
+  completionUpper,
   maxInputSide,
   maxOutputPrice,
   type CacheTtl,
@@ -28,6 +29,7 @@ import { PROMPT_VERSION } from "../seat/prompt.ts";
 import {
   BRIEFING_BYTES_PER_TOKEN,
   MIN_CALIBRATED_SEAT_DAYS,
+  independentSeatDays,
   profileKeyLabel,
   profileKeyText,
   rulesetMajorOf,
@@ -88,6 +90,13 @@ export const BOOTSTRAP_SEED = 20_261_019;
 export const LOCKSTEP_WEEK_WALL_HOURS = 15;
 /** The planned wall time of one lockstep game day. */
 export const LOCKSTEP_WALL_MS_PER_GAME_DAY = Math.ceil((LOCKSTEP_WEEK_WALL_HOURS * 3_600_000) / 7);
+/**
+ * How much later than planned a game day may be played when its card is chosen (review: timeouts,
+ * pauses and rate limits stretch a real run): day d is priced at the dearer card of its window
+ * from its planned start to `WALL_SLACK` × its planned end, so a run that slips past a price change
+ * stays inside its prediction.
+ */
+export const WALL_SLACK = 2;
 
 /**
  * Wall milliseconds per game day of a plan, to choose the card of each planned day: 0 when every
@@ -133,6 +142,8 @@ export interface SeatPrediction {
   readonly central: number;
   readonly high: number;
   readonly source: PredictionSource;
+  /** The scenario's high, whatever the source (the default seat cap's floor). */
+  readonly scenarioHigh: number;
   readonly priceCards: readonly string[];
   readonly attemptBoundNanoUsd: number;
 }
@@ -250,6 +261,7 @@ export function seatAttemptBound(
     {
       modelMax: capabilitiesFor(provider, model, k.endpoint ?? null).maxOutputTokens,
       feePermille: feeOfCards(model, k),
+      provider,
     },
   );
 }
@@ -292,9 +304,10 @@ export function callBound(
   const tierCap = o.tierCap ?? promptTokens;
   const at = (c: readonly TokenPrices[]): TokenPrices[] =>
     o.ttl === "5m" ? c.map((p) => ({ ...p, write1h: p.write5m })) : [...c];
+  const output = completionUpper(k.provider ?? "anthropic", outputTokens);
   const one = (c: readonly TokenPrices[], permille: number): number => {
     const nano = Math.ceil(
-      (promptTokens * maxInputSide(at(c)) + outputTokens * maxOutputPrice(c)) / 1000,
+      (promptTokens * maxInputSide(at(c)) + output * maxOutputPrice(c)) / 1000,
     );
     return nano + (permille === 0 ? 0 : Math.ceil((nano * permille) / 1000));
   };
@@ -422,7 +435,8 @@ interface ProfilePrediction {
 
 /**
  * The planned days of a run and the instant each is priced at: of its window's start and end
- * (`wallMsPerGameDay` from `priceAt`), the one whose card makes the measured wakes dearer.
+ * (`wallMsPerGameDay` from `priceAt`, the end stretched by `WALL_SLACK`), the one whose card makes
+ * the measured wakes dearer.
  */
 function plannedDays(
   s: PredictSeat,
@@ -439,7 +453,9 @@ function plannedDays(
   for (let d = 0; d < Math.ceil(o.days); d += 1) {
     const share = Math.min(1, o.days - d);
     const a = isoOf(start + d * wall);
-    const b = isoOf(Math.max(start + d * wall, start + Math.ceil((d + share) * wall) - 1));
+    const b = isoOf(
+      Math.max(start + d * wall, start + Math.ceil((d + share) * wall * WALL_SLACK) - 1),
+    );
     const same =
       cardAt(s.provider, s.model, s.endpoint, a)?.id ===
       cardAt(s.provider, s.model, s.endpoint, b)?.id;
@@ -606,7 +622,7 @@ export function predict(seats: readonly PredictSeat[], o: PredictOptions): Predi
         );
         const days = plannedDays(s, wakes, o, o.cacheTtl);
         measuredSeat =
-          profile.seatDays.length >= MIN_CALIBRATED_SEAT_DAYS
+          independentSeatDays(profile) >= MIN_CALIBRATED_SEAT_DAYS
             ? calibrated(s, profile, days, o, seatSeed(seed, i))
             : measuredPoint(s, profile, days, e, o);
         const u = used.get(key ?? "") ?? { profile, seats: [] };
@@ -626,6 +642,7 @@ export function predict(seats: readonly PredictSeat[], o: PredictOptions): Predi
       central: measuredSeat?.central ?? e.central,
       high: measuredSeat?.high ?? e.high,
       source: measuredSeat?.source ?? "scenario",
+      scenarioHigh: e.high,
       priceCards: [...new Set(cards.map((c) => c.id))],
       attemptBoundNanoUsd: seatAttemptBound(
         s.model,
@@ -728,7 +745,7 @@ function assumptionsOf(
     const p = u.profile;
     // Only the bootstrap grows prompts; the projection of a measured point scales spend.
     const growth =
-      p.seatDays.length < MIN_CALIBRATED_SEAT_DAYS
+      independentSeatDays(p) < MIN_CALIBRATED_SEAT_DAYS
         ? ""
         : p.briefingGrowth.length === 0
           ? "; no briefing growth (days not measured keep the measured prompt sizes: biased low)"
@@ -742,7 +759,7 @@ function assumptionsOf(
     out.push(
       wall === 0
         ? `measured wakes priced at the cards of ${o.priceAt ?? LEGACY_AT} (one pinned instant)`
-        : `measured wakes priced at the cards of each game day's planned wall-clock time: from ${o.priceAt ?? LEGACY_AT}, ${(wall / 3_600_000).toFixed(2)} wall-clock hours per game day (lockstep: a 7-day match in at most ${LOCKSTEP_WEEK_WALL_HOURS} hours, an assumption), the dearer card of a day's window`,
+        : `measured wakes priced at the cards of each game day's planned wall-clock time: from ${o.priceAt ?? LEGACY_AT}, ${(wall / 3_600_000).toFixed(2)} wall-clock hours per game day (lockstep: a 7-day match in at most ${LOCKSTEP_WEEK_WALL_HOURS} hours, an assumption), the dearer card of a day's window, its end stretched ×${WALL_SLACK} (a slower run)`,
     );
   }
   out.push(

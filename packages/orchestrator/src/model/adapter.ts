@@ -53,6 +53,18 @@ export function brokenStreamOutput(maxTokens: number): number {
 }
 
 /**
+ * The most completion tokens a request of `maxTokens` can be billed by `provider`. OpenRouter's
+ * `max_tokens` covers reasoning and visible output only "on most providers", and its own example
+ * bills more than the limit ("a request with `max_tokens: 300` that returns `completion_tokens:
+ * 302`", docs/guides/best-practices/reasoning-tokens.md, read 2026-10-20): a slack of 1% plus 16
+ * tokens, which the broken-stream estimate and the attempt bound add (unverified for `z-ai/fp8`
+ * until a recorded smoke). Other providers bound their output by the request's limit.
+ */
+export function completionUpper(provider: string, maxTokens: number): number {
+  return provider === "openrouter" ? maxTokens + Math.ceil(maxTokens / 100) + 16 : maxTokens;
+}
+
+/**
  * The prompt cap (phase-4 design §5.2): an attempt whose estimated prompt exceeds it is not sent,
  * and its turn closes (`prompt_cap`), so every attempt's prompt, and with it the attempt bound, is
  * bounded. 160,000 tokens keeps every attempt under the long-context tiers of the planned cards.
@@ -116,13 +128,15 @@ export function attemptBoundNano(
     readonly modelMax?: number;
     /** The platform fee of the served model's cards, in permille. */
     readonly feePermille?: number;
+    /** The provider that bills the attempt (`completionUpper`); default: the limit bounds it. */
+    readonly provider?: string;
   } = {},
 ): number {
   if (!Number.isSafeInteger(promptCap) || promptCap < 1) {
     throw new Error(`the prompt cap must be a positive integer, got ${promptCap}`);
   }
   if (cards.served.length === 0) throw new Error("attemptBoundNano needs the served model's cards");
-  const out = maxAttemptOutput(spec, o.modelMax);
+  const out = completionUpper(o.provider ?? "", maxAttemptOutput(spec, o.modelMax));
   const one = (c: readonly TokenPrices[], feePermille: number): number => {
     const nano = Math.ceil((promptCap * maxInputSide(c) + out * maxOutputPrice(c)) / 1000);
     return nano + (feePermille === 0 ? 0 : Math.ceil((nano * feePermille) / 1000));

@@ -715,16 +715,33 @@ describe("usage, never under the bill", () => {
         .output,
     ).toBe(500);
     // Cached tokens beyond the prompt count (a count apart?): charged both as input and as reads.
-    expect(tokens({ promptTokenCount: 100, cachedContentTokenCount: 400 }).tokens).toMatchObject({
+    expect(
+      tokens({ promptTokenCount: 100, cachedContentTokenCount: 400, totalTokenCount: 100 }).tokens,
+    ).toMatchObject({
       input: 100,
       cacheRead: 400,
     });
-    // Proto3 omits zeros: a usage with the prompt alone is a valid one.
-    expect(tokens({ promptTokenCount: 100 }).tokens).toMatchObject({
+    // Proto3 omits zeros: a usage with the prompt and its total alone is a valid one.
+    expect(tokens({ promptTokenCount: 100, totalTokenCount: 100 }).tokens).toMatchObject({
       input: 100,
       output: 0,
       reasoning: 0,
     });
+  });
+
+  test("an incomplete final usage is charged the estimate (C6): no total, or no output for a reply", () => {
+    // 2,800 characters of text and a usage with the prompt count alone: not an output of 0.
+    expect(tokens({ promptTokenCount: 1000 })).toEqual(fallbackUsage());
+    expect(tokens({ promptTokenCount: 1000, candidatesTokenCount: 700 })).toEqual(fallbackUsage());
+    const produced = (raw: unknown) =>
+      geminiUsage(raw, "gemini-4-argon", fallbackUsage, null, { produced: true });
+    expect(produced({ promptTokenCount: 1000, totalTokenCount: 1000 })).toEqual(fallbackUsage());
+    expect(
+      produced({ promptTokenCount: 1000, candidatesTokenCount: 700, totalTokenCount: 1700 }).tokens
+        .output,
+    ).toBe(700);
+    // The total alone explains the output when the candidate count is missing.
+    expect(produced({ promptTokenCount: 1000, totalTokenCount: 1700 }).tokens.output).toBe(700);
   });
 
   test("a usage of unknown shape is charged conservatively, never 0", () => {
@@ -747,9 +764,16 @@ describe("usage, never under the bill", () => {
     expect(billedModel("gemini-4-argon", null, "STANDARD")).toBe("gemini-4-argon");
     expect(billedModel("gemini-4-argon", null, "flex")).toBe("gemini-4-argon");
     expect(billedModel("gemini-4-argon", "gemini-4-argon", "unspecified")).toBe("gemini-4-argon");
-    const priority = tokens({ promptTokenCount: 1000, serviceTier: "priority" });
+    const priority = tokens({
+      promptTokenCount: 1000,
+      totalTokenCount: 1000,
+      serviceTier: "priority",
+    });
     expect(priority.model).toBe("gemini-4-argon (priority tier)");
-    const other = tokens({ promptTokenCount: 1000 }, "gemini-4-argon-preview-10-2026");
+    const other = tokens(
+      { promptTokenCount: 1000, totalTokenCount: 1000 },
+      "gemini-4-argon-preview-10-2026",
+    );
     for (const u of [priority, other]) {
       const c = argonAt([u]);
       expect([c.unpriced.length, c.cards]).toEqual([1, ["max"]]);
@@ -1139,5 +1163,90 @@ describe("environment and fixtures", () => {
       expect(Array.isArray(sources) && sources.length > 0).toBe(true);
       for (const s of z.array(z.string()).parse(sources)) expect(s).toMatch(/^https:\/\//);
     }
+  });
+});
+
+/** A stream event of one text part (none when `t` is empty), its usage and finish reason. */
+const reviewEvent = (t: string, usage?: unknown, finish?: string) => ({
+  candidates: [
+    {
+      content: { role: "model", parts: t === "" ? [] : [{ text: t }] },
+      ...(finish === undefined ? {} : { finishReason: finish }),
+      index: 0,
+    },
+  ],
+  ...(usage === undefined ? {} : { usageMetadata: usage }),
+  modelVersion: "gemini-4-argon",
+  responseId: "resp-review",
+});
+
+describe("the Pass 2 review's money cases", () => {
+  const req = request([BRIEFING, HEADER]);
+
+  test("C4: the last cumulative usage counts, even one that arrives after the finish", async () => {
+    const { a } = adapter([
+      sse([
+        reviewEvent("Hold the line.", { promptTokenCount: 10_000 }),
+        reviewEvent(
+          "",
+          { promptTokenCount: 10_000, candidatesTokenCount: 2, totalTokenCount: 10_002 },
+          "STOP",
+        ),
+        {
+          usageMetadata: {
+            promptTokenCount: 10_000,
+            candidatesTokenCount: 2,
+            thoughtsTokenCount: 5_000,
+            totalTokenCount: 15_002,
+          },
+          modelVersion: "gemini-4-argon",
+          responseId: "resp-review",
+        },
+      ]),
+    ]);
+    const res = await a.chat(req);
+    expect(res.reply.text).toEqual(["Hold the line."]);
+    expect(res.usage[0]?.tokens).toMatchObject({ input: 10_000, output: 5_002, reasoning: 5_000 });
+    expect(argonAt(res.usage).nanoUsd).toBe(70_020_000);
+  });
+
+  test("C3: an estimate without a usage takes the seat's prompt estimate, at most the request's bytes", async () => {
+    const bytes = utf8(JSON.stringify(adapter([]).a.build(req)));
+    const small = adapter([jsonRes(504, { error: { code: 504, status: "DEADLINE_EXCEEDED" } })]);
+    const e = await rejected(small.a.chat({ ...req, promptTokensUpper: 100 }));
+    expect(e.spent[0]?.tokens).toMatchObject({ input: 100, output: 32_768 });
+    const large = adapter([jsonRes(504, { error: { code: 504, status: "DEADLINE_EXCEEDED" } })]);
+    const f = await rejected(large.a.chat({ ...req, promptTokensUpper: bytes * 10 }));
+    expect(f.spent[0]?.tokens.input).toBe(bytes);
+  });
+
+  test("finished, then broken: the larger of the last usage and the estimate, kind by kind", async () => {
+    const evs = events("stream-parallel-calls.json");
+    let pulls = 0;
+    const body = new ReadableStream<Uint8Array>({
+      pull(c) {
+        pulls += 1;
+        if (pulls === 1) c.enqueue(new TextEncoder().encode(sseOf(evs)));
+        else c.error(new Error("connection reset"));
+      },
+    });
+    const { a } = adapter([new Response(body, { status: 200 })]);
+    const res = await a.chat(req);
+    expect(res.reply.calls.length).toBe(2);
+    expect(res.usage).toEqual([
+      {
+        model: "gemini-4-argon",
+        kind: "message",
+        tokens: {
+          input: 12_000,
+          cacheWrite5m: 0,
+          cacheWrite1h: 0,
+          cacheRead: 8_000,
+          output: 32_768,
+          reasoning: 900,
+        },
+        estimated: true,
+      },
+    ]);
   });
 });

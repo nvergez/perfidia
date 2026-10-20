@@ -228,13 +228,16 @@ export interface SseEvent {
  * are comments; consecutive `data:` lines join with `\n`; an event without data is skipped; an
  * event the body ends inside (no blank line after it) is discarded, as the SSE rule says. When the
  * body ends before an event for which `terminal` is true, the stream broke: a retryable
- * `connection` error (with `spent()`, what the caller says the attempt cost so far).
+ * `connection` error (with `spent()`, what the caller says the attempt cost so far). With
+ * `endOk`, the end of the body is the normal end (a protocol with no terminal event: Gemini's),
+ * unless it ends inside an event; a failed read is a break either way.
  */
 export async function* readSse(
   body: ReadableStream<Uint8Array>,
   o: {
     readonly terminal: (e: SseEvent) => boolean;
     readonly spent?: () => readonly UsageEntry[];
+    readonly endOk?: boolean;
   },
 ): AsyncGenerator<SseEvent> {
   const decoder = new TextDecoder();
@@ -292,7 +295,14 @@ export async function* readSse(
       }
       // At the end of the body, an event not closed by a blank line was cut in transit: it is
       // discarded (the SSE rule), so a body cut inside its terminal event is a broken stream.
-      if (done) break;
+      if (done) {
+        // A body that ends inside an event (data not closed by a blank line) was cut: a break.
+        if (o.endOk === true && data.length === 0) {
+          ended = true;
+          return;
+        }
+        break;
+      }
     }
   } catch (e) {
     throw new ModelError(

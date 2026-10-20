@@ -30,12 +30,16 @@ import { ModelError } from "../model/adapter.ts";
 import { FakeAdapter, type Brain } from "../model/fake.ts";
 import { formatCents, requirePrice } from "../model/prices.ts";
 import { botBrain } from "./brain.ts";
-import { main } from "./cli.ts";
+import { main as arenaMain } from "./cli.ts";
 import { estimateSeat } from "./cost.ts";
 import { arenaEnv, planArena, type LlmSeatPlan } from "./plan.ts";
 import { reconcileRun } from "./reconcile.ts";
 import { runArena, type AdapterContext, type SignalSource } from "./run.ts";
 import { FlakyAdapter, RULESET, readCalls, runDir } from "./rig.test.ts";
+
+/** `arena` as the CLI runs it, with no calibration profile unless a test passes `--profiles`. */
+const main = (...[argv, io, env, o]: Parameters<typeof arenaMain>) =>
+  arenaMain(argv, io, env, { profilesDir: "off", ...o });
 
 const LONG = 120_000;
 const PLAN = ["--fake", "--lineup", "claude-duo", "--seed", "1", "--id-key", "seed"];

@@ -475,6 +475,63 @@ describe("openai: one call", () => {
     expect(readUsage(usageOf(0, 0, 0, 1.5), "m").kind).toBe("invalid");
   });
 
+  test("12-hour cache writes are priced at the 12-hour rate (review C2); a split that does not sum is invalid", () => {
+    const u = {
+      input_tokens: 120_000,
+      input_tokens_details: {
+        cached_tokens: 0,
+        cache_write_tokens: 100_000,
+        cache_write_tokens_details: { ttl_30m_tokens: 0, ttl_12h_tokens: 100_000 },
+      },
+      output_tokens: 1_000,
+      output_tokens_details: { reasoning_tokens: 0 },
+    };
+    const read = readUsage(u, "gpt-6.1-sol");
+    if (read.kind !== "ok") throw new Error(read.kind);
+    expect(read.entry.tokens).toMatchObject({
+      input: 20_000,
+      cacheWrite5m: 0,
+      cacheWrite1h: 100_000,
+      output: 1_000,
+    });
+    // $2 × 20K + $5 × 100K + $10 × 1K per million: what the prompt-caching guide bills.
+    const ctx = { provider: "openai", endpoint: null, at: "2026-10-20T12:00:00Z" };
+    expect(costOf([read.entry], ctx).nanoUsd).toBe(550_000_000);
+    const both = readUsage(
+      {
+        ...u,
+        input_tokens_details: {
+          cached_tokens: 0,
+          cache_write_tokens: 100_000,
+          cache_write_tokens_details: { ttl_30m_tokens: 60_000, ttl_12h_tokens: 40_000 },
+        },
+      },
+      "gpt-6.1-sol",
+    );
+    expect(both.kind === "ok" ? both.entry.tokens : null).toMatchObject({
+      cacheWrite5m: 60_000,
+      cacheWrite1h: 40_000,
+    });
+    const off = readUsage(
+      {
+        ...u,
+        input_tokens_details: {
+          cached_tokens: 0,
+          cache_write_tokens: 100_000,
+          cache_write_tokens_details: { ttl_30m_tokens: 0, ttl_12h_tokens: 90_000 },
+        },
+      },
+      "gpt-6.1-sol",
+    );
+    expect(off.kind).toBe("invalid");
+    // The attempt bound covers a prompt written whole for 12 hours and the retry's output.
+    const bound = seatAttemptBound("gpt-6.1-sol", "off", 32_768, 160_000, {
+      provider: "openai",
+      from: "2026-10-20T00:00:00Z",
+    });
+    expect(bound).toBeGreaterThanOrEqual((160_000 * 5_000_000 + 65_536 * 10_000_000) / 1000);
+  });
+
   test("stops: end_turn, max_tokens, content filter, refusal part, malformed arguments", async () => {
     const text = await runCase("text");
     expect([text.stop, text.reply.text, text.reply.calls]).toEqual([
@@ -940,7 +997,7 @@ describe("openai: environment and transport", () => {
 });
 
 describe("openai: through a seat", () => {
-  test("max_output_tokens stops once, the seat retries at twice the limit, both attempts charged; the line says summary", async () => {
+  test("max_output_tokens stops once, the seat retries at twice the limit, both attempts charged; a line with a summary says summary", async () => {
     const time = virtualTime();
     const clock = { time, random: seededRandom(1) };
     const s = stub((seen, n) =>
@@ -997,7 +1054,8 @@ describe("openai: through a seat", () => {
     expect(inputs[1]).toBe(inputs[0]);
     const lines = log.lines.flatMap((l) => (l.k === "llm_call" ? [l] : []));
     expect(lines.map((l) => l.stop)).toEqual(["max_tokens", "end_turn"]);
-    expect(lines.every((l) => l.reasoningKind === "summary")).toBe(true);
+    // The cut reply carries no reasoning summary: `none` (review: one coverage statistic).
+    expect(lines.map((l) => l.reasoningKind)).toEqual(["none", "summary"]);
     expect(lines.every((l) => l.priceCard === "openai:gpt-6-luna@2026-10-20")).toBe(true);
     expect(ledger.spent("p1")).toBe(lines.reduce((n, l) => n + l.costNanoUsd, 0));
     expect(lines[0]?.usage[0]?.reasoning).toBe(32_768);

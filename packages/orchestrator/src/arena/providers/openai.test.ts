@@ -19,10 +19,14 @@ import { costOf, formatUsd } from "../../model/prices.ts";
 import { ResponsesRequestSchema } from "../../model/wire/openai.ts";
 import { THOUGHT_ASK } from "../../seat/prompt.ts";
 import { botBrain } from "../brain.ts";
-import { main } from "../cli.ts";
+import { main as arenaMain } from "../cli.ts";
 import { arenaEnv, planArena } from "../plan.ts";
 import { readCalls, runDir } from "../rig.test.ts";
 import { openaiBaseUrlProblem } from "./openai.ts";
+
+/** `arena` as the CLI runs it, with no calibration profile unless a test passes `--profiles`. */
+const main = (...[argv, io, env, o]: Parameters<typeof arenaMain>) =>
+  arenaMain(argv, io, env, { profilesDir: "off", ...o });
 
 const LONG = 180_000;
 const KEY = "sk-test-wire-stub-openai-0123456789";

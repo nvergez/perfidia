@@ -41,8 +41,17 @@ import { formatCents } from "../model/prices.ts";
 /** Where the profiles live by default. */
 export const PROFILES_DIR = join(import.meta.dir, "..", "..", "profiles");
 
-/** Seat-days a key needs for a `calibrated` prediction (percentiles); 1–2 give `measured-point`. */
+/**
+ * Independent seat-days a key needs for a `calibrated` prediction (percentiles); 1–2 give
+ * `measured-point`. Seat-days are counted by (run, game day): the seats of one match day share its
+ * map, its opponents and its events, so three seats of one model on one day count once (the Pass 2
+ * review's replication: a bootstrap over one match day missed every seat's spend).
+ */
 export const MIN_CALIBRATED_SEAT_DAYS = 3;
+
+/** A profile's independent seat-days: its distinct (run, game day) pairs. */
+export const independentSeatDays = (p: TokenProfile): number =>
+  new Set(p.seatDays.map((d) => `${d.run}\u0000${d.day}`)).size;
 
 /** The briefing growth needs fake runs of at least a week of game days. */
 export const GROWTH_DAYS = 7;
@@ -564,9 +573,9 @@ export function calibrate(
   };
 }
 
-/** What a profile predicts from: `calibrated` from 3 seat-days, `measured-point` below. */
+/** What a profile predicts from: `calibrated` from 3 independent seat-days, `measured-point` below. */
 export const sourceOfProfile = (p: TokenProfile): "calibrated" | "measured-point" =>
-  p.seatDays.length >= MIN_CALIBRATED_SEAT_DAYS ? "calibrated" : "measured-point";
+  independentSeatDays(p) >= MIN_CALIBRATED_SEAT_DAYS ? "calibrated" : "measured-point";
 
 /** A profile in one line: what it measured and the source it gives. */
 export function profileSummary(p: TokenProfile): string {
@@ -576,7 +585,7 @@ export function profileSummary(p: TokenProfile): string {
   const sum = (f: (r: Round) => number): number => rounds.reduce((n, r) => n + f(r), 0);
   const prompt = sum((r) => r.promptTokens);
   return [
-    `${p.seatDays.length} seat-day(s) (game days ${days.join(", ")}) from ${p.runs.map((r) => r.run).join(", ")}`,
+    `${p.seatDays.length} seat-day(s), ${independentSeatDays(p)} independent (run, day) (game days ${days.join(", ")}) from ${p.runs.map((r) => r.run).join(", ")}`,
     `source ${sourceOfProfile(p)}`,
     `wakes per seat-day ${meanText(wakes.length, p.seatDays.length)}`,
     `attempts per wake ${meanText(rounds.length, wakes.length)}`,

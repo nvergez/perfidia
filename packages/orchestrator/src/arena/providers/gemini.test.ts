@@ -19,11 +19,15 @@ import {
   type StubCall,
 } from "../../model/gemini-stub.test.ts";
 import { cardAt, costOf } from "../../model/prices.ts";
-import { main } from "../cli.ts";
+import { main as arenaMain } from "../cli.ts";
 import { arenaEnv, planArena } from "../plan.ts";
 import { toolsFor } from "../providers.ts";
 import { RULESET, play, runDir } from "../rig.test.ts";
 import { runGeminiSmoke } from "./gemini-smoke.ts";
+
+/** `arena` as the CLI runs it, with no calibration profile unless a test passes `--profiles`. */
+const main = (...[argv, io, env, o]: Parameters<typeof arenaMain>) =>
+  arenaMain(argv, io, env, { profilesDir: "off", ...o });
 
 const LONG = 180_000;
 

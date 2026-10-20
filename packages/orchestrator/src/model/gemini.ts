@@ -313,7 +313,13 @@ export function replyOf(
     else list.push(p.text);
     run = kind;
   }
-  return { native, text, calls, reasoning, reasoningKind: "summary" };
+  return {
+    native,
+    text,
+    calls,
+    reasoning,
+    reasoningKind: reasoning.length === 0 ? "none" : "summary",
+  };
 }
 
 /** Finish reasons that close the turn as a refusal (the category is the reason in lower case). */
@@ -387,28 +393,35 @@ export function estimatedUsage(model: string, promptTokens: number, maxTokens: n
 
 /**
  * `usageMetadata` as a usage entry billed under `model`, or `fallback()` when its shape is not one
- * the adapter knows (no prompt count, a count that is not a non-negative safe integer). Never under
- * what the API bills: cached tokens beyond the prompt count are charged as both, and a total beyond
- * the known counts is charged as output.
+ * the adapter knows (no prompt count, no total, a count that is not a non-negative safe integer, or
+ * no output at all for a reply that produced some). Never under what the API bills: cached tokens
+ * beyond the prompt count are charged as both, and a total beyond the known counts is charged as
+ * output.
  */
 export function geminiUsage(
   raw: unknown,
   model: string,
   fallback: () => UsageEntry,
   served: string | null = null,
+  o: {
+    /** The reply has text or a call beyond its thoughts: an output of 0 is not believed. */
+    readonly produced?: boolean;
+  } = {},
 ): UsageEntry {
   const r = GeminiUsageSchema.safeParse(raw);
   if (!r.success) return fallback();
   const u = r.data;
   const prompt = u.promptTokenCount ?? 0;
   if (prompt <= 0) return fallback();
+  // Without the total, missing output counts would read as 0: the usage is incomplete.
+  if (u.totalTokenCount === undefined) return fallback();
   const cached = u.cachedContentTokenCount ?? 0;
   const tool = u.toolUsePromptTokenCount ?? 0;
   const thoughts = u.thoughtsTokenCount ?? 0;
   const candidates = u.candidatesTokenCount ?? 0;
   const known = prompt + tool + thoughts + candidates;
-  const extra =
-    u.totalTokenCount !== undefined && u.totalTokenCount > known ? u.totalTokenCount - known : 0;
+  const extra = u.totalTokenCount > known ? u.totalTokenCount - known : 0;
+  if (o.produced === true && candidates + thoughts + extra === 0) return fallback();
   return {
     model: billedModel(model, served, u.serviceTier),
     kind: "message",
@@ -514,6 +527,8 @@ interface Seen {
   usage: unknown;
   /** A usage arrived with or after the finish: the final count (earlier ones are partial). */
   final: boolean;
+  /** The body broke after the finish: a later (cumulative) usage may have been lost. */
+  broken: boolean;
   /** The prompt count of a usage that arrived (the broken-stream estimate's prompt). */
   prompt: number | null;
   modelVersion: string | null;
@@ -528,6 +543,7 @@ const newSeen = (): Seen => ({
   block: null,
   usage: undefined,
   final: false,
+  broken: false,
   prompt: null,
   modelVersion: null,
   responseId: null,
@@ -738,9 +754,22 @@ export class GeminiAdapter implements ModelAdapter {
     estimate: () => UsageEntry[],
   ): ChatResult {
     const served = seen.modelVersion;
-    const usage = seen.final
-      ? [geminiUsage(seen.usage, this.spec.model, () => estimate()[0] ?? missing(), served)]
-      : estimate();
+    const produced = seen.parts.some(
+      (p) =>
+        isRecord(p) &&
+        p["thought"] !== true &&
+        (p["functionCall"] !== undefined || (typeof p["text"] === "string" && p["text"] !== "")),
+    );
+    const counted = (): UsageEntry =>
+      geminiUsage(seen.usage, this.spec.model, () => estimate()[0] ?? missing(), served, {
+        produced,
+      });
+    // Finished and then broken: the larger of the last usage and the estimate, kind by kind.
+    const usage = !seen.final
+      ? estimate()
+      : seen.broken
+        ? [atLeast(counted(), estimate()[0] ?? missing())]
+        : [counted()];
     const raw = structuredClone({
       modelVersion: seen.modelVersion,
       responseId: seen.responseId,
@@ -794,7 +823,7 @@ export class GeminiAdapter implements ModelAdapter {
           text: [],
           calls: [],
           reasoning: [],
-          reasoningKind: "summary" as const,
+          reasoningKind: "none" as const,
         },
         stop,
         refusal: {
@@ -812,8 +841,15 @@ export class GeminiAdapter implements ModelAdapter {
     const text = JSON.stringify(body);
     const maxTokens = body.generationConfig.maxOutputTokens;
     const seen = newSeen();
+    // The prompt of an estimate: the usage's count when one arrived, else the seat's own upper
+    // estimate (within the attempt bound), never above the request's bytes.
+    const bytes = utf8.encode(text).length;
     const estimate = (): UsageEntry[] => [
-      estimatedUsage(this.spec.model, seen.prompt ?? utf8.encode(text).length, maxTokens),
+      estimatedUsage(
+        this.spec.model,
+        seen.prompt ?? Math.min(req.promptTokensUpper ?? bytes, bytes),
+        maxTokens,
+      ),
     ];
     const t0 = this.client.time.nowMs();
     return this.exchange(
@@ -828,17 +864,28 @@ export class GeminiAdapter implements ModelAdapter {
             spent: estimate(),
           });
         }
+        // The end of the body ends the stream: `usageMetadata` is cumulative and the last one
+        // counts ("Keep only the last value of each stream", long-decode guide, read 2026-10-20),
+        // so nothing after the finish is skipped.
         try {
           for await (const ev of readSse(res.body, {
-            terminal: () => seen.final,
+            terminal: () => false,
             spent: estimate,
+            endOk: true,
           })) {
             this.absorb(ev.data, seen, t0, estimate);
           }
         } catch (e) {
-          // Finished, but the final usage never came: the reply stands, its usage is estimated.
+          // Finished, then broken: the reply stands, its usage is estimated (a later usage may
+          // have been lost).
           const finished = seen.finish !== null || seen.block !== null;
           if (!(e instanceof ModelError && e.kind === "connection" && finished)) throw e;
+          seen.broken = true;
+        }
+        if (seen.finish === null && seen.block === null) {
+          throw new ModelError("connection", "google: the stream ended before its finish", {
+            spent: estimate(),
+          });
         }
         return this.resultOf(req, seen, t0, estimate);
       },
@@ -949,6 +996,24 @@ export class GeminiAdapter implements ModelAdapter {
     );
     return { model, allowedFallbackModels: [], usage };
   }
+}
+
+/** `a` with each token kind raised to `b`'s where `b`'s is larger (estimated). */
+function atLeast(a: UsageEntry, b: UsageEntry): UsageEntry {
+  const t = a.tokens;
+  const u = b.tokens;
+  return {
+    ...a,
+    tokens: {
+      ...t,
+      input: Math.max(t.input, u.input),
+      cacheWrite5m: Math.max(t.cacheWrite5m, u.cacheWrite5m),
+      cacheWrite1h: Math.max(t.cacheWrite1h, u.cacheWrite1h),
+      cacheRead: Math.max(t.cacheRead, u.cacheRead),
+      output: Math.max(t.output, u.output),
+    },
+    estimated: true,
+  };
 }
 
 /** Unreachable: an estimate always has one entry. */

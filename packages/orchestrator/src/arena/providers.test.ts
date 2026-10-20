@@ -13,9 +13,13 @@ import { verifyLog } from "@perfidia/engine";
 import { memoryIo, readLog } from "@perfidia/sim";
 import { ArenaReportSchema, SeatsFileSchema, type LlmLogLine } from "../log/schema.ts";
 import { costOf } from "../model/prices.ts";
-import { main } from "./cli.ts";
+import { main as arenaMain } from "./cli.ts";
 import { arenaEnv, planArena, type ArenaRequest } from "./plan.ts";
 import { readCalls, runDir } from "./rig.test.ts";
+
+/** `arena` as the CLI runs it, with no calibration profile unless a test passes `--profiles`. */
+const main = (...[argv, io, env, o]: Parameters<typeof arenaMain>) =>
+  arenaMain(argv, io, env, { profilesDir: "off", ...o });
 
 const LONG = 120_000;
 const MID = ["--fake", "--lineup", "mid-tier", "--seed", "1", "--id-key", "seed"];
@@ -223,13 +227,14 @@ describe("arena run --fake --lineup mid-tier (phase 4 Pass 1b)", () => {
           dir,
         ]);
         expect(r.code).toBe(0);
-        // Only the plan's two alerts on the GLM seat (stderr, even under --quiet).
+        // Only the plan's alert on the GLM seat (stderr, even under --quiet); its effort is the
+        // listed `low` the preset names, so no effort alert (review).
         expect(
           r.err
             .split("\n")
             .filter((l) => l !== "")
             .map((l) => l.slice(0, 34)),
-        ).toEqual(["ALERT: p4: z-ai/glm-5.3@z-ai/fp8 d", "ALERT: p4: OpenRouter lists z-ai/g"]);
+        ).toEqual(["ALERT: p4: z-ai/glm-5.3@z-ai/fp8 d"]);
       }
       const [a, b] = dirs.map(tree);
       expect([...(a?.keys() ?? [])]).toEqual([...(b?.keys() ?? [])]);
@@ -291,7 +296,7 @@ describe("arena run --fake --lineup mid-tier (phase 4 Pass 1b)", () => {
         ],
         [
           "p4",
-          "llm:fake/z-ai%2Fglm-5.3@z-ai%2Ffp8/medium:agamemnon@1:p2-env",
+          "llm:fake/z-ai%2Fglm-5.3@z-ai%2Ffp8/low:agamemnon@1:p2-env",
           "openrouter",
           "z-ai/glm-5.3",
           "z-ai/fp8",
@@ -373,6 +378,46 @@ describe("arena run --fake --lineup mid-tier (phase 4 Pass 1b)", () => {
       expect(report.budget.under).toBe(true);
       expect(report.budget.killSwitch).toBeNull();
       expect(report.exit4?.models).toBe(4);
+    },
+    LONG,
+  );
+});
+
+describe("effortSent on a fake run (review)", () => {
+  test(
+    "a fake OpenRouter seat at an effort its model does not list records the level sent",
+    async () => {
+      const dir = runDir("effort-sent");
+      const r = await cli([
+        "run",
+        "--fake",
+        "--seed",
+        "1",
+        "--id-key",
+        "seed",
+        "--days",
+        "1",
+        "--price-date",
+        "2026-10-20",
+        "--seat",
+        "p1=openrouter:z-ai/glm-5.3@z-ai/fp8:medium:odysseus",
+        "--quiet",
+        "--out",
+        dir,
+      ]);
+      expect(r.code).toBe(0);
+      const seats = SeatsFileSchema.parse(
+        JSON.parse(readFileSync(join(dir, "seats.json"), "utf8")),
+      );
+      const effort = seats.seats.flatMap((s) =>
+        s.kind === "llm" ? [[s.seat, s.effort, s.effortSent ?? null]] : [],
+      );
+      expect(effort).toEqual([
+        ["p1", "medium", "low"],
+        ["p2", "medium", null],
+        ["p3", "medium", null],
+        ["p4", "medium", null],
+      ]);
     },
     LONG,
   );

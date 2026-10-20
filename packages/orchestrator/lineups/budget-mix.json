@@ -41,6 +41,7 @@
       "provider": "openrouter",
       "model": "z-ai/glm-5.3-flash",
       "endpoint": "z-ai/fp8",
+      "effort": "low",
       "profile": "agamemnon@1"
     },
     {

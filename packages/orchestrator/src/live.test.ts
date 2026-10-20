@@ -84,7 +84,8 @@ describe.skipIf(!LIVE)("live: the real Claude API (opt-in)", () => {
 // `arena smoke --provider openai` on GPT-6 Luna at low effort: the model's access, the production
 // shape at 16 output tokens, the input-token count and one streamed call of a real round-0
 // request capped at 4,000 output tokens, no retry. Its bound is printed first and asserted under
-// $0.05 ($0.009973 at the 2026-10-20 card). The test name carries why it is skipped.
+// $0.05 ($0.017938 at the 2026-10-20 card, the 12-hour write price included since the Pass 2
+// review). The test name carries why it is skipped.
 const OPENAI_LIVE = env.live && providerEnv(env, "openai").apiKey !== null;
 if (!OPENAI_LIVE) {
   console.log(

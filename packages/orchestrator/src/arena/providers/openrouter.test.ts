@@ -15,7 +15,7 @@
 //   and every request of a turn extends the previous one byte for byte.
 
 import { afterEach, describe, expect, test } from "bun:test";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { verifyLog } from "@perfidia/engine";
 import { BriefingSchema, type PlayerId } from "@perfidia/protocol";
@@ -35,7 +35,7 @@ import {
 } from "../../model/wire/compat.ts";
 import { THOUGHT_ASK } from "../../seat/prompt.ts";
 import { botBrain } from "../brain.ts";
-import { main } from "../cli.ts";
+import { main as arenaMain } from "../cli.ts";
 import { arenaEnv, type ArenaRequest } from "../plan.ts";
 import { RULESET, readCalls, runDir } from "../rig.test.ts";
 import {
@@ -45,6 +45,10 @@ import {
   planLive,
   usdPerTokenToPico,
 } from "./openrouter.ts";
+
+/** `arena` as the CLI runs it, with no calibration profile unless a test passes `--profiles`. */
+const main = (...[argv, io, env, o]: Parameters<typeof arenaMain>) =>
+  arenaMain(argv, io, env, { profilesDir: "off", ...o });
 
 const KEY = "sk-or-v1-planted-wire-stub-0123456789abcdef";
 const LONG = 120_000;
@@ -468,6 +472,10 @@ describe("OpenRouter's live metadata at plan time", () => {
       edit: (model, e) => {
         if (model !== "z-ai/glm-5.3" || e.tag !== PIN) return;
         e.pricing.completion = "0.000004";
+        // Kinds the seats never use (no image, no web search) and a reasoning price within output.
+        Reflect.set(e.pricing, "image", "0.001");
+        Reflect.set(e.pricing, "web_search", "0.01");
+        Reflect.set(e.pricing, "internal_reasoning", "0.0000044");
         e.status = -2;
         e.quantization = "fp4";
       },
@@ -510,6 +518,30 @@ describe("OpenRouter's live metadata at plan time", () => {
           void (m === "z-ai/glm-5.3" && e.tag === PIN && (e.pricing.request = "0.001")),
       },
       "a per-request price (no card has one)",
+    ],
+    [
+      "a reasoning price above the card's output price (review)",
+      {
+        edit: (m, e) =>
+          void (
+            m === "z-ai/glm-5.3" &&
+            e.tag === PIN &&
+            Reflect.set(e.pricing, "internal_reasoning", "0.000005")
+          ),
+      },
+      "p1: z-ai/glm-5.3@z-ai/fp8: OpenRouter now bills internal reasoning $5/M (the card: $4.4/M)",
+    ],
+    [
+      "a price kind no card knows (review)",
+      {
+        edit: (m, e) =>
+          void (
+            m === "z-ai/glm-5.3" &&
+            e.tag === PIN &&
+            Reflect.set(e.pricing, "thinking_surcharge", "0.000001")
+          ),
+      },
+      'a price "thinking_surcharge" no card knows',
     ],
     [
       "another provider behind the slug",
@@ -580,6 +612,89 @@ describe("OpenRouter's live metadata at plan time", () => {
     expect(existsSync(dir)).toBe(false);
     expect(stub.hits.every((h) => h.method === "GET")).toBe(true);
     expect(`${io.stdout()}${io.stderr()}`).not.toContain(KEY);
+  });
+
+  test("arena series plans each real match on the live metadata: a price rise refuses it (review)", async () => {
+    const stub = openrouterStub({
+      edit: (m, e) =>
+        void (m === "z-ai/glm-5.3" && e.tag === PIN && (e.pricing.prompt = "0.0000015")),
+    });
+    const base = runDir("series-live");
+    mkdirSync(base, { recursive: true });
+    const lineup = join(base, "or-pair.json");
+    writeFileSync(
+      lineup,
+      `${JSON.stringify({
+        format: "perfidia-lineup/1",
+        id: "or-pair",
+        title: "Two OpenRouter seats and four bots",
+        comparison: false,
+        budgetUsd: "5",
+        maxTokens: 32768,
+        attemptTimeoutMin: 15,
+        promptCapTokens: 160000,
+        reminders: "last-round",
+        defaults: { effort: "low", fallbacks: "off", zdr: true },
+        seats: [
+          {
+            seat: "p1",
+            kind: "llm",
+            provider: "openrouter",
+            model: "z-ai/glm-5.3",
+            endpoint: PIN,
+            profile: "odysseus@1",
+          },
+          {
+            seat: "p2",
+            kind: "llm",
+            provider: "openrouter",
+            model: "z-ai/glm-5.3-flash",
+            endpoint: PIN,
+            profile: "achilles@1",
+          },
+          { seat: "p3", kind: "bot", label: "bot:expander@2" },
+          { seat: "p4", kind: "bot", label: "bot:turtle@3" },
+          { seat: "p5", kind: "bot", label: "bot:opportunist@3" },
+          { seat: "p6", kind: "bot", label: "bot:conqueror@3" },
+        ],
+      })}\n`,
+    );
+    const out = join(base, "series");
+    const io = memoryIo();
+    const code = await main(
+      ["series", "--lineup", lineup, "--out", out, "--seed", "1", "--days", "1"],
+      io,
+      envOf(stub.base),
+      { nowMs: NOW },
+    );
+    expect(code).toBe(3);
+    expect(io.stderr()).toContain("OpenRouter now bills prompt $1.5/M");
+    expect(existsSync(out)).toBe(false);
+    expect(stub.chats).toEqual([]);
+
+    // The price rises after the series was planned (its two matches, one GLM-5.3 fetch each):
+    // each match is planned again at its start on the live metadata, and refused there.
+    let fetches = 0;
+    const later = openrouterStub({
+      edit: (m, e) => {
+        if (m !== "z-ai/glm-5.3" || e.tag !== PIN) return;
+        fetches += 1;
+        if (fetches > 2) e.pricing.prompt = "0.0000015";
+      },
+    });
+    const out2 = join(base, "series-later");
+    const io2 = memoryIo();
+    const code2 = await main(
+      ["series", "--lineup", lineup, "--out", out2, "--seed", "1", "--days", "1"],
+      io2,
+      envOf(later.base),
+      { nowMs: NOW },
+    );
+    expect([code2, fetches]).toEqual([3, 3]);
+    expect(io2.stderr()).toContain("OpenRouter now bills prompt $1.5/M");
+    expect(existsSync(join(out2, "series.json"))).toBe(true);
+    expect(existsSync(join(out2, "m01"))).toBe(false);
+    expect(later.chats).toEqual([]);
   });
 
   test("arena estimate and a --fake plan read the snapshot: no request at all", async () => {

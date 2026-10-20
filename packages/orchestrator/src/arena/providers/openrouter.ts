@@ -222,6 +222,50 @@ export function usdPerTokenToPico(text: string): number {
   return Number(m[1]) * 1e12 + head + rest;
 }
 
+/**
+ * The endpoint pricing keys OpenRouter documents (the endpoints list's `pricing` schema, read
+ * 2026-10-20) that a seat's requests can never be billed: no image, audio or web search is sent.
+ * Any other key with a price is one the plan cannot compare with a card: refused.
+ */
+const UNUSED_PRICE_KEYS: ReadonlySet<string> = new Set([
+  "image",
+  "image_token",
+  "image_output",
+  "audio",
+  "audio_output",
+  "input_audio_cache",
+  "web_search",
+]);
+
+/** The keys a card is compared with (`livePrices`), and the ones that are not prices. */
+const COMPARED_KEYS: ReadonlySet<string> = new Set([
+  "prompt",
+  "completion",
+  "input_cache_read",
+  "input_cache_write",
+  "input_cache_write_1h",
+  "internal_reasoning",
+  "request",
+  "discount",
+  "overrides",
+]);
+
+/** Priced keys of an endpoint the plan neither compares nor knows unused (zero prices ignored). */
+export function unknownPriceKeys(p: EndpointPricing): string[] {
+  const out: string[] = [];
+  const check = (record: Readonly<Record<string, unknown>>): void => {
+    for (const [k, v] of Object.entries(record)) {
+      if (COMPARED_KEYS.has(k) || UNUSED_PRICE_KEYS.has(k) || out.includes(k)) continue;
+      // Override conditions are not prices.
+      if (typeof v !== "string" || !/^\d+(?:\.\d+)?$/.test(v)) continue;
+      if (usdPerTokenToPico(v) > 0) out.push(k);
+    }
+  };
+  check(p);
+  for (const o of p.overrides ?? []) check(o);
+  return out;
+}
+
 /** Per price kind, the highest of the base price and every override (pico-dollars per token). */
 function livePrices(p: EndpointPricing): Readonly<Record<string, number>> {
   const kinds = [
@@ -230,13 +274,14 @@ function livePrices(p: EndpointPricing): Readonly<Record<string, number>> {
     "input_cache_read",
     "input_cache_write",
     "input_cache_write_1h",
+    "internal_reasoning",
   ] as const;
   const out: Record<string, number> = {};
   for (const k of kinds) {
     let v = p[k] === undefined ? 0 : usdPerTokenToPico(p[k]);
     for (const o of p.overrides ?? []) {
-      const x = o[k];
-      if (x !== undefined) v = Math.max(v, usdPerTokenToPico(x));
+      const x: unknown = o[k];
+      if (typeof x === "string") v = Math.max(v, usdPerTokenToPico(x));
     }
     out[k] = v;
   }
@@ -299,12 +344,16 @@ export function liveChecks(plan: ArenaPlan, live: LiveMetadata): string[] {
       ["cache read", p["input_cache_read"] ?? 0, c.cacheRead],
       ["cache write", p["input_cache_write"] ?? 0, c.write5m],
       ["1-hour cache write", p["input_cache_write_1h"] ?? 0, c.write1h],
+      // Reasoning tokens are billed as output by the cards: a dearer reasoning price is not covered.
+      ["internal reasoning", p["internal_reasoning"] ?? 0, c.output],
     ];
     const dearer = pairs.filter(([, liveP, cardP]) => liveP > cardP);
-    if (dearer.length > 0 || (p["request"] ?? 0) > 0) {
+    const unknown = unknownPriceKeys(e.pricing);
+    if (dearer.length > 0 || (p["request"] ?? 0) > 0 || unknown.length > 0) {
       const what = [
         ...dearer.map(([k, liveP, cardP]) => `${k} ${perM(liveP)} (the card: ${perM(cardP)})`),
         ...((p["request"] ?? 0) > 0 ? ["a per-request price (no card has one)"] : []),
+        ...unknown.map((k) => `a price "${k}" no card knows`),
       ];
       throw new UsageError(
         `${at}: OpenRouter now bills ${what.join(", ")}, over the card ${card.id}: the ledger would charge less than the bill; update packages/orchestrator/src/model/prices/openrouter.ts with its source and date (nothing was sent)`,

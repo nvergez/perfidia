@@ -955,15 +955,18 @@ smokes replace them (§32). One stray request happened while the OpenAI adapter 
 - **Money rules, the same for every adapter** (MONEY SAFETY first: the ledger's charge is never
   below what the provider bills):
 
-| Case                                        | Anthropic                                 | OpenAI                                              | Gemini                                                         | OpenRouter / compat                                                                             |
-| ------------------------------------------- | ----------------------------------------- | --------------------------------------------------- | -------------------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
-| Final usage                                 | mapped (Pass 1)                           | mapped (§28.3)                                      | mapped (§29.4)                                                 | mapped (§30.3); `usage.cost` recorded, output topped up if it exceeds the card                  |
-| Usage missing, unparseable or contradictory | attempt bound (`invalidUsage`)            | attempt bound (`unknown`, `invalidUsage`)           | estimate: prompt count or request bytes + full output limit    | attempt bound (non-finite marker → `invalidUsage`)                                              |
-| Stream accepted, broken before its usage    | `message_start` usage + full `max_tokens` | `promptTokensUpper` at the write price + full limit | estimate as above                                              | the turn's last measured prompt + appended entries, else the attempt bound; + full `max_tokens` |
-| HTTP error before a body                    | nothing (phase 2)                         | nothing                                             | nothing; a 504 is charged the estimate                         | nothing; a timeout or abort before the headers is charged                                       |
-| Served model or tier other than the card's  | refused at preflight (Pass 1 review M7)   | refused at preflight (unpriced id)                  | billed at the dearest card (unpriced id), refused at preflight | dated `-YYYYMMDD` id accepted; another endpoint refused (`bad_request`)                         |
+| Case                                        | Anthropic                                 | OpenAI                                              | Gemini                                                                                                                                                                                                     | OpenRouter / compat                                                                                                             |
+| ------------------------------------------- | ----------------------------------------- | --------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| Final usage                                 | mapped (Pass 1)                           | mapped (§28.3)                                      | mapped (§29.4)                                                                                                                                                                                             | mapped (§30.3); `usage.cost` recorded, output topped up if it exceeds the card                                                  |
+| Usage missing, unparseable or contradictory | attempt bound (`invalidUsage`)            | attempt bound (`unknown`, `invalidUsage`)           | estimate: prompt count, else `promptTokensUpper` (at most the request bytes), + full output limit; a final usage without `totalTokenCount`, or with no output for a reply that has some, counts as missing | attempt bound (non-finite marker → `invalidUsage`), also for a usage too large to price exactly                                 |
+| Stream accepted, broken before its usage    | `message_start` usage + full `max_tokens` | `promptTokensUpper` at the write price + full limit | estimate as above; broken after the finish: the larger of the last usage and the estimate, kind by kind                                                                                                    | the turn's last measured prompt + appended entries, else the attempt bound; + full `max_tokens` + OpenRouter's completion slack |
+| HTTP error before a body                    | nothing (phase 2)                         | nothing                                             | nothing; a 504 is charged the estimate                                                                                                                                                                     | nothing; a timeout or abort before the headers is charged                                                                       |
+| Error event before any output               | n/a                                       | charged (`spent` of the event)                      | charged (the estimate)                                                                                                                                                                                     | OpenRouter: nothing (zero completion insurance), but a length-type error is charged; compat: the estimate                       |
+| Served model or tier other than the card's  | refused at preflight (Pass 1 review M7)   | refused at preflight (unpriced id)                  | billed at the dearest card (unpriced id), refused at preflight                                                                                                                                             | dated `-YYYYMMDD` id accepted; another endpoint refused (`bad_request`)                                                         |
 
-The conformance suite (§34.1) checks the broken-stream row on all four adapters.
+The conformance suite (§34.1) checks the broken-stream row on all four adapters. And whatever the
+adapter: a rejection that is not a `ModelError` (a bug, a pricing error after the request ran) is
+charged one unpriceable entry, the seat's attempt bound, by `LlmSeatAgent` (§40).
 
 ## 28. OpenAI: the Responses API (`model/openai.ts`)
 
@@ -979,7 +982,9 @@ Bearer <key>`:
   adapter, naming the accepted levels.
 - Tools with an explicit `strict: false` (else Responses normalises the schema to strict mode);
   `tool_choice: "auto"`; `parallel_tool_calls: true`.
-- `prompt_cache_options: {mode: "implicit", ttl: "30m"}` (a deviation from design §2.3, §38).
+- `prompt_cache_options: {mode: "implicit", ttl: "30m"}` (a deviation from design §2.3, §38). The
+  request-level `ttl` applies to the implicit breakpoint and to the seat block's explicit one (it
+  has no `ttl` of its own), so the adapter never asks for the 12-hour lifetime.
 - `input`: a `developer` message with the shared block, a `developer` message with the seat block
   (with an explicit `prompt_cache_breakpoint`), then the turn: the briefing as a `user`
   `input_text`, results as `function_call_output` items (string output), operator entries as
@@ -1010,9 +1015,12 @@ Bearer <key>`:
 
 `input = input_tokens − cached_tokens − cache_write_tokens` (the prompt-caching guide's own cost
 formula: `input_tokens` includes cached and written tokens, which settles the design's
-"unverified"); `cacheWrite5m = cache_write_tokens` (the 30-minute writes, in the short bucket);
-`cacheRead = cached_tokens`; `output = output_tokens` (reasoning included); `reasoning =
-reasoning_tokens`. A usage that is missing, fails the schema, contradicts itself (cached + written
+"unverified"); writes split by `input_tokens_details.cache_write_tokens_details`: `ttl_30m_tokens`
+in the short bucket (`cacheWrite5m`, 1.25× input), `ttl_12h_tokens` in the long one
+(`cacheWrite1h`, 2.5× input: the cards' long write price is the pricing page's "12h write"
+column, §40); without the split, every write is a 30-minute one (the lifetime the request asks
+for); a split that does not sum to `cache_write_tokens` is invalid; `cacheRead = cached_tokens`;
+`output = output_tokens` (reasoning included); `reasoning = reasoning_tokens`. A usage that is missing, fails the schema, contradicts itself (cached + written
 
 > input, reasoning > output) or comes from a non-default tier fails `unknown` and is charged the
 > attempt bound.
@@ -1075,7 +1083,11 @@ reasons → `other` (outside the breaker since the integration, §34.4); `MISSIN
 `input = promptTokenCount − cachedContentTokenCount + toolUsePromptTokenCount`; `cacheRead =
 cachedContentTokenCount` (the implicit-cache price); `output = candidatesTokenCount +
 thoughtsTokenCount + whatever part of totalTokenCount the known counts do not explain`; `reasoning
-= thoughtsTokenCount`. Usage counts as final only with or after the finish reason. A served model
+= thoughtsTokenCount`. Usage counts as final only with or after the finish reason, and the stream
+is read to the end of its body: `usageMetadata` is cumulative and the last one counts ("Keep only
+the last value of each stream", `gemini-api/docs/generate-content/long-decode.md.txt`, read
+2026-10-20). A final usage without `totalTokenCount`, or with no output for a reply that has text
+or a call, is charged the estimate (§40). A served model
 (`modelVersion`) other than the one requested, or a tier other than standard/unspecified, is billed
 under an unpriced id (the dearest card) and refused at preflight.
 
@@ -1130,23 +1142,31 @@ a provider reports more reasoning than completion. `usage.cost` (credits = USD) 
 1 nano, output tokens are added (at the output price, rounded up) and the entry is `estimated`.
 The 5.5% fee is charged by the card and logged apart (`feeNanoUsd`).
 
-### 30.4 Efforts (C9 settled as built)
+### 30.4 Efforts (C9 settled as built; the Pass 2 review made it explicit)
 
 `effortSent(provider, model, effort)`: the nearest level the model lists on the `EFFORTS` ladder; a
 tie goes to the lower level (the harness's rule: OpenRouter documents only "the nearest supported
 level"); never `none` unless asked. GLM-5.3 and GLM-5.3 Flash list max, high and low: `medium` is
-sent as `low` (`xhigh` as `high`, `minimal` as `low`). Recorded as `seats.json` `effortSent` (real
-runs only), in the plan warning and in the smoke line; unverified until a smoke records the
-reasoning tokens. The prediction keeps medium's output factor (1.0 against low's 0.6), an upper
-bound.
+sent as `low` (`xhigh` as `high`, `minimal` as `low`). Recorded as `seats.json` `effortSent` (fake
+runs too, since the review), in the plan warning and in the smoke line; unverified until a smoke
+records the reasoning tokens.
+
+**In a comparison lineup the label is the level sent** (review): the plan refuses (exit 3) an
+effort the model does not list, naming its levels, and the four comparison presets set their
+OpenRouter seat's effort explicitly to `low` (what the requests already carried), so the label,
+the spectator's `SeatModel`, the profile key and the prediction (low's output factor 0.6) all say
+`low`. Whether GLM runs at `low` or `high` next to the others' `medium` is an owner decision (§36).
+Outside a comparison lineup the nearest-level mapping and its warning stay.
 
 ### 30.5 Plan time: `planLive`
 
 A real `arena run` (and, since the integration, a real `arena series`) with OpenRouter seats fetches
 `GET {base}/endpoints/zdr` and `GET {base}/models/{id}/endpoints` (public, no key) and re-plans on
 them. Refused (exit 3, nothing written, nothing sent to a model): a live price above the card in
-any kind (prompt, completion, cache read, cache write, 1-hour write, overrides included) or any
-per-request price; another provider name; a sent or required parameter no longer listed;
+any kind (prompt, completion, cache read, cache write, 1-hour write, overrides included), an
+`internal_reasoning` price above the card's output price (reasoning is charged as output), any
+per-request price, or a price under a key the plan does not know (the documented image, audio and
+web-search prices are ignored: a seat never sends any); another provider name; a sent or required parameter no longer listed;
 `tool_choice` auto not supported; context under 200K; `max_completion_tokens` under twice
 `maxTokens`; a pin missing from the ZDR list while `zdr` is set; a metadata request that fails.
 Warnings: a cheaper live price (the ledger over-charges; `arena reconcile` shows by how much), a
@@ -1157,9 +1177,13 @@ snapshot.
 
 Errors: `limit_source`, 402, 503 or moderation → `classifyHttpError`; then the typed
 `metadata.error_type`; then the status (400, 401, 402, 403, 404, 408, 413, 429, 500, 502, 503, 524,
-529 all mapped). Mid-stream `error` events are classified the same way; an error event before any
-output is not charged (zero-completion insurance); a 200 JSON body holding only an error is not
-billed. `finish_reason` `length` (or a `max_tokens_exceeded` error) → `max_tokens`;
+529 all mapped). Mid-stream `error` events are classified the same way; on OpenRouter an error event before any
+output is not charged (zero-completion insurance), unless it is a length-type error (a generation
+that ran to `max_tokens`: billed, charged the estimate); in compat mode it is charged the estimate;
+a 200 JSON body holding only an error is not billed (OpenRouter, length-type errors aside). A
+broken stream's output charge, and the attempt bound, add OpenRouter's completion slack (1% + 16
+tokens: `max_tokens` bounds reasoning plus output only "on most providers", and the docs' own
+example bills `completion_tokens: 302` for `max_tokens: 300`). `finish_reason` `length` (or a `max_tokens_exceeded` error) → `max_tokens`;
 `content_filter` → refusal; anything else → `other`. Preflight: `GET /models/{id}/endpoints` must
 list the pin, then one shape check at `max_tokens` 16. Cards (`model/prices/openrouter.ts`)
 re-verified against the live endpoints JSON of 2026-10-20: GLM-5.3 1.40/4.40/0.26, GLM-5.3 Flash
@@ -1180,12 +1204,18 @@ zero-completion insurance, FAQ (5.5% fee), the chat completions OpenAPI; the end
 | Stable blocks    | two `system` blocks with `cache_control` | two `developer` messages (seat: breakpoint)      | two `systemInstruction` parts                   | two `system` messages                                 |
 | Operator channel | mid-conversation `system` message        | mid-input `developer` message (`-dev`)           | `[harness]` text part (`-env`)                  | `[harness]` user message (`-env`)                     |
 | Results          | `tool_result` blocks                     | `function_call_output` items                     | `functionResponse` parts (id, name)             | `tool` messages                                       |
+| Rejected result  | `is_error: true` and the gateway's JSON  | the gateway's `ok:false` JSON only               | the gateway's `ok:false` JSON only              | the gateway's `ok:false` JSON only                    |
 | Reply echo       | content blocks (thinking signed)         | output items (encrypted reasoning)               | parts verbatim (thought signatures)             | assistant message verbatim (`reasoning_details`)      |
 | Cache            | explicit, 5 min / 1 h                    | implicit, 30 min, plus the seat-block breakpoint | implicit only (no writes)                       | the endpoint's                                        |
 | Prompt in usage  | `input + cache_creation + cache_read`    | `input_tokens` (includes read and written)       | `promptTokenCount` (includes cached) + tool-use | `prompt_tokens` (includes read and written)           |
 | Reasoning tokens | not split (null)                         | `reasoning_tokens`                               | `thoughtsTokenCount` (billed as output)         | `reasoning_tokens`                                    |
 | Max-output stop  | `max_tokens`                             | `incomplete: max_output_tokens`                  | `MAX_TOKENS`                                    | `length`                                              |
 | Reasoning shown  | summary                                  | summary                                          | summary (`thought: true` parts)                 | raw text, or a summary when the provider sends one    |
+
+`reasoningKind` is `none` on every provider when a reply carries no reasoning text (the review: one
+coverage statistic). The `is_error` flag is a known interface difference, phase 2's and pinned for
+Anthropic (`arena/pins.test.ts`): the other three providers have no such field on a tool result,
+and every provider reads the same `ok:false` JSON with its code and hint (design §2.3).
 
 ## 32. Synthetic, unverified, and the owner's recordings
 
@@ -1217,7 +1247,14 @@ settles most of them):
   `system` then two `user` messages in round 0; `reasoning_details` versus plain `reasoning` from
   GLM; what `low` does on GLM-5.3 (C9); `require_parameters` at run time; 404 or 503 for a pinned
   endpoint that is down; `pricing.discount`; whether `usage.cost` includes the fee (assumed not, per
-  the FAQ); dated model ids; `cache_write_tokens` on `z-ai/fp8`.
+  the FAQ); dated model ids; `cache_write_tokens` on `z-ai/fp8`; whether `completion_tokens` stays
+  within `max_tokens` on `z-ai/fp8` (the docs say "on most providers"; the adapter and the bound
+  add a 1% + 16-token slack, §40).
+- Added by the Pass 2 review: OpenAI's `cache_write_tokens_details` on the GPT-6 models (the guide
+  says both lifetimes are always returned; without the split the adapter prices every write as a
+  30-minute one, the lifetime it asks for); Gemini's usage after the finish chunk (the adapter now
+  reads to the end of the body and keeps the last cumulative usage); OpenRouter's
+  `internal_reasoning` price on `z-ai/fp8` (absent on 2026-10-20).
 
 **`arena smoke --record <dir>`** (built by the integration, §34.4) writes every exchange of a smoke
 as one `perfidia-recording/1` file (`arena/record.ts`), numbered in arrival order: the request
@@ -1227,7 +1264,10 @@ generation, request, organisation, project and user ids) replaced by `<id-N>` co
 the recording (a call and its result still match; the provider's model ids are kept), and no
 header kept but the content type. `recordedResponse(file)` serves a recorded response again, so a
 contract test can replay it through the real adapter (`arena/record.test.ts` does, for each
-provider). How the recordings replace the synthetic fixtures: the owner commits the directory under
+provider). Account identifiers inside free text (OpenAI `org-…`, `proj_…`, `req_…`; Google
+`projects/<n>`, `project <n>`, `project=<n>`; OpenRouter `gen-…`) and the `consumer` field are
+replaced too (the review), and the directory is created with the first exchange, so a smoke
+refused before it sends anything leaves none. How the recordings replace the synthetic fixtures: the owner commits the directory under
 `packages/orchestrator/src/model/fixtures/<provider>/recorded/` and sends it back; the next step
 points each contract test that pins an unverified item at the recorded exchange, and fixes the
 adapter where the recording disagrees with its synthetic twin.
@@ -1253,20 +1293,28 @@ ruleset major) into `packages/orchestrator/profiles/` (default):
 
 ### 33.2 Prediction sources (lockstep plans only; a real-time plan keeps the scenario)
 
-- **`measured-point`** (1–2 seat-days): central = `projectSpend` (+15%) of one seat's measured
+Seat-days are counted by distinct (run, game day) since the review: the seats of one match day share
+its map, opponents and events, so three Haiku seats of a 1-day `claude-duo` calibration are one
+independent seat-day (`independentSeatDays`), not three.
+
+- **`measured-point`** (1–2 independent seat-days): central = `projectSpend` (+15%) of one seat's measured
   spend, re-priced at the plan's cards (per card group when several are valid in the window);
   low/high = central × the scenario's low/central and high/central ratios. No percentiles.
-- **`calibrated`** (3 or more seat-days): a seeded bootstrap (2,000 replicates, seed 20261019). Per
+- **`calibrated`** (3 or more independent seat-days): a seeded bootstrap (2,000 replicates, seed 20261019). Per
   game day, a wake count from that day's seat-days, then whole wakes; a day not measured scales the
   count by `BOT_DAY_PROFILE` and grows each prompt by the measured briefing growth. Each day is
   priced at the dearer card of its planned wall window (15/7 wall hours per game day in lockstep,
-  an assumption). Output p10/p50/p90 (nearest rank).
+  an assumption; since the review the window's end is stretched ×2, `WALL_SLACK`, so a slower run
+  that slips past a price change stays inside its prediction). Output p10/p50/p90 (nearest rank).
+  The plan warns when a seat is `calibrated` (its band missed real spend in the review's
+  replication, §39).
 - The match interval is the bootstrap of the sum only when every seat is calibrated; otherwise the
   sum of the seat bounds, labelled with the weakest seat source. The source appears per seat and
   for the match in `estimate.json`, in `arena.json` `budget.estimate.source` and in the printed
   table. `--profiles <dir>|off` on `run`, `estimate` and `series`; `off` keeps the scenario.
-- Default seat caps (2 × high, at least $5) follow a calibrated p90 when one exists; wake caps keep
-  the scenario's central wake cost. `arena.json` `seats[].estimate` and the report's "estimate for
+- Default seat caps are 2 × max(the scenario's high, a calibrated p90), at least $5 (the review:
+  the p90 alone could hand a seat off for `cap`, against design §3.9); wake caps keep the
+  scenario's central wake cost. `arena.json` `seats[].estimate` and the report's "estimate for
   N days" line stay scenario figures.
 
 ### 33.3 `arena series`
@@ -1274,13 +1322,16 @@ ruleset major) into `packages/orchestrator/profiles/` (default):
 `bun run arena -- series --lineup <x> --out <dir> [--blocks N] [--seed S] [--fake] [run flags]`:
 seeded random Latin squares rotate the lineup's LLM seat entries over its positions and an
 orthogonal square rotates the profiles (Graeco-Latin for odd orders and 4, 8, 16: cyclic `(i + j,
-2i + j)` or GF(2^m) `(i⊕j, 2·i⊕j)`, then random rows, columns and symbols; orders 2 and 6 fall back
-to an independent square with a warning and `orthogonal: false`). Game seed = series seed + block.
+2i + j)` or GF(2^m) `(i⊕j, 2·i⊕j)`, then random rows, columns and symbols; every other even order
+(2 and 6, which have no orthogonal pair, and 10, 12, 14, … which do but are not built here) falls
+back to an independent square with a warning and `orthogonal: false`). Game seed = series seed + block.
 Every match is planned before anything is written (a refusal exits 3, nothing written; real matches
 plan with `planLive`), then `series.json` (`perfidia-series/1`), `lineups/mNN.json` and one run
 directory per match; matches run one at a time, the manifest rewritten after each, and the series
 stops at the first non-zero exit or operator signal. It prints Σ predicted low/central/high and Σ
-budgets, and warns when the series' Google high exceeds $250 (Gemini Tier 1).
+budgets, and warns when the series' Google high exceeds $250 (Gemini Tier 1). Each real match is
+planned again on the live metadata at its start (`planLive`), so a price that rose since the
+series was planned refuses that match (exit 3; tested since the review).
 
 ## 34. The integration
 
@@ -1370,11 +1421,12 @@ model, a token per 4 bytes; these dollars are illustrative); the kill run 1.3 s.
 | `--profiles <dir>\|off` on `run`, `estimate`, `series`                                                 | The profiles the prediction draws on (default `packages/orchestrator/profiles/`)                                  |
 
 Smoke bounds printed before anything is sent (2026-10-20 cards; each is the most the smoke can
-cost, the expected cost is a fraction): Claude Haiku 5.5 $0.010969, GPT-6 Luna low $0.009973,
-Gemini 3.8 Flash low $0.189510 (every price kind of every card valid from now, the January card
-included, and the count charged as input), GLM-5.3 Flash on `z-ai/fp8` $0.012266 (fee included);
-for M3: Claude Sonnet 5.5 medium $0.219392, GPT-6.1 Sol medium $0.199462, Gemini 4 Argon medium
-$0.505396, GLM-5.3 $0.113360. Without the key each exits 3 with its bound and "Nothing was sent."
+cost, the expected cost is a fraction): Claude Haiku 5.5 $0.010969, GPT-6 Luna low $0.017938
+(the 12-hour write price counts since the review), Gemini 3.8 Flash low $0.189510 (every price kind
+of every card valid from now, the January card included, and the count charged as input), GLM-5.3
+Flash on `z-ai/fp8` $0.012305 (fee and completion slack included); for M3: Claude Sonnet 5.5
+medium $0.219392, GPT-6.1 Sol medium $0.358765, Gemini 4 Argon medium $0.505396, GLM-5.3 low
+$0.113699. Without the key each exits 3 with its bound and "Nothing was sent."
 
 Environment (read in `src/arena/` only): `PERFIDIA_ANTHROPIC_API_KEY`, `PERFIDIA_OPENAI_API_KEY`,
 `PERFIDIA_GOOGLE_API_KEY`, `PERFIDIA_OPENROUTER_API_KEY`, `PERFIDIA_COMPAT_API_KEY` (optional on
@@ -1386,7 +1438,14 @@ Defaults (the owner said "go" with every default of the design's decisions): Ope
 `z-ai/fp8` with `data_collection: "deny"` and `zdr: true`; medium effort; Anthropic fallbacks off;
 `last-round` reminders; 32,768 output tokens; a 15-minute timeout; the native operator channel;
 Flex off. Every step below is bounded by the printed bound or the run's budget; M2 spends at most
-$0.23 (the four smokes' bounds) + $8 + $40.
+$0.23 (the four smokes' bounds) + $0.35 (step 2's live tests: three under $0.05 each, the Claude
+test under $0.20) + $8 + $40 = $48.58.
+
+**A decision the review adds** (§30.4): in the comparison presets the GLM seat now says `low`, the
+level its requests already carried (GLM-5.3 lists max, high and low; no `medium`). The alternative
+is `high` for that seat: set `"effort": "high"` on p4 in `lineups/budget-mix.json` and
+`lineups/mid-tier.json` (its output factor is 1.5 against low's 0.6, so the prediction and budget
+rise). The figures below are for `low`.
 
 **M2, the cross-provider exit with `budget-mix`** (Claude Haiku 5.5, GPT-6 Luna, Gemini 3.8 Flash,
 GLM-5.3 Flash on Z.AI):
@@ -1403,7 +1462,7 @@ GLM-5.3 Flash on Z.AI):
    export PERFIDIA_ANTHROPIC_API_KEY=…  PERFIDIA_OPENAI_API_KEY=…
    export PERFIDIA_GOOGLE_API_KEY=…     PERFIDIA_OPENROUTER_API_KEY=…
    ```
-2. **Smokes with recordings** (≤ $0.011, $0.010, $0.19, $0.012; each prints its bound first):
+2. **Smokes with recordings** (≤ $0.011, $0.018, $0.19, $0.013; each prints its bound first):
    ```
    bun run arena -- smoke --record recordings/anthropic-haiku
    bun run arena -- smoke --provider openai --record recordings/openai-luna
@@ -1415,22 +1474,24 @@ GLM-5.3 Flash on Z.AI):
    tokens (C9: what `low` does). Send the four `recordings/` directories back (§32). Then
    `PERFIDIA_LIVE=1 bun run test:live` runs one live test per provider whose key is set (each under
    $0.05; the Claude test of phase 2 too, under $0.20).
-3. **Rehearse for free**, then **the 1-day calibration** (central $1.00, high $4.53, budget $8, K
-   $6.61):
+3. **Rehearse for free**, then **the 1-day calibration** (central $0.97, high $4.40, budget $8, K
+   $6.57):
    ```
    bun run arena -- run --fake --lineup budget-mix --stop-after 1 --budget-usd 8 --out runs/budget-mix-rehearsal
    bun run arena -- estimate --lineup budget-mix --stop-after 1 --budget-usd 8
    bun run arena -- run --lineup budget-mix --stop-after 1 --budget-usd 8 --out runs/budget-mix-cal --watch
    ```
    Read `arena.json`: per-seat cost and cache reads, `promptCaps`, refusals, errors by kind, no
-   hand-off; `seats.json` `effortSent` for p4.
+   hand-off; p4's label and `seats.json` effort say `low` (no `effortSent`: the level sent is the
+   seat's).
 4. **Calibrate** (one seat-day per model: `measured-point` profiles, a wide interval):
    ```
    bun run arena -- calibrate runs/budget-mix-cal
    bun run arena -- estimate --lineup budget-mix --budget-usd 40
    ```
-5. **The 7-day match** (scenario before calibration: central $6.97, high $31.73, budget $40, K
-   $38.61; the estimate after step 4 is what `estimate.json` stores):
+5. **The 7-day match** (scenario before calibration: central $6.79, high $30.80, budget $40, K
+   $38.57; the estimate after step 4 is what `estimate.json` stores; one seat-day per model stays
+   `measured-point`):
    ```
    bun run arena -- run --lineup budget-mix --budget-usd 40 --out runs/budget-mix-1 --watch
    ```
@@ -1444,22 +1505,24 @@ GLM-5.3 Flash on Z.AI):
    Exit 0 and `exit4.met: true` in `arena.json` is the cross-provider form of the exit.
 
 **M3, the first comparison with `mid-tier`** (Claude Sonnet 5.5, GPT-6.1 Sol, Gemini 4 Argon,
-GLM-5.3 on Z.AI), **before 2026-11-30** (Argon's card doubles at the change; the plan bounds every
-card valid from the start):
+GLM-5.3 on Z.AI), **starting at least two days before 2026-11-30** (Argon's card doubles at the
+change; the plan bounds every card valid from the start, and a run slower than its planned 15 wall
+hours can slip past the change: the prediction stretches each day's window ×2, so start the 7-day
+match no later than 2026-11-28):
 
-1. Smokes with recordings (≤ $0.22, $0.20, $0.51, $0.11):
+1. Smokes with recordings (≤ $0.22, $0.36, $0.51, $0.12):
    ```
    bun run arena -- smoke --model sonnet-5-5 --effort medium --record recordings/anthropic-sonnet
    bun run arena -- smoke --provider openai --model gpt-6.1-sol --effort medium --record recordings/openai-sol
    bun run arena -- smoke --provider google --model gemini-4-argon --effort medium --record recordings/gemini-argon
-   bun run arena -- smoke --provider openrouter --model z-ai/glm-5.3 --record recordings/openrouter-glm-5.3
+   bun run arena -- smoke --provider openrouter --model z-ai/glm-5.3 --effort low --record recordings/openrouter-glm-5.3
    ```
-2. The 1-day calibration (central $6.01, high $25.50, budget $40, K $34.08), then calibrate:
+2. The 1-day calibration (central $5.78, high $24.30, budget $40, K $33.36), then calibrate:
    ```
    bun run arena -- run --lineup mid-tier --stop-after 1 --budget-usd 40 --out runs/mid-tier-cal --watch
    bun run arena -- calibrate runs/mid-tier-cal
    ```
-3. The first comparison match (scenario: central $42.06, high $178.53, budget $200, K $194.08), and
+3. The first comparison match (scenario: central $40.44, high $170.13, budget $200, K $193.36), and
    its reconciliation 48 hours later:
    ```
    bun run arena -- estimate --lineup mid-tier --budget-usd 200
@@ -1492,6 +1555,11 @@ lint, format, then 3,695 tests pass, 34 skipped, 0 fail, in 295 files: 495 s of 
 in all); the orchestrator suite alone 482 pass, 9 skipped, 0 fail in 51 files,
 60 s (the skips: 5 opt-in live tests and 4 exit tests that run under `test:exit`); `bun run test:exit` green (14 tests, 267 s); the four-provider 2-day match 2.4–2.6 s per run.
 
+After the Pass 2 review's fixes (§40): `bun run check` green (typecheck, lint, format, then 3,715
+tests pass, 34 skipped, 0 fail, in 295 files: 526 s of tests, 8 min 58 s in all); `bun run
+test:exit` green (14 tests, 276 s, 4 min 36 s); 26 mutants of the fixes, 26 killed by the new
+tests.
+
 ## 38. Deviations (Pass 2)
 
 The code wins where the design and the code disagree:
@@ -1508,13 +1576,15 @@ The code wins where the design and the code disagree:
 - **Gemini `anyOf`/`oneOf`** pass through `gemini@1`: they are in the documented subset.
 - **Gemini served-model or tier mismatches** are priced at the dearest card under an unpriced id
   (and refused at preflight) rather than refused at run time.
-- **OpenRouter efforts**: `medium` is sent as `low` on GLM-5.3 (the nearest listed level; a tie goes
-  down); the prediction keeps medium's factor. Recorded as `effortSent`.
+- **OpenRouter efforts**: outside a comparison lineup, `medium` is sent as `low` on GLM-5.3 (the
+  nearest listed level; a tie goes down), recorded as `effortSent`, the prediction keeping medium's
+  factor; a comparison lineup refuses an unlisted effort and the presets name `low` (§30.4, §40).
 - **OpenRouter plan time** refuses a run when the live metadata cannot be fetched (no fallback to
   the snapshot), and replies without routing metadata are refused (strict pin).
 - **Calibration**: profile rounds gained an optional `cacheWriteTokens`; calibration reads lockstep
   runs only and profiles apply to lockstep plans only; `measured-point` re-prices per planned
-  card group; briefing growth assumes 3 bytes per token; default seat caps follow a calibrated p90.
+  card group; briefing growth assumes 3 bytes per token; seat-days count by (run, day); default
+  seat caps are 2 × max(scenario high, calibrated p90).
 
 ## 39. Open items (Pass 2)
 
@@ -1530,12 +1600,19 @@ The code wins where the design and the code disagree:
   each a departure from the reviewed design: calibrate from multi-day runs, grow whole prompts per
   attempt, keep the +15% margin in calibrated mode, or widen the band (block bootstrap by seat-day,
   p5/p95). Until one is chosen, run exit matches with `--profiles off` when the estimate says
-  `calibrated`.
-- **Committed profiles change the default prediction**: `arena calibrate` writes into
-  `packages/orchestrator/profiles/`, read by default; the CLI tests that pin scenario figures
-  (`arena/phase4.test.ts`, `providers.test.ts`, `review.test.ts`, `cli.test.ts`) would then need
-  `--profiles off`. Keep owner profiles uncommitted, or pass them with `--profiles <dir>`, or update
-  those tests in the same commit.
+  `calibrated` (the plan now warns). The Pass 2 review replicated it on the real adapters (wire
+  stubs, bot brains): a `claude-duo` day-1 calibration (3 Haiku seat-days of one match day, then
+  `calibrated`) predicted each Haiku seat at $0.11 / $0.12 / $0.12 and two full 7-day runs spent
+  $0.2129, $0.1149, $0.1524, $0.1880, $0.1011 and $0.1858 per Haiku seat: five of six above p90
+  (up to 1.77×), one below p10, none inside; Sonnet's `measured-point` central $2.54 against $3.52
+  and $3.85. The bootstrap resamples single wakes pooled across seats of one match, so averaging
+  leaves a ±4% band while seats differ by −16% to +77%. What the review changed until the owner
+  chooses a method: seat-days count once per (run, game day), so one match day can no longer make
+  a profile `calibrated` (that `claude-duo` calibration is now `measured-point`); the default seat
+  cap is 2 × max(scenario high, calibrated p90), so a calibrated p90 cannot lower a cap below the
+  scenario's (with actual spend up to 1.77× p90, a cap from p90 alone could hand a mid-tier seat
+  off for `cap`, against design §3.9 and the exit's no-hand-off rule); the plan warns on every
+  calibrated seat. The band itself is unchanged.
 - **Everything of §32's "unverified" list**, settled by the recorded smokes; a dated served model id
   (OpenAI or Gemini) would be refused at preflight until a card or an alias rule is added with
   evidence.
@@ -1545,6 +1622,52 @@ The code wins where the design and the code disagree:
   a 1-day `--fake` rehearsal costs nothing, a real one about the calibration day's cost.
 - **`compat` seats** stay refused at plan time until the owner adds a card to
   `model/prices/compat.ts`; compat mode is exercised by its contract suite only.
+- **Raw chain-of-thought is shown unlabelled**: `llm_calls.jsonl` and the server's annotations carry
+  `reasoningKind` (summary for Anthropic, OpenAI and Gemini; raw for GLM; none without reasoning
+  text), but the web app does not label it yet (Pass 3 agent G), so GLM's raw reasoning reaches the
+  Thoughts column looking like the others' summaries. Until then, do not publish a match with an
+  OpenRouter seat, or accept that difference.
+- **The parallel-call share per seat** (the plan's warning for endpoints without
+  `parallel_tool_calls`) is Pass 3's statistics; nothing reports it yet.
+- **The `[harness]` turn header on OpenRouter** says "The text part above is your briefing" while
+  the briefing is a separate user message there: wording only, kept (a prompt-text change moves the
+  envelope variants' hashes and profile keys; the next prompt version can fix it).
 - **`arena.json` `seats[].estimate`** and the report's "estimate for N days" stay scenario figures;
   `report.ts` and the server do not read `series.json` yet (Pass 3's stats).
 - Pass 3: per-model stats (`@perfidia/spectator/stats`), ratings and the spectator's model pages.
+
+## 40. The Pass 2 review's fixes
+
+Sixteen findings (two lenses: wire and money, fairness and calibration), each verified against the
+code and, for provider facts, against the provider's documentation (WebFetch, 2026-10-20: OpenAI's
+`docs/guides/prompt-caching.md` and `docs/pricing.md`; OpenRouter's
+`docs/api/api-reference/endpoints/list-all-endpoints-for-a-model.md` and
+`docs/guides/best-practices/reasoning-tokens.md`). Every money fix has a regression test that fails
+on the code before it (26 mutants of the fixes, 26 killed).
+
+| Finding                                                                                           | Verdict                 | What changed                                                                                                                                                                                                                                                                                                                                                                                            |
+| ------------------------------------------------------------------------------------------------- | ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| C1: an absurd OpenRouter usage with `cost` charged $0 (major)                                     | fixed                   | `compat.ts`: a usage the cards cannot price exactly (`costOf` throws) is the attempt-bound marker; the reply fails `unknown` with it. `LlmSeatAgent`: an adapter rejection that is not a `ModelError` is charged one unpriceable entry, the seat's attempt bound (when the ledger has one; a thought call only for the adapter's own rejection). C1 itself: $0.540538 charged, `invalidUsage`.          |
+| C4: Gemini stopped at the first final usage (major)                                               | fixed                   | `gemini.ts` reads to the end of the body (`readSse` `endOk`; a body that ends inside an event is still a break) and keeps the last cumulative `usageMetadata`; finished then broken: the larger of that usage and the estimate. C4: 70,020,000 nUSD charged, what the last usage bills.                                                                                                                 |
+| C2: OpenAI 12-hour writes priced as 30-minute ones                                                | fixed                   | `cache_write_tokens_details` parsed (`ttl_12h_tokens` → `cacheWrite1h`; a split that does not sum is invalid); the OpenAI cards' long write is the 12-hour price ($5 / $5 / $0.25 / $25, long context ×2), so attempt bounds and OpenAI smoke bounds cover it (Luna's smoke $0.009973 → $0.017938, Sol's $0.199462 → $0.358765; reserves up by the OpenAI seats' bounds). C2: 550,000,000 nUSD charged. |
+| C6: a Gemini final usage without its output counts charged 0                                      | fixed                   | `geminiUsage` requires `totalTokenCount`, and a reply with text or a call needs some output; otherwise the estimate.                                                                                                                                                                                                                                                                                    |
+| C3: Gemini's estimate from request bytes could pass the attempt bound                             | fixed                   | The estimate's prompt is the usage's count, else `promptTokensUpper` capped by the bytes (as OpenAI). C3: input 100,000 instead of 400,515.                                                                                                                                                                                                                                                             |
+| C5: an error event before output was free in compat mode, and for length errors                   | fixed                   | Zero-completion insurance applies on OpenRouter only and not to `max_tokens_exceeded` (a billed generation): those are charged the estimate (the bound in round 0), stream or 200 JSON.                                                                                                                                                                                                                 |
+| C7: `--record` kept account ids in free text                                                      | fixed                   | `ID_PATTERNS` (`org-…`, `proj_…`, `req_…`, `gen-…`, `projects/<n>`, `project <n>`, `project=<n>`) and the `consumer` field are renumbered; the record directory is created with the first exchange.                                                                                                                                                                                                     |
+| OpenRouter's `internal_reasoning` price ignored at plan time                                      | fixed                   | Refused (exit 3) above the card's output price; any priced key the plan does not know refuses too; documented image, audio and web-search prices are ignored (never sent).                                                                                                                                                                                                                              |
+| OpenRouter's `max_tokens` is not a hard bound                                                     | fixed (and unverified)  | `completionUpper`: 1% + 16 tokens of slack on OpenRouter's broken-stream output and in its attempt and check bounds (GLM-5.3 Flash smoke $0.012266 → $0.012305). Whether `z-ai/fp8` stays within `max_tokens` is listed for the recorded smoke (§32).                                                                                                                                                   |
+| GLM seats sent `low` under a `medium` label (major)                                               | fixed                   | A comparison lineup refuses an effort the model does not list (exit 3, naming the levels); the four comparison presets set their OpenRouter seat to `low` (unchanged on the wire), so label, `SeatModel`, profile key and prediction say `low`; `effortSent` is recorded on fake runs too. `low` or `high` for GLM is now an explicit owner decision (§36).                                             |
+| Calibrated p10–p90 missed every seat; default caps followed p90 (major)                           | fixed (method deferred) | Seat-days count once per (run, game day); default seat caps are 2 × max(scenario high, calibrated p90); the plan warns on every calibrated seat; the replication numbers are in §39. The bootstrap method itself (block bootstrap, wider band) stays an owner choice (§39).                                                                                                                             |
+| The CLI's default profiles dir broke four tests once claude-duo profiles exist                    | fixed                   | `MainOptions.profilesDir` (default `packages/orchestrator/profiles/`); every test that calls the CLI runs with `off` unless it passes `--profiles`, so an owner's calibration can no longer turn `bun run check` red.                                                                                                                                                                                   |
+| Test gaps: bootstrap percentiles, the measured-point margin, series `planLive`, fake `effortSent` | fixed                   | Pinned on a profile with a known spread (n uniform on 1..20 wakes: p10 / p50 / p90 = 3 / 10 / 18 wakes, match 10 / 21 / 32); a two-card-group measured-point pins the +15% per group; a series whose live price rises after it was planned is refused at its match's start (exit 3); a fake run records `effortSent`. Mutants M4, M5, S2, M9, S1, M17 now killed.                                       |
+| Per-day card choice assumed 15 wall hours a week                                                  | fixed                   | Each planned day is priced at the dearer card of its window with its end stretched ×2 (`WALL_SLACK`); §36 says to start M3 no later than 2026-11-28.                                                                                                                                                                                                                                                    |
+| `reasoningKind` "summary" without reasoning; raw CoT unlabelled                                   | fixed / deferred        | `none` when a reply has no reasoning text, in OpenAI, Gemini and the agent's line (Anthropic and fake included). Labelling raw chain-of-thought in the web app is Pass 3 agent G's: listed in §39.                                                                                                                                                                                                      |
+| Docs inaccuracies (M2 total, §33.3 orders, `--record` dir, OpenRouter header)                     | fixed / deferred        | M2's total includes the live tests ($48.58); §33.3 names every even order that falls back; the record dir is lazy. The OpenRouter header wording is deferred (a prompt-text change moves the envelope hashes and profile keys; next prompt version), §39.                                                                                                                                               |
+| Only Anthropic seats get an `is_error` flag                                                       | documented              | A known interface difference (§31), phase 2's and pinned; the parallel-call warning now says the share is Pass 3's, not reported yet.                                                                                                                                                                                                                                                                   |
+
+New estimates after the fixes (2026-10-20 cards, 7-day lockstep, fees included; `arena estimate
+--lineup <preset> --price-date 2026-10-20`), replacing §21's: `budget-mix` $1.63 / $6.79 / $30.80,
+reserve $1.43, K $38.57; `mid-tier` $10.41 / $40.44 / $170.13, reserve $6.64, K $193.36;
+`mid-tier-flash` $8.76 / $32.57 / $131.02, reserve $5.25, K $144.75; `frontier` $36.78 / $134.16 /
+$524.44, reserve $22.90, K $547.10. The GLM and Kimi seats now predict at `low`; the reserves grew
+with the OpenAI 12-hour write price and OpenRouter's completion slack.

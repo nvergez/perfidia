@@ -13,8 +13,10 @@ import { recordingFetch, type HttpFetch, type RecordedExchange } from "../model/
 // Sanitising: no header is kept but the response's content type (keys, request ids and account
 // headers never reach the file); every occurrence of the key (raw and URL-encoded) becomes
 // `<key>`; the values of id fields (`ID_KEYS`: response, message, call, generation, request,
-// organisation, project and user ids) become `<id-N>`, the same N for the same value across the
-// whole recording, so a call and its result still match; the provider's model ids are kept.
+// organisation, project, consumer and user ids) become `<id-N>`, the same N for the same value
+// across the whole recording, so a call and its result still match; account identifiers inside
+// any other text (`ID_PATTERNS`: OpenAI organisation, project and request ids, Google project
+// numbers, OpenRouter generation ids) become `<id-N>` too; the provider's model ids are kept.
 
 export const RECORDING_FORMAT = "perfidia-recording/1";
 
@@ -38,6 +40,21 @@ export const ID_KEYS: ReadonlySet<string> = new Set([
   "user",
   "user_id",
   "account_id",
+  "consumer",
+]);
+
+/**
+ * Account identifiers as they appear inside free text (error messages, help links), each with the
+ * prefix it keeps: `org-…` and `proj_…` (OpenAI), `req_…` (a request id), `gen-…` (an OpenRouter
+ * generation), `projects/<number>`, `project <number>` and `project=<number>` (Google Cloud).
+ */
+export const ID_PATTERNS: readonly RegExp[] = Object.freeze([
+  /\b(org-)([A-Za-z0-9]{6,})/g,
+  /\b(proj_)([A-Za-z0-9]{6,})/g,
+  /\b(req_)([A-Za-z0-9]{6,})/g,
+  /\b(gen-)([A-Za-z0-9][A-Za-z0-9-]{5,})/g,
+  /\b(projects\/)(\d{4,})/g,
+  /\b(project[ =])(\d{6,})/gi,
 ]);
 
 /** One SSE event of a recorded stream. */
@@ -86,6 +103,9 @@ export class Sanitiser {
   text(s: string): string {
     let out = s;
     for (const k of this.secrets) out = out.split(k).join("<key>");
+    for (const re of ID_PATTERNS) {
+      out = out.replace(re, (_m, prefix: string, id: string) => `${prefix}${this.id(id)}`);
+    }
     return out;
   }
 
@@ -174,8 +194,8 @@ function fileName(n: number, e: RecordedExchange): string {
 }
 
 /**
- * Starts a recording into `dir` (created; refused when it already holds files, so recordings
- * never mix). `secrets` are the keys the smoke may send.
+ * Starts a recording into `dir` (created with the first exchange; refused when it already holds
+ * files, so recordings never mix). `secrets` are the keys the smoke may send.
  */
 export function startRecording(
   dir: string,
@@ -192,7 +212,7 @@ export function startRecording(
   if (existsSync(dir) && readdirSync(dir).length > 0) {
     throw new UsageError(`--record: ${dir} already holds files; give an empty or new directory`);
   }
-  mkdirSync(dir, { recursive: true });
+  // Created with the first exchange: a smoke refused before it sends anything leaves no directory.
   const sanitiser = new Sanitiser(o.secrets, o.keep ?? []);
   const recorded = new Date(o.now()).toISOString().slice(0, 10);
   const pending: Promise<void>[] = [];
@@ -202,6 +222,7 @@ export function startRecording(
       exchange.then((e) => {
         n += 1;
         const file = sanitiser.exchange(e, { provider: o.provider, recorded });
+        mkdirSync(dir, { recursive: true });
         writeFileSync(join(dir, fileName(n, e)), `${JSON.stringify(file, null, 2)}\n`);
       }),
     );

@@ -45,6 +45,11 @@ import { THOUGHT_ASK, THOUGHT_QUEUED } from "./prompt.ts";
 const view: FakeReply["calls"] = [{ name: "view_map", args: {} }];
 const endTurn = { name: "end_turn", args: { nextWakeIn: 3600 } };
 
+/** An adapter that rejects with a plain `Error` (not a `ModelError`): review C1's pricing throw. */
+const bug = (): never => {
+  throw new Error("cost of z-ai/glm-5.3 usage is not a safe integer: 9800000022000000");
+};
+
 /** Blocks until the request's signal aborts, then rejects as an aborted attempt. */
 const hangUntilAborted = (req: ChatRequest): Promise<FakeReply> =>
   new Promise((_resolve, reject) => {
@@ -452,6 +457,29 @@ describe("retries", () => {
     expect(e.message).toContain("ENOSPC");
     expect(r.rate.inflight).toBe(0);
     expect(r.fake.requests).toHaveLength(0);
+  });
+
+  test("an adapter rejection that is not a ModelError is charged the attempt bound (review C1)", async () => {
+    const r = rig([bug], { attemptBoundNanoUsd: 540_538_112 });
+    const e = await r.time.run(() => rejection(r.agent.round(inputOf(1, 0))));
+    expect(e.message).toBe("llm p1 turn 1 round 0: unknown");
+    expect(r.ledger.spent("p1")).toBe(540_538_112);
+    const line = calls(r.log)[0];
+    expect([line?.costNanoUsd, line?.error?.kind]).toEqual([540_538_112, "unknown"]);
+    // The thought call too; without a bound (a ledger that has none), nothing to charge: 0.
+    const t = rig([{ calls: [endTurn] }, bug], {
+      policy: { thoughtCall: true },
+      attemptBoundNanoUsd: 1_000,
+    });
+    await t.time.run(() => t.agent.round(inputOf(1, 0)));
+    expect(calls(t.log).map((l) => [l.kind, l.costNanoUsd > 0 ? "charged" : 0])).toEqual([
+      ["round", "charged"],
+      ["thought_call", "charged"],
+    ]);
+    expect(calls(t.log)[1]?.costNanoUsd).toBe(1_000);
+    const none = rig([bug]);
+    await none.time.run(() => rejection(none.agent.round(inputOf(1, 0))));
+    expect(none.ledger.spent("p1")).toBe(0);
   });
 
   test("the thought call is bounded by the attempt timeout", async () => {

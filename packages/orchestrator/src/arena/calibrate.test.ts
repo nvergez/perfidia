@@ -36,13 +36,15 @@ import { PROMPT_VERSION } from "../seat/prompt.ts";
 import {
   BRIEFING_BYTES_PER_TOKEN,
   calibrate,
+  independentSeatDays,
   loadProfiles,
   profileFileName,
   profileKeyText,
   profilesFor,
   rulesetMajorOf,
+  sourceOfProfile,
 } from "./calibrate.ts";
-import { main } from "./cli.ts";
+import { main as arenaMain } from "./cli.ts";
 import { BOT_DAY_PROFILE, estimateCard, projectSpend, scenarioCard } from "./cost.ts";
 import {
   BOOTSTRAP_REPLICATES,
@@ -54,7 +56,13 @@ import {
   type PredictOptions,
   type PredictSeat,
 } from "./estimate.ts";
+import { defaultSeatCap } from "./lineup.ts";
+import { arenaEnv, planArena } from "./plan.ts";
 import { runDir } from "./rig.test.ts";
+
+/** `arena` as the CLI runs it, with no calibration profile unless a test passes `--profiles`. */
+const main = (...[argv, io, env, o]: Parameters<typeof arenaMain>) =>
+  arenaMain(argv, io, env, { profilesDir: "off", ...o });
 
 const LONG = 120_000;
 const RULESET = "perfidia-1@1.1.0";
@@ -67,6 +75,8 @@ interface SynthSeat {
   readonly model: string;
   readonly endpoint?: string;
   readonly promptVariant: PromptVariant;
+  /** Default medium; the presets send GLM's listed `low` (review: the label is the level sent). */
+  readonly effort?: "low" | "medium";
 }
 
 /** One attempt's usage: prompt split into input, cache writes and reads; output. */
@@ -94,6 +104,7 @@ const BUDGET_MIX: readonly SynthSeat[] = [
     model: "z-ai/glm-5.3-flash",
     endpoint: "z-ai/fp8",
     promptVariant: "envelope",
+    effort: "low",
   },
 ];
 
@@ -118,7 +129,7 @@ function callLine(
     provider: s.provider,
     model: s.model,
     servedBy: s.model,
-    effort: "medium",
+    effort: s.effort ?? "medium",
     maxTokens: 32768,
     stop: "tool_use",
     rawStop: "tool_use",
@@ -159,10 +170,10 @@ function seatsFile(seats: readonly SynthSeat[], fake: boolean): SeatsFile {
     seats: seats.map((s, i) => ({
       seat: s.seat,
       kind: "llm",
-      label: `llm:${fake ? "fake" : s.provider}/x/medium:p@1:p2`,
+      label: `llm:${fake ? "fake" : s.provider}/x/${s.effort ?? "medium"}:p@1:p2`,
       provider: fake ? "fake" : s.provider,
       model: s.model,
-      effort: "medium",
+      effort: s.effort ?? "medium",
       maxTokens: 32768,
       capNanoUsd: 5_000_000_000,
       profile: PROFILES[i % PROFILES.length],
@@ -397,7 +408,7 @@ const predictSeat = (s: SynthSeat): PredictSeat => ({
   provider: s.provider,
   model: s.model,
   endpoint: s.endpoint ?? null,
-  effort: "medium",
+  effort: s.effort ?? "medium",
   fallbacks: "off",
   profile: "odysseus@1",
   sampleTokens: 12_000,
@@ -597,16 +608,17 @@ function profileOf(
       provider: s.provider,
       model: s.model,
       endpoint: s.endpoint ?? null,
-      effort: "medium",
+      effort: s.effort ?? "medium",
       promptVariant: s.promptVariant,
       reminders: "last-round",
       maxTokens: 32768,
       promptVersion: PROMPT_VERSION,
       rulesetMajor: "perfidia-1@1",
     },
-    runs: [{ run: "r", seed: 1 }],
+    // One run per seat-day: independent seat-days (a calibrated profile needs 3 of them).
+    runs: days.map((_d, i) => ({ run: `r${i}`, seed: i + 1 })),
     seatDays: days.map((d, i) => ({
-      run: "r",
+      run: `r${i}`,
       seat: `p${i + 1}`,
       day: d.day,
       wakes: d.wakes.map((w) => ({
@@ -935,6 +947,32 @@ describe("the source label in estimate.json and arena.json (arena calibrate, run
       ]);
       expect(est.code).toBe(0);
       expect(est.out).toContain("match (calibrated, p10 / p50 / p90 of the bootstrap of the sum)");
+      // A calibrated seat is announced, and its default cap never falls below the scenario's.
+      expect(est.out).toContain(
+        "warning: p1, p2, p3, p4: predicted from a calibrated profile (a bootstrap of measured wakes)",
+      );
+      const planned = planArena(
+        {
+          fake: true,
+          seed: 1,
+          idKey: "seed",
+          priceDate: "2026-10-20",
+          lineup: "budget-mix",
+          profiles,
+        },
+        arenaEnv({}),
+      );
+      for (const seat of planned.seats) {
+        if (seat.kind !== "llm") continue;
+        const pred = planned.prediction.seats.find((x) => x.seat === seat.seat);
+        expect(pred?.source).toBe("calibrated");
+        expect(seat.capNanoUsd).toBe(
+          defaultSeatCap(Math.max(pred?.high ?? 0, pred?.scenarioHigh ?? 0)),
+        );
+        expect(seat.capNanoUsd).toBeGreaterThanOrEqual(defaultSeatCap(pred?.scenarioHigh ?? 0));
+      }
+      // Here the calibrated p90s are under the scenario's highs: the floor is what applies.
+      expect(planned.prediction.seats.every((x) => x.scenarioHigh > x.high)).toBe(true);
       expect(est.out.match(/ calibrated$/gm)?.length).toBe(4);
       const again = await cli([
         "estimate",
@@ -946,6 +984,26 @@ describe("the source label in estimate.json and arena.json (arena calibrate, run
         profiles,
       ]);
       expect(again.out).toBe(est.out);
+      // The default directory (no --profiles) is `MainOptions.profilesDir`: the tests' `off` keeps
+      // the scenario, whatever an owner calibrates into packages/orchestrator/profiles/ (review).
+      const byDefault = memoryIo();
+      expect(
+        await arenaMain(
+          ["estimate", "--lineup", "budget-mix", "--price-date", "2026-10-20"],
+          byDefault,
+          {},
+          { profilesDir: profiles },
+        ),
+      ).toBe(0);
+      expect(byDefault.stdout()).toBe(est.out);
+      const testDefault = await cli([
+        "estimate",
+        "--lineup",
+        "budget-mix",
+        "--price-date",
+        "2026-10-20",
+      ]);
+      expect(testDefault.out).toContain("match (scenario, the sum of the seat bounds)");
       // --profiles off: the scenario.
       const off = await cli([
         "estimate",
@@ -1038,4 +1096,83 @@ describe("the source label in estimate.json and arena.json (arena calibrate, run
     },
     LONG,
   );
+});
+
+/** One measured-point card group's share: its spend × the days' weight over day 1's, +15%. */
+const groupShare = (spend: number, weight: number): number =>
+  Math.round((spend * weight * 115) / ((BOT_DAY_PROFILE[0] ?? 1) * 100));
+
+describe("the review's pins on the prediction's statistics", () => {
+  const haiku = BUDGET_MIX[0];
+  const argon: SynthSeat = {
+    seat: "p1",
+    provider: "google",
+    model: "gemini-4-argon",
+    promptVariant: "envelope",
+  };
+  if (haiku === undefined) throw new Error("no seat");
+  const ctx = { provider: "anthropic", endpoint: null, at: OPTS.priceAt ?? "" };
+
+  test("the bootstrap's p10 / p50 / p90, per seat and for the match, on a profile with known spread", () => {
+    // Twenty independent seat-days of day 0 with 1..20 identical wakes: a replicate of one day
+    // costs n wakes, n uniform on 1..20, so p10 / p50 / p90 sit near 2, 10 and 18 wakes.
+    const wake: SynthWake = { t: 60, rounds: wakesOf(5, 1, 1)[0]?.rounds ?? [] };
+    const days = Array.from({ length: 20 }, (_v, i) => ({
+      day: 0,
+      wakes: Array.from({ length: i + 1 }, () => wake),
+    }));
+    const w = linesNano([wake], haiku, ctx);
+    const p = predict([predictSeat(haiku), { ...predictSeat(haiku), seat: "p2" }], {
+      ...OPTS,
+      days: 1,
+      profiles: [profileOf(haiku, days)],
+    });
+    const inWakes = (n: number): number => n / w;
+    // Nearest-rank percentiles of the seeded draws (seed 20261019, one stream per seat).
+    expect(p.seats.map((s) => [s.low, s.central, s.high].map(inWakes))).toEqual([
+      [3, 10, 18],
+      [3, 11, 19],
+    ]);
+    // The match is the bootstrap of the sum (not the sum of the seats' percentiles).
+    expect([p.match.low, p.match.central, p.match.high].map(inWakes)).toEqual([10, 21, 32]);
+    expect(p.match.source).toBe("calibrated");
+  });
+
+  test("seat-days count once per (run, game day): three seats of one match day are one", () => {
+    const days = [0, 0, 0].map((day, i) => ({ day, wakes: wakesOf(40 + i, 1, 6) }));
+    const separate = profileOf(haiku, days);
+    // The same three seat-days, all from one run: one independent seat-day.
+    const shared = TokenProfileSchema.parse({
+      ...separate,
+      runs: [{ run: "r", seed: 1 }],
+      seatDays: separate.seatDays.map((d) => ({ ...d, run: "r" })),
+    });
+    expect([independentSeatDays(separate), sourceOfProfile(separate)]).toEqual([3, "calibrated"]);
+    expect([independentSeatDays(shared), sourceOfProfile(shared)]).toEqual([1, "measured-point"]);
+    const p = predict([predictSeat(haiku)], { ...OPTS, profiles: [shared] });
+    expect(p.seats[0]?.source).toBe("measured-point");
+  });
+
+  test("measured-point across two card groups: the +15% margin on each group's share", () => {
+    const w0 = wakesOf(9, 1, 12);
+    // Day 1 wholly before Gemini 4 Argon's change, day 2's window (stretched ×2) across it.
+    const start = Date.parse("2026-11-30T00:00:00Z") - 5 * 3_600_000;
+    const priceAt = new Date(start).toISOString();
+    const p = predict([predictSeat(argon)], {
+      ...OPTS,
+      days: 2,
+      priceAt,
+      wallMsPerGameDay: LOCKSTEP_WALL_MS_PER_GAME_DAY,
+      profiles: [profileOf(argon, [{ day: 0, wakes: w0 }])],
+    });
+    const at = (iso: string): number =>
+      linesNano(w0, argon, { provider: "google", endpoint: null, at: iso });
+    const before = at(priceAt);
+    const after = at("2026-11-30T00:00:00.000Z");
+    expect(after).toBeGreaterThan(before);
+    expect(p.seats[0]?.source).toBe("measured-point");
+    expect(p.seats[0]?.central).toBe(
+      groupShare(before, BOT_DAY_PROFILE[0] ?? 0) + groupShare(after, BOT_DAY_PROFILE[1] ?? 0),
+    );
+  });
 });

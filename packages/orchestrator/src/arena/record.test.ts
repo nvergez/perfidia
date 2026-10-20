@@ -5,7 +5,7 @@
 // reply and the usage the stub sent: what an owner's recording pins, a contract test can replay.
 
 import { afterEach, describe, expect, test } from "bun:test";
-import { readFileSync, readdirSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { harness, memoryIo } from "@perfidia/sim";
 import type { ModelAdapter, ModelSpec } from "../model/adapter.ts";
@@ -20,10 +20,14 @@ import {
   type WireReply,
   type WireStub,
 } from "../model/wire-stubs.test.ts";
-import { main } from "./cli.ts";
+import { main as arenaMain } from "./cli.ts";
 import { PROVIDERS } from "./providers.ts";
 import { Sanitiser, readRecording, recordedResponse, startRecording } from "./record.ts";
 import { runDir } from "./rig.test.ts";
+
+/** `arena` as the CLI runs it, with no calibration profile unless a test passes `--profiles`. */
+const main = (...[argv, io, env, o]: Parameters<typeof arenaMain>) =>
+  arenaMain(argv, io, env, { profilesDir: "off", ...o });
 
 const LONG = 60_000;
 
@@ -125,10 +129,66 @@ describe("the sanitiser", () => {
     const dir = runDir("rec");
     const r = startRecording(dir, { provider: "openai", secrets: [], now: () => 0 });
     expect(r.fetch).toBeInstanceOf(Function);
-    const full = join(dir, "..");
-    expect(() => startRecording(full, { provider: "openai", secrets: [], now: () => 0 })).toThrow(
+    // Nothing exchanged yet: no directory.
+    expect(existsSync(dir)).toBe(false);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "01-post-responses.json"), "{}\n");
+    expect(() => startRecording(dir, { provider: "openai", secrets: [], now: () => 0 })).toThrow(
       "already holds files",
     );
+  });
+
+  test("account identifiers in free text and under `consumer` are replaced (review C7)", () => {
+    const s = new Sanitiser(["sk-k"]);
+    const openai = s.value({
+      error: {
+        message:
+          "Rate limit reached for gpt-6-luna in organization org-AbCdEf123456 on tokens per min. Project proj_ZyXw987654, request req_9f8e7d6c5b4a.",
+        type: "tokens",
+      },
+    });
+    const google = s.value({
+      error: {
+        code: 403,
+        message:
+          "Generative Language API has not been used in project 123456789012 before or it is disabled.",
+        details: [
+          {
+            reason: "SERVICE_DISABLED",
+            metadata: {
+              consumer: "projects/123456789012",
+              activationUrl:
+                "https://console.developers.google.com/apis/api/generativelanguage.googleapis.com/overview?project=123456789012",
+            },
+          },
+        ],
+      },
+    });
+    const openrouter = s.text("generation gen-1760000000-AbCdEfGhIjKl failed");
+    const text = JSON.stringify([openai, google, openrouter]);
+    for (const leak of [
+      "AbCdEf123456",
+      "ZyXw987654",
+      "9f8e7d6c5b4a",
+      "123456789012",
+      "AbCdEfGhIjKl",
+    ]) {
+      expect([leak, text.includes(leak)]).toEqual([leak, false]);
+    }
+    // The same project is the same id everywhere; the model id stays.
+    expect(text).toContain("gpt-6-luna");
+    const project = /project (<id-\d+>)/.exec(text)?.[1];
+    expect(project).toBeDefined();
+    expect(text).toContain(`overview?project=${project ?? ""}`);
+    expect(text).toMatch(/"consumer":"<id-\d+>"/);
+  });
+
+  test("a smoke refused before it sends anything leaves no recording directory", async () => {
+    const dir = runDir("rec-nokey");
+    const io = memoryIo();
+    expect(await main(["smoke", "--provider", "openai", "--record", dir], io, {})).toBe(3);
+    expect(io.stderr()).toContain("Nothing was sent");
+    expect(existsSync(dir)).toBe(false);
   });
 });
 

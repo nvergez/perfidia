@@ -3,6 +3,7 @@ import {
   ModelError,
   adapterLabel,
   brokenStreamOutput,
+  completionUpper,
   promptTokens,
   type ChatRequest,
   type ChatResult,
@@ -825,13 +826,15 @@ export class CompatAdapter implements ModelAdapter {
       const c = classifyStreamError(this.mode, state.error);
       if (c.kind === "length") {
         // A generation stopped at `max_tokens` (OpenRouter turns it into a `length` finish on its
-        // other APIs): the harness's `max_tokens` stop and its retry. Without the final usage, the
-        // spend is the estimate of an error event (nothing when nothing streamed); a reply whose
-        // estimate is the attempt bound cannot carry it, so it fails instead (charged the bound).
+        // other APIs, a successful completion, which is billed): the harness's `max_tokens` stop and
+        // its retry. Without the final usage, the spend is the broken-stream estimate (the prompt
+        // and the full `max_tokens`, even when nothing streamed: zero completion insurance covers
+        // an error finish only); a reply whose estimate is the attempt bound cannot carry it, so it
+        // fails instead (charged the bound).
         state.finish = "length";
         state.nativeFinish ??= c.code;
         if (state.usage === undefined) {
-          const estimated = spent(true);
+          const estimated = spent();
           if (estimated.some((u) => !Number.isFinite(u.tokens.input))) {
             throw new ModelError("unknown", `${this.who}: max_tokens reached without a usage`, {
               spent: estimated,
@@ -909,8 +912,9 @@ export class CompatAdapter implements ModelAdapter {
       const kind: ModelErrorKind =
         c.kind === "length" || c.kind === "refusal" ? "bad_request" : c.kind;
       // An error finish is not billed by OpenRouter (zero completion insurance); nothing streamed.
+      // A length-type error is a generation that ran to `max_tokens` (billed): the estimate.
       throw new ModelError(kind, oneLine(redact(`${this.who} error ${c.code}`, this.secrets)), {
-        spent: this.mode === "openrouter" ? [] : spent(),
+        spent: this.mode === "openrouter" && c.kind !== "length" ? [] : spent(),
         requestId,
       });
     }
@@ -922,8 +926,9 @@ export class CompatAdapter implements ModelAdapter {
 
   /**
    * What an attempt that did not complete cost. The final usage when it arrived (estimated: the
-   * stream broke after it). An error event before any choice (`errorEvent`) is not billed:
-   * OpenRouter's zero completion insurance covers an error finish, and nothing was generated.
+   * stream broke after it). An error event before any output (`errorEvent`) on OpenRouter is not
+   * billed: its zero completion insurance covers an error finish, and nothing was generated (a
+   * compat endpoint has no such insurance: the estimate).
    * Otherwise (a stream that broke, was cut or aborted once the request was accepted, started or
    * not: Z.AI is not among the providers whose generation stops when the client disconnects) the
    * prompt estimate and the full `max_tokens` of output (`brokenStreamOutput`), or the seat's attempt
@@ -940,7 +945,8 @@ export class CompatAdapter implements ModelAdapter {
       if (!u.success) return [boundEntry(this.spec.model)];
       return [{ ...this.entryOf(s, u.data), estimated: true }];
     }
-    if (errorEvent && s.firstAt === null) return [];
+    // Only OpenRouter insures an error finish; a compat endpoint may bill the prompt it read.
+    if (errorEvent && this.mode === "openrouter" && s.firstAt === null) return [];
     const prompt = estimate();
     if (prompt === null) return [boundEntry(this.spec.model)];
     return [
@@ -952,7 +958,7 @@ export class CompatAdapter implements ModelAdapter {
           cacheWrite5m: 0,
           cacheWrite1h: 0,
           cacheRead: 0,
-          output: brokenStreamOutput(maxTokens),
+          output: completionUpper(this.mode, brokenStreamOutput(maxTokens)),
         },
         estimated: true,
       },
@@ -968,11 +974,20 @@ export class CompatAdapter implements ModelAdapter {
     return dated.test(served) ? this.spec.model : served;
   }
 
-  /** One usage entry from a valid usage, with any excess of the reported cost over the card added. */
+  /**
+   * One usage entry from a valid usage, with any excess of the reported cost over the card added;
+   * the attempt-bound marker when the cards cannot price it (counts too large for an exact cost):
+   * a usage the adapter cannot price is charged the attempt bound, never 0.
+   */
   private entryOf(s: StreamState, u: WireUsage): UsageEntry {
     const model = this.billedModel(s.model);
     const tokens = tokensOf(u);
-    const topUp = this.topUpTokens(model, tokens, u.cost ?? null);
+    let topUp: number;
+    try {
+      topUp = this.topUpTokens(model, tokens, u.cost ?? null);
+    } catch {
+      return boundEntry(this.spec.model);
+    }
     return topUp === 0
       ? { model, kind: "message", tokens, estimated: false }
       : {
@@ -1118,6 +1133,12 @@ export class CompatAdapter implements ModelAdapter {
       });
     }
     const entry = this.entryOf(s, parsed.data);
+    if (!Number.isFinite(entry.tokens.input)) {
+      throw new ModelError("unknown", `${this.who}: a usage the cards cannot price`, {
+        spent: [entry],
+        requestId: id,
+      });
+    }
     const usage = [entry];
     const problem = this.servedProblem(s);
     if (problem !== null) {
@@ -1266,7 +1287,7 @@ export class CompatAdapter implements ModelAdapter {
                 cacheWrite5m: 0,
                 cacheWrite1h: 0,
                 cacheRead: 0,
-                output: PREFLIGHT_MAX_TOKENS,
+                output: completionUpper(this.mode, PREFLIGHT_MAX_TOKENS),
               },
               estimated: true,
             },

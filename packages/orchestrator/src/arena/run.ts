@@ -866,7 +866,7 @@ async function runArenaWith(
             toolsHash: sha256Hex(canonicalJson(seatTools(s.seat))),
             operatorHash: operatorHashOf(s.promptVariant),
             ...(s.reasoningContext === null ? {} : { reasoningContext: s.reasoningContext }),
-            ...(!plan.fake && effortSent(s.provider, s.model, s.effort) !== s.effort
+            ...(effortSent(s.provider, s.model, s.effort) !== s.effort
               ? { effortSent: effortSent(s.provider, s.model, s.effort) }
               : {}),
           },

@@ -265,7 +265,10 @@ export type UsageRead =
 /**
  * The usage of a Response as a usage entry of `model` (design §2.3): input = `input_tokens −
  * cached_tokens − cache_write_tokens`, cache reads = `cached_tokens`, writes = `cache_write_tokens`
- * (the 30-minute writes, in the short bucket), output = `output_tokens` (reasoning included).
+ * split by `cache_write_tokens_details` (30-minute writes in the short bucket, 12-hour writes in
+ * the long one, at 2.5× input; without the split, every write is a 30-minute one: the lifetime the
+ * request asks for), output = `output_tokens` (reasoning included). A split that does not sum to
+ * the writes is invalid (charged the attempt bound).
  */
 export function readUsage(raw: unknown, model: string): UsageRead {
   if (raw === undefined || raw === null) return { kind: "absent" };
@@ -281,6 +284,11 @@ export function readUsage(raw: unknown, model: string): UsageRead {
   if (reasoning > u.output_tokens) {
     return { kind: "invalid", why: "reasoning tokens exceed the output tokens" };
   }
+  const split = u.input_tokens_details.cache_write_tokens_details;
+  if (split !== undefined && split.ttl_30m_tokens + split.ttl_12h_tokens !== written) {
+    return { kind: "invalid", why: "the cache writes by lifetime do not sum to the writes" };
+  }
+  const long = split?.ttl_12h_tokens ?? 0;
   return {
     kind: "ok",
     entry: {
@@ -288,8 +296,8 @@ export function readUsage(raw: unknown, model: string): UsageRead {
       kind: "message",
       tokens: {
         input: u.input_tokens - cached - written,
-        cacheWrite5m: written,
-        cacheWrite1h: 0,
+        cacheWrite5m: written - long,
+        cacheWrite1h: long,
         cacheRead: cached,
         output: u.output_tokens,
         reasoning,
@@ -339,7 +347,7 @@ const EMPTY_REPLY: ModelReply = Object.freeze({
   text: Object.freeze([]),
   calls: Object.freeze([]),
   reasoning: Object.freeze([]),
-  reasoningKind: "summary",
+  reasoningKind: "none",
 });
 
 /** A function call's arguments: the parsed JSON, or the raw string when it does not parse. */
@@ -389,7 +397,13 @@ export function replyOf(output: readonly unknown[]): {
     }
   }
   return {
-    reply: { native: output, text, calls, reasoning, reasoningKind: "summary" },
+    reply: {
+      native: output,
+      text,
+      calls,
+      reasoning,
+      reasoningKind: reasoning.length === 0 ? "none" : "summary",
+    },
     refusal,
   };
 }

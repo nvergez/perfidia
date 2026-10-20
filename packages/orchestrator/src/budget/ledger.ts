@@ -338,6 +338,11 @@ export class BudgetLedger {
     return this.book(seat).spent;
   }
 
+  /** The most one attempt of `seat` can cost (what an unpriceable usage is charged); null: none set. */
+  attemptBound(seat: PlayerId): number | null {
+    return this.bounds.get(seat) ?? null;
+  }
+
   cap(seat: PlayerId): number {
     return this.book(seat).cap;
   }

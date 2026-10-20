@@ -86,12 +86,15 @@ describe("the shared block's operator-channel variants", () => {
 describe("the seat agent: cadence and variant", () => {
   test("a last-round seat sends the turn header, then results without reminders; its label says -env", async () => {
     const view = { name: "view_map", args: {} };
-    const r = rig([{ calls: [view] }, { calls: [view] }, { text: ["Done."] }], {
-      spec: { ...SPEC, model: "gemini-4-argon" },
-      intended: { provider: "google", model: "gemini-4-argon", endpoint: null },
-      promptVariant: "envelope",
-      reminders: "last-round",
-    });
+    const r = rig(
+      [{ calls: [view], reasoning: ["Map first."] }, { calls: [view] }, { text: ["Done."] }],
+      {
+        spec: { ...SPEC, model: "gemini-4-argon" },
+        intended: { provider: "google", model: "gemini-4-argon", endpoint: null },
+        promptVariant: "envelope",
+        reminders: "last-round",
+      },
+    );
     const { agent, fake } = r;
     expect(agent.label).toBe("llm:fake/gemini-4-argon/medium:odysseus@1:p2-env");
     await agent.round(inputOf(1, 0));
@@ -102,7 +105,8 @@ describe("the seat agent: cadence and variant", () => {
     expect(roles).toEqual(["user", "operator", "assistant", "user", "assistant", "user"]);
     // The intended provider's card priced it (the ledger's pricer here is the Claude default:
     // unpriced); its reasoning kind is the intended model's.
-    expect(calls(r.log).map((l) => l.reasoningKind)).toEqual(["summary", "summary", "summary"]);
+    // A reply without reasoning text is `none` (review: the same for every provider).
+    expect(calls(r.log).map((l) => l.reasoningKind)).toEqual(["summary", "none", "none"]);
     // Every-round (phase 2) on the same script sends a reminder after each round's results.
     const every = rig([{ calls: [view] }, { calls: [view] }, { text: ["Done."] }]);
     await every.agent.round(inputOf(1, 0));
