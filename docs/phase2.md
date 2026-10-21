@@ -24,6 +24,7 @@
 9. Running the first real match
 10. Tests
 11. Open items
+12. Playtesting a seat: `arena playtest`
 
 ---
 
@@ -385,3 +386,74 @@ asserted.
 - **For the gateway owner:** the `interface` text lists `from, to, text, name` as the typed player
   fields, but player text also appears inside `read_notes` hit summaries; say so in a future
   `ENGINE_VERSION` (the shared prompt already does).
+
+## 12. Playtesting a seat: `arena playtest`
+
+A dev tool, added after phase 4 (`src/arena/playtest/`): an outside player, a person or an agent
+driving the command line, plays one LLM seat of a run turn by turn through the real harness, with
+no model API and at no cost. It shows exactly what the seat's model receives, and answers each
+reply the way a model's tool calls are answered, before a real match spends money.
+
+```sh
+bun run arena -- playtest start --from <run-dir> --seat p2 --at 14 --out <session>  # or --at "D3 08:00", t:93600
+bun run arena -- playtest reply --session <session> --calls reply.json [--text "..."] [--end]
+bun run arena -- playtest next --session <session>    # the bots play on to the seat's next wake
+bun run arena -- playtest status --session <session>  # re-derive, rewrite the material
+```
+
+`reply.json` is an array of `{"name": "<tool>", "args": {...}}` (or `{"text": "...", "calls":
+[...]}`). A reply with no call, or with `end_turn` among its calls, ends the turn, and its text is
+the public thought; `--end` checks that it does (it needs text).
+
+- **The fork.** The run's `match.jsonl` is replayed on a fresh engine (every event, checkpoint and
+  act result checked against the log, as at Level E) and folded into a live `MatchHost`'s gateway
+  state with the rebuild fold (`createGatewayFold`); the gateway's lockstep driver then plays on
+  from the cut. The cut is the start of the turn's game second when the seat woke in that second's
+  first batch, so every seat due then wakes as it did in the run; otherwise (a wake in a later
+  batch, or a second turn in the same second) it is the turn's own wake line, and the turns other
+  seats still had open there are closed as empty rounds. The seat's first wake in the fork must be
+  byte-identical to the run's. The run directory is only read, and its `seats.json` hashes (shared
+  block, seat block, tools, operator templates) must be this build's, or the session is refused.
+  Lockstep runs only.
+- **The seat** is its own `LlmSeatAgent` (prompt cap, reminders, terminal rules, the thought from
+  the terminal reply's text) on a `PlaytestAdapter`. Requests are built by the seat's provider's
+  builder: the Anthropic adapter's own `build()` (an offline client that is never called) for an
+  Anthropic seat; for another provider, the fake adapter's neutral layout, which mirrors its
+  operator channel (same texts, not that provider's wire layout). The playtester's replies become
+  Anthropic content: text blocks, then `tool_use` blocks with ids `pt-<seat>-<turn>-<round>-<i>`.
+  They carry no thinking blocks, which a real model's replies would. Usage is estimated at four
+  bytes a token so that the prompt cap works; nothing is billed. The thought call is off.
+- **The other seats** are bots: a bot seat's own, an LLM seat's hand-off bot (a `--fake` run's
+  default brain), or `--brain pN=strategy@n`. They are fresh instances: their memory is in their
+  notebooks, but their per-match caches are read again (an extra `rules` call), so they do not
+  replay the run move for move.
+- **Calls** run through the real host: the turn gate, the round and wake call caps (`CALLS_CAP`),
+  argument validation and the explanatory errors (`code`, `message`, `hint`), the round-trip cap.
+  The results of a turn's last round trip are never shown to the model; `end.md` shows them to the
+  playtester, with the gateway's record of the turn that the next briefing's `lastTurn` reports.
+  The command line refuses what a model could not send: a tool the seat does not have, arguments
+  that are not a JSON object.
+- **The session directory**: `session.json` (the run and its hashes, the seat, the target turn and
+  cut, the bots), `steps.jsonl` (each reply and each `next`, with the turn, the round and the
+  sha256 of the request it answered), and the material: `prompt.md` (both system blocks),
+  `tools.json` (the request's tools), `turn-NNN/round-R.md` (what round trip R+1 adds: the
+  briefing and the turn header, or the echoed reply, the tool results after a one-line summary of
+  each, and the reminder), `turn-NNN/request-R.json` (the builder's whole request,
+  `JSON.stringify(build(req))`; the SDK adds `stream: true` when it sends), `turn-NNN/end.md`,
+  `fork.jsonl` (the fork's own log since the cut) and `STATUS.md`. Texts are quoted byte for byte
+  inside fences longer than any backtick run they hold.
+- **Stateless and deterministic.** Each command re-derives the whole session from the run's log
+  and the steps: the bots, the batch orders and the harness clock (virtual time, never advanced)
+  are deterministic. A new step is kept only when the derivation consumed it (a reply after a
+  turn's end asks for `next`; `next` while a reply is awaited is refused); a derivation that meets
+  another request than a step recorded (another build, a changed run) stops with an error instead
+  of drifting. A command costs one replay of the log up to the cut plus the turns played since:
+  on a 7-day run, about 1 s for a cut on day 1 and 2.5 s for one on day 6.
+
+Measured on two 7-day `--fake` runs (`--lineup claude-duo --seed 7` and the default lineup with
+`--seed 18`, both `--id-key seed`): in every 13th LLM wake (33 and 38 turns) and in every turn cut
+mid-second (16 and 39, 52 of which closed other seats' open turns), the fork's round-0 request held
+the run's own briefing and turn header, entry for entry; each derivation took 0.8 to 1 s. Tests: `arena/playtest/playtest.test.ts` (byte equality with the Anthropic adapter's
+request rebuilt from the run's transcript and prompt files; a scripted session with results, an
+`--end` and a `next`; the gateway's explanatory errors and the call cap; drift refused; the run
+directory unchanged).
