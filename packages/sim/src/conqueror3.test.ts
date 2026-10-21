@@ -3,11 +3,17 @@
 // the same second, the city falls to its own siege, and the match is a pure function of its seed
 // (the same log twice). Four game days keep the test fast. Its war calls on real matches (a joint
 // strike, a `siege` call to hold its conquest) are tested in `warcalls.test.ts`.
+// Slow suite only (docs/architecture.md §13.8): skipped unless PERFIDIA_SLOW=1
+// (`bun run test:slow`, which `bun run test:exit` runs).
 
 import { describe, expect, test } from "bun:test";
 import type { ActLine, EvLine, LogLine } from "@perfidia/protocol";
 import { normalisedHash, runBots, type BotRunSpec } from "./harness/index.ts";
 import { summarize } from "./summary/index.ts";
+
+const SLOW = process.env["PERFIDIA_SLOW"] === "1";
+/** A group of tests of the slow suite: skipped unless PERFIDIA_SLOW=1. */
+const xdescribe = describe.skipIf(!SLOW);
 
 /** Six seats, every version pinned: the @2 bots with conqueror@3 at p5. */
 const SPEC: BotRunSpec = {
@@ -30,7 +36,7 @@ const acts = (lines: readonly LogLine[], seat: string, type: string): ActLine[] 
 
 const str = (v: unknown): string => (typeof v === "string" ? v : "");
 
-describe("conqueror@3 on a real match (perfidia-1, seed 8, 6 seats, 4 days)", () => {
+xdescribe("conqueror@3 on a real match (perfidia-1, seed 8, 6 seats, 4 days)", () => {
   test("its garrison lands with its founders, the city falls to its siege; the same seed gives the same log", async () => {
     const a = await runBots(SPEC);
     expect(a.lines.at(-1)?.k).toBe("end");

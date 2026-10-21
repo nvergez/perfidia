@@ -3,6 +3,8 @@
 // gateway fold). This catches a fold that skips a line it should project: a silent world timer
 // (perfidia-1@1.1.0's `domination_open` flips `ext.domination.open` with no event), or seat fields
 // (`next`, the effective next wake) that an `ev` line moves for every seat.
+// The 4-day golden's test runs in the slow suite (PERFIDIA_SLOW=1, docs/architecture.md §13.8:
+// `bun run test:slow`, run by `bun run test:exit`).
 
 import { describe, expect, test } from "bun:test";
 import { createReplay } from "@perfidia/engine";
@@ -25,6 +27,10 @@ import {
   queueEnts,
   standingsOf,
 } from "./project.ts";
+
+const SLOW = process.env["PERFIDIA_SLOW"] === "1";
+/** A test of the slow suite: skipped unless PERFIDIA_SLOW=1. */
+const xtest = test.skipIf(!SLOW);
 
 const headerOf = (lines: readonly LogLine[]): HeaderLine => {
   const h = lines[0];
@@ -161,7 +167,7 @@ describe("the fold's frame equals a fresh projection after every line", () => {
     expect(mismatches.slice(0, 5)).toEqual([]);
   });
 
-  test("lockstep-6p-4d: ext (the silent domination_open timer) and the seats", () => {
+  xtest("lockstep-6p-4d: ext (the silent domination_open timer) and the seats", () => {
     const lines = golden("perfidia-1@1.1.0/lockstep-6p-4d.jsonl");
     const { mismatches, at } = check(lines, false);
     expect(mismatches.slice(0, 5)).toEqual([]);

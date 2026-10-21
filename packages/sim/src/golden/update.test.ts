@@ -4,6 +4,8 @@
 // scenarios (`scenario-late`, `scenario-r1`) are written once and checked at Level E only. Every match here lasts at most 1
 // game day (§13): the CLI writes only the 1-day goldens of `GOLDEN_SPECS` and the scenario, named
 // on its command line. The committed fixtures are guarded by `src/golden.test.ts`.
+// The tests that write goldens from bot runs run in the slow suite (PERFIDIA_SLOW=1,
+// docs/architecture.md §13.8: `bun run test:slow`, run by `bun run test:exit`).
 
 import { describe, expect, test } from "bun:test";
 import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
@@ -15,6 +17,10 @@ import { main } from "../cli.ts";
 import { FINGERPRINTS_FILE, jsonlText, listGoldens, readFingerprints } from "../harness/index.ts";
 import { readLog } from "../io/index.ts";
 import { GOLDEN_SPECS, checkFixtures, updateGoldens, type GoldenSpec } from "./index.ts";
+
+const SLOW = process.env["PERFIDIA_SLOW"] === "1";
+/** A test of the slow suite: skipped unless PERFIDIA_SLOW=1. */
+const xtest = test.skipIf(!SLOW);
 
 function tempDir(): string {
   return mkdtempSync(join(tmpdir(), "perfidia-sim-golden-"));
@@ -61,7 +67,7 @@ describe("sim golden", () => {
     ]);
   });
 
-  test("--update adds goldens once and refuses to overwrite them; --check passes, then fails on a tampered golden", async () => {
+  xtest("--update adds goldens once and refuses to overwrite them; --check passes, then fails on a tampered golden", async () => {
     const dir = tempDir();
     // The 1-day goldens of each published ref: `--check` wants one golden per published ref.
     const names = [
@@ -153,7 +159,7 @@ describe("sim golden", () => {
     }
   }, 30000);
 
-  test("--update writes the scripted scenario goldens once, then refuses to rewrite them", async () => {
+  xtest("--update writes the scripted scenario goldens once, then refuses to rewrite them", async () => {
     const dir = tempDir();
     const names = ["perfidia-1@1.0.0/scenario-late", "perfidia-1@1.1.0/scenario-r1"];
     try {

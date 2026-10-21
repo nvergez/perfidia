@@ -7,6 +7,8 @@
 // seed 16, p4 (opportunist@3, allied with p5 from the first hour) answers yes, launches at its
 // planned time and lands inside the window: a joint attack after a call (`teamRecords`). The same
 // seed gives the same log. The match is cut at the end of day 3 to keep the test fast.
+// Slow suite only (docs/architecture.md §13.8): skipped unless PERFIDIA_SLOW=1
+// (`bun run test:slow`, which `bun run test:exit` runs).
 
 import { describe, expect, test } from "bun:test";
 import { composeCall, parseWar, type WarCall } from "@perfidia/bots";
@@ -25,6 +27,10 @@ import {
 import { MemorySink } from "@perfidia/gateway";
 import { teamRecords } from "./batch/index.ts";
 import { normalisedHash, prepareBotRun, runPrepared, type BotRunSpec } from "./harness/index.ts";
+
+const SLOW = process.env["PERFIDIA_SLOW"] === "1";
+/** A group of tests of the slow suite: skipped unless PERFIDIA_SLOW=1. */
+const xdescribe = describe.skipIf(!SLOW);
 
 const DAY = 86400;
 /** The stand-in calls from this time on. */
@@ -176,7 +182,7 @@ const str = (v: unknown): string => (typeof v === "string" ? v : "");
 const events = (lines: readonly LogLine[], type: string): EvLine[] =>
   lines.filter((l): l is EvLine => l.k === "ev" && l.e.type === type);
 
-describe("war calls on a real match (perfidia-1, 6 seats, days 1–3)", () => {
+xdescribe("war calls on a real match (perfidia-1, 6 seats, days 1–3)", () => {
   test("seed 16: opportunist@3 answers its ally's call, launches in time and joins the strike", async () => {
     const { lines, caller } = await runWithCaller(16);
     expect(lines.at(-1)?.k).toBe("end");

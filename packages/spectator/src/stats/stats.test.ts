@@ -6,6 +6,8 @@
 // `--no-costs` leaves cost, tokens and model time out; and hand-made feeds pin the rules the logs do
 // not reach (pacts kept and broken, alliances joined, same-model pairs, self-identification, the
 // preflight split, the parallel-call share).
+// The test of statsOfLog, which folds the war golden again, runs in the slow suite
+// (PERFIDIA_SLOW=1, docs/architecture.md §13.8: `bun run test:slow`, run by `bun run test:exit`).
 
 import { beforeAll, describe, expect, test } from "bun:test";
 import {
@@ -26,7 +28,7 @@ import {
 } from "@perfidia/protocol";
 import { foldLog, type SpectatorFold } from "../fold/fold.ts";
 import { seatTally } from "../reduce/index.ts";
-import { WAR_GOLDEN, fakeRun, golden, type FakeRun } from "../testkit.test.ts";
+import { WAR_GOLDEN, fakeRun, golden, warGoldenFold, type FakeRun } from "../testkit.test.ts";
 import { ID_MAX, PART_MAX, idPart, modelIdOf, parseLabel } from "./keys.ts";
 import { foldedOf, statsOfLog } from "./log.ts";
 import {
@@ -38,6 +40,10 @@ import {
   type FoldedMatch,
 } from "./match.ts";
 
+const SLOW = process.env["PERFIDIA_SLOW"] === "1";
+/** A test of the slow suite: skipped unless PERFIDIA_SLOW=1. */
+const xtest = test.skipIf(!SLOW);
+
 const LONG = 120_000;
 
 let warLines: LogLine[] = [];
@@ -46,7 +52,7 @@ let war: MatchStats;
 
 beforeAll(() => {
   warLines = golden(WAR_GOLDEN);
-  warFold = foldLog(warLines, { match: "war" });
+  warFold = warGoldenFold().fold;
   war = MatchStatsSchema.parse(
     matchStats(foldedOf(warFold), {}, { match: "war", status: "ended" }),
   );
@@ -180,7 +186,7 @@ describe("the war golden (six bots, six days)", () => {
     expect(war.seats.every((s) => s.diplomacy.selfIdentification === 0)).toBe(true);
   });
 
-  test("statsOfLog folds the log itself; an unverifiable log is never rated", () => {
+  xtest("statsOfLog folds the log itself; an unverifiable log is never rated", () => {
     const again = statsOfLog(warLines, {}, { match: "war" });
     expect(again).toEqual(war);
     const t = warLines.findIndex((l) => l.k === "ckpt");

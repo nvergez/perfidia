@@ -24,7 +24,8 @@ Run from the repo root with Bun 1.4.3 (the only package manager and runtime).
 | `bun run serve -- <flags>`    | the read-only spectator server (`--runs <dir> --all-runs`; `--web-dist packages/web/dist` serves the app) |
 | `bun run web:build`           | builds the web app into `packages/web/dist` (fails over the size budget)                                  |
 | `bun run dev -- --runs <dir>` | the web app in development: builds, rebuilds on change, serves it with the server                         |
-| `bun run test:exit`           | the exit suites (7-day matches, both phases)                                                              |
+| `bun run test:slow`           | the slow suite (`PERFIDIA_SLOW=1`: what the default `bun test` leaves out, architecture §13)              |
+| `bun run test:exit`           | the exit suites (7-day matches, both phases), then the slow suite                                         |
 | `bun run test:e2e`            | opt-in: the web app's smoke test in headless Chromium (playwright-core)                                   |
 | `bun run test:live`           | opt-in: calls the Claude API (needs the key; spends < $0.20)                                              |
 

@@ -2,12 +2,18 @@
 // play a 1-game-day perfidia-1 match through the gateway, with rusher@2 on p2 and p6. The rushers
 // spy before protection ends, launch their first wave as it ends, and the first battle lands on day
 // 1 at 13:00–16:00 (a neighbour is three hours away); the same seed gives the same log.
+// Slow suite only (docs/architecture.md §13.8): skipped unless PERFIDIA_SLOW=1
+// (`bun run test:slow`, which `bun run test:exit` runs).
 
 import { describe, expect, test } from "bun:test";
 import { createBotVersion } from "@perfidia/bots";
 import { MemorySink } from "@perfidia/gateway";
 import type { LogLine, PlayerId, SeatAgent } from "@perfidia/protocol";
 import { normalisedText, prepareBotRun, runPrepared } from "./harness/index.ts";
+
+const SLOW = process.env["PERFIDIA_SLOW"] === "1";
+/** A group of tests of the slow suite: skipped unless PERFIDIA_SLOW=1. */
+const xdescribe = describe.skipIf(!SLOW);
 
 const FROM = 43200;
 const RUSHERS: readonly PlayerId[] = ["p2", "p6"];
@@ -36,7 +42,7 @@ async function dayOne(seed: number): Promise<LogLine[]> {
   return sink.parsed();
 }
 
-describe("rusher@2 on a real 6-seat perfidia-1 match (seed 1, day 1)", () => {
+xdescribe("rusher@2 on a real 6-seat perfidia-1 match (seed 1, day 1)", () => {
   test("it spies before protection ends, launches as it ends, and the first battle lands at 13:00–16:00", async () => {
     const lines = await dayOne(1);
     const header = lines[0];

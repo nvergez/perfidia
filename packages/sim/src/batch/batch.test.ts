@@ -4,6 +4,8 @@
 // test rulesets run with a note; results do not depend on the variant order; variants and run
 // directories are checked before any match runs, and runs are never overwritten; a match that
 // fails before its header is a fatal row and the batch goes on.
+// The batches of several matches run in the slow suite (PERFIDIA_SLOW=1, docs/architecture.md
+// §13.8: `bun run test:slow`, run by `bun run test:exit`).
 
 import { describe, expect, test } from "bun:test";
 import {
@@ -32,6 +34,10 @@ import {
   type BatchResult,
 } from "./index.ts";
 
+const SLOW = process.env["PERFIDIA_SLOW"] === "1";
+/** A test of the slow suite: skipped unless PERFIDIA_SLOW=1. */
+const xtest = test.skipIf(!SLOW);
+
 function tempDir(): string {
   return mkdtempSync(join(tmpdir(), "perfidia-sim-batch-"));
 }
@@ -58,7 +64,7 @@ function filesOf(dir: string): Record<string, string> {
 }
 
 describe("sim batch", () => {
-  test("two variants × two seeds print the table and write JSON with provenance; --out keeps verifiable runs", async () => {
+  xtest("two variants × two seeds print the table and write JSON with provenance; --out keeps verifiable runs", async () => {
     const dir = tempDir();
     try {
       const json = join(dir, "out.json");
@@ -288,7 +294,7 @@ describe("sim batch", () => {
     }
   }, 30000);
 
-  test("results do not depend on the variant order", async () => {
+  xtest("results do not depend on the variant order", async () => {
     const a = parseVariant("perfidia-1@1.0.0", { days: 1 });
     const b = parseVariant("other: perfidia-1 time.protectionEnd=21600", { days: 1 });
     const plan = {

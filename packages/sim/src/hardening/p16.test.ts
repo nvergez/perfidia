@@ -13,6 +13,15 @@ import type { LogLine, PlayerId, RoundInput, SeatAgent, Snapshot } from "@perfid
 import { normalisedText, prepareBotRun, runPrepared, type ClockChoice } from "../harness/index.ts";
 import { LOCKSTEP, REFS, VIRTUAL, daySpec, levelE } from "./kit.ts";
 
+/**
+ * The slow suite only (`PERFIDIA_SLOW=1`: `bun run test:slow`, run by `bun run test:exit`; docs/
+ * architecture.md §13.8), on every ruleset of `REFS` under both clocks; the default suite has P16
+ * with the chaos agent (`gateway/src/runtime/chaos.test.ts`).
+ */
+const SLOW = process.env["PERFIDIA_SLOW"] === "1";
+/** A test of the slow suite: skipped unless PERFIDIA_SLOW=1. */
+const xtest = test.skipIf(!SLOW);
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
@@ -111,7 +120,7 @@ async function play(ref: string, clock: ClockChoice, destroy: boolean): Promise<
 describe("P16 at match scale: vandalising what the gateway hands out changes nothing", () => {
   for (const ref of REFS) {
     for (const clock of [LOCKSTEP, VIRTUAL]) {
-      test(`${ref}, ${clock.kind}`, async () => {
+      xtest(`${ref}, ${clock.kind}`, async () => {
         const clean = await play(ref, clock, false);
         const vandalised = await play(ref, clock, true);
         expect(clean.levelE).toBe(true);

@@ -7,6 +7,8 @@
 // leaves out a listed match the server would hide (its log does not verify); a run with a 300-
 // character model id aggregates (bounded ids); a run's control characters never reach the terminal;
 // `power --p 0.5` measures the size.
+// Slow suite only (docs/architecture.md §13.8): skipped unless PERFIDIA_SLOW=1
+// (`bun run test:slow`, which `bun run test:exit` runs).
 
 import { beforeAll, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { cpSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -24,6 +26,12 @@ import { main } from "./cli.ts";
 import { controlChar, table as tableText, terminalText } from "./report.ts";
 import { statsOfRunDir } from "./runs.ts";
 
+const SLOW = process.env["PERFIDIA_SLOW"] === "1";
+/** A test of the slow suite: skipped unless PERFIDIA_SLOW=1. */
+const xtest = test.skipIf(!SLOW);
+/** A group of tests of the slow suite: skipped unless PERFIDIA_SLOW=1. */
+const xdescribe = describe.skipIf(!SLOW);
+
 const LONG = 180_000;
 setDefaultTimeout(LONG);
 
@@ -39,6 +47,7 @@ let mixed = "";
 let agg: ModelStatsFile;
 
 beforeAll(async () => {
+  if (!SLOW) return;
   series = await seriesRoot();
   mixed = await mixedRoot();
   const r = run(["aggregate", "--runs", series, "--json", "--replicates", "50"]);
@@ -46,7 +55,7 @@ beforeAll(async () => {
   agg = ModelStatsFileSchema.parse(JSON.parse(r.out));
 }, LONG);
 
-describe("stats match", () => {
+xdescribe("stats match", () => {
   test("a table, and with --json the perfidia-stats/1 document of statsOfRunDir", () => {
     const table = run(["match", join(series, "m01")]);
     expect(table.code).toBe(0);
@@ -98,7 +107,7 @@ describe("stats match", () => {
   });
 });
 
-describe("stats aggregate", () => {
+xdescribe("stats aggregate", () => {
   test("a rotated series: grouped by series.json, one block of four, too few matches", () => {
     expect(agg.series).toEqual([
       {
@@ -253,7 +262,7 @@ function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null && !Array.isArray(v);
 }
 
-describe("review fixes", () => {
+xdescribe("review fixes", () => {
   test("--publish leaves out a listed match whose log does not verify, as the server hides it", () => {
     const root = join(tempDir("stats-publish"), "runs");
     mkdirSync(root, { recursive: true });
@@ -351,7 +360,7 @@ describe("review fixes", () => {
   });
 });
 
-test("stats power: the design's table and a deterministic simulation", () => {
+xtest("stats power: the design's table and a deterministic simulation", () => {
   const r = run(["power", "--matches", "8", "--reps", "4", "--replicates", "0", "--json"]);
   expect(r.code).toBe(0);
   const a: unknown = JSON.parse(r.out);

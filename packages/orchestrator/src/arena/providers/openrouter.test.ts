@@ -13,6 +13,8 @@
 //   Level E, every attempt charged at its card plus the 5.5% fee (OpenRouter's reported cost plus
 //   that fee), the budget block under, `effortSent: low` in `seats.json`, no `parallel_tool_calls`,
 //   and every request of a turn extends the previous one byte for byte.
+// The 1-day match against the wire stub runs in the slow suite (PERFIDIA_SLOW=1,
+// docs/architecture.md §13.8: `bun run test:slow`, run by `bun run test:exit`).
 
 import { afterEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -45,6 +47,10 @@ import {
   planLive,
   usdPerTokenToPico,
 } from "./openrouter.ts";
+
+const SLOW = process.env["PERFIDIA_SLOW"] === "1";
+/** A test of the slow suite: skipped unless PERFIDIA_SLOW=1. */
+const xtest = test.skipIf(!SLOW);
 
 /** `arena` as the CLI runs it, with no calibration profile unless a test passes `--profiles`. */
 const main = (...[argv, io, env, o]: Parameters<typeof arenaMain>) =>
@@ -799,7 +805,7 @@ describe("arena smoke --provider openrouter", () => {
 });
 
 describe("a 1-day lockstep match on the OpenRouter wire stub", () => {
-  test(
+  xtest(
     "Level E, card costs plus the fee, the reported cost logged, the budget under, effortSent, stable prefixes",
     async () => {
       const stub = openrouterStub();

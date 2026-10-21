@@ -2,12 +2,18 @@
 // per day by class, deferred turns from `defer` lines, a hand-off from a `controller` line, an
 // `INTERNAL` `gw` line, rejections by layer, event counts and sieges), the fatal and incomplete
 // cases, and agreement with the host's own statistics on a real run.
+// The real run of each ruleset runs in the slow suite (PERFIDIA_SLOW=1, docs/architecture.md §13.8:
+// `bun run test:slow`, run by `bun run test:exit`).
 
 import { describe, expect, test } from "bun:test";
 import { verifyLog } from "@perfidia/engine";
 import { LogLineSchema, type LogLine } from "@perfidia/protocol";
 import { jsonlText, runBots } from "../harness/index.ts";
 import { LogShapeError, formatSummary, summarize, wakeClass } from "./index.ts";
+
+const SLOW = process.env["PERFIDIA_SLOW"] === "1";
+/** A test of the slow suite: skipped unless PERFIDIA_SLOW=1. */
+const xtest = test.skipIf(!SLOW);
 
 const H16 = (c: string): string => c.repeat(16);
 
@@ -300,7 +306,7 @@ describe("summarize", () => {
     expect(wakeClass({ reasons: ["safety"], urgent: false, charge: null })).toBe("safety");
   });
 
-  test("agrees with the host's statistics on a real run of each ruleset", async () => {
+  xtest("agrees with the host's statistics on a real run of each ruleset", async () => {
     for (const ruleset of ["perfidia-1", "sandbox-1"]) {
       // oxlint-disable-next-line no-await-in-loop -- one match at a time
       const out = await runBots({

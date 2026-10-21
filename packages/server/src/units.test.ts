@@ -34,6 +34,9 @@ import { CACHE_VERSION_TAG, TimelineCache } from "./timeline/cache.ts";
 import { STEPS_PAGE, Timeline, summaryOf } from "./timeline/timeline.ts";
 import { fakeRun, foldWhole, tempDir, testConfig } from "./testkit.test.ts";
 
+/** The slow suite (PERFIDIA_SLOW=1, docs/architecture.md §13.8) tries more chunkings. */
+const SLOW = process.env["PERFIDIA_SLOW"] === "1";
+
 const byText = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
 
 /** A memo entry of `n` characters. */
@@ -71,7 +74,8 @@ describe("LineTail", () => {
           expect(tail.pending).toBe(0);
         },
       ),
-      { numRuns: 40 },
+      // 10 chunkings outside the slow suite, which tries all 40.
+      { numRuns: SLOW ? 40 : 10 },
     );
   });
 

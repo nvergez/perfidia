@@ -362,8 +362,11 @@ Fly. No CORS, no cookies.
 
 ## 10. Tests and measurements
 
-Server tests (`packages/server/src/*.test.ts`, in the default `bun test`; 53 tests, about 46 s run
-alone):
+Server tests (`packages/server/src/*.test.ts`; 53 tests, about 46 s run alone). Since the suite
+split of architecture §13, the longest are in the slow suite (`bun run test:slow`, run by
+`bun run test:exit`): `war.test.ts`, `cache.test.ts`, `many.test.ts`, the live-follow tests of
+`live.test.ts`, two of `publish.test.ts` and one of `security.test.ts`; the others are in the
+default `bun test`:
 
 | File                                    | What it checks                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
 | --------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -470,7 +473,8 @@ least 14 days old): `elysia@2.0.0-beta.21` (2026-10-02), `@elysia/openapi@2.0.0-
 7. The default `bun test` on this container took 348 s before phase 3 (2,945 tests), 395 s after
    step 1 (3,077 tests), 422 s after step 2 (3,116 tests) and 432 s after the review fixes
    (3,134 tests, 18 skipped): far over the 90 s target of architecture §13.8, which the suite had
-   already left before phase 3.
+   already left before phase 3. The default and slow suites of architecture §13 brought it back
+   under 150 s on this container (§13.8 has the figures).
 8. Open questions for the owner (design §9) still stand: visibility for external harnesses, full
    reasoning, prompts, public costs, what is public, content policy, hosting, the exit-test
    material.

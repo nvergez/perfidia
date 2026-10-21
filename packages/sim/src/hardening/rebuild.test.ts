@@ -25,7 +25,17 @@ import type {
   ToolCall,
 } from "@perfidia/protocol";
 import { prepareBotRun, runBots, runPrepared, type BotRun } from "../harness/index.ts";
-import { LOCKSTEP, REFS, VIRTUAL, daySpec, resolve } from "./kit.ts";
+import { DEFAULT_REF, LOCKSTEP, REFS, VIRTUAL, daySpec, resolve } from "./kit.ts";
+
+/**
+ * The slow suite (`PERFIDIA_SLOW=1`: `bun run test:slow`, run by `bun run test:exit`; docs/
+ * architecture.md §13.8) runs the per-ruleset comparisons on every ruleset of `REFS` under both
+ * clocks; the default suite on `DEFAULT_REF` only, with chaos agents under lockstep, and the system
+ * clock. The runs with the default bots alone and the hand-off run in the slow suite only.
+ */
+const SLOW = process.env["PERFIDIA_SLOW"] === "1";
+/** A test of the slow suite: skipped unless PERFIDIA_SLOW=1. */
+const xtest = test.skipIf(!SLOW);
 
 const text = (gw: GatewayState): string => canonicalJson(gw);
 
@@ -159,7 +169,8 @@ const hasEvent = (lines: readonly LogLine[], ...types: string[]): boolean =>
 describe("rebuilt gateway state = live gateway state (§10.5)", () => {
   for (const ref of REFS) {
     for (const clock of [LOCKSTEP, VIRTUAL]) {
-      test(`${ref}, default bots, ${clock.kind}`, async () => {
+      if (!SLOW && (ref !== DEFAULT_REF || clock.kind !== "lockstep")) continue;
+      xtest(`${ref}, default bots, ${clock.kind}`, async () => {
         const out = await runBots(daySpec(ref, clock, 3));
         expect(out.lines.at(-1)?.k).toBe("end");
         expectRebuilt(out.lines, out.run.gateway);
@@ -180,6 +191,7 @@ describe("rebuilt gateway state = live gateway state (§10.5)", () => {
   }
 
   for (const ref of REFS) {
+    if (!SLOW && ref !== DEFAULT_REF) continue;
     test(`${ref}, default bots, system clock at very high speed: Level E, and the rebuild too`, async () => {
       const out = await runBots(
         daySpec(ref, { kind: "system", speed: { num: 864000, den: 1 } }, 3),
@@ -222,7 +234,7 @@ describe("rebuilt gateway state = live gateway state (§10.5)", () => {
     }, 30000);
   }
 
-  test("a hand-off (controller line) and deferred turns (defer lines)", async () => {
+  xtest("a hand-off (controller line) and deferred turns (defer lines)", async () => {
     const handoff = await runBots({
       ...daySpec("perfidia-1", LOCKSTEP, 6),
       handoffs: [{ seat: "p2", at: 43200, strategy: "turtle" }],

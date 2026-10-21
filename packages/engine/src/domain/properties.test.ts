@@ -53,6 +53,13 @@ import {
   setupOf,
 } from "./fixtures.test.ts";
 
+// The slow suite (PERFIDIA_SLOW=1: `bun run test:slow`, run by `bun run test:exit`; docs/
+// architecture.md §13.8). Read through `import.meta.env`: the pure packages' tests may not name the
+// `process` global.
+const SLOW = import.meta.env["PERFIDIA_SLOW"] === "1";
+/** A test of the slow suite: skipped unless PERFIDIA_SLOW=1. */
+const xtest = test.skipIf(!SLOW);
+
 // Intents ------------------------------------------------------------------------------------------
 
 /** An action intent, resolved against the current state so that most are valid. */
@@ -413,13 +420,14 @@ describe("P4: random intents never throw and keep the step invariants (P3 on the
 
   for (const [name, ruleset] of rulesets) {
     test(`${name}: from a hand-built world`, () => {
-      fromStart(ruleset, { numRuns: 60 });
+      // 20 runs outside the slow suite, which runs 60 (P4 at scale is there too).
+      fromStart(ruleset, { numRuns: SLOW ? 60 : 20 });
     });
 
     // A fixed seed, so that this check of the generator's reach is reproducible: most kinds are
     // accepted, alliances between pact partners happen, and partial or whole recalls meet groups
     // from several homes.
-    test(`${name}: the intents reach every kind of action (seeded)`, () => {
+    xtest(`${name}: the intents reach every kind of action (seeded)`, () => {
       const cov = newCoverage();
       fromStart(ruleset, { numRuns: 150, seed: 20261010 }, cov);
       for (const type of KINDS) {
@@ -493,7 +501,9 @@ test("P9: shuffling the insertion order of every record changes neither the hash
         }
       },
     ),
-    { numRuns: 60 },
+    // 20 runs outside the slow suite, which runs 60 (P9 through bot runs:
+    // sim/src/hardening/p9.test.ts).
+    { numRuns: SLOW ? 60 : 20 },
   );
 }, 30000);
 
@@ -607,6 +617,7 @@ test("violation details are fog-safe: data hidden from the seat never changes it
         for (const a of probes) expect(verdictOf(changed, a)).toBe(verdictOf(visible, a));
       },
     ),
-    { numRuns: 100 },
+    // 30 runs outside the slow suite, which runs 100.
+    { numRuns: SLOW ? 100 : 30 },
   );
 });

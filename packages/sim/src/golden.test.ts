@@ -1,9 +1,11 @@
 // The freeze guard (docs/architecture.md §13.5, §13.6), in the default suite on purpose: every
-// `bun test` replays every committed golden at Level E (and Level G when its controllers are bots
-// of this build), recomputes the ruleset fingerprints and the views fingerprint of every golden
-// (what the hooks show every seat at every checkpoint), and checks that every published ref keeps
-// a golden and a fingerprint entry. The same check must fail on a tampered temporary copy of the
-// fixtures, and on descriptors whose cheat sheet, visibility hook, title or extra tool changed.
+// `bun test` replays every committed golden at Level E, recomputes the ruleset fingerprints and the
+// views fingerprint of every golden (what the hooks show every seat at every checkpoint), and
+// checks that every published ref keeps a golden and a fingerprint entry. Level G (the bots of this
+// build re-simulate every bot golden byte for byte) runs in the slow suite (PERFIDIA_SLOW=1, §13.8:
+// `bun run test:slow`, run by `bun run test:exit`), and in `sim golden --check` in CI's exit job.
+// The same check must fail on a tampered temporary copy of the fixtures, and on descriptors whose
+// cheat sheet, visibility hook, title or extra tool changed.
 // The goldens' coverage claims of §13.5 are asserted from their own lines.
 
 import { describe, expect, test } from "bun:test";
@@ -28,6 +30,9 @@ import {
   readLog,
   type GoldenFile,
 } from "./harness/index.ts";
+
+/** The slow suite (§13.8): Level G of every bot golden. */
+const SLOW = process.env["PERFIDIA_SLOW"] === "1";
 
 const PERFIDIA = "perfidia-1@1.0.0";
 const P11 = "perfidia-1@1.1.0";
@@ -87,8 +92,8 @@ const field = (l: EvLine, key: string): unknown =>
   Object.hasOwn(l.e.data, key) ? l.e.data[key] : undefined;
 
 describe("the freeze guard", () => {
-  test("every golden replays with its recorded final hash, and every fingerprint matches", async () => {
-    const report = await checkGoldens(FIXTURES_DIR, RULESETS);
+  test("every golden replays with its recorded final hash, and every fingerprint matches (Level G: slow suite)", async () => {
+    const report = await checkGoldens(FIXTURES_DIR, RULESETS, { levelG: SLOW });
     expect(report.problems).toEqual([]);
     expect(report.ok).toBe(true);
     // The goldens of §13.5; Level G runs for the bot goldens, not for the scripted scenario. Each
@@ -96,35 +101,36 @@ describe("the freeze guard", () => {
     // default bots of PR #7 (rusher@2, conqueror@1), of PR #8 (the relief release) and of this
     // build (every strategy at its latest version): the older ones keep their Level G check.
     // perfidia-1@1.1.0 has the same bot goldens, for the default bots of its release, and the
-    // scripted `scenario-r1`.
+    // scripted `scenario-r1`. Outside the slow suite, Level G is skipped for every golden.
+    const bot = SLOW ? "pass" : "skipped";
     expect(report.goldens.map((g) => `${g.ref}/${g.name} ${g.levelG}`)).toEqual([
-      `${PERFIDIA}/lockstep-12p-1d-${RELIEF_12P} pass`,
-      `${PERFIDIA}/lockstep-12p-1d-${BOTS_12P} pass`,
-      `${PERFIDIA}/lockstep-12p-1d-${FIGHT_12P} pass`,
-      `${PERFIDIA}/lockstep-12p-1d pass`,
-      `${PERFIDIA}/lockstep-6p-4d-${FIGHT_6P} pass`,
-      `${PERFIDIA}/lockstep-6p-4d-${RELIEF_6P} pass`,
-      `${PERFIDIA}/lockstep-6p-4d-${BOTS_6P} pass`,
-      `${PERFIDIA}/lockstep-6p-4d pass`,
-      `${PERFIDIA}/lockstep-6p-6d-war pass`,
-      `${PERFIDIA}/rt-virtual-6p-1d-${FIGHT_6P} pass`,
-      `${PERFIDIA}/rt-virtual-6p-1d-${RELIEF_6P} pass`,
-      `${PERFIDIA}/rt-virtual-6p-1d-${BOTS_6P} pass`,
-      `${PERFIDIA}/rt-virtual-6p-1d pass`,
+      `${PERFIDIA}/lockstep-12p-1d-${RELIEF_12P} ${bot}`,
+      `${PERFIDIA}/lockstep-12p-1d-${BOTS_12P} ${bot}`,
+      `${PERFIDIA}/lockstep-12p-1d-${FIGHT_12P} ${bot}`,
+      `${PERFIDIA}/lockstep-12p-1d ${bot}`,
+      `${PERFIDIA}/lockstep-6p-4d-${FIGHT_6P} ${bot}`,
+      `${PERFIDIA}/lockstep-6p-4d-${RELIEF_6P} ${bot}`,
+      `${PERFIDIA}/lockstep-6p-4d-${BOTS_6P} ${bot}`,
+      `${PERFIDIA}/lockstep-6p-4d ${bot}`,
+      `${PERFIDIA}/lockstep-6p-6d-war ${bot}`,
+      `${PERFIDIA}/rt-virtual-6p-1d-${FIGHT_6P} ${bot}`,
+      `${PERFIDIA}/rt-virtual-6p-1d-${RELIEF_6P} ${bot}`,
+      `${PERFIDIA}/rt-virtual-6p-1d-${BOTS_6P} ${bot}`,
+      `${PERFIDIA}/rt-virtual-6p-1d ${bot}`,
       `${PERFIDIA}/scenario-late skipped`,
-      `${P11}/lockstep-12p-1d pass`,
-      `${P11}/lockstep-6p-4d pass`,
-      `${P11}/lockstep-6p-6d-war pass`,
-      `${P11}/rt-virtual-6p-1d pass`,
+      `${P11}/lockstep-12p-1d ${bot}`,
+      `${P11}/lockstep-6p-4d ${bot}`,
+      `${P11}/lockstep-6p-6d-war ${bot}`,
+      `${P11}/rt-virtual-6p-1d ${bot}`,
       `${P11}/scenario-r1 skipped`,
-      `${SANDBOX}/lockstep-6p-3d-${FIGHT_6P} pass`,
-      `${SANDBOX}/lockstep-6p-3d-${RELIEF_6P} pass`,
-      `${SANDBOX}/lockstep-6p-3d-${BOTS_6P} pass`,
-      `${SANDBOX}/lockstep-6p-3d pass`,
-      `${SANDBOX}/rt-virtual-6p-1d-${FIGHT_6P} pass`,
-      `${SANDBOX}/rt-virtual-6p-1d-${RELIEF_6P} pass`,
-      `${SANDBOX}/rt-virtual-6p-1d-${BOTS_6P} pass`,
-      `${SANDBOX}/rt-virtual-6p-1d pass`,
+      `${SANDBOX}/lockstep-6p-3d-${FIGHT_6P} ${bot}`,
+      `${SANDBOX}/lockstep-6p-3d-${RELIEF_6P} ${bot}`,
+      `${SANDBOX}/lockstep-6p-3d-${BOTS_6P} ${bot}`,
+      `${SANDBOX}/lockstep-6p-3d ${bot}`,
+      `${SANDBOX}/rt-virtual-6p-1d-${FIGHT_6P} ${bot}`,
+      `${SANDBOX}/rt-virtual-6p-1d-${RELIEF_6P} ${bot}`,
+      `${SANDBOX}/rt-virtual-6p-1d-${BOTS_6P} ${bot}`,
+      `${SANDBOX}/rt-virtual-6p-1d ${bot}`,
     ]);
     // Every published ref of the registry has at least one golden and a fingerprint entry.
     const fp = readFingerprints(FIXTURES_DIR);

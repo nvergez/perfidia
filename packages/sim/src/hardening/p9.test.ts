@@ -13,6 +13,15 @@ import { testStep } from "@perfidia/engine/testing";
 import type { LogLine, Snapshot } from "@perfidia/protocol";
 import { LOCKSTEP, REFS, cachedRun, daySpec, loadChecked, snapshotAt } from "./kit.ts";
 
+/**
+ * The slow suite only (`PERFIDIA_SLOW=1`: `bun run test:slow`, run by `bun run test:exit`; docs/
+ * architecture.md §13.8), on every ruleset of `REFS`; the default suite has P9 at engine level
+ * (`engine/src/domain/properties.test.ts`).
+ */
+const SLOW = process.env["PERFIDIA_SLOW"] === "1";
+/** A test of the slow suite: skipped unless PERFIDIA_SLOW=1. */
+const xtest = test.skipIf(!SLOW);
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
@@ -85,7 +94,7 @@ function continueBoth(lines: readonly LogLine[], snap: Snapshot, a: Match, b: Ma
 
 describe("P9: the insertion order of records changes nothing", () => {
   for (const ref of REFS) {
-    test(`${ref}: shuffled mid-run states continue exactly like the log`, async () => {
+    xtest(`${ref}: shuffled mid-run states continue exactly like the log`, async () => {
       const run = await cachedRun({ ...daySpec(ref, LOCKSTEP, 9), snapshotEvery: 6 });
       const logged = (snap: Snapshot): string[] => {
         const from = run.lines.findIndex((l) => l.k === "ckpt" && l.hour === snap.hour);

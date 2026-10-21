@@ -6,6 +6,8 @@
 // and its log refolded, with the same steps. A log replaced by another with the same header is
 // refolded under a new timeline id, in the same process and after a restart, and so is a third one
 // written in place over the second. Files of other fold versions are deleted at startup.
+// Slow suite only (docs/architecture.md §13.8): skipped unless PERFIDIA_SLOW=1
+// (`bun run test:slow`, which `bun run test:exit` runs).
 
 // oxlint-disable no-await-in-loop -- one match at a time, on purpose
 import { afterAll, describe, expect, test } from "bun:test";
@@ -32,11 +34,15 @@ import {
   waitFor,
 } from "./testkit.test.ts";
 
+const SLOW = process.env["PERFIDIA_SLOW"] === "1";
+/** A group of tests of the slow suite: skipped unless PERFIDIA_SLOW=1. */
+const xdescribe = describe.skipIf(!SLOW);
+
 afterAll(stopServers);
 
 const LONG = 120_000;
 
-describe("the timeline cache", () => {
+xdescribe("the timeline cache", () => {
   test(
     "evicted timelines are read back from the cache; a corrupt cache file is refolded",
     async () => {

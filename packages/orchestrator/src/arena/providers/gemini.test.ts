@@ -6,6 +6,8 @@
 // Google card of its wall-clock start (thoughts as output); the retry at 65,536 tokens; the rate
 // limit retried; the budget block; the seats' channel, cadence and transformed tools. Also
 // `arena smoke --provider google` against the stub: its bound printed before anything is sent.
+// The 1-day match against the wire stub runs in the slow suite (PERFIDIA_SLOW=1,
+// docs/architecture.md §13.8: `bun run test:slow`, run by `bun run test:exit`).
 
 import { afterAll, describe, expect, test } from "bun:test";
 import { canonicalJson, sha256Hex } from "@perfidia/engine/core";
@@ -24,6 +26,10 @@ import { arenaEnv, planArena } from "../plan.ts";
 import { toolsFor } from "../providers.ts";
 import { RULESET, play, runDir } from "../rig.test.ts";
 import { runGeminiSmoke } from "./gemini-smoke.ts";
+
+const SLOW = process.env["PERFIDIA_SLOW"] === "1";
+/** A test of the slow suite: skipped unless PERFIDIA_SLOW=1. */
+const xtest = test.skipIf(!SLOW);
 
 /** `arena` as the CLI runs it, with no calibration profile unless a test passes `--profiles`. */
 const main = (...[argv, io, env, o]: Parameters<typeof arenaMain>) =>
@@ -91,7 +97,7 @@ describe("arena run with Gemini seats against the wire stub (one lockstep day)",
   });
   afterAll(() => stub.stop());
 
-  test(
+  xtest(
     "Level E, every attempt one request priced at its Google card, the retries, the budget held",
     async () => {
       const env = arenaEnv({

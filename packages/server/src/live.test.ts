@@ -7,6 +7,8 @@
 //   missed or sent twice; a client holding another timeline gets `resync`;
 // - replacing the log sends `resync {log_replaced}`; a crash-truncated log stays live, then
 //   stalls, and is never unverifiable; annotations of the fake run's LLM turns are served.
+// The arena match followed live, the chunked log and the real-time match run in the slow suite
+// (PERFIDIA_SLOW=1, docs/architecture.md §13.8: `bun run test:slow`, run by `bun run test:exit`).
 
 // oxlint-disable no-await-in-loop -- the requests, pages and chunks follow each other on purpose (one cursor, one writer)
 import { afterAll, describe, expect, test } from "bun:test";
@@ -35,6 +37,10 @@ import {
   waitFor,
   stopServers,
 } from "./testkit.test.ts";
+
+const SLOW = process.env["PERFIDIA_SLOW"] === "1";
+/** A test of the slow suite: skipped unless PERFIDIA_SLOW=1. */
+const xtest = test.skipIf(!SLOW);
 
 afterAll(stopServers);
 
@@ -67,7 +73,7 @@ async function writeInChunks(
 }
 
 describe("a fake arena match followed while `bun run arena -- run --fake` writes it", () => {
-  test(
+  xtest(
     "the WebSocket follower ends with the frame of a fold of the whole file",
     async () => {
       const root = tempDir("arena");
@@ -126,7 +132,7 @@ describe("a fake arena match followed while `bun run arena -- run --fake` writes
 });
 
 describe("a log written in chunks cut anywhere", () => {
-  test(
+  xtest(
     "from the start, resumed after a disconnect, resumed after a restart from the cache: same frame, contiguous ranges",
     async () => {
       const run = await fakeRun({ days: 1, seed: 3 });
@@ -305,7 +311,7 @@ describe("annotations of a fake run's LLM turns", () => {
 });
 
 describe("a real-time match", () => {
-  test(
+  xtest(
     "its followers get clock messages: the speed, a time between the last line and the cap",
     async () => {
       const root = tempDir("rt");

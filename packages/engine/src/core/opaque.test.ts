@@ -9,6 +9,11 @@ import {
   opaqueId,
 } from "./opaque.ts";
 
+// The slow suite (PERFIDIA_SLOW=1: `bun run test:slow`, run by `bun run test:exit`; docs/
+// architecture.md §13.8). Read through `import.meta.env`: the pure packages' tests may not name the
+// `process` global.
+const SLOW = import.meta.env["PERFIDIA_SLOW"] === "1";
+
 const KEY_A = idKeyFromSeed(42);
 const KEY_B = "0123456789abcdef0123456789abcdef";
 const ID = /^[mrqg][0-9a-hjkmnp-tv-z]{5}$/;
@@ -77,14 +82,15 @@ describe("opaqueId", () => {
     );
   });
 
-  test("has no collision over owners 1..15 × counters below 2^16, using only the base-32 alphabet", () => {
+  test("has no collision over owners 1..15 × counters below 2^16 (2^12 outside the slow suite), using only the base-32 alphabet", () => {
+    const below = SLOW ? 65536 : 4096;
     for (const key of [KEY_A, KEY_B]) {
       const mint = createOpaqueIdMinter(key);
       const seen = new Set<string>();
       for (let who = 1; who <= 15; who += 1) {
-        for (let n = 1; n < 65536; n += 1) seen.add(mint("m", who, n));
+        for (let n = 1; n < below; n += 1) seen.add(mint("m", who, n));
       }
-      expect(seen.size).toBe(15 * 65535);
+      expect(seen.size).toBe(15 * (below - 1));
       for (const id of seen) expect(ID.test(id)).toBe(true);
     }
   }, 30000);

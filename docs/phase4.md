@@ -468,7 +468,8 @@ $0.011 + $1.54 + $0.22 + $10 + $55 (the three smokes' bounds, §25, then the two
 
 ## 11. Tests and measurements
 
-No test touches the network (loopback servers only). Run under `bun test` (default suite):
+No test touches the network (loopback servers only). Run under `bun test` (default suite;
+the long ones in the slow suite since the suite split of architecture §13, see §13.8):
 
 - `arena/phase4.test.ts`: the estimate pinned (above) with the design's $3.69 / $12.59 / $45.68
   reproduced at the design's Sonnet card and phase 2's $83.29; the §4.2 refusal from `estimate` and
@@ -814,6 +815,11 @@ already counts that card.
   dependency was added.
 
 ## 23. Tests and measurements (Pass 1b)
+
+Since the suite split of architecture §13, the long tests listed in its §13.8 (the 2–4-day budget
+matches, the wire-stub matches, series, the statistics CLI and routes, and the like) run in the
+slow suite (`bun run test:slow`, run by `bun run test:exit` and CI's `exit` job), the others in
+the default `bun test`.
 
 No test touches the network. New or extended:
 
@@ -1563,6 +1569,11 @@ match no later than 2026-11-28):
 No test touches the network: stub fetches and `Bun.serve` stubs on 127.0.0.1 only; the live tests
 are skipped with a printed reason unless `PERFIDIA_LIVE=1` and that provider's key are set.
 
+Since the suite split of architecture §13, the long tests listed in its §13.8 (the 2–4-day budget
+matches, the wire-stub matches, series, the statistics CLI and routes, and the like) run in the
+slow suite (`bun run test:slow`, run by `bun run test:exit` and CI's `exit` job), the others in
+the default `bun test`.
+
 | File                                                                                                    | Tests | What                                                                                               |
 | ------------------------------------------------------------------------------------------------------- | ----- | -------------------------------------------------------------------------------------------------- |
 | `model/openai.test.ts`                                                                                  | 47    | The OpenAI contract suite (request bytes, stops, errors by code, usage, broken streams, preflight) |
@@ -1988,6 +1999,11 @@ A rotated series is aggregated where `arena series --out <dir>` wrote it (the ro
 `serve --runs <dir> --stats <file>`.
 
 ## 47. Tests and measurements (Pass 3 statistics)
+
+Since the suite split of architecture §13, the long tests listed in its §13.8 (the 2–4-day budget
+matches, the wire-stub matches, series, the statistics CLI and routes, and the like) run in the
+slow suite (`bun run test:slow`, run by `bun run test:exit` and CI's `exit` job), the others in
+the default `bun test`.
 
 Tests (50 in the new files, in `packages/protocol`, `packages/spectator` and `packages/server`;
 none touches the network):
