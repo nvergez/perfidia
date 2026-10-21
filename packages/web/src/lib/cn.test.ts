@@ -7,7 +7,13 @@ import { classGroup, cn, mergeClasses } from "./cn.ts";
 // `cn` without tailwind-merge (docs/phase3.md §16): every ordered pair of the class names written
 // under `src` (string literals: JSX `className`, `cn(…)`, `cva` tables) merges exactly as
 // tailwind-merge 3.7 merges it, so the app's styles are unchanged. A class added later that the
-// table in `cn.ts` misreads fails here, with the pair named.
+// table in `cn.ts` misreads fails here, with the pair named. The pairwise comparison runs in the
+// slow suite (PERFIDIA_SLOW=1, docs/architecture.md §13.8: `bun run test:slow`, run by
+// `bun run test:exit`).
+
+const SLOW = process.env["PERFIDIA_SLOW"] === "1";
+/** A test of the slow suite: skipped unless PERFIDIA_SLOW=1. */
+const xtest = test.skipIf(!SLOW);
 
 const SRC = join(import.meta.dir, "..");
 const byText = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
@@ -88,7 +94,7 @@ function utilityOf(cls: string): string {
 }
 
 describe("cn", () => {
-  test("merges every pair of the app's classes as tailwind-merge does", () => {
+  xtest("merges every pair of the app's classes as tailwind-merge does", () => {
     const words = vocabulary();
     expect(words.length).toBeGreaterThan(400);
     // Only the classes tailwind-merge knows can conflict; it keeps a repeated unknown one twice.

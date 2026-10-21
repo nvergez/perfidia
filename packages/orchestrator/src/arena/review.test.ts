@@ -5,6 +5,9 @@
 //   before the start preflight (a signal there writes nothing), SIGHUP counts, and a third signal
 //   writes an `operator` line before the CLI exits;
 // - a key an upstream echoes in an error body never reaches a message, a log or stderr.
+// The 4-day kill switch under ENOSPC, --budget-carry of an unfinished run, the per-seat prompt
+// hashes and reconcile within 48 hours run in the slow suite (PERFIDIA_SLOW=1,
+// docs/architecture.md §13.8: `bun run test:slow`, run by `bun run test:exit`).
 
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
@@ -38,6 +41,10 @@ import { exit4Met } from "./report.ts";
 import { operatorHashOf, runArena, type AdapterContext, type SignalSource } from "./run.ts";
 import { RULESET, readCalls, runDir } from "./rig.test.ts";
 
+const SLOW = process.env["PERFIDIA_SLOW"] === "1";
+/** A test of the slow suite: skipped unless PERFIDIA_SLOW=1. */
+const xtest = test.skipIf(!SLOW);
+
 /** `arena` as the CLI runs it, with no calibration profile unless a test passes `--profiles`. */
 const main = (...[argv, io, env, o]: Parameters<typeof arenaMain>) =>
   arenaMain(argv, io, env, { profilesDir: "off", ...o });
@@ -57,7 +64,7 @@ const centsText = (c: number): string =>
 type Call = Extract<LlmLogLine, { k: "llm_call" }>;
 
 describe("the kill switch is fail-safe (review: money, major)", () => {
-  test(
+  xtest(
     "the kill_switch line fails with ENOSPC: every seat is still halted, no attempt starts after the kill, under budget",
     async () => {
       const base = {
@@ -169,7 +176,7 @@ const duo = (days: number) =>
   );
 
 describe("crashes and operator signals (review: money, major)", () => {
-  test(
+  xtest(
     "--budget-carry of a run that did not end carries its reserve for what it had in flight",
     async () => {
       const first = runDir("first");
@@ -717,7 +724,7 @@ describe("arena reconcile (review: money and correctness)", () => {
     expect(ledgerOf([after]).get("google")?.excess).toBe(0);
   });
 
-  test(
+  xtest(
     "under 48 hours, exit4.reconciled stays null unless --force; a fake run is never met",
     async () => {
       const dir = runDir();
@@ -939,7 +946,7 @@ describe("seat checks (review: correctness)", () => {
 });
 
 describe("per-seat prompt hashes (review: correctness)", () => {
-  test(
+  xtest(
     "seats.json hashes each seat's own tools and its channel's rendering of the operator texts",
     async () => {
       const dir = runDir();

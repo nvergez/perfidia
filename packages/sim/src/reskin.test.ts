@@ -2,7 +2,8 @@
 // the actions of 1.0.0's bot goldens, every id renamed, replayed under 1.1.0 with domination off
 // (the one rule 1.1.0 changes besides the score's Olympus term, which none of these matches
 // reaches) give the same events, mapped back to 1.0.0's ids, as the goldens record, and every
-// action the same result.
+// action the same result. The 4- and 6-day goldens run in the slow suite (PERFIDIA_SLOW=1,
+// docs/architecture.md §13.8: `bun run test:slow`, run by `bun run test:exit`).
 
 import { describe, expect, test } from "bun:test";
 import { createMatch, getRuleset } from "@perfidia/engine";
@@ -14,6 +15,8 @@ import {
 } from "@perfidia/protocol";
 import { FIXTURES_DIR } from "./golden/index.ts";
 import { listGoldens, readLog } from "./harness/index.ts";
+
+const SLOW = process.env["PERFIDIA_SLOW"] === "1";
 
 const P11 = getRuleset("perfidia-1@1.1.0");
 
@@ -104,6 +107,7 @@ function replay11(lines: readonly LogLine[]): {
 
 describe("1.0.0's bot goldens replayed under 1.1.0", () => {
   for (const name of ["lockstep-6p-4d", "lockstep-12p-1d", "lockstep-6p-6d-war"]) {
+    if (!SLOW && name !== "lockstep-12p-1d") continue;
     test(`${name}: the same events and action results, ids renamed`, () => {
       const golden = listGoldens(FIXTURES_DIR).find(
         (g) => g.ref === "perfidia-1@1.0.0" && g.name === name,

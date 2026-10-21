@@ -2,6 +2,8 @@
 // §13.5): every `bot:` label of every golden under `fixtures/golden/**` (header controllers and
 // `controller` hand-off lines) parses and builds exactly that version, so a new bot version cannot
 // silently drop an old golden to Level E only. The re-simulation itself runs in `src/golden.test.ts`.
+// Slow suite only (docs/architecture.md §13.8): skipped unless PERFIDIA_SLOW=1
+// (`bun run test:slow`, which `bun run test:exit` runs).
 
 import { expect, test } from "bun:test";
 import { botFromLabel, botLabel, parseBotLabel } from "@perfidia/bots";
@@ -9,7 +11,11 @@ import { DEFAULT_BOTS, listGoldens, resimProblem } from "../harness/index.ts";
 import { readLog } from "../io/index.ts";
 import { FIXTURES_DIR } from "./index.ts";
 
-test("every bot label of every committed golden is a bot of this build", () => {
+const SLOW = process.env["PERFIDIA_SLOW"] === "1";
+/** A test of the slow suite: skipped unless PERFIDIA_SLOW=1. */
+const xtest = test.skipIf(!SLOW);
+
+xtest("every bot label of every committed golden is a bot of this build", () => {
   const goldens = listGoldens(FIXTURES_DIR);
   expect(goldens.length).toBeGreaterThan(0);
   const seen = new Set<string>();

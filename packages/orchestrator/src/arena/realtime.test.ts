@@ -4,6 +4,8 @@
 // closes. A hand-off happens through the queue in real time. Level E and the gateway rebuild hold.
 // Then: a slow spell (every LLM seat's turn past the deadline) closes those turns and the match goes
 // on; an operator-recoverable failure aborts the arena at once.
+// The slow spell past the deadline runs in the slow suite (PERFIDIA_SLOW=1, docs/architecture.md
+// §13.8: `bun run test:slow`, run by `bun run test:exit`).
 
 import { describe, expect, test } from "bun:test";
 import { findRuleset, verifyLog } from "@perfidia/engine";
@@ -16,6 +18,10 @@ import { botBrain } from "./brain.ts";
 import type { LlmSeatPlan } from "./plan.ts";
 import type { AdapterContext } from "./run.ts";
 import { FlakyAdapter, fakePlan, play } from "./rig.test.ts";
+
+const SLOW = process.env["PERFIDIA_SLOW"] === "1";
+/** A test of the slow suite: skipped unless PERFIDIA_SLOW=1. */
+const xtest = test.skipIf(!SLOW);
 
 const LONG = 120_000;
 const resolve = (ref: string) => findRuleset(ref);
@@ -96,7 +102,7 @@ describe("arena in real time (virtual time)", () => {
     LONG,
   );
 
-  test(
+  xtest(
     "a slow spell past the deadline closes those turns only: no breaker, no abort, the match ends",
     async () => {
       const run = await play(fakePlan({ days: 1, clock: "realtime" }), {

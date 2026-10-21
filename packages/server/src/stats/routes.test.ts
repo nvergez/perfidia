@@ -9,6 +9,8 @@
 // fixes: while a match's first fold runs its statistics are a 503 `LOADING`, never figures of a
 // half-folded log; a file whose claim state is not `ok` is served without ratings, outcomes or
 // ranks whatever it holds.
+// Slow suite only (docs/architecture.md §13.8): skipped unless PERFIDIA_SLOW=1
+// (`bun run test:slow`, which `bun run test:exit` runs).
 
 // oxlint-disable no-await-in-loop -- the requests follow each other on purpose
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
@@ -35,6 +37,12 @@ import { main } from "./cli.ts";
 import { seriesRoot } from "./fixtures.test.ts";
 import { statsOfRunDir } from "./runs.ts";
 
+const SLOW = process.env["PERFIDIA_SLOW"] === "1";
+/** A test of the slow suite: skipped unless PERFIDIA_SLOW=1. */
+const xtest = test.skipIf(!SLOW);
+/** A group of tests of the slow suite: skipped unless PERFIDIA_SLOW=1. */
+const xdescribe = describe.skipIf(!SLOW);
+
 const LONG = 180_000;
 
 afterAll(stopServers);
@@ -56,6 +64,7 @@ function aggregateTo(out: string, extra: readonly string[] = []): void {
 }
 
 beforeAll(async () => {
+  if (!SLOW) return;
   root = await seriesRoot();
   cache = tempDir("stats-routes-cache");
   const dir = tempDir("stats-routes");
@@ -92,7 +101,7 @@ async function settled(s: TestServer, ids: readonly string[]): Promise<void> {
 }
 
 for (const adapter of ["elysia", "raw"] as const) {
-  describe(`the statistics routes (${adapter} adapter)`, () => {
+  xdescribe(`the statistics routes (${adapter} adapter)`, () => {
     let s: TestServer;
     let hidden: TestServer;
 
@@ -221,7 +230,7 @@ for (const adapter of ["elysia", "raw"] as const) {
   });
 }
 
-test(
+xtest(
   "while a match's first fold runs, its statistics are 503 LOADING, never a half-folded log's",
   async () => {
     const runs = tempDir("stats-cold");

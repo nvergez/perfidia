@@ -2,6 +2,8 @@
 // at every position once per block, every profile too) and, with an orthogonal pair, Graeco-Latin
 // (every model plays every profile once per block); they are a pure function of the seed. A fake
 // series of budget-mix plays its 4 rotated matches with Level E ok, each seat as the manifest says.
+// The four rotated fake matches run in the slow suite (PERFIDIA_SLOW=1, docs/architecture.md §13.8:
+// `bun run test:slow`, run by `bun run test:exit`).
 
 import { describe, expect, test } from "bun:test";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
@@ -20,6 +22,10 @@ import { main as arenaMain } from "./cli.ts";
 import { loadLineup } from "./lineup.ts";
 import { randomSquares, rotationOf, seriesMatches, type Square } from "./series.ts";
 import { runDir } from "./rig.test.ts";
+
+const SLOW = process.env["PERFIDIA_SLOW"] === "1";
+/** A test of the slow suite: skipped unless PERFIDIA_SLOW=1. */
+const xtest = test.skipIf(!SLOW);
 
 /** `arena` as the CLI runs it, with no calibration profile unless a test passes `--profiles`. */
 const main = (...[argv, io, env, o]: Parameters<typeof arenaMain>) =>
@@ -153,7 +159,7 @@ async function cli(argv: readonly string[]) {
 }
 
 describe("arena series --fake", () => {
-  test(
+  xtest(
     "4 rotated budget-mix matches with a manifest, each Level E ok, seated as the manifest says",
     async () => {
       const out = runDir("series");

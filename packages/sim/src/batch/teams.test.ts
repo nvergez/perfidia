@@ -3,6 +3,8 @@
 // messages and the reach of the R1 domination rule (perfidia-1@1.1.0 §13.3; for a 1.0.0 log, 1.1.0's
 // defaults). Exact on hand-written lines; then one real batch, whose teamwork must agree with
 // its own log and summary.
+// The real batch runs in the slow suite (PERFIDIA_SLOW=1, docs/architecture.md §13.8:
+// `bun run test:slow`, run by `bun run test:exit`).
 
 import { describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
@@ -26,6 +28,10 @@ import {
   type InitialMap,
   type TeamOfMatch,
 } from "./index.ts";
+
+const SLOW = process.env["PERFIDIA_SLOW"] === "1";
+/** A test of the slow suite: skipped unless PERFIDIA_SLOW=1. */
+const xtest = test.skipIf(!SLOW);
 
 function log(rows: readonly unknown[]): LogLine[] {
   return rows.map((r) => LogLineSchema.parse(r));
@@ -470,7 +476,7 @@ describe("a variant's teamwork", () => {
 });
 
 describe("a real batch", () => {
-  test("its teamwork agrees with its log and summary", async () => {
+  xtest("its teamwork agrees with its log and summary", async () => {
     const dir = mkdtempSync(join(tmpdir(), "perfidia-sim-teams-"));
     try {
       const variant = parseVariant("base: perfidia-1");

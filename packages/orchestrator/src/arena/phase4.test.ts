@@ -11,6 +11,9 @@
 // - `--budget-carry`; a failed probe's spend is charged; probes stop once the seats are halted.
 // - `arena reconcile`: `reconcile.json`, exit 4 outside tolerance.
 // - A redirecting base URL never receives the key (the whole CLI).
+// The 2-day byte-identical runs, the 4-day kill switch, --budget-carry, SIGINT once, the failed
+// probe and `arena reconcile` on a run run in the slow suite (PERFIDIA_SLOW=1,
+// docs/architecture.md §13.8: `bun run test:slow`, run by `bun run test:exit`).
 
 import { afterEach, describe, expect, test } from "bun:test";
 import { existsSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
@@ -36,6 +39,10 @@ import { arenaEnv, planArena, type LlmSeatPlan } from "./plan.ts";
 import { reconcileRun } from "./reconcile.ts";
 import { runArena, type AdapterContext, type SignalSource } from "./run.ts";
 import { FlakyAdapter, RULESET, readCalls, runDir } from "./rig.test.ts";
+
+const SLOW = process.env["PERFIDIA_SLOW"] === "1";
+/** A test of the slow suite: skipped unless PERFIDIA_SLOW=1. */
+const xtest = test.skipIf(!SLOW);
 
 /** `arena` as the CLI runs it, with no calibration profile unless a test passes `--profiles`. */
 const main = (...[argv, io, env, o]: Parameters<typeof arenaMain>) =>
@@ -179,7 +186,7 @@ describe("arena estimate (phase 4 §5.3, §5.4)", () => {
 });
 
 describe("arena run --fake --lineup claude-duo (phase 4 Pass 1a)", () => {
-  test(
+  xtest(
     "2 days, budget $55: Level E, estimate.json before turn 1 with its sha in seats.json, exit4, byte-identical runs",
     async () => {
       const dirs = [runDir("a"), runDir("b")];
@@ -290,7 +297,7 @@ describe("arena run --fake --lineup claude-duo (phase 4 Pass 1a)", () => {
     LONG,
   );
 
-  test(
+  xtest(
     "a budget just above the refusal threshold fires the kill switch: every seat handed off match_budget, under budget, the match ends",
     async () => {
       const base = {
@@ -413,7 +420,7 @@ function firing(sig: ReturnType<typeof signals>, at: number) {
 }
 
 describe("operator signals (phase 4 §5.2)", () => {
-  test(
+  xtest(
     "SIGINT once: no attempt after it, every LLM seat handed to its bot (operator), the match ends",
     async () => {
       const sig = signals();
@@ -495,7 +502,7 @@ const billing = (spent: ReturnType<typeof usage> = []) =>
   new ModelError("billing", "credit balance too low", { status: 402, spent });
 
 describe("probes, carry (phase 4 §5.2, §5.5)", () => {
-  test(
+  xtest(
     "a failed probe's spend is charged and logged; probes stop once every seat is halted",
     async () => {
       const sig = signals();
@@ -560,7 +567,7 @@ describe("probes, carry (phase 4 §5.2, §5.5)", () => {
     LONG,
   );
 
-  test(
+  xtest(
     "--budget-carry: a crashed run's logged spend counts from the start (and toward the refusal)",
     async () => {
       const first = runDir("first");
@@ -627,7 +634,7 @@ describe("probes, carry (phase 4 §5.2, §5.5)", () => {
 });
 
 describe("arena reconcile (phase 4 §5.6)", () => {
-  test(
+  xtest(
     "within tolerance: reconcile.json, exit 0, exit4.reconciled true; outside: exit 4",
     async () => {
       const dir = runDir();

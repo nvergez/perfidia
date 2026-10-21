@@ -2,11 +2,17 @@
 // gateway: expander@2 breaks the siege of its own city, opportunist@2 the siege of its ally's
 // city, both by a relief battle (perfidia-1 §9.3); expander@2 attacks no one else; the same seed
 // gives the same log. Each match is cut at the end of day 2 to keep the test fast.
+// Slow suite only (docs/architecture.md §13.8): skipped unless PERFIDIA_SLOW=1
+// (`bun run test:slow`, which `bun run test:exit` runs).
 
 import { describe, expect, test } from "bun:test";
 import type { ActLine, EvLine, LogLine } from "@perfidia/protocol";
 import { normalisedHash, runBots, type BotRunSpec } from "./harness/index.ts";
 import { summarize } from "./summary/index.ts";
+
+const SLOW = process.env["PERFIDIA_SLOW"] === "1";
+/** A group of tests of the slow suite: skipped unless PERFIDIA_SLOW=1. */
+const xdescribe = describe.skipIf(!SLOW);
 
 /** Six seats, every version pinned, so that a later version of any bot does not change these matches. */
 const spec = (seed: number): BotRunSpec => ({
@@ -68,7 +74,7 @@ function expanderAttacksAreReliefs(lines: readonly LogLine[]): void {
   }
 }
 
-describe("relief on real matches (perfidia-1, 6 seats, days 1–2)", () => {
+xdescribe("relief on real matches (perfidia-1, 6 seats, days 1–2)", () => {
   test("seed 35: expander@2 breaks the siege of its own city, and the same seed gives the same log", async () => {
     const a = await runBots(spec(35));
     expect(a.lines.at(-1)?.k).toBe("end");

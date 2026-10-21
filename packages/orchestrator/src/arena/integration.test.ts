@@ -19,6 +19,9 @@
 // - Phase 3: `replies.jsonl` holds one line per reply the conversation keeps, right after its
 //   `llm_call` line, with the fake brain's reasoning; `match.jsonl` is on disk line by line while
 //   the run goes (a seat's wake line is there before its first model call).
+// The two-run determinism check, the capped seat's 2-day hand-off, the billing pause, --stop-after,
+// replies.jsonl and the refused-turns alert run in the slow suite (PERFIDIA_SLOW=1,
+// docs/architecture.md §13.8: `bun run test:slow`, run by `bun run test:exit`).
 
 import { describe, expect, test } from "bun:test";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
@@ -36,6 +39,10 @@ import { botBrain } from "./brain.ts";
 import type { AdapterContext } from "./run.ts";
 import type { LlmSeatPlan } from "./plan.ts";
 import { FlakyAdapter, fakePlan, play, runDir } from "./rig.test.ts";
+
+const SLOW = process.env["PERFIDIA_SLOW"] === "1";
+/** A test of the slow suite: skipped unless PERFIDIA_SLOW=1. */
+const xtest = test.skipIf(!SLOW);
 
 const LONG = 120_000;
 const resolve = (ref: string) => findRuleset(ref);
@@ -251,7 +258,7 @@ describe("arena: a full lockstep match on fake models", () => {
 });
 
 describe("arena: spectator data (phase 3)", () => {
-  test(
+  xtest(
     "replies.jsonl: one line per kept reply, reasoning included; match.jsonl on disk line by line",
     async () => {
       const dir = runDir();
@@ -315,7 +322,7 @@ describe("arena: spectator data (phase 3)", () => {
 });
 
 describe("arena: --stop-after and short matches", () => {
-  test(
+  xtest(
     "--stop-after 1 stops a 7-day match at the end of day 1: told 7 days, Level E up to the cut, exit 0",
     async () => {
       const run = await play(fakePlan({ stopAfterDays: 1 }));
@@ -369,7 +376,7 @@ describe("arena: --stop-after and short matches", () => {
 });
 
 describe("arena: determinism, hand-off, failures", () => {
-  test(
+  xtest(
     "two fake runs give identical match logs, LLM logs, reports and transcripts",
     async () => {
       const [a, b] = [await play(fakePlan({ days: 1 })), await play(fakePlan({ days: 1 }))];
@@ -384,7 +391,7 @@ describe("arena: determinism, hand-off, failures", () => {
     LONG,
   );
 
-  test(
+  xtest(
     "a seat over its cap is handed to its profile's bot mid-match; no model call follows",
     async () => {
       const run = await play(fakePlan({ days: 2, seatCaps: ["p2=0.5"] }));
@@ -446,7 +453,7 @@ describe("arena: determinism, hand-off, failures", () => {
     LONG,
   );
 
-  test(
+  xtest(
     "a billing error pauses a lockstep arena; the preflight probe resumes it; game time stood still",
     async () => {
       let down = false;
@@ -581,7 +588,7 @@ describe("arena: determinism, hand-off, failures", () => {
     LONG,
   );
 
-  test(
+  xtest(
     "two consecutive refused turns of a seat raise an alert with their inbox message ids",
     async () => {
       const run = await play(fakePlan({ days: 1 }), { adapterFor: wrapped(refusing, "p1") });

@@ -5,6 +5,8 @@
 // log has an end line, also after a restart; an unverifiable run is never public, not even while
 // its first fold has not reached the tampered line, and is listed as such in development (no
 // file); `arena.json` saying `degraded` shows as `degraded`.
+// The two tests that fold several runs run in the slow suite (PERFIDIA_SLOW=1, docs/architecture.md
+// §13.8: `bun run test:slow`, run by `bun run test:exit`).
 
 // oxlint-disable no-await-in-loop -- the polls follow each other on purpose
 import { afterAll, describe, expect, test } from "bun:test";
@@ -28,6 +30,10 @@ import {
   stopServers,
 } from "./testkit.test.ts";
 
+const SLOW = process.env["PERFIDIA_SLOW"] === "1";
+/** A test of the slow suite: skipped unless PERFIDIA_SLOW=1. */
+const xtest = test.skipIf(!SLOW);
+
 afterAll(stopServers);
 
 const LONG = 120_000;
@@ -40,7 +46,7 @@ function publishFile(path: string, matches: readonly object[]): void {
 }
 
 describe("publish.json", () => {
-  test(
+  xtest(
     "lists the public matches; removing one unpublishes it live; an invalid file publishes nothing",
     async () => {
       const run = await fakeRun({ days: 1, seed: 3 });
@@ -136,7 +142,7 @@ describe("publish.json", () => {
 });
 
 describe("status from the log and the side files", () => {
-  test(
+  xtest(
     "an unverifiable run is never public, listed as unverifiable in development; degraded from arena.json",
     async () => {
       const run = await fakeRun({ days: 1, seed: 3 });

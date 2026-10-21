@@ -2,11 +2,17 @@
 // design's table (20 / 49 / 199 matches for one pair, 32 / 74 / 303 for six, at 80% power) and the
 // draft's under-powered counts (0.38, 0.42, 0.46); the claim state follows the least-met pair; and
 // the pipeline's simulated power is deterministic for a seed and sits near the exact test's.
+// The size simulation (p = 0.5) runs in the slow suite (PERFIDIA_SLOW=1, docs/architecture.md
+// §13.8: `bun run test:slow`, run by `bun run test:exit`).
 
 import { describe, expect, test } from "bun:test";
 import { claimsOf } from "./aggregate.ts";
 import { binomialPower, matchesNeeded, neededFor } from "./power.ts";
 import { simulatePower } from "./simulate.ts";
+
+const SLOW = process.env["PERFIDIA_SLOW"] === "1";
+/** A test of the slow suite: skipped unless PERFIDIA_SLOW=1. */
+const xtest = test.skipIf(!SLOW);
 
 describe("the exact binomial test", () => {
   test("the design's table of matches needed for 80% power", () => {
@@ -88,7 +94,7 @@ describe("the simulated power of the rating pipeline", () => {
     expect(row?.served).toBeNull();
   });
 
-  test("p = 0.5 measures the size: the served intervals' false claims stay near 5%", () => {
+  xtest("p = 0.5 measures the size: the served intervals' false claims stay near 5%", () => {
     const [row] = simulatePower({ p: 0.5, matches: [20], reps: 120, replicates: 60, seed: 8 });
     if (row === undefined) throw new Error("no row");
     // Two equal models: every claim is false. The exact test holds its level by construction.

@@ -11,6 +11,8 @@
 // - the configuration binds 127.0.0.1 by default, lists every run only with `--all-runs`, and
 //   refuses a public host without `publish.json` and its host names, and a trusted proxy without
 //   `publish.json`.
+// The two run directories holding the same log run in the slow suite (PERFIDIA_SLOW=1,
+// docs/architecture.md §13.8: `bun run test:slow`, run by `bun run test:exit`).
 
 // oxlint-disable no-await-in-loop -- the requests, pages and chunks follow each other on purpose (one cursor, one writer)
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
@@ -46,6 +48,10 @@ import {
   type TestServer,
   stopServers,
 } from "./testkit.test.ts";
+
+const SLOW = process.env["PERFIDIA_SLOW"] === "1";
+/** A test of the slow suite: skipped unless PERFIDIA_SLOW=1. */
+const xtest = test.skipIf(!SLOW);
 
 afterAll(stopServers);
 
@@ -386,7 +392,7 @@ describe("a malformed Host header", () => {
 });
 
 describe("bodies and pages", () => {
-  test(
+  xtest(
     "two run directories with the same log never serve each other's bodies",
     async () => {
       const twins = tempDir("twins");

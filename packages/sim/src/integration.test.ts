@@ -4,6 +4,10 @@
 // repeated, a hand-off re-simulates at Level G, matches interleaved in one process match the same
 // matches run alone (P17), P4 holds through the tools, the extra tools replay, every snapshot
 // matches its checkpoint, and the memory sink writes the same bytes as the harness file writer.
+// The slow suite (PERFIDIA_SLOW=1, docs/architecture.md §13.8: `bun run test:slow`, run by
+// `bun run test:exit`) adds the sandbox-1 matches, the lockstep Level G run, the hand-off, the
+// coexistence tests, the seeded and random matches of P4 through the tools on sandbox-1, and the
+// snapshot and sink checks.
 
 import { describe, expect, test } from "bun:test";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
@@ -53,6 +57,9 @@ import {
   type ClockChoice,
 } from "./harness/index.ts";
 
+const SLOW = process.env["PERFIDIA_SLOW"] === "1";
+/** A test of the slow suite: skipped unless PERFIDIA_SLOW=1. */
+const xtest = test.skipIf(!SLOW);
 const RULESETS = ["perfidia-1@1.0.0", "sandbox-1@1.0.0"] as const;
 const LOCKSTEP: ClockChoice = { kind: "lockstep" };
 const VIRTUAL: ClockChoice = { kind: "virtual" };
@@ -133,6 +140,7 @@ function renaming(bot: SeatAgent): SeatAgent {
 
 describe("1-game-day matches of the default bots", () => {
   for (const ref of RULESETS) {
+    if (!SLOW && ref !== "perfidia-1@1.0.0") continue;
     test(`${ref}, lockstep: no fatal, Level E, and a second run is byte-identical`, async () => {
       const first = await runBots(day(ref, LOCKSTEP));
       const second = await runBots(day(ref, LOCKSTEP));
@@ -186,7 +194,7 @@ describe("1-game-day matches of the default bots", () => {
     }, 30000);
   }
 
-  test("lockstep Level G re-simulates the bots byte for byte", async () => {
+  xtest("lockstep Level G re-simulates the bots byte for byte", async () => {
     const first = await runBots(day("sandbox-1", LOCKSTEP, 8));
     const again = await resimulate(first.lines);
     expect(normalisedHash(again.lines)).toBe(normalisedHash(first.lines));
@@ -213,7 +221,7 @@ describe("1-game-day matches of the default bots", () => {
 });
 
 describe("hand-offs", () => {
-  test("p2 handed to another bot at t = 43200: a controller line, Level E and Level G", async () => {
+  xtest("p2 handed to another bot at t = 43200: a controller line, Level E and Level G", async () => {
     const out = await runBots({
       ...day("perfidia-1", LOCKSTEP, 6),
       handoffs: [{ seat: "p2", at: 43200, strategy: "turtle" }],
@@ -234,7 +242,7 @@ describe("hand-offs", () => {
 
 describe("coexistence (P17)", () => {
   for (const clock of [LOCKSTEP, VIRTUAL]) {
-    test(`three matches interleaved in one process equal each run alone (${clock.kind})`, async () => {
+    xtest(`three matches interleaved in one process equal each run alone (${clock.kind})`, async () => {
       const together = await Promise.all(specs(clock).map((s) => runBots(s)));
       for (const [i, spec] of specs(clock).entries()) {
         // oxlint-disable-next-line no-await-in-loop -- the reference runs are alone, one at a time
@@ -583,6 +591,7 @@ async function intentRun(ruleset: AnyRuleset, seed: number, reach: Reach): Promi
 describe("P4 through the tools", () => {
   // Seeded, so that the check of the intents' reach is reproducible.
   for (const ref of RULESETS) {
+    if (!SLOW && ref !== "perfidia-1@1.0.0") continue;
     test(`${ref}: seeded intents never throw, keep step invariants, ally pact partners and recall from several groups`, async () => {
       const ruleset = getRuleset(ref);
       const reach: Reach = {
@@ -625,7 +634,7 @@ describe("P4 through the tools", () => {
   }
 
   for (const ref of RULESETS) {
-    test(`${ref}: random matches never throw, keep step invariants and replay`, async () => {
+    xtest(`${ref}: random matches never throw, keep step invariants and replay`, async () => {
       await fc.assert(
         fc.asyncProperty(
           fc.integer({ min: 1, max: 1_000_000 }),
@@ -676,7 +685,7 @@ describe("extra tools, snapshots and sinks", () => {
     expect(verifyLog(tampered).divergence?.n).toBe(rename.n);
   }, 30000);
 
-  test("every snapshot's hash equals its ckpt line, and Level E resumes from each", async () => {
+  xtest("every snapshot's hash equals its ckpt line, and Level E resumes from each", async () => {
     const out = await runBots({ ...day("perfidia-1", LOCKSTEP, 9), snapshotEvery: 6 });
     const snaps = out.sink.parsedSnapshots();
     expect(snaps.map((s) => s.hour)).toEqual([6, 12, 18, 23]);
@@ -690,7 +699,7 @@ describe("extra tools, snapshots and sinks", () => {
     expect(out.lines.at(-1)).toMatchObject({ k: "end", h: snaps.at(-1)?.hash });
   }, 30000);
 
-  test("MemorySink text equals the harness file writer's output", async () => {
+  xtest("MemorySink text equals the harness file writer's output", async () => {
     const dir = mkdtempSync(join(tmpdir(), "perfidia-sink-"));
     try {
       const path = join(dir, "run", "match.jsonl");

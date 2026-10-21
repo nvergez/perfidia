@@ -361,6 +361,11 @@ No test touches the network. The default suite (`bun test`, run by `bun run chec
   the deadline closes only its turns (no breaker, no abort); an auth error aborts at once.
 - `arena/plan.test.ts`, `report.test.ts`, `brain.test.ts`, `cli.test.ts`, `smoke.test.ts`.
 
+Since the suite split of architecture §13, the slow suite (`bun run test:slow`, run by
+`bun run test:exit`) holds these instead of the default suite: in `arena/integration.test.ts`,
+`--stop-after 1`, the two identical runs, the hand-off, the billing pause, `replies.jsonl` and the
+refused-turns alert; in `arena/realtime.test.ts`, the slow spell.
+
 `bun run test:exit` runs four 7-day fake matches to their end (lockstep seeds 2 and 3, the default
 brains, real time) and prints the exit criterion of each; with fake brains it is reported, never
 asserted.

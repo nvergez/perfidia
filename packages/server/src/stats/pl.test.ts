@@ -4,6 +4,8 @@
 // cover the truth; a hand-computed case pins the likelihood. The served intervals hold their level
 // where the percentile block bootstrap alone does not (a synthetic coverage check, review fix), and
 // pairs carry the claim's Bonferroni level.
+// The synthetic coverage simulation runs in the slow suite (PERFIDIA_SLOW=1, docs/architecture.md
+// §13.8: `bun run test:slow`, run by `bun run test:exit`).
 
 import { describe, expect, test } from "bun:test";
 import { mulberry32 } from "@perfidia/engine/core";
@@ -17,6 +19,10 @@ import {
   tQuantile,
   type RankedMatch,
 } from "./rate.ts";
+
+const SLOW = process.env["PERFIDIA_SLOW"] === "1";
+/** A test of the slow suite: skipped unless PERFIDIA_SLOW=1. */
+const xtest = test.skipIf(!SLOW);
 
 const uniform = (seed: number): (() => number) => {
   const rng = mulberry32(seed >>> 0);
@@ -183,7 +189,7 @@ describe("MAP Plackett–Luce", () => {
     expect(smallSampleFactor(1000)).toBeCloseTo(1, 2);
   });
 
-  test("coverage (synthetic): the bootstrap alone runs narrow at 5 blocks; the served intervals do not", () => {
+  xtest("coverage (synthetic): the bootstrap alone runs narrow at 5 blocks; the served intervals do not", () => {
     // 80 series of 20 matches (5 blocks of 4), four equal models and two weaker bots; 60 replicates.
     const theta = [0, 0, 0, 0, -1, -1.5];
     // An equal model's expected rank (about 2.95), by Monte Carlo.

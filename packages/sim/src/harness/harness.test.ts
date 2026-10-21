@@ -1,6 +1,8 @@
 // The sim harness (docs/architecture.md §12.1): the JSONL reader and writer, normalised logs, the
 // system clock, Level G options from a header, the ruleset fingerprint, and the golden check with
 // its add-only writers, run on temporary fixture directories.
+// The golden writers and checks on bot runs and the fingerprint at every N run in the slow suite
+// (PERFIDIA_SLOW=1, docs/architecture.md §13.8: `bun run test:slow`, run by `bun run test:exit`).
 
 import { describe, expect, test } from "bun:test";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -40,6 +42,10 @@ import {
   writeJsonl,
   type Fingerprints,
 } from "./index.ts";
+
+const SLOW = process.env["PERFIDIA_SLOW"] === "1";
+/** A test of the slow suite: skipped unless PERFIDIA_SLOW=1. */
+const xtest = test.skipIf(!SLOW);
 
 const SANDBOX = getRuleset("sandbox-1@1.0.0");
 const PERFIDIA = getRuleset("perfidia-1@1.0.0");
@@ -189,7 +195,7 @@ describe("the ruleset fingerprint", () => {
     expect(rulesetFingerprint(reworded)).not.toBe(rulesetFingerprint(SANDBOX));
   });
 
-  test("covers the title, the extra tools, the event schemas and the world at every N", () => {
+  xtest("covers the title, the extra tools, the event schemas and the world at every N", () => {
     const fp = rulesetFingerprint(SANDBOX);
     const titled: AnyRuleset = { ...SANDBOX, title: `${SANDBOX.title} 2` };
     expect(rulesetFingerprint(titled)).not.toBe(fp);
@@ -244,7 +250,7 @@ describe("the ruleset fingerprint", () => {
 });
 
 describe("goldens", () => {
-  test("add-only writers, the check, a tampered copy and an altered descriptor", async () => {
+  xtest("add-only writers, the check, a tampered copy and an altered descriptor", async () => {
     const dir = tempDir();
     try {
       const lines = await shortLog(5);
@@ -316,7 +322,7 @@ describe("goldens", () => {
     }
   }, 30000);
 
-  test("a deleted golden, a golden of a ruleset outside the list and a failing re-simulation are problems, never throws", async () => {
+  xtest("a deleted golden, a golden of a ruleset outside the list and a failing re-simulation are problems, never throws", async () => {
     const dir = tempDir();
     try {
       const lines = await shortLog(5);

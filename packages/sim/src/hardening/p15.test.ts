@@ -24,6 +24,7 @@ import {
   type ToolCall,
 } from "@perfidia/protocol";
 import {
+  DEFAULT_REF,
   REFS,
   LOCKSTEP,
   ToolSession,
@@ -36,6 +37,15 @@ import {
 } from "./kit.ts";
 import { perturb, stage, type Perturbation, type Staged } from "./hidden.ts";
 import { intent, intentOf, type IntentKind } from "./intents.ts";
+
+/**
+ * The slow suite (`PERFIDIA_SLOW=1`: `bun run test:slow`, run by `bun run test:exit`; docs/
+ * architecture.md §13.8) runs (a) and (b) on every ruleset of `REFS`; the default suite runs (b) on
+ * `DEFAULT_REF` only.
+ */
+const SLOW = process.env["PERFIDIA_SLOW"] === "1";
+/** A test of the slow suite: skipped unless PERFIDIA_SLOW=1. */
+const xtest = test.skipIf(!SLOW);
 
 const HOUR = 12;
 const WAKE: WakeRecord = {
@@ -241,7 +251,7 @@ async function world(ref: Ref, hour = HOUR): Promise<{ snap: Staged["snap"]; gw:
 
 describe("P15 (a): hidden data before a step never changes X's copies of its non-intel events", () => {
   for (const ref of REFS) {
-    test(`${ref}: the next events, X's actions and other seats' actions`, async () => {
+    xtest(`${ref}: the next events, X's actions and other seats' actions`, async () => {
       const worlds = await Promise.all([6, 12, 18].map((h) => world(ref, h)));
       const n = players(ref);
       let copies = 0;
@@ -389,6 +399,7 @@ function xCalls(r: ReadCtx, x: PlayerId): ToolCall[] {
 
 describe("P15 (b): hidden-only actions of other seats never change X's results", () => {
   for (const ref of REFS) {
+    if (!SLOW && ref !== DEFAULT_REF) continue;
     test(`${ref}: messages, spies, supports and shipments between others, builds, recruits`, async () => {
       const { snap, gw } = await world(ref);
       const n = players(ref);

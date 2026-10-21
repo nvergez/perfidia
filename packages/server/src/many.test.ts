@@ -2,6 +2,8 @@
 // while its log is written, and all end with the frame of a fold of the whole file, their ranges
 // contiguous, while HTTP requests keep being served; the health route answers in under 100 ms (p99)
 // while two war-golden folds run in the workers (the main thread never folds).
+// Slow suite only (docs/architecture.md §13.8): skipped unless PERFIDIA_SLOW=1
+// (`bun run test:slow`, which `bun run test:exit` runs).
 
 // oxlint-disable no-await-in-loop -- the chunks follow each other on purpose (one writer)
 import { afterAll, describe, expect, test } from "bun:test";
@@ -23,12 +25,16 @@ import {
   stopServers,
 } from "./testkit.test.ts";
 
+const SLOW = process.env["PERFIDIA_SLOW"] === "1";
+/** A group of tests of the slow suite: skipped unless PERFIDIA_SLOW=1. */
+const xdescribe = describe.skipIf(!SLOW);
+
 afterAll(stopServers);
 
 const LONG = 180_000;
 const CLIENTS = 100;
 
-describe("many spectators of one live match", () => {
+xdescribe("many spectators of one live match", () => {
   test(
     `${CLIENTS} WebSocket clients end with the whole fold's frame; HTTP keeps answering`,
     async () => {
@@ -78,7 +84,7 @@ describe("many spectators of one live match", () => {
   );
 });
 
-describe("the event loop while folds run", () => {
+xdescribe("the event loop while folds run", () => {
   test(
     "health answers within 100 ms (p99) while two war-golden folds run in the workers",
     async () => {

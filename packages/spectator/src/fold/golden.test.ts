@@ -3,6 +3,10 @@
 // equals the previous one with its steps applied, and the last frame the first keyframe with every
 // step. Steps do not depend on when the fold is read (fast-check over read points), and the ruleset's
 // `publicCity` (the fold asks it for p1) does not depend on the viewer, for every registered ruleset.
+// Outside the slow suite (PERFIDIA_SLOW=1, docs/architecture.md §13.8: `bun run test:slow`, run by
+// `bun run test:exit`) only the one-day goldens of the phase-1 bots and the scripted scenarios
+// fold: the slow suite folds the longer goldens and those of the later bot sets (`-bots-<hash>`),
+// and reads the fold at more points.
 
 import { describe, expect, test } from "bun:test";
 import { RULESETS, createReplay } from "@perfidia/engine";
@@ -14,7 +18,15 @@ import { applySteps, standingsOf } from "../reduce/index.ts";
 import { WAR_GOLDEN, golden, goldenNames } from "../testkit.test.ts";
 import { createSpectatorFold, foldLog } from "./fold.ts";
 
+const SLOW = process.env["PERFIDIA_SLOW"] === "1";
+
 const byText = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
+
+/** The game days a golden's name says it lasts (`-4d`), 1 for the scripted scenarios. */
+const daysOf = (name: string): number => Number(/-(\d+)d(?:-|\.)/.exec(name)?.[1] ?? "1");
+
+/** Whether a golden folds outside the slow suite: one game day, no later bot set. */
+const inDefault = (name: string): boolean => daysOf(name) === 1 && !name.includes("-bots-");
 
 const headerOf = (lines: readonly LogLine[]): HeaderLine => {
   const h = lines[0];
@@ -24,6 +36,7 @@ const headerOf = (lines: readonly LogLine[]): HeaderLine => {
 
 describe("every golden folds to its end line", () => {
   for (const name of goldenNames().filter((n) => n !== WAR_GOLDEN)) {
+    if (!SLOW && !inDefault(name)) continue;
     test(name, () => {
       const lines = golden(name);
       const fold = foldLog(lines, { match: "golden" });
@@ -70,7 +83,8 @@ describe("steps depend on the log only", () => {
           expect(canonicalJson(fold.frame())).toBe(canonicalJson(whole.frame()));
         },
       ),
-      { numRuns: 8 },
+      // Fewer read-point sets outside the slow suite, which runs all 8.
+      { numRuns: SLOW ? 8 : 3 },
     );
   });
 

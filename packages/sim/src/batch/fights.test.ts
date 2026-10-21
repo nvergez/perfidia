@@ -4,6 +4,8 @@
 // clock text; and a real batch whose rows (fight times, seats, battle split, free slots,
 // countdowns), aggregates, per-day pacing and printed tables agree with its logs, one variant
 // fighting and one ending by domination.
+// The real batch runs in the slow suite (PERFIDIA_SLOW=1, docs/architecture.md §13.8:
+// `bun run test:slow`, run by `bun run test:exit`).
 
 import { describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
@@ -33,6 +35,10 @@ import {
   strategyTable,
   type MatchRow,
 } from "./index.ts";
+
+const SLOW = process.env["PERFIDIA_SLOW"] === "1";
+/** A test of the slow suite: skipped unless PERFIDIA_SLOW=1. */
+const xtest = test.skipIf(!SLOW);
 
 /** Parses hand-written lines with the log schema, so a fixture is always a valid log. */
 function log(rows: readonly unknown[]): LogLine[] {
@@ -148,7 +154,7 @@ describe("fight times", () => {
 });
 
 describe("a real batch", () => {
-  test("rows, aggregates, pacing and tables agree with the logs: one variant fights, one ends by domination", async () => {
+  xtest("rows, aggregates, pacing and tables agree with the logs: one variant fights, one ends by domination", async () => {
     const dir = mkdtempSync(join(tmpdir(), "perfidia-sim-fights-"));
     try {
       // No protection and two days: battles on day 1 or 2. Domination open at 6 h with a

@@ -3,6 +3,8 @@
 // They check the behaviour a single fixture turn cannot: that the rusher (@1, frozen) gets its
 // carriers and raids across water whatever its city cap, and that the opportunist betrays a pact
 // partner it can only see through spy reports. rusher@2's campaigns are in rusher2.test.ts.
+// The opportunist's campaigns run in the slow suite (PERFIDIA_SLOW=1, docs/architecture.md §13.8:
+// `bun run test:slow`, run by `bun run test:exit`).
 
 import { describe, expect, test } from "bun:test";
 import { CityIdSchema } from "@perfidia/protocol";
@@ -21,6 +23,10 @@ import { streamOf } from "./rng.ts";
 import { opportunist, opportunistParams } from "./strategies/opportunist.ts";
 import { rusher } from "./strategies/rusher.ts";
 import type { BotStrategy } from "./strategies/strategy.ts";
+
+const SLOW = process.env["PERFIDIA_SLOW"] === "1";
+/** A test of the slow suite: skipped unless PERFIDIA_SLOW=1. */
+const xtest = test.skipIf(!SLOW);
 
 const DAY = 86400;
 const SHAPES: { name: string; game: (players?: number) => FakeGame }[] = [
@@ -105,7 +111,7 @@ describe.each(SHAPES)("$name", (shape) => {
     }
   }, 60_000);
 
-  test("the opportunist spies, then betrays a pact partner on or after its seeded day", async () => {
+  xtest("the opportunist spies, then betrays a pact partner on or after its seeded day", async () => {
     for (const seed of [1, 2]) {
       const prm = opportunistParams(streamOf(seed, "p1", "opportunist", "params"));
       expect(opportunist.brain(streamOf(seed, "p1", "opportunist", "params")).knobs.carriers).toBe(

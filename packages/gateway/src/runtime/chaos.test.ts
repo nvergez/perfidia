@@ -2,7 +2,9 @@
 // receives is schema-valid; it throws otherwise, and strict mode makes that fatal) with zero
 // INTERNAL, and P16 (a chaos agent that mutates everything it receives leaves the log, the hash and
 // every seat's inputs byte-identical to the same agent without mutation), under lockstep and under
-// real time with `VirtualTime`, for both rulesets and the testing kit's fixture.
+// real time with `VirtualTime`, for both rulesets and the testing kit's fixture. The perfidia-1
+// runs (the longest) are in the slow suite (PERFIDIA_SLOW=1, docs/architecture.md §13.8:
+// `bun run test:slow`, run by `bun run test:exit`).
 
 import { describe, expect, test } from "bun:test";
 import { verifyLog, type AnyRuleset } from "@perfidia/engine";
@@ -11,6 +13,8 @@ import { VirtualTime } from "@perfidia/gateway/clock";
 import type { PlayerId, RoundInput, SeatAgent, TimeSource, ToolResult } from "@perfidia/protocol";
 import { ChaosAgent, MemorySink, copyOf, runMatch, type RunMatchOptions } from "./index.ts";
 import { FIXTURE, PERFIDIA, SANDBOX, call, setupOf } from "./testkit.test.ts";
+
+const SLOW = process.env["PERFIDIA_SLOW"] === "1";
 
 /**
  * `agent`, recording the canonical text of every input, and a copy of every result in it, before
@@ -118,6 +122,7 @@ describe("P12 and P16 with the chaos agent", () => {
     [FIXTURE, 2],
   ] as const) {
     for (const clock of ["lockstep", "virtual"] as const) {
+      if (!SLOW && rs === PERFIDIA) continue;
       test(`${rs.ref}, ${clock}: zero INTERNAL in strict mode; mutation changes nothing`, async () => {
         const mutating = await chaosRun(rs, players, true, clock);
         const quiet = await chaosRun(rs, players, false, clock);

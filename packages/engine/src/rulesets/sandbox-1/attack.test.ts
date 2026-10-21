@@ -19,6 +19,11 @@ import {
   type Overrides,
 } from "./testkit.test.ts";
 
+// The slow suite (PERFIDIA_SLOW=1: `bun run test:slow`, run by `bun run test:exit`; docs/
+// architecture.md §13.8). Read through `import.meta.env`: the pure packages' tests may not name the
+// `process` global.
+const SLOW = import.meta.env["PERFIDIA_SLOW"] === "1";
+
 // `hooks.arrive.attack` through the kernel (docs/architecture.md §3.8) on hand-built states, with
 // step invariants (std's included, unit conservation among them) and the emitted-event check:
 // immediate capture, disbanding everywhere, elimination, raids with loot, the capital immunity,
@@ -534,7 +539,8 @@ describe("random battles through the kernel (property)", () => {
           match.advanceTo(arriveAt + 20000);
         },
       ),
-      { numRuns: 120 },
+      // 30 runs outside the slow suite, which runs 120.
+      { numRuns: SLOW ? 120 : 30 },
     );
   });
 });

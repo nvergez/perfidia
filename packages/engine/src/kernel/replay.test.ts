@@ -35,6 +35,12 @@ import {
   type VerifyOptions,
 } from "./index.ts";
 
+// The fast-check properties of P7 and `createReplay` run about a third of their runs in the default
+// suite and all of them in the slow suite (PERFIDIA_SLOW=1: `bun run test:slow`, run by
+// `bun run test:exit`; docs/architecture.md §13.8). Read through `import.meta.env`: the pure
+// packages' tests may not name the `process` global.
+const SLOW = import.meta.env["PERFIDIA_SLOW"] === "1";
+
 // Level E replay (§10.4) and P7: a log recorded from a random run replays with zero divergence, and
 // tampering with an act's `a` (whether or not that changes its verdict) or `r`, the order of act
 // lines, the payloads of two act lines, an `ev` line (a non-integer number included) or a `ckpt`
@@ -274,7 +280,7 @@ describe("P7: replay of recorded logs", () => {
         expect(report.checkpoints).toBe(rec.lines.filter((l) => l.k === "ckpt").length);
         expect(report.warnings).toEqual([]);
       }),
-      { numRuns: 40 },
+      { numRuns: SLOW ? 40 : 15 },
     );
   });
 
@@ -373,7 +379,8 @@ describe("P7: replay of recorded logs", () => {
           });
         }
       }),
-      { numRuns: 120 },
+      // 30 runs outside the slow suite, which runs 120.
+      { numRuns: SLOW ? 120 : 30 },
     );
   });
 
@@ -763,7 +770,7 @@ describe("createReplay", () => {
         expect(canonicalJson(replay.finish())).toBe(canonicalJson(expected));
         expect(seenB).toEqual(seenA);
       }),
-      { numRuns: 40 },
+      { numRuns: SLOW ? 40 : 15 },
     );
   });
 
@@ -785,7 +792,7 @@ describe("createReplay", () => {
           expect(replay.push(rec.lines[n] ?? rec.lines[0]!).ok).toBe(false);
         }
       }),
-      { numRuns: 40 },
+      { numRuns: SLOW ? 40 : 15 },
     );
   });
 
@@ -810,7 +817,7 @@ describe("createReplay", () => {
           prevT = line.t;
         }
       }),
-      { numRuns: 30 },
+      { numRuns: SLOW ? 30 : 12 },
     );
   });
 
