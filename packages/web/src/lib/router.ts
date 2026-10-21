@@ -1,13 +1,16 @@
 import { useSyncExternalStore } from "react";
 import { isPlayerId, type PlayerId } from "./ids.ts";
 
-// A tiny router on the History API: `/` (the match list) and `/m/:id` (a match), with the query
+// A tiny router on the History API: `/` (the match list), `/m/:id` (a match), with the query
 // `?pair=pA,pB` (the feed's pair mode), `?reel=1` (start the key moments reel), `?start=1`
 // (open at the first second instead of the latest) and `?turn=pN.T` (the turn detail of seat pN's
-// turn T, `turns/link.tsx`). Parsing is pure; `useRoute` follows `history.pushState` (through
-// `navigate`) and the back and forward buttons.
+// turn T, `turns/link.tsx`), and `/models` with `/models/:id` (phase 4: the model statistics and
+// one model's). Parsing is pure; `useRoute` follows `history.pushState` (through `navigate`) and
+// the back and forward buttons.
 
 const MATCH_ID = /^[A-Za-z0-9][A-Za-z0-9._@-]{0,127}$/;
+/** As the protocol's `ModelIdSchema`. */
+const MODEL_ID = /^[a-z0-9][a-z0-9.-]{0,159}$/;
 
 export type Route =
   | { readonly page: "list" }
@@ -19,6 +22,8 @@ export type Route =
       readonly start: boolean;
       readonly turn: TurnRef | null;
     }
+  | { readonly page: "models" }
+  | { readonly page: "model"; readonly id: string }
   | { readonly page: "not-found"; readonly path: string };
 
 /** A seat's turn, as the feed's turn items and the annotations number it (`?turn=p2.48`). */
@@ -57,6 +62,14 @@ export function parseTurnRef(value: string | null): TurnRef | null {
 
 export function parseRoute(pathname: string, search: string): Route {
   if (pathname === "/" || pathname === "") return { page: "list" };
+  if (pathname === "/models" || pathname === "/models/") return { page: "models" };
+  const model = /^\/models\/([^/]+)\/?$/.exec(pathname);
+  if (model !== null) {
+    const id = model[1] === undefined ? null : decode(model[1]);
+    return id !== null && MODEL_ID.test(id)
+      ? { page: "model", id }
+      : { page: "not-found", path: pathname };
+  }
   const m = /^\/m\/([^/]+)\/?$/.exec(pathname);
   const id = m?.[1] === undefined ? null : decode(m[1]);
   if (id === null || !MATCH_ID.test(id)) return { page: "not-found", path: pathname };
@@ -89,8 +102,15 @@ export function matchHref(id: string, o: MatchHrefOptions = {}): string {
   return `/m/${encodeURIComponent(id)}${query === "" ? "" : `?${query}`}`;
 }
 
+/** `/models/<id>`: one model's statistics. */
+export function modelHref(id: string): string {
+  return `/models/${encodeURIComponent(id)}`;
+}
+
 export function routeHref(r: Route): string {
   if (r.page === "list") return "/";
+  if (r.page === "models") return "/models";
+  if (r.page === "model") return modelHref(r.id);
   if (r.page === "not-found") return r.path;
   return matchHref(r.id, r);
 }

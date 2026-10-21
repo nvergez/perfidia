@@ -5,6 +5,9 @@ import {
   HealthSchema,
   MatchListItemSchema,
   MatchMetaSchema,
+  MatchStatsSchema,
+  ModelDetailSchema,
+  ModelsResponseSchema,
   MomentSchema,
   PlayerDossierSchema,
   ReportDetailSchema,
@@ -16,6 +19,9 @@ import {
   type Health,
   type MatchListItem,
   type MatchMeta,
+  type MatchStats,
+  type ModelDetail,
+  type ModelsResponse,
   type Moment,
   type PlayerDossier,
   type ReportDetail,
@@ -272,6 +278,21 @@ export class Api {
       PlayerDossierSchema,
       signal,
     );
+  }
+
+  /** One match's statistics, seat by seat (`perfidia-stats/1`, phase 4 Pass 3). */
+  matchStats(id: string, signal?: AbortSignal): Promise<MatchStats> {
+    return this.get(`/api/matches/${seg(id)}/stats`, "match statistics", MatchStatsSchema, signal);
+  }
+
+  /** The model statistics across the published matches (`perfidia-model-stats/1`). */
+  models(signal?: AbortSignal): Promise<ModelsResponse> {
+    return this.get("/api/models", "model statistics", ModelsResponseSchema, signal);
+  }
+
+  /** One model's statistics and its seats, match by match. */
+  model(id: string, signal?: AbortSignal): Promise<ModelDetail> {
+    return this.get(`/api/models/${seg(id)}`, "model detail", ModelDetailSchema, signal);
   }
 
   report(id: string, report: string, signal?: AbortSignal): Promise<ReportDetail> {

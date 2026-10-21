@@ -14,3 +14,10 @@ export const LazyPlayersPanel = lazyComponent(
   () => import("./players-panel.tsx").then((m) => m.PlayersPanel),
   { what: "the players", skeletonClassName: "h-64" },
 );
+
+// The dossier's model block (phase 4 Pass 3): the seat's model, effort, reasoning kind, spend and
+// incidents from the match's statistics, in a chunk of its own.
+export const LazyModelBlock = lazyComponent(
+  () => import("./model-block.tsx").then((m) => m.ModelBlock),
+  { what: "the model block", skeletonClassName: "h-28" },
+);

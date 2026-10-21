@@ -32,6 +32,7 @@ import {
 import * as protocol from "./index.ts";
 import { STANDARD_EVENT_DATA, TOOL_ARGS, TOOL_RESULT_DATA, z, type ZodType } from "./index.ts";
 import { ARENA_CASES, SPECTATOR_CASES } from "./spectator.fixtures.test.ts";
+import { STATS_CASES } from "./stats.fixtures.test.ts";
 
 type Path = readonly (string | number)[];
 interface Invalid {
@@ -1191,6 +1192,8 @@ const CASES: Record<string, Case> = {
   // arena.ts and spectator.ts (spectator.fixtures.test.ts)
   ...ARENA_CASES,
   ...SPECTATOR_CASES,
+  // stats.ts (stats.fixtures.test.ts)
+  ...STATS_CASES,
 };
 
 /**

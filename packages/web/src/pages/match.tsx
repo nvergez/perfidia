@@ -1,4 +1,12 @@
-import { ArrowLeft, CircleHelp, Hourglass, Loader2, TriangleAlert, WifiOff } from "lucide-react";
+import {
+  ArrowLeft,
+  ChartColumn,
+  CircleHelp,
+  Hourglass,
+  Loader2,
+  TriangleAlert,
+  WifiOff,
+} from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
 import { BlocProgress } from "../board/bloc-progress.tsx";
 import { Leaderboard } from "../board/leaderboard.tsx";
@@ -349,6 +357,14 @@ function Header() {
       >
         {meta === null ? null : `rules ${meta.ruleset}`}
       </span>
+      <AppLink
+        href="/models"
+        aria-label="How the models compare"
+        title="How the models compare across matches"
+        className={buttonVariants({ variant: "ghost", size: "sm" })}
+      >
+        <ChartColumn aria-hidden="true" /> <span className="hidden lg:inline">Models</span>
+      </AppLink>
       <Button variant="ghost" size="sm" onClick={() => uiActions.openHowToWatch()}>
         <CircleHelp aria-hidden="true" /> <span className="hidden sm:inline">How to watch</span>
       </Button>

@@ -1,5 +1,5 @@
 import type { MatchListItem, MatchMeta, Moment } from "@perfidia/protocol/spectator";
-import { Clapperboard, Crown, Radio, RefreshCw } from "lucide-react";
+import { ChartColumn, Clapperboard, Crown, Radio, RefreshCw } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api, ApiFailure } from "../api/client.ts";
 import { AppLink } from "../common/link.tsx";
@@ -19,7 +19,7 @@ import { Skeleton } from "../ui/skeleton.tsx";
 // The match list (phase-3 design §4.2.1): live matches first (LIVE badge, the day, the leader and
 // the latest moment), then finished ones (winners and reason, lineup and models, length and date);
 // a FAKE badge on runs whose LLM seats are bots behind the LLM pipe. Each card offers "Watch the key
-// moments" (the reel) and "Open".
+// moments" (the reel) and "Open". The header links to the model statistics (`/models`, phase 4).
 
 type ListState =
   | { readonly status: "loading" }
@@ -238,6 +238,12 @@ export function ListPage() {
           negotiate, ally and betray; you see every private message, plan and army they hide from
           each other.
         </p>
+        <AppLink
+          href="/models"
+          className={buttonVariants({ variant: "outline", size: "sm", className: "w-fit" })}
+        >
+          <ChartColumn aria-hidden="true" /> How the models compare
+        </AppLink>
       </header>
       {state.status === "loading" ? (
         <div className="grid grid-cols-1 gap-4 md:grid-cols-2" aria-busy="true">

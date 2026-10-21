@@ -4,7 +4,10 @@
 // - the fold runs in the worker only: `fold/worker.ts` alone imports the spectator fold
 //   (`createSpectatorFold`, `foldLog`), so no request ever folds on the main thread;
 // - the service layer is framework-free: `elysia` and `@elysia/*` are imported by
-//   `http/elysia.ts` alone, and `service/`, `store/`, `timeline/` import no HTTP adapter.
+//   `http/elysia.ts` alone, and `service/`, `store/`, `timeline/` import no HTTP adapter;
+// - statistics (phase 4, Pass 3): only the `stats` command line's `stats/runs.ts` folds whole logs
+//   (`statsOfLog`); the routes' `stats/service.ts` takes the statistics of the workers' steps, and
+//   nothing the server runs imports the command line's modules.
 
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
@@ -78,6 +81,29 @@ describe("server sources", () => {
           ]);
         }
       }
+    }
+  });
+});
+
+describe("statistics", () => {
+  test("only the command line folds whole logs; the server never imports it", () => {
+    for (const f of sources) {
+      const src = text(f);
+      expect([f, /\bstatsOfLog\b/.test(src)]).toEqual([f, f === "stats/runs.ts"]);
+      if (f.startsWith("stats/") && (f === "stats/runs.ts" || f === "stats/cli.ts")) continue;
+      for (const spec of imports(src)) {
+        const cli =
+          /(?:^|\/)stats\/(?:runs|cli)\.ts$/.test(spec) || /^\.\/(?:runs|cli)\.ts$/.test(spec);
+        expect([f, spec, cli]).toEqual([f, spec, false]);
+      }
+    }
+  });
+
+  test("the statistics routes are in the route table, GET only", async () => {
+    const { ROUTES } = await import("./http/routes.ts");
+    const paths = ROUTES.map((r) => r.path);
+    for (const p of ["/api/matches/:id/stats", "/api/models", "/api/models/:id"]) {
+      expect(paths).toContain(p);
     }
   });
 });

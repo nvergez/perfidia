@@ -2,10 +2,12 @@ import { Brain } from "lucide-react";
 import { useMemo, useState } from "react";
 import { NotPublished } from "../common/not-published.tsx";
 import { PlainText } from "../common/plain-text.tsx";
+import { ReasoningKindTag } from "../common/reasoning-kind.tsx";
 import { cn } from "../lib/cn.ts";
 import { fmtInt, plural } from "../lib/format.ts";
 import type { PlayerId } from "../lib/ids.ts";
-import { useLiveAnnots, usePublished } from "../store/hooks.ts";
+import { seatReasoningKind, shownReasoningKind } from "../lib/models.ts";
+import { useLiveAnnots, usePublished, useSeat } from "../store/hooks.ts";
 import { OpenTurnButton } from "../turns/open-turn.tsx";
 import { roundTitle, type RoundRow } from "../turns/detail.ts";
 import { liveView } from "./live-rounds.ts";
@@ -17,8 +19,9 @@ import { liveView } from "./live-rounds.ts";
 // last. The newest round shows a few lines, the two before it one line each, older ones are
 // counted; "more" shows them all, whole. A new round fades in only when motion is allowed. When the
 // turn ends the column unmounts this block and the turn's thought takes its place, its "Reasoning"
-// opening at once on these rounds (`turn-reasoning.tsx`) while the annotation loads. Mounted by
-// `thoughts-panel.tsx` through `LazyLiveReasoning`.
+// opening at once on these rounds (`turn-reasoning.tsx`) while the annotation loads. A round's
+// reasoning is labelled with the seat's kind (a summary or a raw chain of thought; live messages
+// carry no kind of their own). Mounted by `thoughts-panel.tsx` through `LazyLiveReasoning`.
 
 export interface LiveReasoningProps {
   readonly seat: PlayerId;
@@ -34,6 +37,8 @@ function longer(r: RoundRow, latest: boolean): boolean {
 export function LiveReasoning({ seat, turn }: LiveReasoningProps) {
   const msgs = useLiveAnnots(seat, turn);
   const published = usePublished();
+  const info = useSeat(seat);
+  const kind = info === null ? null : seatReasoningKind(info);
   const [more, setMore] = useState(false);
   const view = useMemo(() => liveView(msgs, more), [msgs, more]);
   const clamped = view.earlier > 0 || view.rounds.some((r) => longer(r, r.key === view.latest));
@@ -72,6 +77,9 @@ export function LiveReasoning({ seat, turn }: LiveReasoningProps) {
                 <span className="shrink-0 font-semibold tracking-wider whitespace-nowrap uppercase">
                   {roundTitle(r)}
                 </span>
+                {r.reasoning.length === 0 ? null : (
+                  <ReasoningKindTag kind={shownReasoningKind(r.reasoningKind, kind)} />
+                )}
                 {r.calls.length === 0 ? null : (
                   <span className="truncate font-mono">
                     · {r.calls.map((c) => c.tool).join(", ")}

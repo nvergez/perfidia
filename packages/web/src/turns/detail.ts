@@ -4,6 +4,7 @@ import type {
   TurnAnnotation,
   TurnCall,
 } from "@perfidia/protocol/spectator";
+import { asReasoningKind, type ReasoningKind } from "../lib/models.ts";
 import type { FeedEntry } from "../playback/timeline.ts";
 import type { AnnotMsg } from "../store/match.ts";
 
@@ -58,6 +59,8 @@ export interface RoundRow {
   readonly round: number;
   readonly kind: Kind;
   readonly reasoning: readonly string[];
+  /** What `reasoning` is, as the annotation logged it (null: not logged, or a live round only). */
+  readonly reasoningKind: ReasoningKind | null;
   readonly text: readonly string[];
   readonly calls: readonly CallRow[];
   readonly meter: RoundMeter | null;
@@ -126,6 +129,7 @@ interface Base {
   readonly round: number;
   readonly kind: Kind;
   reasoning: readonly string[];
+  readonly reasoningKind: ReasoningKind | null;
   text: readonly string[];
   names: readonly string[];
   meter: RoundMeter | null;
@@ -156,6 +160,7 @@ function baseRounds(annotation: TurnAnnotation | null, live: readonly AnnotMsg[]
       round: r.round,
       kind: r.kind,
       reasoning: r.reasoning,
+      reasoningKind: asReasoningKind(r.reasoningKind),
       text: r.text,
       names: r.calls,
       meter: meterOf(r),
@@ -169,6 +174,7 @@ function baseRounds(annotation: TurnAnnotation | null, live: readonly AnnotMsg[]
         round: m.round,
         kind: m.kind,
         reasoning: m.reasoning,
+        reasoningKind: null,
         text: m.text,
         names: m.calls,
         meter: null,
@@ -249,6 +255,7 @@ export function shapeRounds({ annotation, live, results }: RoundSources): TurnRo
         round: b.round,
         kind: b.kind,
         reasoning: b.reasoning,
+        reasoningKind: b.reasoningKind,
         text: b.text,
         calls: b.names.map((n, i) => nameRow(`${i}`, n, "pending")),
         meter: b.meter,
@@ -269,7 +276,15 @@ export function shapeRounds({ annotation, live, results }: RoundSources): TurnRo
   // A round the log has calls for but no annotation or live message names (e.g. no side files).
   for (const rt of byRt.keys()) {
     if (rt !== null && !all.some((b) => b.kind === "round" && b.round === rt)) {
-      all.push({ round: rt, kind: "round", reasoning: [], text: [], names: [], meter: null });
+      all.push({
+        round: rt,
+        kind: "round",
+        reasoning: [],
+        reasoningKind: null,
+        text: [],
+        names: [],
+        meter: null,
+      });
     }
   }
   all.sort(byRound);
@@ -292,6 +307,7 @@ export function shapeRounds({ annotation, live, results }: RoundSources): TurnRo
       round: b.round,
       kind: b.kind,
       reasoning: b.reasoning,
+      reasoningKind: b.reasoningKind,
       text: b.text,
       calls,
       meter: b.meter,
@@ -305,6 +321,7 @@ export function shapeRounds({ annotation, live, results }: RoundSources): TurnRo
       round: -1,
       kind: "round",
       reasoning: [],
+      reasoningKind: null,
       text: [],
       calls: loose.map((r, i) => rowOf(`l${i}`, r)),
       meter: null,

@@ -360,6 +360,11 @@ export class Registry {
     for (const e of Array.from(this.entries.values())) if (!ids.has(e.id)) this.remove(e);
   }
 
+  /** Whether `publish.json` lists a match (every discovered run without a file). */
+  listed(id: string): boolean {
+    return this.entries.has(id) && this.deps.publish.entry(id) !== null;
+  }
+
   /** A visible match. */
   get(id: string): MatchEntry | null {
     const e = this.entries.get(id);

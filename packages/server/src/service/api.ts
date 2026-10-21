@@ -10,6 +10,7 @@ import {
   type TurnAnnotation,
 } from "@perfidia/protocol/spectator";
 import { TIMELINE_VERSION } from "@perfidia/spectator";
+import type { StatsService } from "../stats/service.ts";
 import type { FeedQuery, Timeline, TimelineSummary } from "../timeline/timeline.ts";
 import type { MatchEntry, Registry } from "./matches.ts";
 
@@ -80,10 +81,16 @@ export interface MemoProbe {
 export class SpectatorService {
   private readonly registry: Registry;
   private readonly memo: MemoProbe;
+  private readonly statsService: StatsService | null;
 
-  constructor(registry: Registry, memo: MemoProbe = { has: () => false }) {
+  constructor(
+    registry: Registry,
+    memo: MemoProbe = { has: () => false },
+    stats: StatsService | null = null,
+  ) {
     this.registry = registry;
     this.memo = memo;
+    this.statsService = stats;
   }
 
   health(): ApiResult {
@@ -223,6 +230,21 @@ export class SpectatorService {
     return ok(detail, IMMUTABLE, `${id}:${r.timeline.timeline}:report:${report}`);
   }
 
+  /** A match's statistics (phase 4, Pass 3: `stats/service.ts`). */
+  stats(id: MatchId): ApiResult {
+    return this.statsService?.match(id) ?? noStats();
+  }
+
+  /** The model statistics of the `--stats` file. */
+  models(): ApiResult {
+    return this.statsService?.models() ?? noStats();
+  }
+
+  /** One model of the `--stats` file. */
+  model(id: string): ApiResult {
+    return this.statsService?.model(id) ?? noStats();
+  }
+
   /** The body under `key`, when the HTTP layer holds it for the match's current timeline. */
   private held(id: MatchId, timeline: TimelineId, key: string): ApiResult | null {
     const e = this.registry.get(id);
@@ -267,7 +289,16 @@ function timelineGone(id: MatchId, timeline: TimelineId, now: TimelineId): ApiRe
   );
 }
 
-function notFound(id: MatchId): ApiResult {
+function noStats(): ApiResult {
+  return apiError(
+    404,
+    "NO_STATS",
+    "this server publishes no statistics",
+    "statistics are served by a server started with its runs root",
+  );
+}
+
+export function notFound(id: MatchId): ApiResult {
   return apiError(
     404,
     "NOT_FOUND",
@@ -276,7 +307,7 @@ function notFound(id: MatchId): ApiResult {
   );
 }
 
-function loading(id: MatchId): ApiResult {
+export function loading(id: MatchId): ApiResult {
   return apiError(
     503,
     "LOADING",

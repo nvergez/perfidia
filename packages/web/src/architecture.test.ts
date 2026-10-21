@@ -5,7 +5,8 @@
 // island kinds) appear in `src/skins/**` only; no file under `src` renders HTML from strings;
 // `localStorage` is touched by `lib/storage.ts` only; `index.html` has no inline script; and the
 // bundle (built in process, split) holds none of the banned packages and keeps its initial load
-// (the entry chunk and what it imports statically; `import()` chunks are lazy) within budget.
+// (the entry chunk and what it imports statically; `import()` chunks are lazy) within budget, the
+// model statistics page and the dossier's model block (phase 4) outside it.
 
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
@@ -161,7 +162,7 @@ const SINKS: readonly RegExp[] = [
 
 /**
  * A link target (`href=`) the app may render: a literal path of the app (not `//host`), the router's
- * `matchHref`/`routeHref`, or `AppLink` passing its own (checked) prop through.
+ * `matchHref`/`modelHref`/`routeHref`, or `AppLink` passing its own (checked) prop through.
  */
 function linkOk(file: string, value: string): boolean {
   if (value.startsWith('"') || value.startsWith("'")) {
@@ -170,7 +171,7 @@ function linkOk(file: string, value: string): boolean {
   }
   const expr = value.slice(1, -1).trim();
   if (file === "common/link.tsx" && expr === "href") return true;
-  return /^(?:matchHref|routeHref)\(/.test(expr);
+  return /^(?:matchHref|modelHref|routeHref)\(/.test(expr);
 }
 
 describe("plain text only", () => {
@@ -206,7 +207,7 @@ describe("plain text only", () => {
     for (const p of probes) expect([p, SINKS.some((re) => re.test(p))]).toEqual([p, true]);
   });
 
-  test("every link is a literal app path or comes from matchHref/routeHref", () => {
+  test("every link is a literal app path or comes from matchHref/modelHref/routeHref", () => {
     for (const file of sources().filter((f) => f.endsWith(".tsx"))) {
       const text = code(read(file));
       for (const m of text.matchAll(/\bhref=(\{[^}]*\}|"[^"]*"|'[^']*')/g)) {
@@ -216,6 +217,7 @@ describe("plain text only", () => {
     expect(linkOk("x.tsx", '"/"')).toBe(true);
     expect(linkOk("x.tsx", '"//evil.example/phish"')).toBe(false);
     expect(linkOk("x.tsx", "{matchHref(item.id)}")).toBe(true);
+    expect(linkOk("x.tsx", "{modelHref(m.id)}")).toBe(true);
     expect(linkOk("x.tsx", "{t}")).toBe(false);
     expect(linkOk("x.tsx", "{`javascript:${t}`}")).toBe(false);
   });
@@ -281,5 +283,24 @@ describe("the bundle", () => {
     expect(initial.size).toBeGreaterThan(0);
     expect(lazyChunks).toBeGreaterThan(5);
     expect(sum(true, "gzip")).toBeLessThanOrEqual(JS_BUDGET_GZ);
+    // Phase 4 Pass 3: the model statistics page and the dossier's model block load on demand.
+    const lazyOnly = [
+      "src/models/models-page.tsx",
+      "src/models/parts.tsx",
+      "src/models/format.ts",
+      "src/players/model-block.tsx",
+      "src/players/match-stats.ts",
+    ];
+    const outputs = Object.entries(built.metafile?.outputs ?? {});
+    const seen = new Set<string>();
+    for (const [path, meta] of outputs) {
+      for (const input of Object.keys(meta.inputs)) {
+        const rel = relative(WEB, resolve(input));
+        if (!lazyOnly.includes(rel)) continue;
+        seen.add(rel);
+        expect([rel, initial.has(path.replace(/^\.\//, ""))]).toEqual([rel, false]);
+      }
+    }
+    expect([...seen].toSorted(byText)).toEqual(lazyOnly.toSorted(byText));
   });
 });

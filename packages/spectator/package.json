@@ -6,7 +6,8 @@
   "exports": {
     ".": "./src/index.ts",
     "./annotations": "./src/annotations/index.ts",
-    "./reduce": "./src/reduce/index.ts"
+    "./reduce": "./src/reduce/index.ts",
+    "./stats": "./src/stats/index.ts"
   },
   "dependencies": {
     "@perfidia/engine": "workspace:*",

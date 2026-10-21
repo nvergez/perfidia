@@ -98,6 +98,11 @@ export interface ServeConfig {
   readonly origins: readonly string[];
   /** What the annotations serve (§9 Q2, Q4; the design serves both by default). */
   readonly policy: { readonly costs: boolean; readonly reasoning: boolean };
+  /**
+   * The model statistics file (`bun run stats -- aggregate --out <file>`) served at `/api/models`;
+   * null or absent: none.
+   */
+  readonly stats?: string | null;
   /** Fold workers (§2.5: at most 2). */
   readonly workers: number;
   readonly limits: Limits;
@@ -137,8 +142,10 @@ export const USAGE = [
   "  --public-host <h>   a Host name[:port] the server answers to (repeatable; required to bind a",
   "                      non-loopback host); its origins may open the WebSocket",
   "  --origin <url>      another browser origin allowed to open the WebSocket (repeatable)",
-  "  --no-costs          leave costs, tokens and spend out of the annotations",
+  "  --no-costs          leave costs, tokens and spend out of the annotations and statistics",
   "  --no-reasoning      leave reasoning summaries and reply text out of the annotations",
+  "  --stats <file>      serve the model statistics of bun run stats -- aggregate --out <file>",
+  "                      at /api/models (only while every match it aggregates is public)",
   "  --adapter <name>    elysia (default) or raw (the Bun.serve fallback)",
   "  --web-dist <dir>    serve the built web app (bun run web:build) outside /api",
   "  --dev               serve the OpenAPI UI page; re-read --web-dist when it changes",
@@ -167,6 +174,7 @@ export function parseServeArgs(argv: readonly string[], env: EnvConfig = readEnv
         origin: { type: "string", multiple: true },
         "no-costs": { type: "boolean" },
         "no-reasoning": { type: "boolean" },
+        stats: { type: "string" },
         adapter: { type: "string" },
         "web-dist": { type: "string" },
         dev: { type: "boolean" },
@@ -246,6 +254,7 @@ export function parseServeArgs(argv: readonly string[], env: EnvConfig = readEnv
     trustProxy: env.trustProxy,
     origins: values.origin ?? [],
     policy: { costs: values["no-costs"] !== true, reasoning: values["no-reasoning"] !== true },
+    stats: values.stats ?? null,
     workers: 2,
     limits: DEFAULT_LIMITS,
     timing: DEFAULT_TIMING,

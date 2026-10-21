@@ -3,7 +3,8 @@
 // DOM checks come from `../kit.ts`. On the finished fake run, p2's dossier (a chunk loaded on
 // demand, opened from the leaderboard) shows its record equal to the server's counts, its score
 // and cities hour by hour up to the end line, and every version of its notebook with a diff; then,
-// with the playhead moved back to D1 06:00, only what had happened by then.
+// with the playhead moved back to D1 06:00, only what had happened by then, and its model block
+// (phase 4 Pass 3) no whole-match figure until the viewer asks for them.
 
 import { expect, test } from "bun:test";
 import { PlayerDossierSchema, type PlayerDossier } from "@perfidia/protocol/spectator";
@@ -67,6 +68,19 @@ export function dossierChecks(): void {
     );
     const before = (await sheet.getByTestId("seat-record").textContent()) ?? "";
     expect(tile(before, "Turns played")).toBeLessThan(d.counts.turns);
+    // The model block too (phase 4 Pass 3 review fix): who the model is, never the whole match's
+    // figures, until the viewer asks for them.
+    const block = sheet.getByTestId("model-block");
+    await block.getByTestId("model-later").waitFor();
+    const later = (await block.textContent()) ?? "";
+    for (const s of ["Calls", "Incidents", "spent by every seat", "attempts:", "handed to"]) {
+      expect([s, later.includes(s)]).toEqual([s, false]);
+    }
+    expect(later).toContain("Rehearsal");
+    expect(await block.getByTestId("model-spend").count()).toBe(0);
+    await block.getByRole("button", { name: "Show the whole match's figures" }).click();
+    await block.getByText("Over the whole match, whatever the time shown.").waitFor();
+    expect(await block.getByTestId("model-spend").count()).toBe(1);
     await domIsClean(page);
   }, 20_000);
 }

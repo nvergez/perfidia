@@ -63,9 +63,12 @@ const PATHS = [
   "/api/matches/{id}/latest",
   "/api/matches/{id}/players/{seat}",
   "/api/matches/{id}/reports/{report}",
+  "/api/matches/{id}/stats",
   "/api/matches/{id}/t/{timeline}/keyframes/{seq}",
   "/api/matches/{id}/t/{timeline}/moments",
   "/api/matches/{id}/t/{timeline}/steps",
+  "/api/models",
+  "/api/models/{id}",
 ];
 
 let root = "";

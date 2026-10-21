@@ -216,6 +216,7 @@ export function testConfig(o: Partial<ServeConfig> & { readonly runs: string }):
     trustProxy: null,
     origins: [],
     policy: { costs: true, reasoning: true },
+    stats: null,
     workers: 2,
     limits: OPEN_LIMITS,
     timing: { pollMs: 25, rescanMs: 100, publishMs: 50, clockMs: 200, liveCacheMs: 0 },
