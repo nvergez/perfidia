@@ -21,6 +21,7 @@ import {
   TOOL_RESULT_DATA,
   ToolResultSchema,
   type PlayerId,
+  type Presentation,
   type ToolName,
   type ToolResult,
 } from "@perfidia/protocol";
@@ -48,12 +49,13 @@ class Bench {
     this.wake = createWakeScheduler(this.gw, gatewayRulesCopy(this.match.rules.gateway));
   }
 
-  env(seat: PlayerId): ToolEnv {
+  env(seat: PlayerId, presentation: Presentation = 1): ToolEnv {
     return {
       match: this.match,
       seat,
       gw: this.gw,
       gatewayRules: this.wake.rules,
+      presentation,
       turn: { index: 1, round: 0, call: 0 },
       submit: (a) => {
         this.submitted += 1;
@@ -68,8 +70,14 @@ class Bench {
     };
   }
 
-  run(seat: PlayerId, tool: string, args: unknown = {}): CallOutcome {
-    return invokeTool(createToolRegistry(this.match.ruleset), this.env(seat), call(tool, args));
+  run(
+    seat: PlayerId,
+    tool: string,
+    args: unknown = {},
+    presentation: Presentation = 1,
+  ): CallOutcome {
+    const env = this.env(seat, presentation);
+    return invokeTool(createToolRegistry(this.match.ruleset), env, call(tool, args));
   }
 }
 
@@ -82,7 +90,7 @@ function failure(r: ToolResult): { code: string; message: string; details?: unkn
   return r;
 }
 
-/** The descriptions of the 22 tools, verbatim (agent-visible text, versioned with ENGINE_VERSION). */
+/** The descriptions of the 22 tools, verbatim (agent-visible text, versioned with PROMPT_VERSION). */
 const EXPECTED_DESCRIPTIONS: Readonly<Record<ToolName, string>> = {
   view_city:
     "View one city. Your own and allied cities in full: stock, production rates, storage cap, population, buildings, build and recruit queues with their item numbers and end times, units at home, stationed groups and the movements you can see arriving or leaving. Any other city: its public fields and the latest spy or battle report you hold about it, with its age.",
@@ -91,7 +99,7 @@ const EXPECTED_DESCRIPTIONS: Readonly<Record<ToolName, string>> = {
   view_map:
     "Every island and city with their public fields. With fromCity (one of your cities), also the travel time from it to every island for every travel group of the rules.",
   view_player:
-    "A player's public profile: cities, score and its public parts, relations (allies and pacts) and its relation to you. On yourself it adds your movements, your groups stationed in other cities, your founding-unit count and the next founding-unit cost, your open proposals, today's counters and your pending self-wake.",
+    "A player's public profile: cities, score and its public parts, relations (allies and pacts) and its relation to you; the leaderboard already lists every player's score, city count and relations, so on another player this adds only its city ids. On yourself it adds your movements, your groups stationed in other cities, your founding-unit count and the next founding-unit cost, your open proposals, today's counters (today.day counts from 0: D1 is day 0) and your pending self-wake.",
   leaderboard:
     "The standings: rank, score and its public parts, cities and alive status of every player, with alliances and relations, plus the match-wide public state of the ruleset (for example running countdowns).",
   rules:
@@ -105,9 +113,9 @@ const EXPECTED_DESCRIPTIONS: Readonly<Record<ToolName, string>> = {
   send_resources:
     "Ship wood, stone and gold from one of your cities to another city, yours or another player's. The cargo leaves your stock now and arrives after the travel time; what the destination's storage cannot hold is lost. In-flight cargo per city may be capped (rules.movement.shipment).",
   attack:
-    "Send units from one of your cities to attack a city. The target and the foe you fight are fixed at launch. Counts against your attack launches per game day. A movement can be turned back within the recall window (rules.movement.recall).",
+    "Send units from one of your cities to attack a city. The target and the foe you fight are fixed at launch (the result's party). Counts against your attack launches per game day. A movement can be turned back within the recall window (rules.movement.recall).",
   support:
-    "Send units from one of your cities to defend another city, where they stay stationed until recalled or dismissed.",
+    "Send units from one of your cities to defend another city, where they stay stationed until recalled or dismissed. The result's party is the player the support is recorded for at launch, usually the city's owner; what your units do on arrival if the city has changed hands or is besieged meanwhile follows the cheat sheet.",
   spy: "Send gold from one of your cities to spy on a city (at least rules.movement.spyMinGold). The report or the failure notice comes back when it arrives.",
   recall_troops:
     "Exactly one mode per call. {movement}: turn one of your movements back within its recall window. {stationedAt, home?, units?}: bring your units stationed in a city home: all of them, the group from one home city, or part of it, as the rules allow. {dismiss: {city, player}}: send a player's support group in your city home.",
@@ -116,15 +124,15 @@ const EXPECTED_DESCRIPTIONS: Readonly<Record<ToolName, string>> = {
   send_message:
     'Send a message to a list of players (private: only they and you see it) or to "all" (public: in everyone\'s news; it wakes nobody). Counts once against your messages per game day, whatever the recipients. Nothing written is binding.',
   propose_alliance:
-    "Propose an alliance (kind alliance; name names a new alliance) or a non-aggression pact (kind pact) to a player, with an optional text. It expires after rules.diplomacy.proposalTtl; limits are checked again when it is accepted. until (a pact end) is accepted only when rules.toolOptions.pactUntil allows it. Nothing is binding.",
+    "Propose an alliance (kind alliance; name names a new alliance) or a non-aggression pact (kind pact) to a player, with an optional text. It expires after rules.diplomacy.proposalTtl and cannot be withdrawn. Limits (rules.diplomacy) are checked again when it is accepted: if one no longer allows it, the acceptance is refused and the proposal stays open until it expires. A pact proposed to a current pact partner renews that pact once accepted, for rules.diplomacy.pactDuration from the acceptance, and does not count as a new pact. until (a pact end) is accepted only when rules.toolOptions.pactUntil allows it. Nothing is binding.",
   answer_proposal:
-    "Accept or refuse an open proposal addressed to you; its id is in your briefing. Limits are checked when you accept.",
+    "Accept or refuse an open proposal addressed to you; its id is in your briefing. Limits are checked when you accept; a refused acceptance leaves the proposal open. In a proposal_answered event, the player who answered is always its to (the addressee).",
   leave_alliance:
     "Without with: leave your alliance. With a pact partner: end that pact. With an ally: leave the alliance.",
   write_note:
     "Write your notebook, which every briefing shows verbatim: mode append adds a line, mode replace rewrites it. At most rules.gateway.notesMaxChars characters.",
   read_notes:
-    "Without arguments: your notebook. search looks through your archive (scope mine), the public feed (public) or both (all, the default), filtered by case-insensitive text, event kinds, a counterpart player and a time range, newest first, at most 20 hits; when more is true, repeat the search with before set to the last hit's e to read the next page. open returns one full message or report by its id.",
+    "Without arguments: your notebook (search and open results leave it out: every briefing shows it). search looks through your archive (scope mine), the public feed (public) or both (all, the default), filtered by case-insensitive text, event kinds, a counterpart player and a time range, newest first, at most limit hits (20 at most); when more is true, repeat the search with before set to the last hit's e to read the next page. open returns one full message or report by its id.",
   end_turn:
     "End your turn. nextWakeIn (seconds ahead) or wakeAt (a game time), at most one, sets your self-wake: it is clamped into rules.gateway.selfWake and stays pending until it fires or a later end_turn replaces it. end_turn {} keeps any pending self-wake. Calls after end_turn in the same round trip are not run, and that round trip's results are not returned: your next briefing's lastTurn lists its failures and warnings (WAKE_CLAMPED when the wake was clamped).",
 };
@@ -162,11 +170,13 @@ describe("toolDefinitions", () => {
     expect(sandbox.at(-1)?.description).toBe(SANDBOX.tools?.[1]?.description);
     expect(TOOL_DESCRIPTIONS).toEqual(EXPECTED_DESCRIPTIONS);
     // The whole definitions, schemas included: a change here changes what agents are handed.
+    // Changed with the orchestrator's PROMPT_VERSION 3 (descriptions of view_player, attack,
+    // support, propose_alliance, answer_proposal and read_notes; schemas unchanged).
     expect(sha256Hex(canonicalJson(perfidia))).toBe(
-      "9d095ad58363b9ecf7e80a7d6a78be6a47337ffb37505303a8676c434e2173cc",
+      "a6e8b844b89bda88460791a005752470ec1810e218146ad9835cfe2925c6d446",
     );
     expect(sha256Hex(canonicalJson(sandbox))).toBe(
-      "cf13324d1d7a4ba8415f2347ae0df6169ca36fd7f52e4b4364afee7f602734aa",
+      "b183f95ce5b7e0f957888b613c313153a5780620ff11d303f6500f96460bbf17",
     );
     expect(perfidia.find((d) => d.name === "end_turn")).toEqual({
       name: "end_turn",
@@ -280,6 +290,27 @@ describe("layers 2–4", () => {
     expect(b.run("p1", "write_note", { text: "y".repeat(3000), mode: "replace" }).line).toBe("gw");
     const extra = b.run("p1", "hill_status", {});
     expect(extra).toMatchObject({ line: "obs", result: { ok: true, data: { open: false } } });
+  });
+
+  test("presentation 2: read_notes gives the notebook alone, never with a search or an open", () => {
+    const b = new Bench(SANDBOX, 2);
+    b.run("p1", "write_note", { text: "plan: hold c1", mode: "replace" });
+    const sent = b.run("p2", "send_message", { to: ["p1"], text: "hello" });
+    if (!sent.result.ok) throw new Error("the message was not sent");
+    const id = sent.result.data["message"];
+    if (typeof id !== "string") throw new Error("no message id");
+    const bare = b.run("p1", "read_notes", {}, 2);
+    expect(bare.result).toMatchObject({ ok: true, data: { notes: "plan: hold c1" } });
+    for (const args of [{ search: {} }, { open: id }, { search: {}, open: id }]) {
+      const r = b.run("p1", "read_notes", args, 2);
+      if (!r.result.ok) throw new Error("read_notes failed");
+      expect(r.result.data).not.toHaveProperty("notes");
+      expect(r.line).toBe("obs");
+      // Presentation 1 (bots, goldens) keeps the notebook in every result.
+      const p1 = b.run("p1", "read_notes", args);
+      if (!p1.result.ok) throw new Error("read_notes failed");
+      expect(p1.result.data).toEqual({ ...r.result.data, notes: "plan: hold c1" });
+    }
   });
 
   test("read_notes open gives player text whole but cleaned, and times as pairs; summaries are cleaned too", () => {

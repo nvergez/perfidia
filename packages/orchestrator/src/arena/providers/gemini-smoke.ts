@@ -1,6 +1,5 @@
 import { createMatch, getRuleset } from "@perfidia/engine";
 import { canonicalJson, idKeyFromSeed } from "@perfidia/engine/core";
-import { rulesInfo } from "@perfidia/gateway/present";
 import { toolDefinitions } from "@perfidia/gateway/runtime";
 import type { RoundInput, TimeSource } from "@perfidia/protocol";
 import { EXIT, UsageError, harness, type CliIo } from "@perfidia/sim";
@@ -28,6 +27,7 @@ import { modelTools } from "../../model/tools.ts";
 import { ENTRY_OVERHEAD_TOKENS } from "../../seat/agent.ts";
 import { PROFILES } from "../../seat/personalities.ts";
 import { seatPrompt, sharedPrompt, turnHeader } from "../../seat/prompt.ts";
+import { promptInfo } from "../prompt-info.ts";
 import { callBound } from "../estimate.ts";
 import { PreflightError, preflight, sampleRequest } from "../preflight.ts";
 import { DEFAULT_ARENA_DAYS, checkedBaseUrl, providerEnv, type ArenaEnv } from "../plan.ts";
@@ -86,7 +86,7 @@ export async function geminiSmokePlan(
   rulesetRef = "perfidia-1",
 ): Promise<GeminiSmokePlan> {
   const ruleset = getRuleset(rulesetRef);
-  const info = rulesInfo(
+  const info = promptInfo(
     createMatch(
       harness.setupFor(ruleset, {
         seed: 1,

@@ -1,6 +1,5 @@
 import { createMatch, getRuleset } from "@perfidia/engine";
 import { canonicalJson, idKeyFromSeed } from "@perfidia/engine/core";
-import { rulesInfo } from "@perfidia/gateway/present";
 import { toolDefinitions } from "@perfidia/gateway/runtime";
 import type { Effort, TimeSource } from "@perfidia/protocol";
 import { EXIT, UsageError, harness, type CliIo } from "@perfidia/sim";
@@ -38,6 +37,7 @@ import {
 import { ENTRY_OVERHEAD_TOKENS, entryTokensUpper } from "../../seat/agent.ts";
 import { PROFILES } from "../../seat/personalities.ts";
 import { seatPrompt, sharedPrompt, turnHeader } from "../../seat/prompt.ts";
+import { promptInfo } from "../prompt-info.ts";
 import { callBound } from "../estimate.ts";
 import {
   MIN_CONTEXT_TOKENS,
@@ -484,7 +484,7 @@ export async function openrouterSmokePlan(o: {
   readonly boundNano: number;
 }> {
   const ruleset = getRuleset(o.ruleset);
-  const info = rulesInfo(
+  const info = promptInfo(
     createMatch(
       harness.setupFor(ruleset, { seed: 1, players: 6, days: 7, idKey: idKeyFromSeed(1) }),
       ruleset,

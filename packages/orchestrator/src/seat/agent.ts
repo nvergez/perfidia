@@ -2,6 +2,7 @@ import { canonicalJson, sha256Hex } from "@perfidia/engine/core";
 import type {
   GameTime,
   PlayerId,
+  Presentation,
   PromptVariant,
   ReminderCadence,
   RoundInput,
@@ -33,6 +34,7 @@ import type { RateGate } from "../model/rate.ts";
 import { ArenaAborted, type PauseGate } from "./pause.ts";
 import { profileRef, type Profile } from "./personalities.ts";
 import {
+  LLM_PRESENTATION,
   PROMPT_VERSION,
   THOUGHT_ASK,
   THOUGHT_QUEUED,
@@ -282,6 +284,8 @@ function requestTime(input: RoundInput): GameTime {
 
 export class LlmSeatAgent implements SeatAgent {
   readonly label: string;
+  /** Presentation 2 (prompt version 3 on): the briefings and results the shared block describes. */
+  readonly presentation: Presentation = LLM_PRESENTATION;
   readonly seat: PlayerId;
   private readonly o: LlmSeatOptions;
   private state: TurnState | null = null;

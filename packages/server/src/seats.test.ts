@@ -169,7 +169,7 @@ describe("an OpenRouter seat", () => {
       expect(view(mid.seats)).toEqual(expected);
       expect(view(bare.seats)).toEqual(expected);
       // The mid-tier preset names GLM's listed effort, `low` (phase-4 Pass 2 review, §30.4).
-      expect(mid.seats[3]?.label).toBe("llm:fake/z-ai%2Fglm-5.3@z-ai%2Ffp8/low:agamemnon@1:p2-env");
+      expect(mid.seats[3]?.label).toBe("llm:fake/z-ai%2Fglm-5.3@z-ai%2Ffp8/low:agamemnon@1:p3-env");
       expect(mid.seats[3]?.model?.effort).toBe("low");
     },
     LONG,

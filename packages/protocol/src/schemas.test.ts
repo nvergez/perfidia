@@ -1253,7 +1253,8 @@ const TOOL_RESULT_INVALID: Record<protocol.ToolName, readonly Invalid[]> = {
     bad(toolResultData.write_note, ["max"], undefined),
   ],
   read_notes: [
-    bad(toolResultData.read_notes, ["notes"], undefined),
+    // `notes` may be absent (presentation 2's search and open results), but is a string when present.
+    bad(toolResultData.read_notes, ["notes"], 7),
     bad(toolResultData.read_notes, ["hits", 0, "e"], -1),
     bad(
       toolResultData.read_notes,

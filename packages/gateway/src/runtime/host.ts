@@ -41,6 +41,7 @@ import {
   type LogLine,
   type MatchResult,
   type PlayerId,
+  type Presentation,
   type RoundInput,
   type RoundOutput,
   type SeatAgent,
@@ -387,10 +388,11 @@ export class MatchHost implements ClockHost {
       used: { own: rec.used.own, social: rec.used.social },
     });
     this.countWake(seat, rec);
-    const briefing = copyOf(buildBriefing(this.match.read(), seat, this.gw, rec));
+    const presentation = this.agents.get(seat)?.presentation === 2 ? 2 : 1;
+    const briefing = copyOf(buildBriefing(this.match.read(), seat, this.gw, rec, { presentation }));
     briefed(this.gw, seat, t);
     this.counts.turns += 1;
-    return new HostTurn(this, seat, s.turns, briefing, this.wall?.nowMs());
+    return new HostTurn(this, seat, s.turns, briefing, this.wall?.nowMs(), presentation);
   }
 
   logBatch(t: GameTime, b: number, order: readonly PlayerId[]): void {
@@ -583,6 +585,7 @@ export class MatchHost implements ClockHost {
       seat: turn.seat,
       gw: this.gw,
       gatewayRules: this.wake.rules,
+      presentation: turn.presentation,
       turn: { index: turn.turn, round: turn.round, call: index },
       submit: (a, i) => this.submit(turn, call.tool, a, i),
       rejectItem: (i, error) => this.writeGw(turn, call.tool, error, { i }),
@@ -772,6 +775,8 @@ export class HostTurn implements TurnHandle {
   /** The seat's turn number, from 1. */
   readonly turn: number;
   readonly wallStart: number | undefined;
+  /** How the agent that opened the turn reads briefings and results (`SeatAgent.presentation`). */
+  readonly presentation: Presentation;
   private readonly host: MatchHost;
   private readonly briefing: Briefing;
   /** Rounds executed. */
@@ -795,12 +800,14 @@ export class HostTurn implements TurnHandle {
     turn: number,
     briefing: Briefing,
     wallStart: number | undefined,
+    presentation: Presentation = 1,
   ) {
     this.host = host;
     this.seat = seat;
     this.turn = turn;
     this.briefing = briefing;
     this.wallStart = wallStart;
+    this.presentation = presentation;
   }
 
   private get maxRounds(): number {

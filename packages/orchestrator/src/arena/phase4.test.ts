@@ -80,11 +80,13 @@ describe("arena estimate (phase 4 §5.3, §5.4)", () => {
     expect(r.out).toContain(
       "match (scenario, the sum of the seat bounds): $3.47 low · $12.05 central · $44.28 high",
     );
-    // The review added US-only inference (1.1×) to every Claude bound: $2.00 → $2.20.
+    // The review added US-only inference (1.1×) to every Claude bound: $2.00 → $2.20. Prompt
+    // version 3's longer shared block (READING THE INTERFACE, TIMES) raised the probe and the
+    // preflight, which price the real prefix: $0.17 → $0.20 each, the reserve $2.20 → $2.25.
     expect(r.out).toContain(
-      "reserve $2.20 = attempt bounds $1.85 + one probe $0.17 + start preflight $0.17",
+      "reserve $2.25 = attempt bounds $1.85 + one probe $0.20 + start preflight $0.20",
     );
-    expect(r.out).toContain("budget $55.00 · kill threshold K = $52.80 (budget − reserve)");
+    expect(r.out).toContain("budget $55.00 · kill threshold K = $52.75 (budget − reserve)");
     expect(r.out).toMatch(/p1 +claude-sonnet-5-5 +medium +off /);
     expect(r.out).not.toContain("warning:");
     // One calibration day.
@@ -124,12 +126,13 @@ describe("arena estimate (phase 4 §5.3, §5.4)", () => {
     const r = await cli(["estimate", "--lineup", "claude-family"]);
     expect(r.code).toBe(0);
     expect(r.out).toContain("$13.54 low · $46.38 central · $168.92 high");
-    expect(r.out).toContain("reserve $20.33 = attempt bounds $16.10");
-    expect(r.out).toContain("budget $190.00 · kill threshold K = $169.67");
+    // Prompt version 3: the probe and preflight price a longer prefix (reserve $20.33 → $20.95).
+    expect(r.out).toContain("reserve $20.95 = attempt bounds $16.10");
+    expect(r.out).toContain("budget $190.00 · kill threshold K = $169.05");
     expect(r.out).not.toContain("warning:");
     const low = await cli(["estimate", "--lineup", "claude-family", "--budget-usd", "180"]);
     expect(low.code).toBe(0);
-    expect(low.out).toContain("warning: budget $180.00 leaves K = $159.67");
+    expect(low.out).toContain("warning: budget $180.00 leaves K = $159.05");
     expect(low.out).toContain("below the predicted high $168.92: the kill switch might fire");
   });
 
@@ -143,7 +146,7 @@ describe("arena estimate (phase 4 §5.3, §5.4)", () => {
       const r = await cli([...command, "--budget-usd", "5"]);
       expect(r.code).toBe(3);
       expect(r.err).toContain(
-        "budget $5.00 leaves K = $2.80 after the reserve ($2.20 = attempt bounds $1.85 + one probe $0.17 + start preflight $0.17), below the predicted low $3.47: raise --budget-usd",
+        "budget $5.00 leaves K = $2.75 after the reserve ($2.25 = attempt bounds $1.85 + one probe $0.20 + start preflight $0.20), below the predicted low $3.47: raise --budget-usd",
       );
     }
     expect(existsSync(dir)).toBe(false);

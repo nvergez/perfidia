@@ -45,6 +45,7 @@ import { startRecording } from "./record.ts";
 import { runSeries } from "./series.ts";
 import { smokeCommand } from "./smoke.ts";
 import { planLive, smokeOpenRouter } from "./providers/openrouter.ts";
+import { PLAYTEST_USAGE, playtestCommand } from "./playtest/cli.ts";
 
 /** The largest seed. */
 const UINT32_MAX = 4_294_967_295;
@@ -72,6 +73,7 @@ export const USAGE = [
   "  series         play a lineup as rotated matches (Latin squares over seats and profiles)",
   "  personalities  list the profiles and their exact seat text",
   "  smoke          one live check of the key, the model and the request shape (needs the key)",
+  "  playtest       play one LLM seat of a run turn by turn yourself, through the real harness (no API)",
   "",
   "`bun run arena -- <command> --help` lists a command's flags.",
   `lineup presets: ${PRESETS.join(", ")} (packages/orchestrator/lineups/)`,
@@ -710,6 +712,8 @@ function dispatch(
       return personalities(io);
     case "smoke":
       return smoke(argv, io, env, o);
+    case "playtest":
+      return playtestCommand(argv, io);
     default:
       throw new UsageError(`unknown command "${command}"\n\n${USAGE}`);
   }
@@ -724,6 +728,7 @@ const COMMAND_USAGE: Readonly<Record<string, string>> = {
   cost: COST_USAGE,
   personalities: PERSONALITIES_USAGE,
   smoke: SMOKE_USAGE,
+  playtest: PLAYTEST_USAGE,
 };
 
 /** Runs one `arena` command line; returns its exit code. Never throws. */

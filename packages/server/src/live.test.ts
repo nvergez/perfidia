@@ -142,13 +142,21 @@ describe("a log written in chunks cut anywhere", () => {
       const half = Math.floor(at.length / 2);
       let s = serve(testConfig({ runs: root, cache }));
 
-      // The first chunks, until the server has the header.
+      // The first chunks, until the server has the header (at least three, and as many as the
+      // header line needs: the cuts depend on the run's length).
       let written = 0;
       const writeUpTo = async (n: number, pauseMs: number): Promise<void> => {
         await writeInChunks(log, text, at.slice(written, n + 1), pauseMs);
         written = n;
       };
-      await writeUpTo(3, 10);
+      const headerEnd = text.indexOf("\n") + 1;
+      await writeUpTo(
+        Math.max(
+          3,
+          at.findIndex((x) => x >= headerEnd),
+        ),
+        10,
+      );
       const meta = await metaOf(s, "chunked");
       const a = await Follower.start(s, "chunked");
       const b = await Follower.start(s, "chunked");

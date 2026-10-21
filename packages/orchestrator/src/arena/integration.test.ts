@@ -182,10 +182,10 @@ describe("arena: a full lockstep match on fake models", () => {
         expect(header?.k === "header" ? header.controllers[s.seat] : "").toBe(s.label);
       }
       expect(run.seats.seats.filter((s) => s.kind === "llm").map((s) => s.label)).toEqual([
-        "llm:fake/claude-opus-5-5/medium:odysseus@1:p2",
-        "llm:fake/claude-opus-5-5/medium:achilles@1:p2",
-        "llm:fake/claude-opus-5-5/medium:penelope@1:p2",
-        "llm:fake/claude-opus-5-5/medium:agamemnon@1:p2",
+        "llm:fake/claude-opus-5-5/medium:odysseus@1:p3",
+        "llm:fake/claude-opus-5-5/medium:achilles@1:p3",
+        "llm:fake/claude-opus-5-5/medium:penelope@1:p3",
+        "llm:fake/claude-opus-5-5/medium:agamemnon@1:p3",
       ]);
 
       // One llm_call line per model call: every round of an LLM turn is one call (no retries here).
@@ -411,7 +411,7 @@ describe("arena: determinism, hand-off, failures", () => {
       expect(p2?.handoff?.label).toBe("bot:conqueror@3");
       expect(p2?.handoff?.t).toBe(at);
       expect(p2?.controllers).toMatch(
-        /^llm:fake\/claude-opus-5-5\/medium:achilles@1:p2 → bot:conqueror@3 at D[12] /,
+        /^llm:fake\/claude-opus-5-5\/medium:achilles@1:p3 → bot:conqueror@3 at D[12] /,
       );
       expect(run.stderr).toContain("p2: over its cap");
       expect(verifyLog(lines).ok).toBe(true);

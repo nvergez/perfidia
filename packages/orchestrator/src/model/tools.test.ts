@@ -6,10 +6,13 @@ import { SAFE_INT_MAX, SCHEMA_KEYWORDS, anthropicTools, schemaKeywords } from ".
 
 // The Anthropic tool transform (phase-2 design §2.4) on the real gateway definitions.
 
-/** sha256 of the transformed tools of a pinned ruleset version: an agent-visible text. */
+/**
+ * sha256 of the transformed tools of a pinned ruleset version: an agent-visible text. PROMPT_VERSION
+ * 3 changed six gateway descriptions (version 2's: 3050f846… and 499cd277…).
+ */
 const SNAPSHOTS: Readonly<Record<string, string>> = {
-  "perfidia-1@1.1.0": "3050f846d05c16bee278c92be2ed8b14bc9badc4fb1009d448d65ef609adbcfa",
-  "sandbox-1@1.0.0": "499cd2772128d412c9ae38977842da589dd905a3d22ad6af8068d9ae7d9c8bec",
+  "perfidia-1@1.1.0": "626fa033b5fbc99fc8009da9da9b300e747af1e8bb5be623640b896c9c6e937e",
+  "sandbox-1@1.0.0": "07ebd77eba3372693c1638f9340c365ae844fe0c250c783cdf5bb6a274c88111",
 };
 
 describe("anthropicTools", () => {

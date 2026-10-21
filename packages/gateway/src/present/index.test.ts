@@ -24,6 +24,7 @@ describe("@perfidia/gateway/present", () => {
       expect(typeof (present as Record<string, unknown>)[name]).toBe("function");
     }
     expect(present.BRIEFING_TARGET_CHARS).toBe(2400);
+    expect(present.BRIEFING_TARGET_CHARS_2).toBe(6000);
     expect(present.MESSAGE_CUT).toBe(300);
   });
 

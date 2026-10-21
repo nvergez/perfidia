@@ -27,9 +27,20 @@ export interface RoundOutput {
   readonly thought?: string;
 }
 
+/**
+ * How the gateway presents a seat's briefings and read results (§8.2). `1`, the default, is phase
+ * 1's compact presentation: what bots read and goldens record. `2` is the LLM seats' (prompt version
+ * 3 on): a larger briefing whose cuts keep the events the wake names, building levels per city, the
+ * island of a found movement, exact `more` calls, and `read_notes` search and open results without
+ * the notebook. Game state and the log's lines are the same under both, `obs` sizes aside.
+ */
+export type Presentation = 1 | 2;
+
 export interface SeatAgent {
   /** A versioned controller label, e.g. `bot:expander@1`. */
   readonly label: string;
+  /** How the gateway presents this agent's briefings and read results; `1` when absent. */
+  readonly presentation?: Presentation;
   round(input: RoundInput): Promise<RoundOutput>;
 }
 
