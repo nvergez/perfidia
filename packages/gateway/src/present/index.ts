@@ -77,7 +77,14 @@ export {
 } from "./common.ts";
 export { MESSAGE_CUT, isTimeKey, renderData, renderEntryData, renderEvent } from "./events.ts";
 export { leaderboard, openProposals, viewCity, viewIsland, viewMap, viewPlayer } from "./views.ts";
-export { BRIEFING_TARGET_CHARS, MESSAGE_MIN_CUT, briefingSize, buildBriefing } from "./briefing.ts";
+export {
+  BRIEFING_TARGET_CHARS,
+  BRIEFING_TARGET_CHARS_2,
+  MESSAGE_MIN_CUT,
+  briefingSize,
+  buildBriefing,
+  type BriefingOptions,
+} from "./briefing.ts";
 export {
   EXPLAINED_CODES,
   explain,

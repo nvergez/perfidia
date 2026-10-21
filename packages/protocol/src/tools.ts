@@ -405,11 +405,12 @@ export const TOOL_RESULT_DATA = {
   leave_alliance: z.looseObject({}),
   write_note: z.looseObject({ chars: z.int().nonnegative(), max: z.int().nonnegative() }),
   /**
-   * `notes` always; `hits` for a search (newest first, with `more` when truncated: the next page is
-   * the same search with `before` set to the last hit's `e`); `entry` for `open`.
+   * `notes` (always under presentation 1; under presentation 2 only without `search` and `open`);
+   * `hits` for a search (newest first, with `more` when truncated: the next page is the same search
+   * with `before` set to the last hit's `e`); `entry` for `open`.
    */
   read_notes: z.looseObject({
-    notes: z.string(),
+    notes: z.string().optional(),
     hits: z.array(ArchiveHitSchema).max(READ_NOTES_MAX_HITS).optional(),
     more: z.boolean().optional(),
     entry: ArchiveEntrySchema.optional(),

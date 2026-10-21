@@ -38,6 +38,7 @@ import {
   type Json,
   type JsonObject,
   type PlayerId,
+  type Presentation,
   type ToolArgs,
   type ToolCall,
   type ToolError,
@@ -77,6 +78,8 @@ export interface ToolEnv {
   readonly gw: GatewayState;
   /** The match's gateway rules: the daily caps and the self-wake range. */
   readonly gatewayRules: GatewayRules;
+  /** How the calling agent reads results (`SeatAgent.presentation`); 1 when absent. */
+  readonly presentation?: Presentation;
   /** The seat's turn number, the round (from 0) and the call's index in the round. */
   readonly turn: { readonly index: number; readonly round: number; readonly call: number };
   /** Applies engine action `a`, item `i` of the call: writes its `act` line and delivers its events. */
@@ -365,7 +368,9 @@ const readTools = {
   rules: spec("rules", (env) => ok(env, rulesInfo(env.match))),
   read_notes: spec("read_notes", (env, a) => {
     const s = seatOf(env.gw, env.seat);
-    const data: Record<string, unknown> = { notes: s.notes };
+    // Presentation 2 shows the notebook only when asked for it alone: every briefing shows it.
+    const bare = a.search === undefined && a.open === undefined;
+    const data: Record<string, unknown> = env.presentation === 2 && !bare ? {} : { notes: s.notes };
     if (a.search !== undefined) {
       const page = searchArchivePage(env.gw, env.seat, a.search);
       data["hits"] = page.hits;
@@ -712,6 +717,7 @@ export function invokeTool(tools: ToolRegistry, env: ToolEnv, call: ToolCall): C
     seat: env.seat,
     gw: env.gw,
     gatewayRules: env.gatewayRules,
+    ...(env.presentation === undefined ? {} : { presentation: env.presentation }),
     turn: env.turn,
     submit(a, i) {
       changed = true;

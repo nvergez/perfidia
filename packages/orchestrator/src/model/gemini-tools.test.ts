@@ -106,11 +106,12 @@ describe("gemini@1: the neutral tools in Gemini's schema subset", () => {
     expect(toolsFor("google", neutral)).toEqual(gemini);
     expect(toolsFor("anthropic", neutral)).toBe(neutral);
     expect(hash(neutral)).not.toBe(hash(gemini));
-    // Pinned: a change to the transform or to the gateway's schemas shows here (bump gemini@N).
-    expect(hash(gemini)).toBe("39f0993453961cc79f3e9824a302377c5117f66e236e7cc90ead46f488428dc3");
+    // Pinned: a change to the transform or to the gateway's schemas shows here (bump gemini@N);
+    // the gateway's descriptions too (PROMPT_VERSION 3 changed six: version 2's hash 39f09934…).
+    expect(hash(gemini)).toBe("68c795e271e0b89870f848601621a460592a662b206844676fe37ffed1640a95");
     // 1.0.0 and 1.1.0 give the gateway the same tool schemas.
     expect(hash(toolsOf("perfidia-1@1.0.0").gemini)).toBe(
-      "39f0993453961cc79f3e9824a302377c5117f66e236e7cc90ead46f488428dc3",
+      "68c795e271e0b89870f848601621a460592a662b206844676fe37ffed1640a95",
     );
   });
 

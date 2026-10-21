@@ -175,7 +175,7 @@ describe("arena smoke", () => {
     expect(code).toBe(0);
     const out = io.stdout();
     expect(out).toContain(
-      "smoke: anthropic/claude-haiku-5-5/low on https://api.test.invalid, at most $0.010969",
+      "smoke: anthropic/claude-haiku-5-5/low on https://api.test.invalid, at most $0.012233",
     );
     expect(out).toContain("1. preflight: ok; allowed fallbacks: none");
     expect(out).toContain("2. count_tokens: 10250 input tokens");
@@ -222,17 +222,18 @@ describe("arena smoke", () => {
     ]);
   }, 60_000);
 
-  test("the bound of the real requests: $1.54 on Opus 5.5 (fallbacks on), $0.22 on Sonnet 5.5, $0.011 on Haiku 5.5; said before anything is sent", async () => {
+  test("the bound of the real requests: $1.71 on Opus 5.5 (fallbacks on), $0.24 on Sonnet 5.5, $0.012 on Haiku 5.5; said before anything is sent", async () => {
     // Phase-4 review: the bound is the real requests' (one token per byte of the shape check and of
     // the call's prompt, cold, the call's 4,000 output tokens, every fallback hop of Opus 5.5, US-only
-    // inference), not the scenario's prefix: $0.2175 on Opus 5.5 was not one.
+    // inference), not the scenario's prefix: $0.2175 on Opus 5.5 was not one. Prompt version 3's
+    // longer shared block raised it from $1.535745, $0.219392 and $0.010969.
     const plans = await Promise.all(
       ["claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5"].map((m) => smokePlan(m, "low")),
     );
     expect(plans.map((p) => formatUsd(p.boundNano))).toEqual([
-      "$1.535745",
-      "$0.219392",
-      "$0.010969",
+      "$1.712730",
+      "$0.244675",
+      "$0.012233",
     ]);
     // The worst the requests of Opus 5.5 can bill is the bound, to rounding: the shape check and
     // the call each refused and served by both fallback targets, cold, in the US, the output full.
@@ -266,7 +267,7 @@ describe("arena smoke", () => {
     } catch (e) {
       message = e instanceof Error ? e.message : String(e);
     }
-    expect(message).toContain("at most $1.535745 on claude-opus-5-5");
+    expect(message).toContain("at most $1.712730 on claude-opus-5-5");
     expect(message).toContain("Nothing was sent");
   });
 

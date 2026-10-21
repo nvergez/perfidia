@@ -1,6 +1,5 @@
 import { createMatch, getRuleset, type AnyRuleset } from "@perfidia/engine";
 import { canonicalJson, idKeyFromSeed } from "@perfidia/engine/core";
-import { rulesInfo } from "@perfidia/gateway/present";
 import { MemorySink, runMatch, toolDefinitions } from "@perfidia/gateway/runtime";
 import type { PlayerId, RoundInput, SeatAgent, TimeSource } from "@perfidia/protocol";
 import { EXIT, UsageError, harness, type CliIo } from "@perfidia/sim";
@@ -27,6 +26,7 @@ import { anthropicTools } from "../model/tools.ts";
 import { ENTRY_OVERHEAD_TOKENS, entryTokensUpper } from "../seat/agent.ts";
 import { PROFILES } from "../seat/personalities.ts";
 import { seatPrompt, sharedPrompt, turnHeader } from "../seat/prompt.ts";
+import { promptInfo } from "./prompt-info.ts";
 import { defaultFallbacks } from "./lineup.ts";
 import { callBound } from "./estimate.ts";
 import {
@@ -108,7 +108,7 @@ export async function smokePlan(
 }> {
   requirePrice(model);
   const ruleset = getRuleset(rulesetRef);
-  const info = rulesInfo(
+  const info = promptInfo(
     createMatch(
       harness.setupFor(ruleset, {
         seed: 1,
@@ -321,7 +321,7 @@ async function providerSmoke(o: SmokeOptions, provider: string): Promise<number>
   }
   const variant = info.capabilities.operatorChannel;
   const ruleset = getRuleset(o.ruleset ?? "perfidia-1");
-  const rules = rulesInfo(
+  const rules = promptInfo(
     createMatch(
       harness.setupFor(ruleset, {
         seed: 1,

@@ -1215,7 +1215,7 @@ Pure functions of `(match.read(), seat, gatewayState)` that always build fresh o
 
 ### 8.2 Briefing
 
-`buildBriefing(r, seat, gw, wake): Briefing` is compact, deterministic JSON. Target: ≤ 2,400 characters for a 3-city seat **excluding `notes`** (≈ 600 tokens at 4 chars/token). `notes` is always included verbatim and is bounded by `notesMaxChars`. A test checks a fixture with the notebook full and several long messages.
+`buildBriefing(r, seat, gw, wake): Briefing` is compact, deterministic JSON. Target: ≤ 2,400 characters for a 3-city seat **excluding `notes`** (≈ 600 tokens at 4 chars/token). This is presentation 1, what bots read and goldens record; an agent may declare presentation 2 (`SeatAgent.presentation`, the LLM seats': a 6,000-character target and the other differences of docs/phase2.md §3.5). `notes` is always included verbatim and is bounded by `notesMaxChars`. A test checks a fixture with the notebook full and several long messages.
 
 ```json
 {
@@ -1351,7 +1351,7 @@ export interface ToolSpec<A = unknown> {
   readonly name: string;
   readonly family: "observe" | "economy" | "military" | "diplomacy" | "memory" | "turn";
   readonly kind: "read" | "engine" | "gateway";
-  readonly description: string; // gateway-owned, identical in every ruleset, versioned with ENGINE_VERSION
+  readonly description: string; // gateway-owned, identical in every ruleset; only model seats read it: versioned with the orchestrator's PROMPT_VERSION (docs/phase2.md §3.5)
   readonly args: ZodType<A>; // a z.object (§3.7)
   handle(env: ToolEnv, args: A): ToolResult; // never throws on player input (fuzz test P12); INTERNAL otherwise (§7.3)
 }

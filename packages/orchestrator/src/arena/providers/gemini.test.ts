@@ -139,14 +139,14 @@ describe("arena run with Gemini seats against the wire stub (one lockstep day)",
       ).toEqual([
         [
           "p1",
-          "llm:google/gemini-4-argon/medium:odysseus@1:p2-env",
+          "llm:google/gemini-4-argon/medium:odysseus@1:p3-env",
           "envelope",
           "last-round",
           gemini,
         ],
         [
           "p2",
-          "llm:google/gemini-3.8-flash/low:achilles@1:p2-env",
+          "llm:google/gemini-3.8-flash/low:achilles@1:p3-env",
           "envelope",
           "last-round",
           gemini,

@@ -269,7 +269,7 @@ describe("arena run --fake --lineup mid-tier (phase 4 Pass 1b)", () => {
       ).toEqual([
         [
           "p1",
-          "llm:fake/claude-sonnet-5-5/medium:odysseus@1:p2",
+          "llm:fake/claude-sonnet-5-5/medium:odysseus@1:p3",
           "anthropic",
           "claude-sonnet-5-5",
           null,
@@ -278,7 +278,7 @@ describe("arena run --fake --lineup mid-tier (phase 4 Pass 1b)", () => {
         ],
         [
           "p2",
-          "llm:fake/gpt-6.1-sol/medium:achilles@1:p2-dev",
+          "llm:fake/gpt-6.1-sol/medium:achilles@1:p3-dev",
           "openai",
           "gpt-6.1-sol",
           null,
@@ -287,7 +287,7 @@ describe("arena run --fake --lineup mid-tier (phase 4 Pass 1b)", () => {
         ],
         [
           "p3",
-          "llm:fake/gemini-4-argon/medium:penelope@1:p2-env",
+          "llm:fake/gemini-4-argon/medium:penelope@1:p3-env",
           "google",
           "gemini-4-argon",
           null,
@@ -296,7 +296,7 @@ describe("arena run --fake --lineup mid-tier (phase 4 Pass 1b)", () => {
         ],
         [
           "p4",
-          "llm:fake/z-ai%2Fglm-5.3@z-ai%2Ffp8/low:agamemnon@1:p2-env",
+          "llm:fake/z-ai%2Fglm-5.3@z-ai%2Ffp8/low:agamemnon@1:p3-env",
           "openrouter",
           "z-ai/glm-5.3",
           "z-ai/fp8",

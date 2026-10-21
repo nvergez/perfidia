@@ -396,7 +396,8 @@ reconciled: OUTSIDE tolerance (exit 4)
 - **Prompt bytes and labels.** The Anthropic request bodies and controller labels are ec8e2ad's
   (phase 3, before phase 4), pinned by hash per model and profile in `arena/pins.test.ts`. The only
   request change: a seat whose fallbacks are `off` (Sonnet 5.5's default) sends neither
-  `fallbacks` nor its beta header.
+  `fallbacks` nor its beta header. (After phase 4, `PROMPT_VERSION` 3 changed them on purpose, before
+  any real match: phase2.md §3.5; the pins hold version 3's hashes and name version 2's.)
 
 ## 9. Commands
 
@@ -489,7 +490,7 @@ No test touches the network (loopback servers only). Run under `bun test` (defau
   after the rate-gate slot, the thought-call check or `redirect: "error"` fails the suite.
 - `budget/ledger.test.ts`, `model/bound.test.ts`, `model/redirect.test.ts`,
   `model/prices.test.ts` (card ids, sources and rates), `seat/agent.test.ts` (prompt cap),
-  `arena/pins.test.ts` (ec8e2ad hashes), `arena/plan.test.ts` (lineups, defaults, errors).
+  `arena/pins.test.ts` (ec8e2ad hashes; prompt version 3's since phase2.md §3.5), `arena/plan.test.ts` (lineups, defaults, errors).
 - `packages/server/src/compat.test.ts`: a phase-4 run directory and the same run rewritten as phase
   3 wrote it are both listed, ended, with the same seats and annotations.
 
@@ -701,7 +702,8 @@ take `provider`, `model`, `endpoint` and `effort` per seat.
 Model and endpoint ids escape `%`, `/` and `@` (`%25`, `%2F`, `%40`); ids holding `:` or spaces are
 refused (an OpenRouter `:free` id cannot be a seat). Anthropic labels are phase 2's bytes
 (`llm:anthropic/claude-sonnet-5-5/medium:odysseus@1:p2`); an OpenRouter seat reads
-`llm:openrouter/z-ai%2Fglm-5.3@z-ai%2Ffp8/medium:agamemnon@1:p2-env`. `parseControllerLabel`
+`llm:openrouter/z-ai%2Fglm-5.3@z-ai%2Ffp8/medium:agamemnon@1:p2-env` (`p3` from prompt version 3,
+phase2.md §3.5). `parseControllerLabel`
 inverts the format (a fast-check property over arbitrary ids and every catalogued model), and the
 server's `parseLlmLabel` reads every label the orchestrator writes (the same property, against the
 orchestrator's parser).
@@ -742,7 +744,7 @@ endpoint (parameters, quantization, ZDR). This build reads the snapshot checked 
 go where each provider takes instructions: Anthropic `system` messages, OpenAI `developer`
 messages, and for Gemini, OpenRouter and compat seats a text part beginning `[harness] ` appended to
 the user turn (`envelope`). The shared block differs by one sentence of WHO SPEAKS per variant; the
-`system` variant is phase 2's bytes (its hash is still ec8e2ad's), and the label carries the
+`system` variant is phase 2's bytes (its hash was ec8e2ad's until prompt version 3, phase2.md §3.5), and the label carries the
 variant (`-dev`, `-env`). Player text only ever sits inside JSON strings, so it cannot start a
 `[harness]` part.
 
@@ -751,7 +753,7 @@ results) or `last-round` (the turn header, then only the last-round and wake-end
 default of the Pass 1b presets.
 
 **Tools.** Every provider gets the same neutral list (phase 2's Anthropic list, hash
-`214b14ba…`); a provider with a narrower schema dialect gets it through a named `ToolTransform`,
+`214b14ba…`; `0e01104c…` from prompt version 3, whose tool descriptions changed); a provider with a narrower schema dialect gets it through a named `ToolTransform`,
 whose output is frozen and may not rename or reorder the tools. `seats.json` records per seat the
 sha256 of its shared block (`sharedHash`), its own tools (`toolsHash`: the neutral list through its
 provider's transform, `arena/providers.ts` `toolsFor`; the identity for every provider of this
@@ -833,9 +835,10 @@ No test touches the network. New or extended:
 - `model/bound.test.ts` (§17), `model/cards.test.ts` (card ids, sources, rates, windows, fees,
   rounding, long tiers, overrides, monotonicity; the catalog), `model/labels.test.ts`,
   `model/http.test.ts` (§16), `seat/variants.test.ts` (the variants differ in one sentence, the
-  `system` one is ec8e2ad's hash; the cadence; the label suffix; the fake's rendering per provider;
-  the tool transform), `architecture.test.ts` (environment names, `fetch` only in `model/http.ts`),
-  `arena/pins.test.ts` (Anthropic request bodies and labels still ec8e2ad's).
+  `system` one is ec8e2ad's hash, prompt version 3's since phase2.md §3.5; the cadence; the label
+  suffix; the fake's rendering per provider; the tool transform), `architecture.test.ts`
+  (environment names, `fetch` only in `model/http.ts`), `arena/pins.test.ts` (Anthropic request
+  bodies and labels still ec8e2ad's; prompt version 3's since phase2.md §3.5).
 - `packages/server/src/seats.test.ts`, `packages/spectator/src/fold/feed.test.ts`, and the
   annotation and compatibility tests above.
 

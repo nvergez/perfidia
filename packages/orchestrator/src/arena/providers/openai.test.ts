@@ -396,12 +396,12 @@ describe("arena run with OpenAI seats against a wire stub (one game day, lockste
       ).toEqual([
         [
           "p1",
-          "llm:openai/gpt-6.1-sol/medium:achilles@1:p2-dev",
+          "llm:openai/gpt-6.1-sol/medium:achilles@1:p3-dev",
           "developer",
           "all_turns",
           "last-round",
         ],
-        ["p2", "llm:openai/gpt-6-luna/low:penelope@1:p2-dev", "developer", null, "last-round"],
+        ["p2", "llm:openai/gpt-6-luna/low:penelope@1:p3-dev", "developer", null, "last-round"],
       ]);
 
       // Every attempt: an OpenAI card, recomputed from its usage; summaries; no error.

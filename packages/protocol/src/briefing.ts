@@ -106,6 +106,8 @@ export const BriefingCitySchema = z.looseObject({
   units: UnitCountsSchema,
   /** Number of groups stationed in the city. */
   stationed: Count,
+  /** Presentation 2: the level of every building above level 0, in the rules' building order. */
+  lvl: safeRecord(BuildingIdSchema, z.int().positive()).optional(),
   /** `publicCity` extras, omitted when empty (e.g. `perfidia-1`'s siege of an own city). */
   ext: JsonObjectSchema.optional(),
 });
@@ -131,6 +133,8 @@ export const BriefingMoveSchema = z.looseObject({
   id: MovementIdSchema,
   kind: MovementKindSchema,
   to: CityIdSchema.nullable(),
+  /** Presentation 2, a `found` movement (`to` null): the island it founds on. */
+  isl: IslandIdSchema.optional(),
   arrive: TimePairSchema,
 });
 

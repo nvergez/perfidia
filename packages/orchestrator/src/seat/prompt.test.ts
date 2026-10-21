@@ -2,12 +2,12 @@ import { describe, expect, test } from "bun:test";
 import fc from "fast-check";
 import { createMatch, getRuleset, idKeyFromSeed, type AnyRuleset } from "@perfidia/engine";
 import { canonicalJson, sha256Hex } from "@perfidia/engine/core";
-import { rulesInfo } from "@perfidia/gateway/present";
 import type { Briefing, ToolResult } from "@perfidia/protocol";
 import { AnthropicAdapter, AnthropicClient } from "../model/anthropic.ts";
 import { briefingOf, inputOf, rig, SPEC } from "../testkit.test.ts";
 import { PROFILES, findProfile, profileRef } from "./personalities.ts";
 import { PROMPT_VERSION, operatorTemplates, seatPrompt, sharedPrompt } from "./prompt.ts";
+import { promptInfo } from "../arena/prompt-info.ts";
 
 // The agent-visible texts (phase-2 design §4, §7 item 5): what the blocks contain, what they never
 // contain, their pinned hashes (a change of any agent-visible text bumps PROMPT_VERSION or a
@@ -24,11 +24,14 @@ function infoOf(ruleset: AnyRuleset, seed: number, players = 6) {
     },
     ruleset,
   );
-  return rulesInfo(m);
+  return promptInfo(m);
 }
 
-/** sha256 of the shared template (the ruleset's texts replaced by placeholders). */
-const SHARED_TEMPLATE_SHA = "0fdd2f53e4b396a8c908277fd229ffa76f7ae5b7d2b4966db24c07be39d1ed22";
+/**
+ * sha256 of the shared template (the ruleset's texts replaced by placeholders). Version 3 added
+ * READING THE INTERFACE and TIMES, whose numbers are this match's (version 2's was 0fdd2f53…).
+ */
+const SHARED_TEMPLATE_SHA = "7d8502b37280e7490bf76ae73e2b5dd85d37344c7622684bc3492e445067e6ff";
 /** sha256 of the four seat blocks and the operator templates. */
 const SEAT_AND_OPERATOR_SHA = "e092f7571eeebac98d6caee03c7274cc2c0ee15f38fcabc159f5f6d5813af4b7";
 
@@ -47,6 +50,49 @@ describe("system blocks", () => {
     expect(shared).not.toContain(canonicalJson(info.config));
   });
 
+  test("version 3: the harness's notes on the interface, with this match's numbers", () => {
+    const notes = shared.slice(
+      shared.indexOf("READING THE INTERFACE"),
+      shared.indexOf("\nCHEAT SHEET\n"),
+    );
+    // Roles, wake timing, what an own wake costs, what lastTurn.nextWake counts, the cost index.
+    expect(notes).toContain("party = the player a movement fights or is recorded for");
+    expect(notes).toContain("an own or social wake starts 10m after its first trigger");
+    expect(notes).toContain("out of 12 own wakes a game day");
+    expect(notes).toContain("lastTurn.nextWake and budget.selfWakeAt count only");
+    expect(notes).toContain("buildings[].cost[L] is the price of raising that building to level L");
+    expect(notes).toContain("at most 500 + 500 × its harbor level of cargo in flight");
+    // The events that never wake anyone are named only when the wake table has no entry for them.
+    expect(notes).toContain(
+      "(build_done, recruit_done, city_founded, support_arrived, shipment_delivered)",
+    );
+  });
+
+  test("version 3: TIMES lists the compiled times the rules tool leaves out", () => {
+    const times = shared.slice(shared.indexOf("TIMES ("));
+    const rules = createMatch(
+      {
+        ruleset: ruleset.ref,
+        overrides: {},
+        seed: 7,
+        idKey: idKeyFromSeed(7),
+        seats: Array.from({ length: 6 }, (_, i) => ({ id: `p${i + 1}` as const })),
+      },
+      ruleset,
+    ).rules;
+    for (const b of rules.buildings) {
+      const row = b.time.slice(1).map((r) => r[1] ?? 0);
+      expect(times).toContain(`\n${b.id} ${row.join(" ")}\n`);
+    }
+    for (const u of rules.units) expect(times).toContain(` ${u.time.slice(1).join(" ")}`);
+    // The base times of the cheat sheet's formulas: level 1 at build-speed level 1, one unit at 1.
+    expect(rules.buildings.map((b) => b.time[1]?.[1])).toEqual([
+      1800, 1500, 1500, 1500, 1200, 1500, 2400, 1500,
+    ]);
+    // The rules tool still leaves them out.
+    expect(canonicalJson(info.rules)).not.toContain('"time":[[');
+  });
+
   test("nothing volatile: the same bytes for any seed and id key; no model name, date or hash", () => {
     expect(sharedPrompt(infoOf(ruleset, 4242), 6)).toBe(shared);
     for (const block of [shared, ...PROFILES.map((p) => seatPrompt("p3", p))]) {
@@ -63,7 +109,8 @@ describe("system blocks", () => {
       .replace(info.cheatSheet, "{cheatSheet}")
       .replace(canonicalJson(info.rules), "{rules}")
       .replace(`${info.title}, ${info.ruleset}`, "{title}, {ruleset}");
-    expect(PROMPT_VERSION).toBe(2);
+    // Version 3: READING THE INTERFACE and TIMES (the `arena playtest` sessions; no real run yet).
+    expect(PROMPT_VERSION).toBe(3);
     const t = sha256Hex(template);
     const s = sha256Hex(
       canonicalJson({

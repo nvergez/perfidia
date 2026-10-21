@@ -7,7 +7,6 @@
 import { describe, expect, test } from "bun:test";
 import { createMatch, getRuleset, idKeyFromSeed } from "@perfidia/engine";
 import { canonicalJson, sha256Hex } from "@perfidia/engine/core";
-import { rulesInfo } from "@perfidia/gateway/present";
 import type { Json, JsonObject } from "@perfidia/protocol";
 import { toolDefinitions } from "@perfidia/gateway/runtime";
 import type { ChatRequest, ModelTool } from "../model/adapter.ts";
@@ -21,9 +20,10 @@ import {
 } from "../model/tools.ts";
 import { SPEC, calls, inputOf, ok, rig } from "../testkit.test.ts";
 import { roundReminder, sharedPrompt } from "./prompt.ts";
+import { promptInfo } from "../arena/prompt-info.ts";
 
 const ruleset = getRuleset("perfidia-1@1.1.0");
-const info = rulesInfo(
+const info = promptInfo(
   createMatch(
     {
       ruleset: ruleset.ref,
@@ -50,14 +50,14 @@ function renameKeys(o: JsonObject, from: string, to: string): JsonObject {
   return Object.fromEntries(Object.entries(o).map(([k, v]) => [k === from ? to : k, value(v)]));
 }
 
-/** ec8e2ad's shared block (seed 7, six seats), as `arena/pins.test.ts` pins it. */
-const EC8E2AD_SHARED = "a24c94a7990c88ffafb2e85d43e4179dac9c358a7f21097182e6c51ea5e5b363";
+/** The shared block of PROMPT_VERSION 3 (seed 7, six seats), as `arena/pins.test.ts` pins it. */
+const V3_SHARED = "ba6bdf346fda48e6cca6bacfd11c661d42d1142478f211f9f1f070b59acea144";
 
 describe("the shared block's operator-channel variants", () => {
-  test("system is phase 2's bytes; developer and envelope differ in the WHO SPEAKS sentence only", () => {
+  test("system is the pinned bytes; developer and envelope differ in the WHO SPEAKS sentence only", () => {
     const system = sharedPrompt(info, 6);
     expect(sharedPrompt(info, 6, "system")).toBe(system);
-    expect(sha256Hex(system)).toBe(EC8E2AD_SHARED);
+    expect(sha256Hex(system)).toBe(V3_SHARED);
     for (const v of ["developer", "envelope"] as const) {
       const other = sharedPrompt(info, 6, v);
       expect(other).not.toBe(system);
@@ -96,7 +96,7 @@ describe("the seat agent: cadence and variant", () => {
       },
     );
     const { agent, fake } = r;
-    expect(agent.label).toBe("llm:fake/gemini-4-argon/medium:odysseus@1:p2-env");
+    expect(agent.label).toBe("llm:fake/gemini-4-argon/medium:odysseus@1:p3-env");
     await agent.round(inputOf(1, 0));
     await agent.round(inputOf(1, 1, [ok()]));
     await agent.round(inputOf(1, 2, [ok()]));
@@ -122,7 +122,7 @@ describe("the seat agent: cadence and variant", () => {
       "user",
       "operator",
     ]);
-    expect(every.agent.label).toBe("llm:fake/claude-opus-5-5/medium:odysseus@1:p2");
+    expect(every.agent.label).toBe("llm:fake/claude-opus-5-5/medium:odysseus@1:p3");
   });
 });
 
@@ -217,11 +217,12 @@ describe("the tool transform hook", () => {
   const defs = toolDefinitions(ruleset);
   const neutral = modelTools(defs);
 
-  test("the neutral list is phase 2's Anthropic list; the identity changes nothing", () => {
+  test("the neutral list is the Anthropic list; the identity changes nothing", () => {
     expect(anthropicTools(defs)).toEqual(neutral);
     expect(transformTools(neutral, IDENTITY_TRANSFORM)).toBe(neutral);
+    // PROMPT_VERSION 3's tools (arena/pins.test.ts); phase 2's were 214b14ba….
     expect(sha256Hex(canonicalJson(JSON.parse(JSON.stringify(neutral))))).toBe(
-      "214b14ba67e638817bb4ca4d46d8e789fef47a95d375f4695b140587bf8d5b3b",
+      "0e01104cee57b8d23f145543f44b88ba5dd056a200da06c7e89df9d7d01eab82",
     );
   });
 
