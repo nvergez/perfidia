@@ -10,6 +10,9 @@
 // gateway at the maximum of 12 seats: the default bots with chaos agents on a third of the seats,
 // under step invariants, lockstep and real time with `VirtualTime`, end without a fatal line or an
 // INTERNAL result and replay at Level E.
+// Slow suite only (docs/architecture.md §13.8): skipped unless PERFIDIA_SLOW=1
+// (`bun run test:slow`, which `bun run test:exit` runs). The default suite keeps P4 at engine level
+// (`engine/src/domain/properties.test.ts`) and through the tools (`sim/src/integration.test.ts`).
 
 import { describe, expect, test } from "bun:test";
 import fc from "fast-check";
@@ -30,6 +33,10 @@ import {
   stagedStart,
   type IntentKind,
 } from "./intents.ts";
+
+const SLOW = process.env["PERFIDIA_SLOW"] === "1";
+/** A group of tests of the slow suite: skipped unless PERFIDIA_SLOW=1. */
+const xdescribe = describe.skipIf(!SLOW);
 
 interface Tally {
   attempted: Record<string, number>;
@@ -178,7 +185,7 @@ const CONFIGS: Readonly<Record<Ref, readonly Readonly<Record<string, Json>>[]>> 
 const sum = (rec: Record<string, number>, keys: readonly string[]): number =>
   keys.reduce((n, k) => n + (rec[k] ?? 0), 0);
 
-describe("P4 at scale: random intents and time advances", () => {
+xdescribe("P4 at scale: random intents and time advances", () => {
   for (const ref of REFS) {
     test(`${ref}: 6 to 12 seats, hundreds of steps, step invariants`, () => {
       const ruleset = rulesetOf(ref);
@@ -244,7 +251,7 @@ describe("P4 at scale: random intents and time advances", () => {
   }
 });
 
-describe("P4 at scale through the gateway: 12 seats, bots and chaos agents", () => {
+xdescribe("P4 at scale through the gateway: 12 seats, bots and chaos agents", () => {
   for (const ref of REFS) {
     for (const clock of [LOCKSTEP, VIRTUAL]) {
       test(`${ref}, ${clock.kind}: no fatal, no INTERNAL, step invariants, Level E`, async () => {

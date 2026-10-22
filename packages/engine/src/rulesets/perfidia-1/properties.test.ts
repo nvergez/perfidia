@@ -4,6 +4,11 @@ import { addAlliance, addMovement, addPact, addStationed } from "@perfidia/engin
 import type { CityId, UnitCounts } from "@perfidia/protocol";
 import { besiege, city, extOf, load, world } from "./fixtures.test.ts";
 
+// The slow suite (PERFIDIA_SLOW=1: `bun run test:slow`, run by `bun run test:exit`; docs/
+// architecture.md §13.8). Read through `import.meta.env`: the pure packages' tests may not name the
+// `process` global.
+const SLOW = import.meta.env["PERFIDIA_SLOW"] === "1";
+
 // Random city, relief and homecoming battles through the kernel, with step invariants (unit
 // conservation, sieges, emitted-event checks…): they never throw, and their aftermath (sieges,
 // conquests, returns, betrayals) keeps every invariant until the dust settles.
@@ -130,7 +135,8 @@ describe("battles through the kernel", () => {
         for (const bp of Object.values(x.battlePoints)) expect(bp).toBeGreaterThanOrEqual(0);
         if (s.mode !== "city") expect(x.sieges["c2"]).toBeUndefined();
       }),
-      { numRuns: 120 },
+      // 30 runs outside the slow suite, which runs 120.
+      { numRuns: SLOW ? 120 : 30 },
     );
   }, 30000);
 });

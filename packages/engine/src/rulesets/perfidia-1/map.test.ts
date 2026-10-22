@@ -16,6 +16,13 @@ import {
 } from "./map.ts";
 import { distanceTiles, travelBetween } from "./travel.ts";
 
+// The slow suite (PERFIDIA_SLOW=1: `bun run test:slow`, run by `bun run test:exit`; docs/
+// architecture.md §13.8). Read through `import.meta.env`: the pure packages' tests may not name the
+// `process` global.
+const SLOW = import.meta.env["PERFIDIA_SLOW"] === "1";
+/** A test of the slow suite: skipped unless PERFIDIA_SLOW=1. */
+const xtest = test.skipIf(!SLOW);
+
 // Map generation (perfidia-1 §2.3, §2.4, §3) and the fairness guarantee of §2.5.
 
 const d = PERFIDIA_1_DEFAULTS;
@@ -234,7 +241,7 @@ describe("§2.5 fairness guarantee", () => {
     );
   });
 
-  test(
+  xtest(
     "holds over the exhaustive sweep of rot and the jitter extremes",
     () => {
       for (let n = 6; n <= 12; n += 1) {

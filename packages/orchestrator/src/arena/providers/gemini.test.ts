@@ -6,6 +6,8 @@
 // Google card of its wall-clock start (thoughts as output); the retry at 65,536 tokens; the rate
 // limit retried; the budget block; the seats' channel, cadence and transformed tools. Also
 // `arena smoke --provider google` against the stub: its bound printed before anything is sent.
+// The 1-day match against the wire stub runs in the slow suite (PERFIDIA_SLOW=1,
+// docs/architecture.md §13.8: `bun run test:slow`, run by `bun run test:exit`).
 
 import { afterAll, describe, expect, test } from "bun:test";
 import { canonicalJson, sha256Hex } from "@perfidia/engine/core";
@@ -24,6 +26,10 @@ import { arenaEnv, planArena } from "../plan.ts";
 import { toolsFor } from "../providers.ts";
 import { RULESET, play, runDir } from "../rig.test.ts";
 import { runGeminiSmoke } from "./gemini-smoke.ts";
+
+const SLOW = process.env["PERFIDIA_SLOW"] === "1";
+/** A test of the slow suite: skipped unless PERFIDIA_SLOW=1. */
+const xtest = test.skipIf(!SLOW);
 
 /** `arena` as the CLI runs it, with no calibration profile unless a test passes `--profiles`. */
 const main = (...[argv, io, env, o]: Parameters<typeof arenaMain>) =>
@@ -91,7 +97,7 @@ describe("arena run with Gemini seats against the wire stub (one lockstep day)",
   });
   afterAll(() => stub.stop());
 
-  test(
+  xtest(
     "Level E, every attempt one request priced at its Google card, the retries, the budget held",
     async () => {
       const env = arenaEnv({
@@ -139,14 +145,14 @@ describe("arena run with Gemini seats against the wire stub (one lockstep day)",
       ).toEqual([
         [
           "p1",
-          "llm:google/gemini-4-argon/medium:odysseus@1:p2-env",
+          "llm:google/gemini-4-argon/medium:odysseus@1:p3-env",
           "envelope",
           "last-round",
           gemini,
         ],
         [
           "p2",
-          "llm:google/gemini-3.8-flash/low:achilles@1:p2-env",
+          "llm:google/gemini-3.8-flash/low:achilles@1:p3-env",
           "envelope",
           "last-round",
           gemini,
@@ -289,7 +295,7 @@ describe("arena smoke --provider google (against the wire stub)", () => {
     });
     expect(code).toBe(3);
     expect(cli.stderr()).toMatch(
-      /arena smoke --provider google makes one live API call \(at most \$0\.\d+ on gemini-3\.8-flash\): set PERFIDIA_GOOGLE_API_KEY first\. Nothing was sent\./,
+      /arena smoke: the google smoke makes one live API call \(at most \$0\.\d+ on gemini-3\.8-flash\): set PERFIDIA_GOOGLE_API_KEY first\. Nothing was sent\./,
     );
     expect(stub.records.length).toBe(before);
     // An effort the model does not take, and another provider's smoke: usage errors.

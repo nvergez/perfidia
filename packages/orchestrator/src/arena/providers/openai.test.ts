@@ -6,6 +6,8 @@
 // block, one fetch per attempt, the key in the header only and nowhere in the run directory, every
 // request valid against the wire schema, and prefix stability (each request of a turn extends the
 // previous one, byte for byte, and the stable blocks and tools never change).
+// The 1-day match against the wire stub runs in the slow suite (PERFIDIA_SLOW=1,
+// docs/architecture.md §13.8: `bun run test:slow`, run by `bun run test:exit`).
 
 import { afterAll, describe, expect, test } from "bun:test";
 import { readFileSync, readdirSync, statSync } from "node:fs";
@@ -23,6 +25,10 @@ import { main as arenaMain } from "../cli.ts";
 import { arenaEnv, planArena } from "../plan.ts";
 import { readCalls, runDir } from "../rig.test.ts";
 import { openaiBaseUrlProblem } from "./openai.ts";
+
+const SLOW = process.env["PERFIDIA_SLOW"] === "1";
+/** A test of the slow suite: skipped unless PERFIDIA_SLOW=1. */
+const xtest = test.skipIf(!SLOW);
 
 /** `arena` as the CLI runs it, with no calibration profile unless a test passes `--profiles`. */
 const main = (...[argv, io, env, o]: Parameters<typeof arenaMain>) =>
@@ -345,7 +351,7 @@ const filesOf = (dir: string): string[] => {
 // The match -----------------------------------------------------------------------------------------
 
 describe("arena run with OpenAI seats against a wire stub (one game day, lockstep)", () => {
-  test(
+  xtest(
     "Level E, OpenAI's cards, the budget block, one fetch per attempt, the key in the header only, stable prefixes",
     async () => {
       const stub = wireStub({ p1: "bot:opportunist@3", p2: "bot:conqueror@3" });
@@ -396,12 +402,12 @@ describe("arena run with OpenAI seats against a wire stub (one game day, lockste
       ).toEqual([
         [
           "p1",
-          "llm:openai/gpt-6.1-sol/medium:achilles@1:p2-dev",
+          "llm:openai/gpt-6.1-sol/medium:achilles@1:p3-dev",
           "developer",
           "all_turns",
           "last-round",
         ],
-        ["p2", "llm:openai/gpt-6-luna/low:penelope@1:p2-dev", "developer", null, "last-round"],
+        ["p2", "llm:openai/gpt-6-luna/low:penelope@1:p3-dev", "developer", null, "last-round"],
       ]);
 
       // Every attempt: an OpenAI card, recomputed from its usage; summaries; no error.
@@ -525,7 +531,7 @@ describe("arena smoke --provider openai", () => {
     const code = await main(["smoke", "--provider", "openai"], io, {});
     expect(code).toBe(3);
     expect(io.stderr()).toMatch(
-      /arena smoke --provider openai makes one live API call \(at most \$0\.0\d{5} on gpt-6-luna\): set PERFIDIA_OPENAI_API_KEY first\. Nothing was sent\./,
+      /arena smoke: the openai smoke makes one live API call \(at most \$0\.0\d{5} on gpt-6-luna\): set PERFIDIA_OPENAI_API_KEY first\. Nothing was sent\./,
     );
   });
 

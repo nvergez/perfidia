@@ -12,6 +12,7 @@ import {
 import { fallbacksOn } from "../model/anthropic.ts";
 import { FALLBACK_TARGETS, costOf, formatUsd, isPriced, type Cost } from "../model/prices.ts";
 import { operatorTemplates } from "../seat/prompt.ts";
+import { providerInfo } from "./providers.ts";
 
 // The arena's preflight (phase-2 design §2.2, §8), before the run directory exists: for each
 // (provider, model, effort) group, the adapter checks the key and the model (`models.retrieve`),
@@ -196,6 +197,13 @@ function geoProblem(usage: readonly UsageEntry[]): Problem | null {
   };
 }
 
+/** What to fix after a refused key (the M1 rehearsal: a bare "auth (401)" named nothing). */
+function authHint(label: string): string {
+  const provider = label.slice(0, label.indexOf("/"));
+  const variable = providerInfo(provider)?.keyVar ?? "the provider's PERFIDIA_<PROVIDER>_API_KEY";
+  return `; check ${variable}: a valid key, created in the workspace (or project) this run is billed to, exported in this shell`;
+}
+
 /**
  * Runs the preflight of every group, in order: each outcome goes to `onGroup` (with its cost,
  * failed groups included), then a failure throws `PreflightError`. `stop()` is checked before each
@@ -224,7 +232,10 @@ export async function preflight(
       usage = e.spent;
       status = e.status;
       const code = e.status === null ? "" : ` (${e.status})`;
-      failure = new PreflightError(e.kind, `preflight of ${label}: ${e.kind}${code}: ${e.message}`);
+      failure = new PreflightError(
+        e.kind,
+        `preflight of ${label}: ${e.kind}${code}: ${e.message}${e.kind === "auth" ? authHint(label) : ""}`,
+      );
     }
     const cost = o.price?.(g, usage) ?? costOf(usage);
     nanoUsd += cost.nanoUsd;

@@ -6,6 +6,8 @@
 // checkpoint (into the run directory, or a temporary one for a log file) and diffs it against the
 // nearest snapshot, a ruleset ref the build lacks exits 3 listing the refs, and diverging verifies
 // leave no file open.
+// The tests that run or re-simulate matches run in the slow suite (PERFIDIA_SLOW=1,
+// docs/architecture.md §13.8: `bun run test:slow`, run by `bun run test:exit`).
 
 import { describe, expect, test } from "bun:test";
 import {
@@ -26,6 +28,10 @@ import { main } from "../cli.ts";
 import { jsonlText, normalisedText, resimulate } from "../harness/index.ts";
 import { readLog } from "../io/index.ts";
 import { jsonDiff } from "./index.ts";
+
+const SLOW = process.env["PERFIDIA_SLOW"] === "1";
+/** A test of the slow suite: skipped unless PERFIDIA_SLOW=1. */
+const xtest = test.skipIf(!SLOW);
 
 function tempDir(): string {
   return mkdtempSync(join(tmpdir(), "perfidia-sim-verify-"));
@@ -75,7 +81,7 @@ function tamper(path: string, lines: readonly LogLine[], index: number, line: Lo
 }
 
 describe("sim verify", () => {
-  test("--from a mid-run snapshot passes for both rulesets with a non-empty override; --resim is byte-identical", async () => {
+  xtest("--from a mid-run snapshot passes for both rulesets with a non-empty override; --resim is byte-identical", async () => {
     const dir = tempDir();
     try {
       for (const [ruleset, override] of [
@@ -121,7 +127,7 @@ describe("sim verify", () => {
     }
   }, 30000);
 
-  test("a tampered log exits 1 naming the divergence; --dump writes the divergent checkpoint and diffs it", async () => {
+  xtest("a tampered log exits 1 naming the divergence; --dump writes the divergent checkpoint and diffs it", async () => {
     const dir = tempDir();
     try {
       const out = join(dir, "run");
@@ -202,7 +208,7 @@ describe("sim verify", () => {
     }
   }, 30000);
 
-  test("--resim catches a log whose controllers would play differently; a corrupt line reports its number", async () => {
+  xtest("--resim catches a log whose controllers would play differently; a corrupt line reports its number", async () => {
     const dir = tempDir();
     try {
       const out = join(dir, "run");

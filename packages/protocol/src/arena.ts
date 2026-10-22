@@ -624,6 +624,12 @@ export const ArenaReportSchema = z.strictObject({
   clock: z.string(),
   promptVersion: z.int().positive(),
   harness: z.string(),
+  /**
+   * The origin of each LLM seat provider's base URL that is not the provider's default (a local
+   * proxy or a stub: `PERFIDIA_<PROVIDER>_BASE_URL`), by provider. Absent when every seat used its
+   * provider's default, and on `--fake` runs. A loopback origin never meets `exit4`.
+   */
+  baseUrls: z.record(z.string(), z.string()).optional(),
   /** The last game time of the log, and the match's end (`null` while it runs or after a stop). */
   lastT: Int,
   endedAt: Int.nullable(),

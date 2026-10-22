@@ -26,6 +26,7 @@ import {
 } from "@perfidia/gateway/seat";
 import {
   BriefingSchema,
+  TOOL_ARGS,
   type Briefing,
   type CityId,
   type CompiledRules,
@@ -36,6 +37,7 @@ import {
 } from "@perfidia/protocol";
 import {
   BRIEFING_TARGET_CHARS,
+  BRIEFING_TARGET_CHARS_2,
   MESSAGE_MIN_CUT,
   briefingSize,
   buildBriefing,
@@ -920,3 +922,114 @@ describe("which movements incoming lists", () => {
 });
 
 void P3;
+
+// Presentation 2 (the LLM seats', `SeatAgent.presentation`): a larger target, the events the wake
+// names never cut, routine events cut first, building levels per city, the island of a found
+// movement, and `more` searches whose `limit` lists exactly the entries left out. Presentation 1 is
+// what every test above checks (and bots read, and goldens record).
+
+describe("presentation 2 (LLM seats)", () => {
+  test("presentation 1 is the default: the same briefing with or without the option", () => {
+    const { match, gw } = budgetWorld(3);
+    const reasons = [`incoming_attack ${oid("m", 1)}`, "message g00001"];
+    const r = match.read();
+    const plainB = buildBriefing(r, SEAT, gw, wakeRecord(reasons, true));
+    expect(buildBriefing(r, SEAT, gw, wakeRecord(reasons, true), { presentation: 1 })).toEqual(
+      plainB,
+    );
+    expect(plainB.cities.every((c) => c.lvl === undefined)).toBe(true);
+  });
+
+  test("the three-attack budget world fits whole: nothing cut, building levels per city", () => {
+    const { match, gw } = budgetWorld(3);
+    const reasons = [`incoming_attack ${oid("m", 1)}`, "message g00001"];
+    const r = match.read();
+    const b = parse(buildBriefing(r, SEAT, gw, wakeRecord(reasons, true), { presentation: 2 }));
+    expect(b.more).toBeUndefined();
+    expect([b.msgs.length, b.events.length, b.news.length, b.moves.length]).toEqual([5, 2, 2, 1]);
+    expect(briefingSize(b)).toBeGreaterThan(BRIEFING_TARGET_CHARS);
+    expect(briefingSize(b)).toBeLessThanOrEqual(BRIEFING_TARGET_CHARS_2);
+    for (const c of b.cities) {
+      const city = r.state.cities[c.id];
+      const levels = Object.entries(city?.buildings ?? {}).filter(([, l]) => l > 0);
+      expect(c.lvl).toEqual(Object.fromEntries(levels));
+    }
+  });
+
+  test("the events the wake names never give way; routine events give way first; more lists exactly the rest", () => {
+    const match = fixtureMatch();
+    const { gw, wake } = gatewayFor(match);
+    const many: DomainEvent[] = [
+      event(NOW - 400, "spy_report", [[P1, "self"]], { report: "r00042", city: "c6", gold: 50 }),
+      event(NOW - 399, "alliance_left", [[P1, "target"]], { alliance: "a1", player: P2 }),
+    ];
+    for (let i = 0; i < 80; i += 1) {
+      many.push(
+        event(NOW - 300 + i, "build_done", [[P1, "self"]], {
+          city: "c1",
+          item: 100 + i,
+          building: "tower",
+          level: 2,
+        }),
+      );
+      many.push(
+        event(
+          NOW - 300 + i,
+          "battle",
+          [],
+          { city: "c6", attacker: P3, defender: P4, kind: "raid", winner: "defender" },
+          true,
+        ),
+      );
+    }
+    deliver(gw, many, wake);
+    const reasons = ["spy_report r00042"];
+    const r = match.read();
+    const one = parse(buildBriefing(r, P1, gw, wakeRecord(reasons)));
+    const two = parse(buildBriefing(r, P1, gw, wakeRecord(reasons), { presentation: 2 }));
+    // Presentation 1 cuts the oldest events first: the named report is gone.
+    expect(one.events.some((e) => e.type === "spy_report")).toBe(false);
+    // Presentation 2 keeps it and the other non-routine event, and cuts build_done first.
+    expect(briefingSize(two)).toBeLessThanOrEqual(BRIEFING_TARGET_CHARS_2);
+    expect(two.events.slice(0, 2).map((e) => e.type)).toEqual(["spy_report", "alliance_left"]);
+    expect(two.news).toEqual([]);
+    const left = two.more?.["events"];
+    const kept = two.events.filter((e) => e.type === "build_done").length;
+    expect(left?.count).toBe(80 - kept);
+    expect(kept).toBeGreaterThan(0);
+    // The newest build_done are the ones kept.
+    expect(two.events.at(-1)).toMatchObject({ type: "build_done", item: 179 });
+    // Each call carries the limit that lists exactly the entries left out.
+    for (const name of ["events", "news"]) {
+      const more = two.more?.[name];
+      const q = TOOL_ARGS.read_notes.parse(more?.call.args).search;
+      if (more === undefined || q === undefined) throw new Error(`no ${name} call`);
+      expect(q.limit).toBe(Math.min(20, more.count));
+      const hits = searchArchivePage(gw, P1, q).hits;
+      expect(hits).toHaveLength(Math.min(20, more.count));
+      if (name === "events") {
+        expect(hits.every((h) => h.type === "build_done")).toBe(true);
+        const shown = new Set(two.events.map((e) => e["item"]));
+        expect(hits.some((h) => shown.has(Number(/item=(\d+)/.exec(h.summary)?.[1])))).toBe(false);
+      }
+    }
+  });
+
+  test("a found movement in moves shows the island it founds on", () => {
+    const match = fixtureMatch([{ kind: "found", arriveIn: 1800 }]);
+    const { gw } = gatewayFor(match);
+    const r = match.read();
+    const found = Object.values(r.state.movements).find((m) => m.kind === "found");
+    if (found === undefined) throw new Error("no found movement");
+    const two = parse(
+      buildBriefing(r, found.owner, gw, wakeRecord(["start"]), { presentation: 2 }),
+    );
+    expect(two.moves.find((m) => m.id === found.id)).toMatchObject({
+      kind: "found",
+      to: null,
+      isl: found.toIsland,
+    });
+    const one = parse(buildBriefing(r, found.owner, gw, wakeRecord(["start"])));
+    expect(one.moves.find((m) => m.id === found.id)).not.toHaveProperty("isl");
+  });
+});

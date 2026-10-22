@@ -12,6 +12,11 @@ import { NAMES_1_0_0, NAMES_1_1_0, buildingIds, kindIds, unitIds } from "./names
 import { perfidia1_1_0_0 } from "./v1_0_0.ts";
 import { perfidia1_1_1_0 } from "./v1_1_0.ts";
 
+// The slow suite (PERFIDIA_SLOW=1: `bun run test:slow`, run by `bun run test:exit`; docs/
+// architecture.md §13.8). Read through `import.meta.env`: the pure packages' tests may not name the
+// `process` global.
+const SLOW = import.meta.env["PERFIDIA_SLOW"] === "1";
+
 // The reskin of perfidia-1@1.1.0 (docs/rulesets/perfidia-1.md §0.1) renames ids and changes no
 // number but the domination share: with every 1.0.0 id renamed, 1.1.0's defaults, compiled rules
 // (for every N, and under random number overrides) and initial worlds are 1.0.0's, apart from the
@@ -133,7 +138,8 @@ describe("the compiled rules", () => {
           expect({ ...now, ruleset: "" }).toEqual({ ...old, ruleset: "" });
         },
       ),
-      { numRuns: 150 },
+      // 40 runs outside the slow suite, which runs 150.
+      { numRuns: SLOW ? 150 : 40 },
     );
   });
 });

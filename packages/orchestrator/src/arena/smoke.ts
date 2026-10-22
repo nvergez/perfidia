@@ -1,6 +1,5 @@
 import { createMatch, getRuleset, type AnyRuleset } from "@perfidia/engine";
 import { canonicalJson, idKeyFromSeed } from "@perfidia/engine/core";
-import { rulesInfo } from "@perfidia/gateway/present";
 import { MemorySink, runMatch, toolDefinitions } from "@perfidia/gateway/runtime";
 import type { PlayerId, RoundInput, SeatAgent, TimeSource } from "@perfidia/protocol";
 import { EXIT, UsageError, harness, type CliIo } from "@perfidia/sim";
@@ -27,6 +26,7 @@ import { anthropicTools } from "../model/tools.ts";
 import { ENTRY_OVERHEAD_TOKENS, entryTokensUpper } from "../seat/agent.ts";
 import { PROFILES } from "../seat/personalities.ts";
 import { seatPrompt, sharedPrompt, turnHeader } from "../seat/prompt.ts";
+import { promptInfo } from "./prompt-info.ts";
 import { defaultFallbacks } from "./lineup.ts";
 import { callBound } from "./estimate.ts";
 import {
@@ -108,7 +108,7 @@ export async function smokePlan(
 }> {
   requirePrice(model);
   const ruleset = getRuleset(rulesetRef);
-  const info = rulesInfo(
+  const info = promptInfo(
     createMatch(
       harness.setupFor(ruleset, {
         seed: 1,
@@ -200,7 +200,7 @@ export async function smokeCommand(o: SmokeOptions): Promise<number> {
   } = await smokePlan(model, effort, o.ruleset ?? "perfidia-1");
   if (o.env.apiKey === null) {
     throw new UsageError(
-      `arena smoke makes one live API call (at most ${formatUsd(bound)} on ${model}): set PERFIDIA_ANTHROPIC_API_KEY first. Nothing was sent.`,
+      `this smoke makes one live API call (at most ${formatUsd(bound)} on ${model}): set PERFIDIA_ANTHROPIC_API_KEY first. Nothing was sent.`,
     );
   }
   // The same check as arena run's (exit 3): no key over http:// off loopback.
@@ -321,7 +321,7 @@ async function providerSmoke(o: SmokeOptions, provider: string): Promise<number>
   }
   const variant = info.capabilities.operatorChannel;
   const ruleset = getRuleset(o.ruleset ?? "perfidia-1");
-  const rules = rulesInfo(
+  const rules = promptInfo(
     createMatch(
       harness.setupFor(ruleset, {
         seed: 1,
@@ -354,7 +354,7 @@ async function providerSmoke(o: SmokeOptions, provider: string): Promise<number>
   const pe = providerEnv(o.env, provider);
   if (pe.apiKey === null) {
     throw new UsageError(
-      `arena smoke --provider ${provider} makes one live API call (at most ${formatUsd(bound)} on ${model}): set ${p.keyVar} first. Nothing was sent.`,
+      `the ${provider} smoke makes one live API call (at most ${formatUsd(bound)} on ${model}): set ${p.keyVar} first. Nothing was sent.`,
     );
   }
   const base = o.baseURL ?? pe.baseURL ?? p.defaultBaseUrl;

@@ -13,12 +13,18 @@
 // - Seed 28 (cut at D5 16:00): p1 (conqueror@3) asks p3 (turtle@3) to hold the city its siege is
 //   taking (`siege`); p3 answers yes, and once the city is p1's its defenders land there inside the
 //   window. The same seed gives the same log.
+// Slow suite only (docs/architecture.md §13.8): skipped unless PERFIDIA_SLOW=1
+// (`bun run test:slow`, which `bun run test:exit` runs).
 
 import { describe, expect, test } from "bun:test";
 import { parseWar, WAR_LIMITS, type WarAck, type WarCall } from "@perfidia/bots";
 import type { ActLine, EvLine, LogLine, PlayerId } from "@perfidia/protocol";
 import { teamRecords } from "./batch/index.ts";
 import { normalisedHash, runBots, type BotChoice, type BotRunSpec } from "./harness/index.ts";
+
+const SLOW = process.env["PERFIDIA_SLOW"] === "1";
+/** A group of tests of the slow suite: skipped unless PERFIDIA_SLOW=1. */
+const xdescribe = describe.skipIf(!SLOW);
 
 const DAY = 86400;
 const LINEUP: readonly BotChoice[] = [
@@ -109,7 +115,7 @@ function controllers(lines: readonly LogLine[]): Readonly<Record<string, string>
   return header?.k === "header" ? header.controllers : {};
 }
 
-describe("war calls between conqueror@3 and the responders (perfidia-1, 6 seats, real matches)", () => {
+xdescribe("war calls between conqueror@3 and the responders (perfidia-1, 6 seats, real matches)", () => {
   test("seed 26: opportunist@3 calls a strike, conqueror@3 answers yes and both land in the window; conqueror@3's ally holds the city it takes", async () => {
     const { lines } = await runBots(spec(26, 4 * DAY + 15 * 3600));
     expect(lines.at(-1)?.k).toBe("end");

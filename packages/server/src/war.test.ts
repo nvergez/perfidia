@@ -4,6 +4,8 @@
 // standings of the log's end line, the same steps as a direct fold, and every keyframe equal to the
 // reduction up to its cursor. Then the server restarts from its cache: same timeline, same steps,
 // no fold.
+// Slow suite only (docs/architecture.md §13.8): skipped unless PERFIDIA_SLOW=1
+// (`bun run test:slow`, which `bun run test:exit` runs).
 
 // oxlint-disable no-await-in-loop -- the requests, pages and chunks follow each other on purpose (one cursor, one writer)
 import { afterAll, describe, expect, test } from "bun:test";
@@ -32,6 +34,10 @@ import {
   stopServers,
 } from "./testkit.test.ts";
 
+const SLOW = process.env["PERFIDIA_SLOW"] === "1";
+/** A group of tests of the slow suite: skipped unless PERFIDIA_SLOW=1. */
+const xdescribe = describe.skipIf(!SLOW);
+
 afterAll(stopServers);
 
 const LONG = 120_000;
@@ -51,7 +57,7 @@ async function allSteps(base: string, timeline: string, limit: number): Promise<
   }
 }
 
-describe("the war golden through the API", () => {
+xdescribe("the war golden through the API", () => {
   test(
     "reduces to the end line's standings; same steps as a direct fold; keyframes consistent; restart from the cache",
     async () => {

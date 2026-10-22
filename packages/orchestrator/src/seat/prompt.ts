@@ -1,6 +1,9 @@
-import { canonicalJson } from "@perfidia/engine/core";
+import { DAY, canonicalJson, fmtDuration } from "@perfidia/engine/core";
 import type {
+  CompiledRules,
+  DeepReadonly,
   PlayerId,
+  Presentation,
   PromptVariant,
   ReminderCadence,
   RoundInput,
@@ -27,8 +30,57 @@ import type { Profile } from "./personalities.ts";
 // start a `[harness]` part. The reminder cadence is one per lineup: `every-round` (phase 2: a
 // reminder after every round's results) or `last-round` (the turn header, then only the last-round
 // and wake-end notes; the default of mixed lineups).
+//
+// Version 3 (the playtests of `arena playtest`, before any real match, so no measured run is
+// lost): the shared block adds READING THE INTERFACE (roles, wake timing, what an own wake costs,
+// what `lastTurn.nextWake` counts, the cost-table index, shipments) and TIMES (the compiled build
+// and recruit times the rules tool leaves out), the gateway's tool descriptions changed (pinned
+// with the tools hash), and LLM seats read the gateway's presentation 2 (`SeatAgent.presentation`).
+// The texts of the three variants keep differing only in the WHO SPEAKS sentence and the header.
 
-export const PROMPT_VERSION = 2;
+export const PROMPT_VERSION = 3;
+
+/** The gateway presentation an LLM seat of this prompt version reads (`SeatAgent.presentation`). */
+export const LLM_PRESENTATION: Presentation = 2;
+
+/**
+ * The compiled times the `rules` tool leaves out (`agentRules`), per building and unit id: seconds
+ * to build level L (index L − 1, L ≥ 1) with the build-speed building at level 1, and seconds per
+ * unit with its queue's building at level l (index l − 1, l ≥ 1).
+ */
+export interface PromptTimes {
+  readonly buildSpeed: string | null;
+  readonly build: readonly { readonly id: string; readonly seconds: readonly number[] }[];
+  readonly recruit: readonly {
+    readonly id: string;
+    readonly queue: string;
+    readonly seconds: readonly number[];
+  }[];
+}
+
+/**
+ * What the shared block is built from: the `rules` payload and the compiled times
+ * (`arena/prompt-info.ts`'s `promptInfo(match)`).
+ */
+export interface PromptInfo extends RulesInfo {
+  readonly times: PromptTimes;
+}
+
+/** The compiled times of `rules` the shared block's TIMES lists. */
+export function promptTimes(rules: DeepReadonly<CompiledRules>): PromptTimes {
+  return {
+    buildSpeed: rules.roles.buildSpeed,
+    build: rules.buildings.map((b) => ({
+      id: b.id,
+      seconds: b.time.slice(1).map((row) => row[Math.min(1, row.length - 1)] ?? 0),
+    })),
+    recruit: rules.units.map((u) => ({
+      id: u.id,
+      queue: rules.queues.recruit.find((q) => q.id === u.queue)?.building ?? u.queue,
+      seconds: u.time.slice(1),
+    })),
+  };
+}
 
 /** The "WHO SPEAKS" sentence of each operator channel (the only per-variant text). */
 const CHANNEL_SENTENCE: Readonly<Record<PromptVariant, string>> = Object.freeze({
@@ -45,7 +97,7 @@ const CHANNEL_SENTENCE: Readonly<Record<PromptVariant, string>> = Object.freeze(
  * channel; `system` is phase 2's text, byte for byte.
  */
 export function sharedPrompt(
-  info: RulesInfo,
+  info: PromptInfo,
   players: number,
   variant: PromptVariant = "system",
 ): string {
@@ -69,11 +121,70 @@ WHO SPEAKS
 
 ${info.interface}
 
+${readingNotes(info)}
+
 CHEAT SHEET
 ${info.cheatSheet}
 
 TABLES (the compiled rules, as the rules tool returns them)
-${canonicalJson(info.rules)}`;
+${canonicalJson(info.rules)}
+
+${timesText(info)}`;
+}
+
+/** Standard event types that are no trigger in most rulesets, named as examples when they are none here. */
+const QUIET_EXAMPLES = [
+  "build_done",
+  "recruit_done",
+  "city_founded",
+  "support_arrived",
+  "shipment_delivered",
+] as const;
+
+/**
+ * READING THE INTERFACE: the harness's notes on the gateway's INTERFACE lines, from `rules.gateway`
+ * and `rules.movement` (ruleset-agnostic: a line about a rule the match does not have is left out).
+ */
+function readingNotes(info: PromptInfo): string {
+  const g = info.rules.gateway;
+  const group = fmtDuration(g.groupWindow);
+  const lines = [
+    "READING THE INTERFACE (the harness's notes on the lines above)",
+    "- Roles in TRIGGERS: party = the player a movement fights or is recorded for (the owner of an attacked city; the besieger, for an attack on a city under siege or a return into one); self = you acted, or the queue, movement or report is yours; target = the player a message, proposal or answer is for, or the owner of the city concerned when that owner is not the party; stationed = you have a group stationed in that city; ally = an ally of the target; public = every player, for a public event. You hold one role per event, the first of party, self, target, stationed, ally that applies.",
+    `- Wake timing: an own or social wake starts ${group} after its first trigger and delivers everything pending when it starts; an urgent wake starts at once (at most one per ${fmtDuration(g.urgentMinGap)}); a self-wake fires at its time. Budgets and daily caps reset at 00:00 of each game day (D2 00:00 is ${DAY}).`,
+  ];
+  const queueEmpty = Object.hasOwn(g.wake, "queue_empty") ? g.wake["queue_empty"] : undefined;
+  if (queueEmpty !== undefined && Object.hasOwn(queueEmpty, "self") && queueEmpty.self === "own") {
+    lines.push(
+      `- Own wakes go fast: every queue of every city fires its own queue_empty when its last item completes (the build queue and each unit queue separately; a cancel fires none), and each is an own trigger, out of ${g.ownWakesPerDay} own wakes a game day. Queues that empty within ${group} of each other share one wake: line their ends up, or keep them long.`,
+    );
+  }
+  const quiet = QUIET_EXAMPLES.filter((type) => !Object.hasOwn(g.wake, type));
+  lines.push(
+    `- lastTurn.nextWake and budget.selfWakeAt count only your self-wake, the safety wake and triggers that already happened: a queue still running or a report still on its way adds its trigger when it ends.${quiet.length === 0 ? "" : ` Events that are no trigger (${quiet.join(", ")}) never wake you: they wait for your next briefing.`}`,
+    "- Briefing: the events your wake.reasons name are always shown. When a list is cut, more.<list>.count is how many entries were left out and its call lists exactly those (for msgs, with your own messages among them). Each city lists lvl, the level of each of its buildings above 0; a found movement in moves lists isl, the island it founds on. read_notes search and open results leave the notebook out (every briefing shows it).",
+    "- In TABLES, buildings[].cost[L] is the price of raising that building to level L (cost[0] is never charged); levels.production[L], levels.storage[L] and levels.population[L] are by the level L of the building concerned; settlerCost[k] is by k. The travel times of view_map and view_island are [seconds, text] pairs, one per travel probe, in the result's probes order.",
+  );
+  const ship = info.rules.movement.shipment;
+  if (ship !== null) {
+    lines.push(
+      `- Shipments (rules.movement.shipment): a city may have at most ${ship.base} + ${ship.perLevel} × its ${ship.building} level of cargo in flight, its bounced shipments coming back included; a larger send_resources is refused.`,
+    );
+  }
+  return lines.join("\n");
+}
+
+/** TIMES: the compiled build and recruit times, one line per building and unit. */
+function timesText(info: PromptInfo): string {
+  const t = info.times;
+  const speed = t.buildSpeed === null ? "" : ` with ${t.buildSpeed} at level 1`;
+  return [
+    "TIMES (seconds, from the compiled rules; the rules tool leaves them out)",
+    `Build level 1, 2, 3, …${speed} (the cheat sheet's BUILD formula gives the other levels of ${t.buildSpeed ?? "the build-speed building"}):`,
+    ...t.build.map((b) => `${b.id} ${b.seconds.join(" ")}`),
+    "One unit, with its queue's building at level 1, 2, 3, …:",
+    ...t.recruit.map((u) => `${u.id} (${u.queue}) ${u.seconds.join(" ")}`),
+  ].join("\n");
 }
 
 /** The seat block (`system[1]`): the seat's private profile, identical for every wake. */

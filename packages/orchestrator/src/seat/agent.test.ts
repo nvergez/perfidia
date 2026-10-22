@@ -103,7 +103,7 @@ describe("conversation layout", () => {
       maxCalls: 10,
       kind: "round",
     });
-    expect(r.agent.label).toBe("llm:fake/claude-opus-5-5/medium:odysseus@1:p2");
+    expect(r.agent.label).toBe("llm:fake/claude-opus-5-5/medium:odysseus@1:p3");
   });
 
   test("parallel calls: one RoundOutput in order; all results back in one user entry, ids matched, is_error kept", async () => {

@@ -5,6 +5,9 @@
 //   before the start preflight (a signal there writes nothing), SIGHUP counts, and a third signal
 //   writes an `operator` line before the CLI exits;
 // - a key an upstream echoes in an error body never reaches a message, a log or stderr.
+// The 4-day kill switch under ENOSPC, --budget-carry of an unfinished run, the per-seat prompt
+// hashes and reconcile within 48 hours run in the slow suite (PERFIDIA_SLOW=1,
+// docs/architecture.md §13.8: `bun run test:slow`, run by `bun run test:exit`).
 
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
@@ -27,7 +30,7 @@ import { AnthropicAdapter, AnthropicClient, type HttpFetch } from "../model/anth
 import { LEGACY_AT, costOf } from "../model/prices.ts";
 import { FakeAdapter, type Brain } from "../model/fake.ts";
 import { botBrain } from "./brain.ts";
-import { main as arenaMain, processSignalsOf } from "./cli.ts";
+import { SIGNAL_REPEAT_MS, main as arenaMain, processSignalsOf } from "./cli.ts";
 import { LINEUPS_DIR } from "./lineup.ts";
 import { arenaEnv, planArena, type ArenaRequest, type LlmSeatPlan } from "./plan.ts";
 import { SNAPSHOT_ENDPOINTS, toolsFor, type EndpointSource } from "./providers.ts";
@@ -37,6 +40,10 @@ import { ledgerOf, reconcileDir, reconcileRun, tokensWithin } from "./reconcile.
 import { exit4Met } from "./report.ts";
 import { operatorHashOf, runArena, type AdapterContext, type SignalSource } from "./run.ts";
 import { RULESET, readCalls, runDir } from "./rig.test.ts";
+
+const SLOW = process.env["PERFIDIA_SLOW"] === "1";
+/** A test of the slow suite: skipped unless PERFIDIA_SLOW=1. */
+const xtest = test.skipIf(!SLOW);
 
 /** `arena` as the CLI runs it, with no calibration profile unless a test passes `--profiles`. */
 const main = (...[argv, io, env, o]: Parameters<typeof arenaMain>) =>
@@ -57,7 +64,7 @@ const centsText = (c: number): string =>
 type Call = Extract<LlmLogLine, { k: "llm_call" }>;
 
 describe("the kill switch is fail-safe (review: money, major)", () => {
-  test(
+  xtest(
     "the kill_switch line fails with ENOSPC: every seat is still halted, no attempt starts after the kill, under budget",
     async () => {
       const base = {
@@ -169,7 +176,7 @@ const duo = (days: number) =>
   );
 
 describe("crashes and operator signals (review: money, major)", () => {
-  test(
+  xtest(
     "--budget-carry of a run that did not end carries its reserve for what it had in flight",
     async () => {
       const first = runDir("first");
@@ -301,7 +308,9 @@ describe("crashes and operator signals (review: money, major)", () => {
     const exits: number[] = [];
     const got: string[] = [];
     const before = process.listenerCount("SIGHUP");
-    const off = processSignalsOf((code) => exits.push(code)).subscribe((s) => got.push(s));
+    let ms = 0;
+    const clock = () => (ms += SIGNAL_REPEAT_MS);
+    const off = processSignalsOf((code) => exits.push(code), clock).subscribe((s) => got.push(s));
     expect(process.listenerCount("SIGHUP")).toBe(before + 1);
     process.emit("SIGHUP", "SIGHUP");
     process.emit("SIGTERM", "SIGTERM");
@@ -310,6 +319,37 @@ describe("crashes and operator signals (review: money, major)", () => {
     expect([got, exits]).toEqual([["SIGHUP", "SIGTERM", "SIGINT"], [130]]);
     off();
     expect(process.listenerCount("SIGHUP")).toBe(before);
+  });
+
+  test("one Ctrl-C under `bun run` arrives twice, 3 ms apart: the process source takes it once", () => {
+    // The M1 rehearsal: the terminal signals the arena's process group and `bun run` forwards its
+    // own copy; counted twice, one Ctrl-C (or a closed terminal) aborted 3 of 6 runs.
+    const exits: number[] = [];
+    const got: string[] = [];
+    let ms = 10_000;
+    const off = processSignalsOf(
+      (code) => exits.push(code),
+      () => ms,
+    ).subscribe((s) => got.push(s));
+    try {
+      process.emit("SIGINT", "SIGINT");
+      ms += 3;
+      process.emit("SIGINT", "SIGINT");
+      ms += SIGNAL_REPEAT_MS - 4;
+      process.emit("SIGHUP", "SIGHUP");
+      expect(got).toEqual(["SIGINT"]);
+      // A second later than the first taken: a second press (the run aborts).
+      ms += 1;
+      process.emit("SIGINT", "SIGINT");
+      ms += 2;
+      process.emit("SIGINT", "SIGINT");
+      expect(got).toEqual(["SIGINT", "SIGINT"]);
+      ms += SIGNAL_REPEAT_MS;
+      process.emit("SIGTERM", "SIGTERM");
+      expect([got, exits]).toEqual([["SIGINT", "SIGINT", "SIGTERM"], [130]]);
+    } finally {
+      off();
+    }
   });
 });
 
@@ -396,6 +436,10 @@ describe("a key echoed by the upstream is redacted (review: money, minor)", () =
     );
     expect(r.code).toBe(3);
     expect(r.err).toContain("preflight of anthropic/claude-sonnet-5-5/medium: auth (401)");
+    // What to fix (the M1 rehearsal: a bare 401 named nothing).
+    expect(r.err).toContain(
+      "; check PERFIDIA_ANTHROPIC_API_KEY: a valid key, created in the workspace",
+    );
     expect(r.err).toContain("[redacted]");
     expect(`${r.out}${r.err}`).not.toContain(KEY);
     expect(`${r.out}${r.err}`).not.toContain(encodeURIComponent(KEY));
@@ -717,7 +761,7 @@ describe("arena reconcile (review: money and correctness)", () => {
     expect(ledgerOf([after]).get("google")?.excess).toBe(0);
   });
 
-  test(
+  xtest(
     "under 48 hours, exit4.reconciled stays null unless --force; a fake run is never met",
     async () => {
       const dir = runDir();
@@ -762,9 +806,12 @@ describe("exit4.met (review: correctness)", () => {
     reconciled: true,
   };
 
-  test("every part is needed, each on its own; a fake run never meets it", () => {
-    expect(exit4Met(all, { fake: false })).toBe(true);
-    expect(exit4Met(all, { fake: true })).toBe(false);
+  test("every part is needed, each on its own; a fake run or a loopback base URL never meets it", () => {
+    const real = { fake: false, loopback: false };
+    expect(exit4Met(all, real)).toBe(true);
+    expect(exit4Met(all, { ...real, fake: true })).toBe(false);
+    // The M1 rehearsal: a 7-day run against a stub on 127.0.0.1 reached met after --force.
+    expect(exit4Met(all, { ...real, loopback: true })).toBe(false);
     const flips: [string, Partial<typeof all> | { reconciled: null }][] = [
       ["models", { models: 1 }],
       ["ended", { ended: false }],
@@ -777,7 +824,7 @@ describe("exit4.met (review: correctness)", () => {
       ["reconciled null", { reconciled: null }],
     ];
     for (const [name, flip] of flips) {
-      expect([name, exit4Met({ ...all, ...flip }, { fake: false })]).toEqual([name, false]);
+      expect([name, exit4Met({ ...all, ...flip }, real)]).toEqual([name, false]);
     }
   });
 });
@@ -939,7 +986,7 @@ describe("seat checks (review: correctness)", () => {
 });
 
 describe("per-seat prompt hashes (review: correctness)", () => {
-  test(
+  xtest(
     "seats.json hashes each seat's own tools and its channel's rendering of the operator texts",
     async () => {
       const dir = runDir();

@@ -891,8 +891,13 @@ async function runArenaWith(
     }
   }
   const e = plan.estimate;
+  // A carried spend counts from the start (the M1 rehearsal: the banner left it out).
+  const carried =
+    e.budget === null || e.budget.carryNanoUsd === 0
+      ? ""
+      : `; carry ${formatCents(e.budget.carryNanoUsd)}${plan.budget === null || plan.budget.carryFrom === null ? "" : ` from ${plan.budget.carryFrom}`} (its logged spend${plan.budget !== null && plan.budget.carryInFlightNanoUsd > 0 ? " and its reserve" : ""}), so ${formatCents(Math.max(0, e.budget.killAtNanoUsd - e.budget.carryNanoUsd))} until K`;
   say(
-    `prediction for ${e.days} game day(s) (${e.match.source}): ${formatCents(e.match.low)} low · ${formatCents(e.match.central)} central · ${formatCents(e.match.high)} high; reserve ${reserveText(e.reserve)}${e.budget === null ? "; no match budget" : `; budget ${formatCents(e.budget.budgetNanoUsd)}, kill threshold K = ${formatCents(e.budget.killAtNanoUsd)}`}\n`,
+    `prediction for ${e.days} game day(s) (${e.match.source}): ${formatCents(e.match.low)} low · ${formatCents(e.match.central)} central · ${formatCents(e.match.high)} high; reserve ${reserveText(e.reserve)}${e.budget === null ? "; no match budget" : `; budget ${formatCents(e.budget.budgetNanoUsd)}, kill threshold K = ${formatCents(e.budget.killAtNanoUsd)}${carried}`}\n`,
   );
   for (const w of plan.warnings) alert(w);
   writeReport(report(null));
@@ -920,7 +925,7 @@ async function runArenaWith(
         ...(virtual === null ? { wall: iso() } : {}),
       });
       alert(
-        `${signal}: no model attempt starts from now on; every LLM seat is handed to its bot at its next turn and the match plays on (send it again to abort)`,
+        `${signal}: no model attempt starts from now on; every LLM seat is handed to its bot at its next turn and the match plays on (send it again, a second or more later, to abort)`,
       );
       ledger.halt("operator", lastT);
       return;

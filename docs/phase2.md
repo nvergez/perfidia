@@ -24,6 +24,7 @@
 9. Running the first real match
 10. Tests
 11. Open items
+12. Playtesting a seat: `arena playtest`
 
 ---
 
@@ -54,7 +55,7 @@ internal layers.
 | Directory | Contents                                                                                                                                                        | May import                                               |
 | --------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------- |
 | `model/`  | `adapter.ts` (the contract), `anthropic.ts` (the only SDK import), `tools.ts` (schema transform), `fake.ts` (`FakeAdapter`), `prices.ts`, `rate.ts`, `clock.ts` | protocol                                                 |
-| `seat/`   | `agent.ts` (`LlmSeatAgent`), `prompt.ts` (`PROMPT_VERSION` 2), `personalities.ts`, `pause.ts` (pause gate, breaker), `retry.ts`, `thought.ts`                   | protocol, engine/core, model, budget, log                |
+| `seat/`   | `agent.ts` (`LlmSeatAgent`), `prompt.ts` (`PROMPT_VERSION` 3), `personalities.ts`, `pause.ts` (pause gate, breaker), `retry.ts`, `thought.ts`                   | protocol, engine/core, model, budget, log                |
 | `budget/` | `ledger.ts`: spend per seat and per wake; the gateway's `HandoffQueue`                                                                                          | protocol, model/adapter, model/prices                    |
 | `log/`    | `calls.ts` (`llm_calls.jsonl`, transcripts, prompts), `schema.ts`, `watch.ts` (the `--watch` fold)                                                              | protocol, engine/core, node:fs, node:path, model/adapter |
 | `arena/`  | `cli.ts`, `plan.ts`, `preflight.ts`, `run.ts`, `brain.ts`, `report.ts`, `cost.ts`, `smoke.ts`                                                                   | everything above, gateway, engine, sim, bots             |
@@ -88,15 +89,15 @@ the game (briefing, notebook, archive).
   `end_turn`, or the last round trip); sanitised and cut at 400 characters. The optional
   out-of-band thought call (`--thought-call on`) asks for one when a terminal reply has none.
 - The controller label is `llm:<provider>/<model>/<effort>:<profile>@<n>:p<PROMPT_VERSION>`, e.g.
-  `llm:anthropic/claude-opus-5-5/medium:odysseus@1:p2`: `match.jsonl` alone says what played.
-  (`PROMPT_VERSION` 2 added the wake-end reminder.)
+  `llm:anthropic/claude-opus-5-5/medium:odysseus@1:p3`: `match.jsonl` alone says what played.
+  (`PROMPT_VERSION` 2 added the wake-end reminder; 3, the notes, times and presentation of §3.5.)
 
 ### 3.2 The prompt and the cache
 
 `tools` (the gateway's 22 `perfidia-1` tools, transformed: no `$schema`, no safe-integer maxima;
 `strict` off) → `system[0]`, shared by every seat of one model and effort (harness text, the
-gateway's interface text, the ruleset's cheat sheet and compiled tables) → `system[1]`, the seat's
-private profile → the messages. Both system blocks carry `cache_control`, and the request adds the
+gateway's interface text, READING THE INTERFACE, the ruleset's cheat sheet and compiled tables,
+TIMES; §3.5) → `system[1]`, the seat's private profile → the messages. Both system blocks carry `cache_control`, and the request adds the
 automatic breakpoint on the growing tail (3 breakpoints in all). Nothing volatile is in a system
 block. The preflight writes the shared prefix once, so the seats woken together at t = 0 read it.
 A reply with more than about 20 positions (progress-note thinking blocks between tool calls break
@@ -117,6 +118,64 @@ warlord; `conqueror@3`), `penelope@1` (the steward; keeps its word, punishes bet
 writes the same `controller` line. The budget ledger is the queue. A queue that throws or returns an
 invalid hand-off is a `HostFailure` (a `fatal` line). Existing paths are unchanged: every golden
 still verifies at Level E and Level G.
+
+### 3.5 Prompt version 3: what the playtests changed
+
+Three `arena playtest` sessions (§12: an opening, a diplomacy turn, a war turn with a betrayal
+nearby; 61 turns, 318 calls) found the interface hard to read in a few places that a real match
+would pay for in wasted round trips and wrong decisions. `PROMPT_VERSION` 3 fixes what the harness
+and the gateway's presentation can fix without changing a published ruleset, the engine, a golden
+or what bots read. No real match had run, so no measured run or calibration profile is lost.
+
+- **READING THE INTERFACE** (`seat/prompt.ts`, after the gateway's INTERFACE block; ruleset-agnostic,
+  its numbers from `rules.gateway` and `rules.movement`): the roles of the TRIGGERS line (party,
+  self, target, stationed, ally, public); a non-urgent wake starts `groupWindow` after its first
+  trigger, an urgent one at once; budgets and daily caps reset at 00:00 of each game day; every
+  queue of every city fires its own `queue_empty`, each an own wake out of `ownWakesPerDay`, so
+  queues ending within `groupWindow` share one; `lastTurn.nextWake` counts only triggers that
+  already happened; which events never wake; the briefing's presentation 2 (below); `cost[L]` is the
+  price of level L (`cost[0]` never charged) and the other level tables; the travel times' probe
+  order; the shipment cap. The interface text itself is unchanged: bots call the `rules` tool, whose
+  `obs` size the goldens record.
+- **TIMES** (after TABLES): the compiled build times (each level at build-speed level 1, the cheat
+  sheet's `baseTime` at level 1) and recruit times (per unit, by queue building level), which the
+  `rules` tool leaves out (`agentRules`, unchanged for the same reason). `arena/prompt-info.ts`'s
+  `promptInfo(match)` is the shared block's input (`rulesInfo` plus `promptTimes`).
+- **Tool descriptions** (the gateway's, which only model seats read, so they are versioned with
+  `PROMPT_VERSION` and pinned by the tools hash): `view_player` (the leaderboard already lists
+  relations; `today.day` counts from 0), `attack` and `support` (the result's `party`),
+  `propose_alliance` (cannot be withdrawn; a refused acceptance leaves it open; a pact proposed to a
+  partner renews it, not counting against `maxPacts`), `answer_proposal` (the answerer of a
+  `proposal_answered` is its `to`), `read_notes` (`limit`; the notebook only without arguments).
+- **Presentation 2** (`SeatAgent.presentation`, declared by `LlmSeatAgent`; bots keep presentation
+  1, so goldens, fingerprints and every bot's view are unchanged; the host passes it to
+  `buildBriefing` and to the read tools): a briefing target of 6,000 characters instead of 2,400
+  (excluding the notebook); the events the wake's reasons name never give way, and routine events
+  (`build_done`, `recruit_done`, `queue_empty`) give way before the others; each city lists `lvl`
+  (its building levels above 0); a `found` movement in `moves` lists `isl`; each `more` search
+  carries a `limit` that lists exactly the entries left out (an old briefing's entries of the same
+  second no longer pad it); `read_notes` search and open results leave the notebook out. On the
+  two 7-day `--fake` material runs, regenerated: briefings with a cut list fell from 66% and 69% of
+  LLM wakes to 12% and 11%, events left out from 1,753 and 1,798 to 261 and 208; the briefing's
+  median grew from about 2,850 to 3,800 characters; the fake runs cost +1.8% and −0.4%.
+- **Cost figures:** the shared block grew by 3,682 bytes and the tools by about 900 (≈ 1,150 tokens
+  at four bytes a token, a stable prefix of about 8,900 tokens; the Sonnet 5.5 request of round 0
+  at turn 3 went from 36,695 to 41,099 bytes with its larger briefing), so the
+  smoke bound and the estimate's probe and preflight grew ($0.17 → $0.20 each for Sonnet 5.5 in
+  `claude-duo`'s reserve). The a-priori estimate's assumptions (`PREFIX_TOKENS` 9,500,
+  `BRIEFING_TOKENS` 1,500) and every budget, cap and kill path are unchanged.
+
+Not fixed, with the reason (each needs a ruleset version, an engine change or a change bots would
+see): `queue_empty` grouped per seat or mutable from `end_turn` (a wake rule: a new `GatewayRules`
+field in a new ruleset version); withdrawing a proposal and voiding moot ones (an engine action);
+a `by` field on `proposal_answered` and a labelled `points` in battle reports (event data,
+fingerprinted); the siege's 1.41:1 settler rule against a relief and the re-homing of a garrison on
+conquest (cheat-sheet text of the published `perfidia-1@1.1.0`; for the next version);
+`ext.holding`'s besieger and role (the ruleset's briefing hook); `details.availableAt` as a time
+pair (logged in `gw` lines; the hint already words it); `view_map` travel rows labelled or sorted
+(bots parse them); a per-city shipment cap in the briefing and `wake.since` (left to the notes
+above); the notebook a playtest inherits from a `--fake` run's brain (playtest material only:
+documented in the material's `POINTS.md`).
 
 ## 4. The Anthropic adapter (`model/anthropic.ts`)
 
@@ -299,10 +358,13 @@ Exit codes: 0 ok, 1 Level E divergence, 2 fatal or aborted, 3 usage, config or p
 
 1. **Key and backstop.** Export `PERFIDIA_ANTHROPIC_API_KEY` (and `PERFIDIA_ANTHROPIC_BASE_URL`
    only for a proxy). Nothing else from the environment is read. Set a Console spend limit on the
-   key's workspace (e.g. $500). The cloud container's egress proxy may block `api.anthropic.com`:
-   run on the owner's machine.
-2. **Smoke** (at most $0.0054 on Haiku 5.5 and $0.22 on Opus 5.5, printed before anything is
-   sent: the call's output is capped at 4 000 tokens): `bun run arena -- smoke` (Haiku 5.5 at
+   key's workspace (e.g. $100). For the first real runs follow `docs/phase4.md` §10 (M0/M1): it
+   supersedes steps 4–5 below, which use phase 2's default lineup (four Opus 5.5 seats) with no
+   match budget. The cloud container's egress proxy may block `api.anthropic.com`: run on the
+   owner's machine.
+2. **Smoke** (at most $0.013 on Haiku 5.5 and $1.72 on Opus 5.5, its two fallback targets
+   included, printed before anything is sent: the bound of the preflight and the call, whose output
+   is capped at 4 000 tokens; $0.012233 and $1.712730 since prompt version 3): `bun run arena -- smoke` (Haiku 5.5 at
    `low`), then `bun run arena -- smoke --model opus-5-5 --effort low`. Each runs the preflight (key, model,
    allowed fallbacks and their prices, the exact request shape, the pre-warm), `count_tokens` on
    the prefix and a real briefing, and one streamed call; it prints the stop reason, the served
@@ -361,6 +423,11 @@ No test touches the network. The default suite (`bun test`, run by `bun run chec
   the deadline closes only its turns (no breaker, no abort); an auth error aborts at once.
 - `arena/plan.test.ts`, `report.test.ts`, `brain.test.ts`, `cli.test.ts`, `smoke.test.ts`.
 
+Since the suite split of architecture §13, the slow suite (`bun run test:slow`, run by
+`bun run test:exit`) holds these instead of the default suite: in `arena/integration.test.ts`,
+`--stop-after 1`, the two identical runs, the hand-off, the billing pause, `replies.jsonl` and the
+refused-turns alert; in `arena/realtime.test.ts`, the slow spell.
+
 `bun run test:exit` runs four 7-day fake matches to their end (lockstep seeds 2 and 3, the default
 brains, real time) and prints the exit criterion of each; with fake brains it is reported, never
 asserted.
@@ -385,3 +452,75 @@ asserted.
 - **For the gateway owner:** the `interface` text lists `from, to, text, name` as the typed player
   fields, but player text also appears inside `read_notes` hit summaries; say so in a future
   `ENGINE_VERSION` (the shared prompt already does).
+
+## 12. Playtesting a seat: `arena playtest`
+
+A dev tool, added after phase 4 (`src/arena/playtest/`): an outside player, a person or an agent
+driving the command line, plays one LLM seat of a run turn by turn through the real harness, with
+no model API and at no cost. It shows exactly what the seat's model receives, and answers each
+reply the way a model's tool calls are answered, before a real match spends money.
+
+```sh
+bun run arena -- playtest start --from <run-dir> --seat p2 --at 14 --out <session>  # or --at "D3 08:00", t:93600
+bun run arena -- playtest reply --session <session> --calls reply.json [--text "..."] [--end]
+bun run arena -- playtest next --session <session>    # the bots play on to the seat's next wake
+bun run arena -- playtest status --session <session>  # re-derive, rewrite the material
+```
+
+`reply.json` is an array of `{"name": "<tool>", "args": {...}}` (or `{"text": "...", "calls":
+[...]}`). A reply with no call, or with `end_turn` among its calls, ends the turn, and its text is
+the public thought; `--end` checks that it does (it needs text).
+
+- **The fork.** The run's `match.jsonl` is replayed on a fresh engine (every event, checkpoint and
+  act result checked against the log, as at Level E) and folded into a live `MatchHost`'s gateway
+  state with the rebuild fold (`createGatewayFold`); the gateway's lockstep driver then plays on
+  from the cut. The cut is the start of the turn's game second when the seat woke in that second's
+  first batch, so every seat due then wakes as it did in the run; otherwise (a wake in a later
+  batch, or a second turn in the same second) it is the turn's own wake line, and the turns other
+  seats still had open there are closed as empty rounds. The seat's first wake in the fork must be
+  byte-identical to the run's. The run directory is only read, and its `seats.json` hashes (shared
+  block, seat block, tools, operator templates) must be this build's, or the session is refused:
+  material made under an earlier `PROMPT_VERSION` must be made again (`arena run --fake`).
+  Lockstep runs only.
+- **The seat** is its own `LlmSeatAgent` (prompt cap, reminders, terminal rules, the thought from
+  the terminal reply's text) on a `PlaytestAdapter`. Requests are built by the seat's provider's
+  builder: the Anthropic adapter's own `build()` (an offline client that is never called) for an
+  Anthropic seat; for another provider, the fake adapter's neutral layout, which mirrors its
+  operator channel (same texts, not that provider's wire layout). The playtester's replies become
+  Anthropic content: text blocks, then `tool_use` blocks with ids `pt-<seat>-<turn>-<round>-<i>`.
+  They carry no thinking blocks, which a real model's replies would. Usage is estimated at four
+  bytes a token so that the prompt cap works; nothing is billed. The thought call is off.
+- **The other seats** are bots: a bot seat's own, an LLM seat's hand-off bot (a `--fake` run's
+  default brain), or `--brain pN=strategy@n`. They are fresh instances: their memory is in their
+  notebooks, but their per-match caches are read again (an extra `rules` call), so they do not
+  replay the run move for move.
+- **Calls** run through the real host: the turn gate, the round and wake call caps (`CALLS_CAP`),
+  argument validation and the explanatory errors (`code`, `message`, `hint`), the round-trip cap.
+  The results of a turn's last round trip are never shown to the model; `end.md` shows them to the
+  playtester, with the gateway's record of the turn that the next briefing's `lastTurn` reports.
+  The command line refuses what a model could not send: a tool the seat does not have, arguments
+  that are not a JSON object.
+- **The session directory**: `session.json` (the run and its hashes, the seat, the target turn and
+  cut, the bots), `steps.jsonl` (each reply and each `next`, with the turn, the round and the
+  sha256 of the request it answered), and the material: `prompt.md` (both system blocks),
+  `tools.json` (the request's tools), `turn-NNN/round-R.md` (what round trip R+1 adds: the
+  briefing and the turn header, or the echoed reply, the tool results after a one-line summary of
+  each, and the reminder), `turn-NNN/request-R.json` (the builder's whole request,
+  `JSON.stringify(build(req))`; the SDK adds `stream: true` when it sends), `turn-NNN/end.md`,
+  `fork.jsonl` (the fork's own log since the cut) and `STATUS.md`. Texts are quoted byte for byte
+  inside fences longer than any backtick run they hold.
+- **Stateless and deterministic.** Each command re-derives the whole session from the run's log
+  and the steps: the bots, the batch orders and the harness clock (virtual time, never advanced)
+  are deterministic. A new step is kept only when the derivation consumed it (a reply after a
+  turn's end asks for `next`; `next` while a reply is awaited is refused); a derivation that meets
+  another request than a step recorded (another build, a changed run) stops with an error instead
+  of drifting. A command costs one replay of the log up to the cut plus the turns played since:
+  on a 7-day run, about 1 s for a cut on day 1 and 2.5 s for one on day 6.
+
+Measured on two 7-day `--fake` runs (`--lineup claude-duo --seed 7` and the default lineup with
+`--seed 18`, both `--id-key seed`): in every 13th LLM wake (33 and 38 turns) and in every turn cut
+mid-second (16 and 39, 52 of which closed other seats' open turns), the fork's round-0 request held
+the run's own briefing and turn header, entry for entry; each derivation took 0.8 to 1 s. Tests: `arena/playtest/playtest.test.ts` (byte equality with the Anthropic adapter's
+request rebuilt from the run's transcript and prompt files; a scripted session with results, an
+`--end` and a `next`; the gateway's explanatory errors and the call cap; drift refused; the run
+directory unchanged).

@@ -15,6 +15,7 @@ import { canonicalJson, opaqueId } from "@perfidia/engine/core";
 import { buildBriefing, visibilityOf, type GatewayState, type WakeRecord } from "@perfidia/gateway";
 import type { PlayerId, ToolCall } from "@perfidia/protocol";
 import {
+  DEFAULT_REF,
   REFS,
   LOCKSTEP,
   ToolSession,
@@ -34,6 +35,15 @@ import {
   type Perturbation,
   type Staged,
 } from "./hidden.ts";
+
+/**
+ * The slow suite (`PERFIDIA_SLOW=1`: `bun run test:slow`, run by `bun run test:exit`; docs/
+ * architecture.md §13.8) runs these tests on every ruleset of `REFS`, the default suite on
+ * `DEFAULT_REF` only; the ally's outgoing movement (a match per ruleset) is in the slow suite only.
+ */
+const SLOW = process.env["PERFIDIA_SLOW"] === "1";
+/** A test of the slow suite: skipped unless PERFIDIA_SLOW=1. */
+const xtest = test.skipIf(!SLOW);
 
 const HOUR = 12;
 const WAKE: WakeRecord = {
@@ -265,6 +275,7 @@ async function world(ref: Ref): Promise<{ snap: Staged["snap"]; gw: GatewayState
 
 describe("P10 at tool level: hidden data never changes what a seat gets", () => {
   for (const ref of REFS) {
+    if (!SLOW && ref !== DEFAULT_REF) continue;
     test(`${ref}: every tool, errors included, and the briefing`, async () => {
       const { snap, gw } = await world(ref);
       const n = players(ref);
@@ -308,6 +319,7 @@ describe("P10 at tool level: hidden data never changes what a seat gets", () => 
   }
 
   for (const ref of REFS) {
+    if (!SLOW && ref !== DEFAULT_REF) continue;
     test(`${ref}: recall_troops on another player's movement reads exactly like a missing id`, async () => {
       const { snap, gw } = await world(ref);
       const base = loadChecked(snap);
@@ -336,7 +348,7 @@ describe("P10 at tool level: hidden data never changes what a seat gets", () => 
     }, 30000);
   }
 
-  test("an ally's outgoing movement: never shown in perfidia-1, shown in full in sandbox-1", async () => {
+  xtest("an ally's outgoing movement: never shown in perfidia-1, shown in full in sandbox-1", async () => {
     for (const ref of REFS) {
       // oxlint-disable-next-line no-await-in-loop -- one world per ruleset, cached
       const { snap, gw } = await world(ref);

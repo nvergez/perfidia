@@ -3,11 +3,17 @@
 // own siege, its strikes mostly win, and the match is a pure function of its seed (the same log
 // twice). The match is cut at the end of day 5 to keep the test fast; this seed eliminates on
 // day 4.
+// Slow suite only (docs/architecture.md §13.8): skipped unless PERFIDIA_SLOW=1
+// (`bun run test:slow`, which `bun run test:exit` runs).
 
 import { describe, expect, test } from "bun:test";
 import type { EvLine, LogLine, NoteLine } from "@perfidia/protocol";
 import { normalisedHash, runBots, type BotRunSpec } from "./harness/index.ts";
 import { summarize } from "./summary/index.ts";
+
+const SLOW = process.env["PERFIDIA_SLOW"] === "1";
+/** A group of tests of the slow suite: skipped unless PERFIDIA_SLOW=1. */
+const xdescribe = describe.skipIf(!SLOW);
 
 const DAY = 86400;
 
@@ -30,7 +36,7 @@ const events = (lines: readonly LogLine[], type: string): EvLine[] =>
 
 const str = (v: unknown): string => (typeof v === "string" ? v : "");
 
-describe("conqueror on a real match (perfidia-1, seed 13, 6 seats)", () => {
+xdescribe("conqueror on a real match (perfidia-1, seed 13, 6 seats)", () => {
   test("it eliminates its victim by conquest, and the same seed gives the same log", async () => {
     const a = await runBots(SPEC);
     expect(a.lines.at(-1)?.k).toBe("end");

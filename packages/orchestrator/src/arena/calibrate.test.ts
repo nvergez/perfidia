@@ -11,6 +11,8 @@
 //   growth), priced at the cards of the planned wall times; the match is the bootstrap of the sum
 //   only when every seat is calibrated;
 // - the source label in `estimate.json` and `arena.json` (`arena run --fake --profiles`).
+// The calibrated fake run runs in the slow suite (PERFIDIA_SLOW=1, docs/architecture.md §13.8:
+// `bun run test:slow`, run by `bun run test:exit`).
 
 import { describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
@@ -59,6 +61,10 @@ import {
 import { defaultSeatCap } from "./lineup.ts";
 import { arenaEnv, planArena } from "./plan.ts";
 import { runDir } from "./rig.test.ts";
+
+const SLOW = process.env["PERFIDIA_SLOW"] === "1";
+/** A test of the slow suite: skipped unless PERFIDIA_SLOW=1. */
+const xtest = test.skipIf(!SLOW);
 
 /** `arena` as the CLI runs it, with no calibration profile unless a test passes `--profiles`. */
 const main = (...[argv, io, env, o]: Parameters<typeof arenaMain>) =>
@@ -911,7 +917,7 @@ async function cli(argv: readonly string[]) {
 }
 
 describe("the source label in estimate.json and arena.json (arena calibrate, run --fake --profiles)", () => {
-  test(
+  xtest(
     "calibrated budget-mix: estimate and run; one seat-day each: measured-point",
     async () => {
       const b = base();

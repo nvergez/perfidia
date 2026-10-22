@@ -27,6 +27,7 @@ import {
   type LogLine,
   type ReplyLine,
 } from "@perfidia/protocol";
+import { foldLog, type SpectatorFold } from "./fold/fold.ts";
 
 export const GOLDEN_DIR = join(import.meta.dir, "..", "..", "sim", "fixtures", "golden");
 export const WAR_GOLDEN = "perfidia-1@1.1.0/lockstep-6p-6d-war.jsonl.gz";
@@ -73,6 +74,21 @@ export function golden(name: string): LogLine[] {
     goldens.set(name, lines);
   }
   return lines;
+}
+
+let war: { readonly fold: SpectatorFold; readonly ms: number } | null = null;
+
+/**
+ * The war golden folded once per test process (as `war-golden`: the fold takes seconds), with the
+ * wall time of that fold. Tests only read it.
+ */
+export function warGoldenFold(): { readonly fold: SpectatorFold; readonly ms: number } {
+  if (war === null) {
+    const lines = golden(WAR_GOLDEN);
+    const t0 = performance.now();
+    war = { fold: foldLog(lines, { match: "war-golden" }), ms: performance.now() - t0 };
+  }
+  return war;
 }
 
 export interface FakeRun {

@@ -2,7 +2,6 @@ import { existsSync, readFileSync, statSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { createMatch, type AnyRuleset, type InvariantLevel } from "@perfidia/engine";
 import { idKeyFromSeed } from "@perfidia/engine/core";
-import { rulesInfo } from "@perfidia/gateway/present";
 import { toolDefinitions } from "@perfidia/gateway/runtime";
 import {
   IdKeySchema,
@@ -64,6 +63,7 @@ import { modelTools } from "../model/tools.ts";
 import type { SeatPolicy } from "../seat/agent.ts";
 import { PROFILES, findProfile, profileRef, type Profile } from "../seat/personalities.ts";
 import { seatPrompt, sharedPrompt } from "../seat/prompt.ts";
+import { promptInfo } from "./prompt-info.ts";
 import { EFFORT_FACTOR_PCT, centralWakeNanoOf, loggedSpend, scenarioCard } from "./cost.ts";
 import { profilesFor } from "./calibrate.ts";
 import {
@@ -1195,7 +1195,7 @@ export function planArena(req: ArenaRequest, env: ArenaEnv, o: PlanOptions = {})
   checkCreation(setup, ruleset);
 
   // The prediction (phase 4 §5.3), from the texts every seat will get.
-  const info = rulesInfo(createMatch(setup, ruleset));
+  const info = promptInfo(createMatch(setup, ruleset));
   const sharedByVariant: Partial<Record<PromptVariant, string>> = {
     system: sharedPrompt(info, setup.seats.length, "system"),
   };
@@ -1404,7 +1404,8 @@ export function planArena(req: ArenaRequest, env: ArenaEnv, o: PlanOptions = {})
 }
 
 /** Whether a base URL names a loopback host. */
-function isLoopback(base: string): boolean {
+/** Whether `base` names a loopback host (a local proxy or a stub). */
+export function isLoopback(base: string): boolean {
   try {
     return LOOPBACK.has(new URL(base).hostname);
   } catch {

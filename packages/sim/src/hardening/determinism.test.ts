@@ -4,11 +4,17 @@
 // order (a hidden module-level state would show as a difference). Every one of these logs, in this
 // process and in the children, passes Level E. The children run `determinism-child.ts`, a plain
 // script: no test runner, linter or type checker is spawned.
+// Slow suite only (docs/architecture.md §13.8): skipped unless PERFIDIA_SLOW=1
+// (`bun run test:slow`, which `bun run test:exit` runs).
 
 import { expect, test } from "bun:test";
 import { join } from "node:path";
 import { z } from "@perfidia/protocol";
 import { caseHashes, type CaseHashes } from "./determinism-child.ts";
+
+const SLOW = process.env["PERFIDIA_SLOW"] === "1";
+/** A test of the slow suite: skipped unless PERFIDIA_SLOW=1. */
+const xtest = test.skipIf(!SLOW);
 
 const CASES = [
   "perfidia-1@1.0.0:lockstep:31",
@@ -39,7 +45,7 @@ async function child(args: readonly string[]): Promise<Record<string, CaseHashes
   return HashesSchema.parse(JSON.parse(out.trim()));
 }
 
-test("two separate bun processes give the same logs and hashes as this one", async () => {
+xtest("two separate bun processes give the same logs and hashes as this one", async () => {
   const [forward, backward] = await Promise.all([child(CASES), child(CASES.toReversed())]);
   for (const c of CASES) {
     // oxlint-disable-next-line no-await-in-loop -- the in-process reference runs, one at a time

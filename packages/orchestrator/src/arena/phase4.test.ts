@@ -11,6 +11,9 @@
 // - `--budget-carry`; a failed probe's spend is charged; probes stop once the seats are halted.
 // - `arena reconcile`: `reconcile.json`, exit 4 outside tolerance.
 // - A redirecting base URL never receives the key (the whole CLI).
+// The 2-day byte-identical runs, the 4-day kill switch, --budget-carry, SIGINT once, the failed
+// probe and `arena reconcile` on a run run in the slow suite (PERFIDIA_SLOW=1,
+// docs/architecture.md §13.8: `bun run test:slow`, run by `bun run test:exit`).
 
 import { afterEach, describe, expect, test } from "bun:test";
 import { existsSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
@@ -30,12 +33,16 @@ import { ModelError } from "../model/adapter.ts";
 import { FakeAdapter, type Brain } from "../model/fake.ts";
 import { formatCents, requirePrice } from "../model/prices.ts";
 import { botBrain } from "./brain.ts";
-import { main as arenaMain } from "./cli.ts";
+import { main as arenaMain, processSignalsOf } from "./cli.ts";
 import { estimateSeat } from "./cost.ts";
 import { arenaEnv, planArena, type LlmSeatPlan } from "./plan.ts";
 import { reconcileRun } from "./reconcile.ts";
 import { runArena, type AdapterContext, type SignalSource } from "./run.ts";
 import { FlakyAdapter, RULESET, readCalls, runDir } from "./rig.test.ts";
+
+const SLOW = process.env["PERFIDIA_SLOW"] === "1";
+/** A test of the slow suite: skipped unless PERFIDIA_SLOW=1. */
+const xtest = test.skipIf(!SLOW);
 
 /** `arena` as the CLI runs it, with no calibration profile unless a test passes `--profiles`. */
 const main = (...[argv, io, env, o]: Parameters<typeof arenaMain>) =>
@@ -80,11 +87,13 @@ describe("arena estimate (phase 4 §5.3, §5.4)", () => {
     expect(r.out).toContain(
       "match (scenario, the sum of the seat bounds): $3.47 low · $12.05 central · $44.28 high",
     );
-    // The review added US-only inference (1.1×) to every Claude bound: $2.00 → $2.20.
+    // The review added US-only inference (1.1×) to every Claude bound: $2.00 → $2.20. Prompt
+    // version 3's longer shared block (READING THE INTERFACE, TIMES) raised the probe and the
+    // preflight, which price the real prefix: $0.17 → $0.20 each, the reserve $2.20 → $2.25.
     expect(r.out).toContain(
-      "reserve $2.20 = attempt bounds $1.85 + one probe $0.17 + start preflight $0.17",
+      "reserve $2.25 = attempt bounds $1.85 + one probe $0.20 + start preflight $0.20",
     );
-    expect(r.out).toContain("budget $55.00 · kill threshold K = $52.80 (budget − reserve)");
+    expect(r.out).toContain("budget $55.00 · kill threshold K = $52.75 (budget − reserve)");
     expect(r.out).toMatch(/p1 +claude-sonnet-5-5 +medium +off /);
     expect(r.out).not.toContain("warning:");
     // One calibration day.
@@ -124,12 +133,13 @@ describe("arena estimate (phase 4 §5.3, §5.4)", () => {
     const r = await cli(["estimate", "--lineup", "claude-family"]);
     expect(r.code).toBe(0);
     expect(r.out).toContain("$13.54 low · $46.38 central · $168.92 high");
-    expect(r.out).toContain("reserve $20.33 = attempt bounds $16.10");
-    expect(r.out).toContain("budget $190.00 · kill threshold K = $169.67");
+    // Prompt version 3: the probe and preflight price a longer prefix (reserve $20.33 → $20.95).
+    expect(r.out).toContain("reserve $20.95 = attempt bounds $16.10");
+    expect(r.out).toContain("budget $190.00 · kill threshold K = $169.05");
     expect(r.out).not.toContain("warning:");
     const low = await cli(["estimate", "--lineup", "claude-family", "--budget-usd", "180"]);
     expect(low.code).toBe(0);
-    expect(low.out).toContain("warning: budget $180.00 leaves K = $159.67");
+    expect(low.out).toContain("warning: budget $180.00 leaves K = $159.05");
     expect(low.out).toContain("below the predicted high $168.92: the kill switch might fire");
   });
 
@@ -143,7 +153,7 @@ describe("arena estimate (phase 4 §5.3, §5.4)", () => {
       const r = await cli([...command, "--budget-usd", "5"]);
       expect(r.code).toBe(3);
       expect(r.err).toContain(
-        "budget $5.00 leaves K = $2.80 after the reserve ($2.20 = attempt bounds $1.85 + one probe $0.17 + start preflight $0.17), below the predicted low $3.47: raise --budget-usd",
+        "budget $5.00 leaves K = $2.75 after the reserve ($2.25 = attempt bounds $1.85 + one probe $0.20 + start preflight $0.20), below the predicted low $3.47: raise --budget-usd",
       );
     }
     expect(existsSync(dir)).toBe(false);
@@ -179,7 +189,7 @@ describe("arena estimate (phase 4 §5.3, §5.4)", () => {
 });
 
 describe("arena run --fake --lineup claude-duo (phase 4 Pass 1a)", () => {
-  test(
+  xtest(
     "2 days, budget $55: Level E, estimate.json before turn 1 with its sha in seats.json, exit4, byte-identical runs",
     async () => {
       const dirs = [runDir("a"), runDir("b")];
@@ -290,7 +300,7 @@ describe("arena run --fake --lineup claude-duo (phase 4 Pass 1a)", () => {
     LONG,
   );
 
-  test(
+  xtest(
     "a budget just above the refusal threshold fires the kill switch: every seat handed off match_budget, under budget, the match ends",
     async () => {
       const base = {
@@ -413,7 +423,7 @@ function firing(sig: ReturnType<typeof signals>, at: number) {
 }
 
 describe("operator signals (phase 4 §5.2)", () => {
-  test(
+  xtest(
     "SIGINT once: no attempt after it, every LLM seat handed to its bot (operator), the match ends",
     async () => {
       const sig = signals();
@@ -439,6 +449,60 @@ describe("operator signals (phase 4 §5.2)", () => {
       expect(
         calls.filter((l) => l.k === "handoff").map((l) => l.k === "handoff" && l.reason),
       ).toEqual(["operator", "operator", "operator", "operator"]);
+      expect(out.report.levelE?.ok).toBe(true);
+    },
+    LONG,
+  );
+
+  test(
+    "one Ctrl-C under `bun run` (two copies 3 ms apart) through the CLI's source: a hand-off, no abort",
+    async () => {
+      // The M1 rehearsal: the terminal and `bun run` both deliver it; 3 of 6 runs aborted.
+      let ms = 0;
+      const source = processSignalsOf(
+        () => undefined,
+        () => ms,
+      );
+      const ctrlC = {
+        source,
+        emit: () => {
+          process.emit("SIGINT", "SIGINT");
+          ms += 3;
+          process.emit("SIGINT", "SIGINT");
+        },
+        subscribed: () => true,
+      };
+      const dir = runDir();
+      const plan = planArena(
+        {
+          ruleset: RULESET,
+          fake: true,
+          seed: 1,
+          idKey: "seed",
+          lineup: "claude-duo",
+          days: 2,
+          stopAfterDays: 1,
+        },
+        arenaEnv({}),
+      );
+      const out = await runArena(plan, {
+        dir,
+        io: memoryIo(),
+        quiet: true,
+        signals: source,
+        adapterFor: firing(ctrlC, 40),
+      });
+      expect([out.status, out.code]).toEqual(["stopped", 0]);
+      const calls = readCalls(dir);
+      expect(calls.flatMap((l) => (l.k === "operator" ? [[l.signal, l.action]] : []))).toEqual([
+        ["SIGINT", "handoff"],
+      ]);
+      expect(calls.flatMap((l) => (l.k === "handoff" ? [l.reason] : []))).toEqual([
+        "operator",
+        "operator",
+        "operator",
+        "operator",
+      ]);
       expect(out.report.levelE?.ok).toBe(true);
     },
     LONG,
@@ -495,7 +559,7 @@ const billing = (spent: ReturnType<typeof usage> = []) =>
   new ModelError("billing", "credit balance too low", { status: 402, spent });
 
 describe("probes, carry (phase 4 §5.2, §5.5)", () => {
-  test(
+  xtest(
     "a failed probe's spend is charged and logged; probes stop once every seat is halted",
     async () => {
       const sig = signals();
@@ -560,7 +624,7 @@ describe("probes, carry (phase 4 §5.2, §5.5)", () => {
     LONG,
   );
 
-  test(
+  xtest(
     "--budget-carry: a crashed run's logged spend counts from the start (and toward the refusal)",
     async () => {
       const first = runDir("first");
@@ -627,7 +691,7 @@ describe("probes, carry (phase 4 §5.2, §5.5)", () => {
 });
 
 describe("arena reconcile (phase 4 §5.6)", () => {
-  test(
+  xtest(
     "within tolerance: reconcile.json, exit 0, exit4.reconciled true; outside: exit 4",
     async () => {
       const dir = runDir();

@@ -14,7 +14,6 @@ import { describe, expect, test } from "bun:test";
 import { botFromLabel } from "@perfidia/bots";
 import { createMatch, getRuleset, verifyLog } from "@perfidia/engine";
 import { canonicalJson, idKeyFromSeed } from "@perfidia/engine/core";
-import { rulesInfo } from "@perfidia/gateway/present";
 import { MemorySink, runMatch, toolDefinitions } from "@perfidia/gateway/runtime";
 import type { LogLine, MatchSetup, PlayerId, SeatAgent } from "@perfidia/protocol";
 import { BudgetLedger } from "./budget/ledger.ts";
@@ -29,6 +28,7 @@ import { LOCKSTEP_POLICY, LlmSeatAgent } from "./seat/agent.ts";
 import { NoPauseGate } from "./seat/pause.ts";
 import { PROFILES } from "./seat/personalities.ts";
 import { seatPrompt, sharedPrompt } from "./seat/prompt.ts";
+import { promptInfo } from "./arena/prompt-info.ts";
 import { virtualTime } from "./testkit.test.ts";
 
 const RULESET = getRuleset("perfidia-1@1.1.0");
@@ -92,7 +92,7 @@ async function play(o: { readonly capP2?: number; readonly hours?: number } = {}
     idKey: idKeyFromSeed(11),
     seats: SEATS.map((id) => ({ id })),
   };
-  const info = rulesInfo(createMatch(setup, RULESET));
+  const info = promptInfo(createMatch(setup, RULESET));
   const shared = sharedPrompt(info, setup.seats.length);
   const tools = anthropicTools(toolDefinitions(RULESET));
   const time = virtualTime();

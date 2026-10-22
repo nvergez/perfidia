@@ -3,6 +3,8 @@
 // and usage errors (exit 3) that leave nothing behind, run directories never written over (even
 // partial ones), `--trace-hashes` equal to the engine's own trace and kept for a fatal run, a
 // system-clock run at very high speed, and the plan's defaults. The CLI runs in-process.
+// The run checked by verify and summary (twice) runs in the slow suite (PERFIDIA_SLOW=1,
+// docs/architecture.md §13.8: `bun run test:slow`, run by `bun run test:exit`).
 
 import { describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -16,6 +18,10 @@ import { main } from "../cli.ts";
 import { jsonlText, normalisedText, runBots } from "../harness/index.ts";
 import { readLog, readLogLines } from "../io/index.ts";
 import { DEFAULT_VIRTUAL_LATENCY_MS, defaultRunDir, planRun, writeTrace } from "./index.ts";
+
+const SLOW = process.env["PERFIDIA_SLOW"] === "1";
+/** A test of the slow suite: skipped unless PERFIDIA_SLOW=1. */
+const xtest = test.skipIf(!SLOW);
 
 function tempDir(): string {
   return mkdtempSync(join(tmpdir(), "perfidia-sim-run-"));
@@ -48,7 +54,7 @@ describe("sim run --live-flush", () => {
 });
 
 describe("sim run", () => {
-  test("writes a run that verify and summary accept, and running it twice gives the same log", async () => {
+  xtest("writes a run that verify and summary accept, and running it twice gives the same log", async () => {
     const dir = tempDir();
     try {
       const a = join(dir, "a");

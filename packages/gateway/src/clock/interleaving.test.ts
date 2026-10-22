@@ -22,6 +22,9 @@ import { createRealtimeDriver } from "./realtime.ts";
 
 // Interleavings explored with fc.scheduler (§9.4): every agent answer and every timer is a task the
 // scheduler releases in an order it picks.
+// Each property runs 25 interleavings in the default suite and 100 in the slow suite
+// (PERFIDIA_SLOW=1, docs/architecture.md §13.8: `bun run test:slow`, run by `bun run test:exit`).
+const SLOW = process.env["PERFIDIA_SLOW"] === "1";
 
 /** A seeded script: 1–3 rounds per turn of attacks, messages and views, then `end_turn` with a self-wake. */
 function script(seed: number, seats: number) {
@@ -135,7 +138,7 @@ describe("interleavings (fc.scheduler)", () => {
         expect(host.trace).toEqual(reference.trace);
         expect(unique(log.keys)).toBe(true);
       }),
-      { numRuns: 100 },
+      { numRuns: SLOW ? 100 : 25 },
     );
   });
 
@@ -203,7 +206,7 @@ describe("interleavings (fc.scheduler)", () => {
           expect(clock.driver.live()).toBe(0);
         },
       ),
-      { numRuns: 100 },
+      { numRuns: SLOW ? 100 : 25 },
     );
   });
 });

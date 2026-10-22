@@ -13,6 +13,8 @@
 // with a budget just above the plan's refusal threshold and replies that spend fast: the kill
 // switch fires, every LLM seat is handed off `match_budget`, the spend stays under the budget, no
 // attempt starts after the kill, and the match ends with the bots.
+// The 2-day byte-identical runs through the four adapters run in the slow suite (PERFIDIA_SLOW=1,
+// docs/architecture.md §13.8: `bun run test:slow`, run by `bun run test:exit`).
 
 import { afterEach, describe, expect, test } from "bun:test";
 import { readFileSync, readdirSync, statSync } from "node:fs";
@@ -40,6 +42,10 @@ import { arenaEnv, llmSeatsOf, planArena, type ArenaPlan, type ArenaRequest } fr
 import { planLive } from "./providers/openrouter.ts";
 import { readCalls, runDir } from "./rig.test.ts";
 import { runArena, type ArenaOutcome } from "./run.ts";
+
+const SLOW = process.env["PERFIDIA_SLOW"] === "1";
+/** A test of the slow suite: skipped unless PERFIDIA_SLOW=1. */
+const xtest = test.skipIf(!SLOW);
 
 const LONG = 300_000;
 const RULESET = "perfidia-1@1.1.0";
@@ -109,9 +115,11 @@ function tree(dir: string): Map<string, string> {
 /**
  * Wall-clock fields, left out of determinism comparisons: the log schema's wall fields, the price
  * instant of a real run (its start), the think times and the speed derived from them, the run's
- * wall window, and the estimate's sha (`estimate.json` holds the price instant).
+ * wall window, and the estimate's sha (`estimate.json` holds the price instant); also `baseUrls`,
+ * the stubs' origins, whose ports change from run to run.
  */
 const WALL = new Set([
+  "baseUrls",
   "wallStart",
   "latencyMs",
   "ttftMs",
@@ -169,7 +177,7 @@ const llmCalls = (lines: readonly LlmLogLine[]): LlmCallLine[] =>
   lines.filter((l): l is LlmCallLine => l.k === "llm_call");
 
 describe("budget-mix for 2 game days through the four real adapters and their wire stubs", () => {
-  test(
+  xtest(
     "Level E, the gateway rebuild, each seat's costs from its card, the budget block, exit4; byte-identical runs",
     async () => {
       const a = await play();
@@ -253,6 +261,16 @@ describe("budget-mix for 2 game days through the four real adapters and their wi
       expect(r.budget.killSwitch).toBeNull();
       expect(r.budget.budgetNanoUsd).toBe(40_000_000_000);
       expect(calls.filter((l) => l.k === "preflight").length).toBe(4);
+      // The stubs' loopback origins are recorded: such a run never meets exit4 (M1 rehearsal).
+      expect(Object.keys(r.baseUrls ?? {}).toSorted((x, y) => (x < y ? -1 : 1))).toEqual([
+        "anthropic",
+        "google",
+        "openai",
+        "openrouter",
+      ]);
+      expect(Object.values(r.baseUrls ?? {}).every((o) => o.startsWith("http://127.0.0.1:"))).toBe(
+        true,
+      );
       // exit4: every part computed; not met, since a stub run is never reconciled.
       expect(r.exit4).toEqual({
         models: 4,

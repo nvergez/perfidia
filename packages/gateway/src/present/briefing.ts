@@ -11,9 +11,12 @@ import {
 } from "@perfidia/engine/std";
 import {
   readableNumbers,
+  searchArchivePage,
   seatBudget,
   seatOf,
   unreadNews,
+  wakeReasonOf,
+  type ArchiveQuery,
   type Delivered,
   type GatewayState,
   type SeatState,
@@ -22,6 +25,7 @@ import {
 import {
   BriefingIncomingSchema,
   BriefingMessageSchema,
+  READ_NOTES_MAX_HITS,
   compareIds,
   type Briefing,
   type BriefingCity,
@@ -31,6 +35,7 @@ import {
   type GameTime,
   type JsonObject,
   type PlayerId,
+  type Presentation,
 } from "@perfidia/protocol";
 import {
   byCodeUnit,
@@ -64,9 +69,28 @@ import { openProposals } from "./views.ts";
 // (latest arrivals first for `moves`), and a `more` entry names the call that lists what was left
 // out. Cities, `incoming` and `proposals` never give way, so a seat with full queues in every city,
 // several attacks and several open proposals can exceed the target (measured in the tests).
+//
+// Presentation 2 (the LLM seats', `SeatAgent.presentation`; phase-2 playtests): the target is
+// `BRIEFING_TARGET_CHARS_2`; the events the wake names (`wakeReasonOf` in `wake.reasons`) never give
+// way, and among the other events the routine ones (`ROUTINE_EVENTS`, which the cities' queues
+// already show) give way first; each city lists its building levels (`lvl`) and a `found` movement
+// its island (`isl`); and each `more` call of `news`, `events` and `msgs` carries a `limit`, so it
+// lists exactly the entries left out (and, for `msgs`, the seat's own messages among them).
+// Presentation 1 (bots, goldens) is unchanged.
 
 /** The briefing's size target in characters of compact JSON, excluding `notes` (≈ 600 tokens). */
 export const BRIEFING_TARGET_CHARS = 2400;
+
+/** Presentation 2's target (≈ 1 500 tokens): playtests found 2/3 of 2 400-character briefings cut. */
+export const BRIEFING_TARGET_CHARS_2 = 6000;
+
+/** Standard event types that give way first under presentation 2: the queues show their effect. */
+const ROUTINE_EVENTS: ReadonlySet<string> = new Set(["build_done", "recruit_done", "queue_empty"]);
+
+export interface BriefingOptions {
+  /** `SeatAgent.presentation`; 1 when absent. */
+  readonly presentation?: Presentation;
+}
 
 /** The shortest message body a briefing shows when the target forces a cut below `MESSAGE_CUT`. */
 export const MESSAGE_MIN_CUT = 100;
@@ -92,6 +116,7 @@ function briefingCity(
   vis: SeatVisibility,
   seat: PlayerId,
   c: DeepReadonly<City>,
+  levels: boolean,
 ): BriefingCity {
   const build: BriefingCity["build"] = [];
   const recruit: BriefingCity["recruit"] = {};
@@ -121,6 +146,14 @@ function briefingCity(
     units: orderedUnits(r.rules.units, unitsAtHome(r, c.id)),
     stationed: c.stationed.length,
   };
+  if (levels) {
+    const lvl: NonNullable<BriefingCity["lvl"]> = {};
+    for (const b of r.rules.buildings) {
+      const level = lookup(c.buildings, b.id) ?? 0;
+      if (level > 0) lvl[b.id] = level;
+    }
+    city.lvl = lvl;
+  }
   const ext = vis.publicCity(seat, c.id);
   if (Object.keys(ext).length > 0) city.ext = ext;
   return city;
@@ -229,6 +262,10 @@ interface Item<V> {
   readonly t: GameTime;
   readonly e?: number;
   readonly value: V;
+  /** Presentation 2: never gives way (an event the wake names). */
+  readonly pinned?: boolean;
+  /** Presentation 2: gives way before the other entries of its list (a routine event). */
+  readonly routine?: boolean;
 }
 
 interface Lists {
@@ -246,49 +283,109 @@ interface Lists {
  * `moves`, `msgs` and `news` only), or of the public feed (`news`). For `msgs` the search also
  * lists the seat's own messages of that span; past 20 hits, `more` pages on with `before`.
  */
-function moreCall(
-  name: ListName,
-  seat: PlayerId,
+function moreSearch(
+  name: Exclude<ListName, "moves">,
   since: GameTime,
   before: number,
   leftTypes: readonly string[],
-): BriefingMore["call"] {
-  if (name === "moves") return { tool: "view_player", args: { player: seat } };
-  if (name === "news") {
-    return { tool: "read_notes", args: { search: { scope: "public", since, before } } };
-  }
+): ArchiveQuery {
+  if (name === "news") return { scope: "public", since, before };
   const kinds = name === "msgs" ? ["message"] : [...new Set(leftTypes)].toSorted(byCodeUnit);
-  return { tool: "read_notes", args: { search: { scope: "mine", kinds, since, before } } };
+  return { scope: "mine", kinds, since, before };
 }
 
-/** How many entries of each list are kept. */
+/** A `more` search as `read_notes` arguments (its fields as `moreSearch` and `exactLimit` set them). */
+function searchArgs(q: ArchiveQuery): JsonObject {
+  const args: JsonObject = {};
+  if (q.scope !== undefined) args["scope"] = q.scope;
+  if (q.kinds !== undefined) args["kinds"] = [...q.kinds];
+  if (q.since !== undefined) args["since"] = q.since;
+  if (q.before !== undefined) args["before"] = q.before;
+  if (q.limit !== undefined) args["limit"] = q.limit;
+  return args;
+}
+
+/** How many entries of each list are kept (of those that can give way). */
 type Keep = Record<ListName, number>;
 
-/** The kept entries: the earliest arrivals of `moves`, the newest entries of the other lists. */
-function keptOf<V>(name: ListName, list: readonly Item<V>[], keep: number): V[] {
-  const kept = name === "moves" ? list.slice(0, keep) : list.slice(list.length - keep);
-  return kept.map((x) => x.value);
+/**
+ * The indices of the entries of a list that can give way, in the order they do: the latest
+ * arrivals of `moves` first, the oldest entries of the other lists first; under presentation 2 the
+ * routine events before the other events, and never a pinned one.
+ */
+function giveWayOrder<V>(name: ListName, list: readonly Item<V>[]): number[] {
+  const free = list.flatMap((x, i) => (x.pinned === true ? [] : [i]));
+  if (name === "moves") return free.toReversed();
+  const routine = free.filter((i) => list[i]?.routine === true);
+  if (routine.length === 0) return free;
+  return [...routine, ...free.filter((i) => list[i]?.routine !== true)];
+}
+
+/** A list with `keep` of its entries that can give way: the kept values, in list order, and the entries left out. */
+function cutList<V>(
+  name: ListName,
+  list: readonly Item<V>[],
+  keep: number,
+): { readonly kept: V[]; readonly left: Item<V>[] } {
+  const order = giveWayOrder(name, list);
+  const dropped = order.slice(0, Math.max(0, order.length - keep));
+  const out = new Set(dropped);
+  return {
+    kept: list.flatMap((x, i) => (out.has(i) ? [] : [x.value])),
+    left: dropped.flatMap((i) => {
+      const x = list[i];
+      return x === undefined ? [] : [x];
+    }),
+  };
+}
+
+/** What `moreOf` needs besides the lists: the seat, its last briefing and its readable numbers. */
+interface MoreEnv {
+  readonly seat: PlayerId;
+  readonly gw: GatewayState;
+  readonly since: GameTime;
+  readonly readable: () => ReadonlyMap<number, number>;
+  /** Presentation 2: each search carries the `limit` that lists exactly the entries left out. */
+  readonly exact: boolean;
+}
+
+/**
+ * The `limit` of a `more` search under presentation 2: how many of the search's hits are numbered
+ * from the oldest entry left out on (the entries left out, and for `msgs` the seat's own messages
+ * among them), at most 20. Older hits (entries of earlier briefings in the same seconds) are left
+ * to the next page.
+ */
+function exactLimit(env: MoreEnv, q: ArchiveQuery, oldest: number, count: number): number {
+  const page = searchArchivePage(env.gw, env.seat, { ...q, limit: READ_NOTES_MAX_HITS });
+  const listed = page.hits.filter((h) => h.e >= oldest).length;
+  return Math.min(READ_NOTES_MAX_HITS, Math.max(listed, count, 1));
 }
 
 /** `more` for the lists cut short, or `null` when nothing was left out. */
 function moreOf(
   all: Readonly<Lists>,
   keep: Readonly<Keep>,
-  seat: PlayerId,
-  since: GameTime,
-  readable: () => ReadonlyMap<number, number>,
+  env: MoreEnv,
 ): Record<string, BriefingMore> | null {
   const more: Record<string, BriefingMore> = {};
-  // Entries left out: the latest arrivals of `moves`, the oldest entries of the other lists.
-  const leftTypes = all.events.slice(0, all.events.length - keep.events).map((x) => x.value.type);
+  const leftTypes = cutList("events", all.events, keep.events).left.map((x) => x.value.type);
   for (const name of ["moves", "msgs", "events", "news"] as const) {
     const list: readonly Item<unknown>[] = all[name];
-    const count = list.length - keep[name];
+    const { left } = cutList(name, list, keep[name]);
+    const count = left.length;
     if (count <= 0) continue;
+    if (name === "moves") {
+      more[name] = { count, call: { tool: "view_player", args: { player: env.seat } } };
+      continue;
+    }
     // One past the readable number of the newest entry left out: the search lists it and older.
-    const newest = list[count - 1]?.e;
-    const before = newest === undefined ? 1 : (readable().get(newest) ?? 0) + 1;
-    more[name] = { count, call: moreCall(name, seat, since, before, leftTypes) };
+    const delivered = left.flatMap((x) => (x.e === undefined ? [] : [x.e]));
+    const newest = delivered.length === 0 ? undefined : Math.max(...delivered);
+    const before = newest === undefined ? 1 : (env.readable().get(newest) ?? 0) + 1;
+    const q: ArchiveQuery = moreSearch(name, env.since, before, leftTypes);
+    const oldest = env.readable().get(Math.min(...delivered));
+    if (env.exact && oldest !== undefined) q.limit = exactLimit(env, q, oldest, count);
+    more[name] = { count, call: { tool: "read_notes", args: { search: searchArgs(q) } } };
   }
   return Object.keys(more).length === 0 ? null : more;
 }
@@ -310,15 +407,18 @@ export function buildBriefing(
   seat: PlayerId,
   gw: GatewayState,
   wake: WakeRecord,
+  o: BriefingOptions = {},
 ): Briefing {
   const s = seatOf(gw, seat);
   const vis = visibilityOf(r);
   const now = r.now;
+  const p2 = o.presentation === 2;
+  const target = p2 ? BRIEFING_TARGET_CHARS_2 : BRIEFING_TARGET_CHARS;
 
   const cities: BriefingCity[] = [];
   for (const id of citiesOf(r, seat)) {
     const c = r.state.cities[id];
-    if (c !== undefined) cities.push(briefingCity(r, vis, seat, c));
+    if (c !== undefined) cities.push(briefingCity(r, vis, seat, c, p2));
   }
 
   const seen = seenMovements(r, vis, seat).toSorted(byArrival);
@@ -334,13 +434,20 @@ export function buildBriefing(
   const incoming = [...visible, ...recalled].toSorted(byArrive);
   const moves: Item<MoveEntry>[] = ownMovements(r, seat)
     .toSorted(byArrival)
-    .map((x) => ({
-      t: x.m.arriveAt,
-      value: { id: x.m.id, kind: x.m.kind, to: x.m.to, arrive: timePair(x.m.arriveAt) },
-    }));
+    .map((x) => {
+      const value: MoveEntry = {
+        id: x.m.id,
+        kind: x.m.kind,
+        to: x.m.to,
+        arrive: timePair(x.m.arriveAt),
+      };
+      if (p2 && x.m.to === null) value.isl = x.m.toIsland;
+      return { t: x.m.arriveAt, value };
+    });
 
   const msgs: Item<MessageEntry>[] = [];
   const events: Item<EventEntry>[] = [];
+  const named: ReadonlySet<string> = new Set(wake.reasons);
   for (const d of s.inbox) {
     const ev = d.event;
     if (ev.type === "message") {
@@ -355,7 +462,11 @@ export function buildBriefing(
       (ev.type.startsWith("incoming_")
         ? visibleIds.has(movement) || recalledIds.has(movement)
         : ev.type === "movement_recalled" && recalledIds.has(movement));
-    if (!listed) events.push({ t: ev.t, e: d.e, value: renderEvent(ev) });
+    if (listed) continue;
+    const item: Item<EventEntry> = { t: ev.t, e: d.e, value: renderEvent(ev) };
+    if (p2 && named.has(wakeReasonOf(ev))) events.push({ ...item, pinned: true });
+    else if (p2 && ROUTINE_EVENTS.has(ev.type)) events.push({ ...item, routine: true });
+    else events.push(item);
   }
   const news: Item<EventEntry>[] = unreadNews(gw, seat).map((d) => ({
     t: d.event.t,
@@ -414,15 +525,16 @@ export function buildBriefing(
     ext: vis.briefing(seat),
   };
   const all: Lists = { news, moves, events, msgs };
+  const env: MoreEnv = { seat, gw, since: s.lastBriefingAt, readable, exact: p2 };
   const assemble = (keep: Readonly<Keep>, shortened?: MessageEntry): Briefing => {
     const briefing: Briefing = {
       ...fixed,
-      moves: keptOf("moves", moves, keep.moves),
-      msgs: shortened === undefined ? keptOf("msgs", msgs, keep.msgs) : [shortened],
-      events: keptOf("events", events, keep.events),
-      news: keptOf("news", news, keep.news),
+      moves: cutList("moves", moves, keep.moves).kept,
+      msgs: shortened === undefined ? cutList("msgs", msgs, keep.msgs).kept : [shortened],
+      events: cutList("events", events, keep.events).kept,
+      news: cutList("news", news, keep.news).kept,
     };
-    const more = moreOf(all, keep, seat, s.lastBriefingAt, readable);
+    const more = moreOf(all, keep, env);
     if (more !== null) briefing.more = more;
     return briefing;
   };
@@ -432,17 +544,17 @@ export function buildBriefing(
   // does, it keeps whichever of all or none makes the briefing smaller (a short list can cost less
   // than its `more` entry), and the next list gives way.
   const keep: Keep = {
-    news: news.length,
-    moves: moves.length,
-    events: events.length,
-    msgs: msgs.length,
+    news: giveWayOrder("news", news).length,
+    moves: giveWayOrder("moves", moves).length,
+    events: giveWayOrder("events", events).length,
+    msgs: giveWayOrder("msgs", msgs).length,
   };
   let briefing = assemble(keep);
   for (const name of GIVE_WAY) {
     const size = briefingSize(briefing);
-    if (size <= BRIEFING_TARGET_CHARS) break;
+    if (size <= target) break;
     const none = assemble({ ...keep, [name]: 0 });
-    if (briefingSize(none) > BRIEFING_TARGET_CHARS) {
+    if (briefingSize(none) > target) {
       if (briefingSize(none) < size) {
         keep[name] = 0;
         briefing = none;
@@ -455,7 +567,7 @@ export function buildBriefing(
     while (lo <= hi) {
       const mid = Math.floor((lo + hi) / 2);
       const candidate = assemble({ ...keep, [name]: mid });
-      if (briefingSize(candidate) <= BRIEFING_TARGET_CHARS) {
+      if (briefingSize(candidate) <= target) {
         best = { k: mid, briefing: candidate };
         lo = mid + 1;
       } else {
@@ -465,7 +577,9 @@ export function buildBriefing(
     keep[name] = best.k;
     briefing = best.briefing;
   }
-  return keep.msgs > 0 ? briefing : (withShortenedMessage(msgs, keep, assemble) ?? briefing);
+  return keep.msgs > 0
+    ? briefing
+    : (withShortenedMessage(msgs, keep, assemble, target) ?? briefing);
 }
 
 /**
@@ -478,6 +592,7 @@ function withShortenedMessage(
   msgs: readonly Item<MessageEntry>[],
   keep: Readonly<Keep>,
   assemble: (keep: Readonly<Keep>, shortened?: MessageEntry) => Briefing,
+  target: number,
 ): Briefing | null {
   const newest = msgs.at(-1)?.value;
   if (newest === undefined || newest.text.length <= MESSAGE_MIN_CUT) return null;
@@ -489,7 +604,7 @@ function withShortenedMessage(
   while (lo <= hi) {
     const mid = Math.floor((lo + hi) / 2);
     const candidate = at(mid);
-    if (briefingSize(candidate) <= BRIEFING_TARGET_CHARS) {
+    if (briefingSize(candidate) <= target) {
       best = candidate;
       lo = mid + 1;
     } else {

@@ -5,6 +5,8 @@
 // keyframe equals the previous one with its steps applied, the steps are deterministic and the same
 // however the fold is read along the way, the frames hold materialised values only, and nothing
 // served carries a secret of the header.
+// The read-point property and the materialised-values check run in the slow suite (PERFIDIA_SLOW=1,
+// docs/architecture.md §13.8: `bun run test:slow`, run by `bun run test:exit`).
 
 import { beforeAll, describe, expect, test } from "bun:test";
 import { createReplay } from "@perfidia/engine";
@@ -22,8 +24,8 @@ import {
   type LogLine,
 } from "@perfidia/protocol";
 import { applySteps, notebookTexts, seatTally, standingsOf } from "../reduce/index.ts";
-import { WAR_GOLDEN, expectNoSecrets, golden } from "../testkit.test.ts";
-import { createSpectatorFold, foldLog, type SpectatorFold } from "./fold.ts";
+import { WAR_GOLDEN, expectNoSecrets, golden, warGoldenFold } from "../testkit.test.ts";
+import { createSpectatorFold, type SpectatorFold } from "./fold.ts";
 import {
   armies,
   cityEnt,
@@ -32,6 +34,10 @@ import {
   popUsedByCity,
   standingsOf as ruleStandings,
 } from "./project.ts";
+
+const SLOW = process.env["PERFIDIA_SLOW"] === "1";
+/** A test of the slow suite: skipped unless PERFIDIA_SLOW=1. */
+const xtest = test.skipIf(!SLOW);
 
 let lines: LogLine[] = [];
 let fold: SpectatorFold;
@@ -43,9 +49,7 @@ const itemsOf = <K extends FeedItem["k"]>(k: K): FeedItemOf<K>[] =>
 
 beforeAll(() => {
   lines = golden(WAR_GOLDEN);
-  const t0 = performance.now();
-  fold = foldLog(lines, { match: "war-golden" });
-  foldMs = performance.now() - t0;
+  ({ fold, ms: foldMs } = warGoldenFold());
   items = fold.steps.flatMap((s) => s.items ?? []);
 }, 60_000);
 
@@ -395,7 +399,7 @@ describe("the war golden through the spectator fold", () => {
     }
   });
 
-  test("the steps do not depend on how the fold is read along the way, and are deterministic", () => {
+  xtest("the steps do not depend on how the fold is read along the way, and are deterministic", () => {
     const header = headerOf(lines);
     const again = createSpectatorFold(header, { match: "war-golden" });
     const frames: string[] = [];
@@ -415,7 +419,7 @@ describe("the war golden through the spectator fold", () => {
     expect(frames.length).toBeGreaterThan(10);
   }, 60_000);
 
-  test("frames hold materialised values only: projecting the same state later changes nothing", () => {
+  xtest("frames hold materialised values only: projecting the same state later changes nothing", () => {
     const header = headerOf(lines);
     const replay = createReplay(header, { invariants: "off" });
     let checked = 0;

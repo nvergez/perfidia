@@ -2,6 +2,8 @@
 // the orchestrator writes (`llm:<provider>/<model>[@<endpoint>]/<effort>:<profile>@<v>:p<N>[-dev|-env]`,
 // model and endpoint ids escaping `%`, `/` and `@`), phase 2's labels unchanged; an OpenRouter seat
 // is an LLM seat with its routing endpoint, with or without `seats.json`, never a bot.
+// The fake mid-tier run served by the server runs in the slow suite (PERFIDIA_SLOW=1,
+// docs/architecture.md §13.8: `bun run test:slow`, run by `bun run test:exit`).
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { cpSync, rmSync } from "node:fs";
@@ -28,6 +30,10 @@ import {
   testConfig,
   warText,
 } from "./testkit.test.ts";
+
+const SLOW = process.env["PERFIDIA_SLOW"] === "1";
+/** A test of the slow suite: skipped unless PERFIDIA_SLOW=1. */
+const xtest = test.skipIf(!SLOW);
 
 const LONG = 120_000;
 const GLM = "llm:openrouter/z-ai%2Fglm-5.3@z-ai%2Ffp8/medium:agamemnon@1:p2-env";
@@ -136,6 +142,7 @@ describe("an OpenRouter seat", () => {
 
   let root = "";
   beforeAll(async () => {
+    if (!SLOW) return;
     const run = await fakeRun({ days: 1, seed: 3, lineup: "mid-tier" });
     root = tempDir("seats");
     cpSync(run.dir, join(root, "mid"), { recursive: true });
@@ -144,7 +151,7 @@ describe("an OpenRouter seat", () => {
   }, LONG);
   afterAll(stopServers);
 
-  test(
+  xtest(
     "served from a fake mid-tier run, with and without seats.json",
     async () => {
       const s = serve(testConfig({ runs: root, adapter: "raw" }));
@@ -169,7 +176,7 @@ describe("an OpenRouter seat", () => {
       expect(view(mid.seats)).toEqual(expected);
       expect(view(bare.seats)).toEqual(expected);
       // The mid-tier preset names GLM's listed effort, `low` (phase-4 Pass 2 review, §30.4).
-      expect(mid.seats[3]?.label).toBe("llm:fake/z-ai%2Fglm-5.3@z-ai%2Ffp8/low:agamemnon@1:p2-env");
+      expect(mid.seats[3]?.label).toBe("llm:fake/z-ai%2Fglm-5.3@z-ai%2Ffp8/low:agamemnon@1:p3-env");
       expect(mid.seats[3]?.model?.effort).toBe("low");
     },
     LONG,

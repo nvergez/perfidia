@@ -29,7 +29,15 @@ import {
   repricePreflight,
   scenarioCard,
 } from "./cost.ts";
-import { DEFAULT_ARENA_DAYS, llmSeatsOf, matchEndOf, type ArenaPlan } from "./plan.ts";
+import {
+  DEFAULT_ARENA_DAYS,
+  isLoopback,
+  llmSeatsOf,
+  matchEndOf,
+  providerEnv,
+  type ArenaPlan,
+} from "./plan.ts";
+import { providerInfo } from "./providers.ts";
 
 // `arena.json` (phase-2 design §6): a pure fold over the match log, the LLM log and the plan. Per
 // LLM seat: cost by token kind, attempts, stops, errors, refusals, fallbacks and served-by shares,
@@ -422,6 +430,7 @@ export function buildReport(r: ReportInput): ArenaReport {
   const levelE = r.levelE;
   const budget = budgetBlock(r, llmCalls);
   const exit4 = exit4Of(r, budget, llmCalls);
+  const baseUrls = baseUrlsOf(plan);
   const seatsCost = seats.reduce((n, s) => n + s.costNanoUsd, 0);
   const pre = preflightSpend(r.calls);
 
@@ -440,6 +449,7 @@ export function buildReport(r: ReportInput): ArenaReport {
         : `realtime ${plan.clock.speed.num}/${plan.clock.speed.den} (${plan.time})`,
     promptVersion: PROMPT_VERSION,
     harness: HARNESS_VERSION,
+    ...(baseUrls === null ? {} : { baseUrls }),
     lastT,
     endedAt: end?.t ?? null,
     result: end === null ? null : { reason: end.reason, winners: end.winners },
@@ -619,16 +629,45 @@ export function exit4Of(
     levelE: r.levelE?.ok === true,
     reconciled: null,
   };
-  return { ...parts, met: exit4Met(parts, { fake: r.plan.fake }) };
+  const loopback = onLoopback(baseUrlsOf(r.plan));
+  return { ...parts, met: exit4Met(parts, { fake: r.plan.fake, loopback }) };
+}
+
+/**
+ * The origins of the plan's base URLs that are not their provider's default, by provider (the M1
+ * rehearsal: a run against a stub left no trace and could reach `met`); null when every LLM seat
+ * uses its provider's default, and on `--fake` (no network).
+ */
+export function baseUrlsOf(plan: ArenaPlan): Record<string, string> | null {
+  if (plan.fake) return null;
+  const out: Record<string, string> = {};
+  for (const s of llmSeatsOf(plan)) {
+    const fallback = providerInfo(s.provider)?.defaultBaseUrl ?? null;
+    const base = providerEnv(plan.env, s.provider).baseURL ?? fallback;
+    if (base === null) continue;
+    const origin = new URL(base).origin;
+    if (fallback === null || origin !== new URL(fallback).origin) out[s.provider] = origin;
+  }
+  return Object.keys(out).length === 0 ? null : out;
+}
+
+/** Whether a recorded base URL is on loopback: a stub or a local proxy, which a claim cannot tell from the provider. */
+export function onLoopback(baseUrls: Readonly<Record<string, string>> | null | undefined): boolean {
+  return Object.values(baseUrls ?? {}).some(isLoopback);
 }
 
 /**
  * `exit4.met`: every part holds, with at least two served models and a reconciled run, and the
- * run was real (a `--fake` run rehearses the path at $0: it never meets the criterion).
+ * run was real (a `--fake` run rehearses the path at $0: it never meets the criterion) and served
+ * by the providers' own hosts (`loopback`: a base URL on loopback, a stub or a local proxy).
  */
-export function exit4Met(e: Omit<Exit4, "met">, o: { readonly fake: boolean }): boolean {
+export function exit4Met(
+  e: Omit<Exit4, "met">,
+  o: { readonly fake: boolean; readonly loopback: boolean },
+): boolean {
   return (
     !o.fake &&
+    !o.loopback &&
     e.models >= 2 &&
     e.ended &&
     e.estimateStored &&
@@ -651,6 +690,12 @@ export function formatReport(r: ArenaReport): string {
   out.push(
     `arena: ${r.status}${r.reason === null ? "" : ` (${r.reason})`} · ${r.ruleset} · seed ${r.seed} · ${r.players} players · ${r.clock}${r.fake ? " · fake models" : ""}`,
   );
+  if (r.baseUrls !== undefined) {
+    const list = Object.entries(r.baseUrls).map(([p, origin]) => `${p} ${origin}`);
+    out.push(
+      `base URLs: ${list.join(", ")} (not the providers' defaults${onLoopback(r.baseUrls) ? "; on loopback, a stub or a local proxy: the exit criterion of step 4 is never met" : ""})`,
+    );
+  }
   if (r.result !== null) {
     out.push(
       `result: ${r.result.reason} at ${fmtTime(r.endedAt ?? 0)}, winners ${r.result.winners.join(", ") || "none"}`,
@@ -681,12 +726,14 @@ export function formatReport(r: ArenaReport): string {
   out.push(
     `total ${usd(r.totals.costNanoUsd)} (preflight ${usd(r.totals.preflightNanoUsd)}), cache reads ${r.totals.cacheReadPct}% of prompt tokens, fallbacks ${r.totals.fallbackPermille}‰`,
   );
+  // Under one measured day the projection multiplies minutes of spend by days (the M1 rehearsal
+  // printed $1,077.92 for an abort at 00:10): arena.json keeps it, the text leaves it out.
   out.push(
-    `estimate for ${r.days} days: ${usd(r.estimate.low)} low · ${usd(r.estimate.central)} central · ${usd(r.estimate.high)} high; projection from ${r.projection.fromDays} measured day(s): ${usd(r.projection.costNanoUsd)}`,
+    `estimate for ${r.days} days: ${usd(r.estimate.low)} low · ${usd(r.estimate.central)} central · ${usd(r.estimate.high)} high; ${r.projection.fromDays < 1 ? `no projection (${r.projection.fromDays} measured day(s), under one)` : `projection from ${r.projection.fromDays} measured day(s): ${usd(r.projection.costNanoUsd)}`}`,
   );
   if (r.recommendedSpeed !== null) {
     out.push(
-      `real-time speed ≤ ${r.recommendedSpeed.num}/${r.recommendedSpeed.den} (≈ ${r.recommendedSpeed.approx}), from p95 think time ${Math.round(r.recommendedSpeed.p95ThinkMs / 1000)} s`,
+      `real-time speed for a later real-time run of these seats ≤ ${r.recommendedSpeed.num}/${r.recommendedSpeed.den} (≈ ${r.recommendedSpeed.approx}), from p95 think time ${Math.round(r.recommendedSpeed.p95ThinkMs / 1000)} s`,
     );
   }
   const e = r.exit;
@@ -696,8 +743,13 @@ export function formatReport(r: ArenaReport): string {
   if (r.levelE !== null) {
     const ok =
       r.status === "stopped" || r.reason?.startsWith(STOPPED) === true ? "ok up to the stop" : "ok";
+    // An aborted log has no end line by design: when that is its only divergence, Level E holds
+    // up to the abort (arena.json keeps `ok: false`, as `sim verify` reads the log).
+    const cut = r.status === "aborted" && r.levelE.divergence?.startsWith("end at") === true;
     out.push(
-      `Level E: ${r.levelE.ok ? ok : "FAILED"} (${r.levelE.actions} actions, ${r.levelE.checkpoints} checkpoints)${r.levelE.divergence === null ? "" : `: ${r.levelE.divergence}`}`,
+      cut
+        ? `Level E: ok up to the abort (${r.levelE.actions} actions, ${r.levelE.checkpoints} checkpoints; no end line: the run was aborted)`
+        : `Level E: ${r.levelE.ok ? ok : "FAILED"} (${r.levelE.actions} actions, ${r.levelE.checkpoints} checkpoints)${r.levelE.divergence === null ? "" : `: ${r.levelE.divergence}`}`,
     );
   }
   const b = r.budget;

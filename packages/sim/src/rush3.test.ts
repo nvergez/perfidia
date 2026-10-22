@@ -3,10 +3,16 @@
 // rusher keeps rusher@2's rush (spies landed by protection end, a wave launched as it ends, the
 // first battle on day 1) and grows: a second city founded before the end of day 2, its founder
 // sent once its first wave has left. The same seed gives the same log.
+// Slow suite only (docs/architecture.md §13.8): skipped unless PERFIDIA_SLOW=1
+// (`bun run test:slow`, which `bun run test:exit` runs).
 
 import { describe, expect, test } from "bun:test";
 import type { EvLine, LogLine } from "@perfidia/protocol";
 import { normalisedText, runBots, type BotRunSpec } from "./harness/index.ts";
+
+const SLOW = process.env["PERFIDIA_SLOW"] === "1";
+/** A group of tests of the slow suite: skipped unless PERFIDIA_SLOW=1. */
+const xdescribe = describe.skipIf(!SLOW);
 
 const DAY = 86400;
 const FROM = 43200;
@@ -25,7 +31,7 @@ const SPEC: BotRunSpec = {
 const events = (lines: readonly LogLine[], type: string): EvLine[] =>
   lines.filter((l): l is EvLine => l.k === "ev" && l.e.type === type);
 
-describe("rusher@3 on a real 6-seat perfidia-1 match (seed 3, two days)", () => {
+xdescribe("rusher@3 on a real 6-seat perfidia-1 match (seed 3, two days)", () => {
   test("it rushes on day 1, founds a city by day 2, and the same seed gives the same log", async () => {
     const a = await runBots(SPEC);
     expect(a.lines.at(-1)?.k).toBe("end");

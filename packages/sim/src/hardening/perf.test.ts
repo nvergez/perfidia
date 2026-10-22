@@ -3,11 +3,17 @@
 // wall time of the run, of its Level E replay and of the gateway rebuild, with the log size, turns,
 // calls and engine events; and the time of a full state hash and of a briefing at the end. Printed,
 // never asserted (the 7-day budgets of §13.8 are the exit suite's); only completion is checked.
+// Slow suite only (§13.8): skipped unless PERFIDIA_SLOW=1 (`bun run test:slow`, run by
+// `test:exit`).
 
 import { expect, test } from "bun:test";
 import { buildBriefing, rebuildGatewayState } from "@perfidia/gateway";
 import { runBots, type ClockChoice } from "../harness/index.ts";
 import { LOCKSTEP, REFS, VIRTUAL, daySpec, levelE, loadChecked, resolve } from "./kit.ts";
+
+const SLOW = process.env["PERFIDIA_SLOW"] === "1";
+/** A test of the slow suite: skipped unless PERFIDIA_SLOW=1. */
+const xtest = test.skipIf(!SLOW);
 
 const ms = (from: number): number => Math.round((performance.now() - from) * 10) / 10;
 
@@ -78,7 +84,7 @@ async function measure(ref: string, players: number, clock: ClockChoice): Promis
   };
 }
 
-test("performance of the 1-game-day runs (printed, not asserted)", async () => {
+xtest("performance of the 1-game-day runs (printed, not asserted)", async () => {
   const rows: Row[] = [];
   for (const ref of REFS) {
     for (const players of [6, 12]) {

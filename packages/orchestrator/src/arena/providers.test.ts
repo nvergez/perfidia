@@ -5,6 +5,8 @@
 //   intended card (the OpenRouter fee apart), the budget held, two runs byte-identical.
 // - The presets plan; the seat grammar of the other providers; the plan's §4.2 refusals (endpoint
 //   slugs, ZDR, ids holding ":", efforts, `--price-date` on a real run, keys per provider).
+// The 2-day mid-tier runs and the effortSent run run in the slow suite (PERFIDIA_SLOW=1,
+// docs/architecture.md §13.8: `bun run test:slow`, run by `bun run test:exit`).
 
 import { describe, expect, test } from "bun:test";
 import { readFileSync, readdirSync, statSync } from "node:fs";
@@ -16,6 +18,10 @@ import { costOf } from "../model/prices.ts";
 import { main as arenaMain } from "./cli.ts";
 import { arenaEnv, planArena, type ArenaRequest } from "./plan.ts";
 import { readCalls, runDir } from "./rig.test.ts";
+
+const SLOW = process.env["PERFIDIA_SLOW"] === "1";
+/** A test of the slow suite: skipped unless PERFIDIA_SLOW=1. */
+const xtest = test.skipIf(!SLOW);
 
 /** `arena` as the CLI runs it, with no calibration profile unless a test passes `--profiles`. */
 const main = (...[argv, io, env, o]: Parameters<typeof arenaMain>) =>
@@ -209,7 +215,7 @@ describe("arena estimate --cards (design §5.4)", () => {
 });
 
 describe("arena run --fake --lineup mid-tier (phase 4 Pass 1b)", () => {
-  test(
+  xtest(
     "2 days at the 2026-10-19 cards: Level E, four intended providers, their cards, the budget, byte-identical runs",
     async () => {
       const dirs = [runDir("a"), runDir("b")];
@@ -269,7 +275,7 @@ describe("arena run --fake --lineup mid-tier (phase 4 Pass 1b)", () => {
       ).toEqual([
         [
           "p1",
-          "llm:fake/claude-sonnet-5-5/medium:odysseus@1:p2",
+          "llm:fake/claude-sonnet-5-5/medium:odysseus@1:p3",
           "anthropic",
           "claude-sonnet-5-5",
           null,
@@ -278,7 +284,7 @@ describe("arena run --fake --lineup mid-tier (phase 4 Pass 1b)", () => {
         ],
         [
           "p2",
-          "llm:fake/gpt-6.1-sol/medium:achilles@1:p2-dev",
+          "llm:fake/gpt-6.1-sol/medium:achilles@1:p3-dev",
           "openai",
           "gpt-6.1-sol",
           null,
@@ -287,7 +293,7 @@ describe("arena run --fake --lineup mid-tier (phase 4 Pass 1b)", () => {
         ],
         [
           "p3",
-          "llm:fake/gemini-4-argon/medium:penelope@1:p2-env",
+          "llm:fake/gemini-4-argon/medium:penelope@1:p3-env",
           "google",
           "gemini-4-argon",
           null,
@@ -296,7 +302,7 @@ describe("arena run --fake --lineup mid-tier (phase 4 Pass 1b)", () => {
         ],
         [
           "p4",
-          "llm:fake/z-ai%2Fglm-5.3@z-ai%2Ffp8/low:agamemnon@1:p2-env",
+          "llm:fake/z-ai%2Fglm-5.3@z-ai%2Ffp8/low:agamemnon@1:p3-env",
           "openrouter",
           "z-ai/glm-5.3",
           "z-ai/fp8",
@@ -384,7 +390,7 @@ describe("arena run --fake --lineup mid-tier (phase 4 Pass 1b)", () => {
 });
 
 describe("effortSent on a fake run (review)", () => {
-  test(
+  xtest(
     "a fake OpenRouter seat at an effort its model does not list records the level sent",
     async () => {
       const dir = runDir("effort-sent");

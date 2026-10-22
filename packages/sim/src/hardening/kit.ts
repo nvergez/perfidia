@@ -40,6 +40,12 @@ import { runBots, type BotRun, type BotRunSpec, type ClockChoice } from "../harn
 export const REFS = ["perfidia-1@1.0.0", "perfidia-1@1.1.0", "sandbox-1@1.0.0"] as const;
 export type Ref = (typeof REFS)[number];
 
+/**
+ * The ruleset the default suite runs the match-scale properties on (the active default); the slow
+ * suite runs them on every ref of `REFS` (docs/architecture.md §13.8).
+ */
+export const DEFAULT_REF: Ref = "perfidia-1@1.1.0";
+
 export const LOCKSTEP: ClockChoice = { kind: "lockstep" };
 export const VIRTUAL: ClockChoice = { kind: "virtual" };
 
