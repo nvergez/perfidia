@@ -133,6 +133,8 @@ describe("arena CLI", () => {
     const io = memoryIo();
     expect(await main(["smoke"], io, JUNK)).toBe(3);
     expect(io.stderr()).toContain("set PERFIDIA_ANTHROPIC_API_KEY first. Nothing was sent.");
+    // One "arena smoke:" prefix (the M1 rehearsal read it twice).
+    expect(io.stderr()).toStartWith("arena smoke: this smoke makes one live API call (at most $");
   });
 
   test("personalities prints the four profiles' exact seat text", async () => {

@@ -200,7 +200,7 @@ export async function smokeCommand(o: SmokeOptions): Promise<number> {
   } = await smokePlan(model, effort, o.ruleset ?? "perfidia-1");
   if (o.env.apiKey === null) {
     throw new UsageError(
-      `arena smoke makes one live API call (at most ${formatUsd(bound)} on ${model}): set PERFIDIA_ANTHROPIC_API_KEY first. Nothing was sent.`,
+      `this smoke makes one live API call (at most ${formatUsd(bound)} on ${model}): set PERFIDIA_ANTHROPIC_API_KEY first. Nothing was sent.`,
     );
   }
   // The same check as arena run's (exit 3): no key over http:// off loopback.
@@ -354,7 +354,7 @@ async function providerSmoke(o: SmokeOptions, provider: string): Promise<number>
   const pe = providerEnv(o.env, provider);
   if (pe.apiKey === null) {
     throw new UsageError(
-      `arena smoke --provider ${provider} makes one live API call (at most ${formatUsd(bound)} on ${model}): set ${p.keyVar} first. Nothing was sent.`,
+      `the ${provider} smoke makes one live API call (at most ${formatUsd(bound)} on ${model}): set ${p.keyVar} first. Nothing was sent.`,
     );
   }
   const base = o.baseURL ?? pe.baseURL ?? p.defaultBaseUrl;

@@ -229,7 +229,7 @@ export async function runGeminiSmoke(o: GeminiSmokeOptions): Promise<GeminiSmoke
   const boundNano = geminiSmokeBoundNano(builder, plan, at);
   if (pe.apiKey === null) {
     throw new UsageError(
-      `arena smoke --provider google makes one live API call (at most ${formatUsd(boundNano)} on ${model}): set PERFIDIA_GOOGLE_API_KEY first. Nothing was sent.`,
+      `the google smoke makes one live API call (at most ${formatUsd(boundNano)} on ${model}): set PERFIDIA_GOOGLE_API_KEY first. Nothing was sent.`,
     );
   }
   const client = new GeminiClient({

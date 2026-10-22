@@ -1404,7 +1404,8 @@ export function planArena(req: ArenaRequest, env: ArenaEnv, o: PlanOptions = {})
 }
 
 /** Whether a base URL names a loopback host. */
-function isLoopback(base: string): boolean {
+/** Whether `base` names a loopback host (a local proxy or a stub). */
+export function isLoopback(base: string): boolean {
   try {
     return LOOPBACK.has(new URL(base).hostname);
   } catch {

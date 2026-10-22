@@ -14,7 +14,7 @@ import {
 } from "../log/schema.ts";
 import { LEGACY_AT, formatCents, priceOf, uncertainExcess, usdToNano } from "../model/prices.ts";
 import { repriceContext } from "./cost.ts";
-import { exit4Met } from "./report.ts";
+import { exit4Met, onLoopback } from "./report.ts";
 
 // `arena reconcile <run-dir>` (phase-4 design §5.6): the ledger against the provider's usage pages.
 // The owner reads, at least 48 hours after the run's wall end (usage graphs can lag a day), the
@@ -222,7 +222,12 @@ export function readInput(path: string): ReconcileInput {
   return parsed.data;
 }
 
-function runFiles(dir: string): { lines: LlmLogLine[]; arena: ArenaReport; arenaPath: string } {
+/** A run directory's LLM log lines and its `arena.json` (exit 3 when either is missing or unreadable). */
+export function runFiles(dir: string): {
+  lines: LlmLogLine[];
+  arena: ArenaReport;
+  arenaPath: string;
+} {
   if (!existsSync(dir) || !statSync(dir).isDirectory()) {
     throw new UsageError(`${dir}: not a run directory`);
   }
@@ -271,6 +276,46 @@ export function formatReconcile(r: ReconcileFile): string {
   return `${out.join("\n")}\n`;
 }
 
+/** Whether `arena` is a crashed run's report: still `running`, with no wall-clock end. */
+export function crashedRun(arena: ArenaReport): boolean {
+  return arena.status === "running" && arena.budget.wall.end === null && !arena.fake;
+}
+
+/** A line's wall-clock time in ms: an attempt's start plus its latency, a pause's end; NaN if none. */
+function wallMsOf(l: LlmLogLine): number {
+  if (l.k === "llm_call") {
+    return l.wallStart === undefined ? Number.NaN : Date.parse(l.wallStart) + l.latencyMs;
+  }
+  if (l.k === "preflight") return l.wallStart === undefined ? Number.NaN : Date.parse(l.wallStart);
+  if (l.k === "pause") return Date.parse(l.wallEnd ?? l.wallStart);
+  if (l.k === "kill_switch" || l.k === "operator") {
+    return l.wall === undefined ? Number.NaN : Date.parse(l.wall);
+  }
+  return Number.NaN;
+}
+
+/** The latest wall-clock time `lines` log, as an ISO string; null when none logs one. */
+export function lastLoggedWall(lines: readonly LlmLogLine[]): string | null {
+  let last = Number.NaN;
+  for (const l of lines) {
+    const ms = wallMsOf(l);
+    if (Number.isFinite(ms) && !(ms <= last)) last = ms;
+  }
+  return Number.isFinite(last) ? new Date(last).toISOString() : null;
+}
+
+/**
+ * The wall window to reconcile: the report's, or for a crashed run (the M1 rehearsal: it was
+ * called "a --fake run", with no 48-hour check) its start to its last logged wall time.
+ */
+export function reconcileWindow(
+  arena: ArenaReport,
+  lines: readonly LlmLogLine[],
+): { readonly start: string | null; readonly end: string | null } {
+  const wall = arena.budget.wall;
+  return crashedRun(arena) ? { start: wall.start, end: lastLoggedWall(lines) } : wall;
+}
+
 /**
  * Reconciles the run in `dir`: writes `reconcile.json`, fills `exit4.reconciled` (and `met`) in
  * `arena.json`, and returns the file. `nowMs`: the wall clock (the 48-hour check). Earlier than 48
@@ -283,12 +328,15 @@ export function reconcileDir(
   o: { readonly force?: boolean } = {},
 ): ReconcileFile {
   const { lines, arena, arenaPath } = runFiles(dir);
-  const file = reconcileRun(lines, input, arena.budget.wall, nowMs);
+  const file = reconcileRun(lines, input, reconcileWindow(arena, lines), nowMs);
   writeFileAtomic(join(dir, RECONCILE_FILE), `${JSON.stringify(file, null, 2)}\n`);
   const parts = { ...arena.exit4, reconciled: file.early && o.force !== true ? null : file.ok };
   const updated: ArenaReport = ArenaReportSchema.parse({
     ...arena,
-    exit4: { ...parts, met: exit4Met(parts, { fake: arena.fake }) },
+    exit4: {
+      ...parts,
+      met: exit4Met(parts, { fake: arena.fake, loopback: onLoopback(arena.baseUrls) }),
+    },
   });
   writeFileAtomic(arenaPath, `${JSON.stringify(updated, null, 2)}\n`);
   return file;

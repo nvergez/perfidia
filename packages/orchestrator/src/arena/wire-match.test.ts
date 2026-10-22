@@ -115,9 +115,11 @@ function tree(dir: string): Map<string, string> {
 /**
  * Wall-clock fields, left out of determinism comparisons: the log schema's wall fields, the price
  * instant of a real run (its start), the think times and the speed derived from them, the run's
- * wall window, and the estimate's sha (`estimate.json` holds the price instant).
+ * wall window, and the estimate's sha (`estimate.json` holds the price instant); also `baseUrls`,
+ * the stubs' origins, whose ports change from run to run.
  */
 const WALL = new Set([
+  "baseUrls",
   "wallStart",
   "latencyMs",
   "ttftMs",
@@ -259,6 +261,16 @@ describe("budget-mix for 2 game days through the four real adapters and their wi
       expect(r.budget.killSwitch).toBeNull();
       expect(r.budget.budgetNanoUsd).toBe(40_000_000_000);
       expect(calls.filter((l) => l.k === "preflight").length).toBe(4);
+      // The stubs' loopback origins are recorded: such a run never meets exit4 (M1 rehearsal).
+      expect(Object.keys(r.baseUrls ?? {}).toSorted((x, y) => (x < y ? -1 : 1))).toEqual([
+        "anthropic",
+        "google",
+        "openai",
+        "openrouter",
+      ]);
+      expect(Object.values(r.baseUrls ?? {}).every((o) => o.startsWith("http://127.0.0.1:"))).toBe(
+        true,
+      );
       // exit4: every part computed; not met, since a stub run is never reconciled.
       expect(r.exit4).toEqual({
         models: 4,

@@ -295,7 +295,7 @@ describe("arena smoke --provider google (against the wire stub)", () => {
     });
     expect(code).toBe(3);
     expect(cli.stderr()).toMatch(
-      /arena smoke --provider google makes one live API call \(at most \$0\.\d+ on gemini-3\.8-flash\): set PERFIDIA_GOOGLE_API_KEY first\. Nothing was sent\./,
+      /arena smoke: the google smoke makes one live API call \(at most \$0\.\d+ on gemini-3\.8-flash\): set PERFIDIA_GOOGLE_API_KEY first\. Nothing was sent\./,
     );
     expect(stub.records.length).toBe(before);
     // An effort the model does not take, and another provider's smoke: usage errors.

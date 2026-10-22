@@ -358,10 +358,13 @@ Exit codes: 0 ok, 1 Level E divergence, 2 fatal or aborted, 3 usage, config or p
 
 1. **Key and backstop.** Export `PERFIDIA_ANTHROPIC_API_KEY` (and `PERFIDIA_ANTHROPIC_BASE_URL`
    only for a proxy). Nothing else from the environment is read. Set a Console spend limit on the
-   key's workspace (e.g. $500). The cloud container's egress proxy may block `api.anthropic.com`:
-   run on the owner's machine.
-2. **Smoke** (at most $0.0054 on Haiku 5.5 and $0.22 on Opus 5.5, printed before anything is
-   sent: the call's output is capped at 4 000 tokens): `bun run arena -- smoke` (Haiku 5.5 at
+   key's workspace (e.g. $100). For the first real runs follow `docs/phase4.md` §10 (M0/M1): it
+   supersedes steps 4–5 below, which use phase 2's default lineup (four Opus 5.5 seats) with no
+   match budget. The cloud container's egress proxy may block `api.anthropic.com`: run on the
+   owner's machine.
+2. **Smoke** (at most $0.013 on Haiku 5.5 and $1.72 on Opus 5.5, its two fallback targets
+   included, printed before anything is sent: the bound of the preflight and the call, whose output
+   is capped at 4 000 tokens; $0.012233 and $1.712730 since prompt version 3): `bun run arena -- smoke` (Haiku 5.5 at
    `low`), then `bun run arena -- smoke --model opus-5-5 --effort low`. Each runs the preflight (key, model,
    allowed fallbacks and their prices, the exact request shape, the pre-warm), `count_tokens` on
    the prefix and a real briefing, and one streamed call; it prints the stop reason, the served

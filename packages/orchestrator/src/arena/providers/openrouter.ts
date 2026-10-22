@@ -576,7 +576,7 @@ export async function smokeOpenRouter(o: OpenRouterSmokeOptions): Promise<number
   );
   if (key === null) {
     throw new UsageError(
-      `arena smoke --provider openrouter makes one live API call (at most ${formatUsd(plan.boundNano)} on ${model}@${endpoint}): set PERFIDIA_OPENROUTER_API_KEY first. Nothing was sent.`,
+      `the openrouter smoke makes one live API call (at most ${formatUsd(plan.boundNano)} on ${model}@${endpoint}): set PERFIDIA_OPENROUTER_API_KEY first. Nothing was sent.`,
     );
   }
   const adapter = new CompatAdapter(plan.spec, {

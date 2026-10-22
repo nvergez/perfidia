@@ -35,6 +35,10 @@
 >   vendor's terms, reasoning-kind labels wherever reasoning shows (a provider's summary or a raw
 >   chain of thought), the dossier's model block, and the lazy `/models` page (ratings only above
 >   the claim threshold, otherwise "too few matches: N more needed").
+> - **Before the first real match** (§56–§57): playtests of the agent interface through
+>   `arena playtest` (prompt version 3, re-tested on a betrayal) and an owner-style rehearsal of
+>   M0 and M1 against a loopback stub of the Anthropic API, with its fixes (signals counted once,
+>   the base-URL origin in `arena.json`, crashed-run reconciliation, clearer reports).
 > - **Not built yet:** the optional red team (agent H).
 > - This document describes what was built. The reviewed phase-4 design (with its `[critic]`
 >   corrections) is the source of the decisions; "design §x" below and in code comments refers to
@@ -178,11 +182,13 @@ seats (`llm`: provider, model, optional endpoint, effort, profile, `capUsd`, `wa
 
 | Preset          | Seats                                                                                | `maxTokens` | Low / central / high      | Reserve | Budget | K       |
 | --------------- | ------------------------------------------------------------------------------------ | ----------- | ------------------------- | ------- | ------ | ------- |
-| `claude-duo`    | p1 Sonnet 5.5 (fallbacks off), p2–p4 Haiku 5.5; p5 `opportunist@3`, p6 `conqueror@3` | 16,000      | $3.47 / $12.05 / $44.28   | $2.20   | $55    | $52.80  |
-| `claude-family` | Opus 5.5, Sonnet 5.5 (off), Haiku 5.5, Opus 5.5 at `low`; the same bots              | 16,000      | $13.54 / $46.38 / $168.92 | $20.33  | $190   | $169.67 |
+| `claude-duo`    | p1 Sonnet 5.5 (fallbacks off), p2–p4 Haiku 5.5; p5 `opportunist@3`, p6 `conqueror@3` | 16,000      | $3.47 / $12.05 / $44.28   | $2.25   | $55    | $52.75  |
+| `claude-family` | Opus 5.5, Sonnet 5.5 (off), Haiku 5.5, Opus 5.5 at `low`; the same bots              | 16,000      | $13.54 / $46.38 / $168.92 | $20.95  | $190   | $169.05 |
 
-Both keep phase 2's request shape: `every-round` reminders, 16,000 output tokens, a 10-minute
-attempt timeout (§12). One calibration day of `claude-duo` (`--stop-after 1`) is
+Reserves and K as printed since prompt version 3 (`docs/phase2.md` §3.5): its larger stable prefix
+raised every probe and start-preflight bound ($0.17 → $0.20 for `claude-duo`); under version 2
+they were $2.20 / $52.80 and $20.33 / $169.67. Both keep phase 2's request shape: `every-round`
+reminders, 16,000 output tokens, a 10-minute attempt timeout (§12). One calibration day of `claude-duo` (`--stop-after 1`) is
 $0.50 / $1.72 / $6.33.
 
 **Defaults** for lineup seats without their own values (design §3.9): seat cap = 2 × the seat's
@@ -216,8 +222,8 @@ p2    claude-haiku-5-5   medium  off        $5.00      $0.10      $0.16      $0.
 p3    claude-haiku-5-5   medium  off        $5.00      $0.10      $0.16      $0.55      $1.99      $0.26          scenario
 p4    claude-haiku-5-5   medium  off        $5.00      $0.10      $0.16      $0.55      $1.99      $0.26          scenario
 match (scenario, the sum of the seat bounds): $3.47 low · $12.05 central · $44.28 high
-reserve $2.20 = attempt bounds $1.85 + one probe $0.17 + start preflight $0.17
-budget $55.00 · kill threshold K = $52.80 (budget − reserve) · on budget: handoff
+reserve $2.25 = attempt bounds $1.85 + one probe $0.20 + start preflight $0.20
+budget $55.00 · kill threshold K = $52.75 (budget − reserve) · on budget: handoff
 price cards: anthropic:claude-sonnet-5-5@2026-10-20, anthropic:claude-sonnet-5-5@2026-10-20+us, anthropic:claude-haiku-5-5@2026-10-20, anthropic:claude-haiku-5-5@2026-10-20+us, anthropic:claude-haiku-5-5@2026-10-20#over100k, anthropic:claude-haiku-5-5@2026-10-20#over100k+us
 assumption: …
 ```
@@ -257,13 +263,13 @@ assumption: …
 - **Probe and start-preflight bounds:** one check of every preflight group, cold: the group's
   sample prompt (one token per UTF-8 byte, an upper bound) at the highest input-side price plus the
   check's output, on the model and on each fallback target when fallbacks are on. `claude-duo`:
-  $0.17 each.
+  $0.20 each since prompt version 3 ($0.17 before).
 
 **Refusal and warning** (design §4.2, exit 3, nothing written): a K below the predicted low (the
 carry counted) is refused:
 
 ```
-budget $5.00 leaves K = $2.80 after the reserve ($2.20 = attempt bounds $1.85 + one probe $0.17 + start preflight $0.17), below the predicted low $3.47: raise --budget-usd
+budget $5.00 leaves K = $2.75 after the reserve ($2.25 = attempt bounds $1.85 + one probe $0.20 + start preflight $0.20), below the predicted low $3.47: raise --budget-usd
 ```
 
 (`raise the lineup's budgetUsd` when the budget came from the lineup). A K below the predicted
@@ -318,7 +324,12 @@ the start preflight. Once: an `operator` line, every LLM seat handed to its bot 
 `operator`), no attempt after it, the match plays to its end; during the start preflight it stops
 the checks between groups and the run writes nothing (exit 3, the preflight's spend printed).
 Twice: the run aborts (exit 2). A third time: an `operator` line (`exit`), then the CLI exits at
-once (130).
+once (130). A signal less than a second after the last one the CLI took is the same signal
+(`SIGNAL_REPEAT_MS`, `arena/cli.ts`): under `bun run arena`, the arena shares the terminal's
+process group, so one Ctrl-C or a closed terminal reaches it twice, from the terminal and forwarded
+by `bun run`, a few milliseconds apart. Counted twice, it aborted the run instead of handing the
+seats off: in the M1 rehearsal (§57), 3 of 6 Ctrl-C, 2 of 3 SIGTERM and 2 of 3 SIGHUP to the
+group. To abort, send the second signal a second or more after the first; the alert says so.
 
 **Provider backstops** stay owner steps: an Anthropic Console spend limit on a dedicated workspace
 (phase 2).
@@ -349,7 +360,10 @@ New or changed in a run directory (`docs/phase2.md` §7 has the rest):
   include the start preflight and probes; the `budget` block (`budgetNanoUsd`, `reserveNanoUsd`,
   `killAtNanoUsd`, `carryNanoUsd`, `onBudget`, `estimate` {sha256, low, central, high, source},
   `actualNanoUsd` = attempts + preflight + probes, `estimatedNanoUsd`, `feesNanoUsd`, `under`,
-  `withinPrediction`, `killSwitch`, the wall window, `byProvider`); the `exit4` block (§2).
+  `withinPrediction`, `killSwitch`, the wall window, `byProvider`); the `exit4` block (§2);
+  `baseUrls` (since the M1 rehearsal, §57), the origin of each LLM seat provider's base URL that
+  is not the provider's default (`PERFIDIA_<PROVIDER>_BASE_URL`: a proxy or a stub), absent when
+  every seat used its provider's default and on `--fake`. A loopback origin never meets `exit4`.
 - **`reconcile.json`** (`perfidia-reconcile/1`), after `arena reconcile`.
 
 ## 7. Reconciliation: `arena reconcile`
@@ -357,7 +371,9 @@ New or changed in a run directory (`docs/phase2.md` §7 has the rest):
 `bun run arena -- reconcile <run-dir> (--input <file> | --usd <provider=usd> ...)`
 
 - **When:** at least 48 hours after the run's wall end (the command warns if earlier; a `--fake`
-  run's wall times are virtual and it says so).
+  run's wall times are virtual and it says so). A crashed run (`arena.json` still `running`, no
+  wall end) is reconciled over its wall start to its last logged wall time (an attempt's start plus
+  its latency, or a line's own time), with a warning that it crashed.
 - **Input:** per provider, the pre-tax usage cost of the run's wall window from the usage page of a
   dedicated workspace, and, in a `perfidia-reconcile-input/1` file, the token counts per model
   where the page shows them (`input`, `cacheWrite`, `cacheRead`, `output`) and fees apart.
@@ -423,19 +439,40 @@ defaults (OpenRouter pinned to `z-ai/fp8` with `data_collection: "deny"` and `zd
 the native operator channel, `last-round` reminders, 32,768 output tokens and a 15-minute timeout
 for comparison lineups; budgets $8/$40 for `budget-mix` and $40/$200 for `mid-tier`) apply from
 Pass 1b and Pass 2. Each run is bounded by its budget: M0 + M1 spend at most
-$0.011 + $1.54 + $0.22 + $10 + $55 (the three smokes' bounds, §25, then the two budgets).
+$0.013 + $1.72 + $0.25 + $10 + $55 (the three smokes' bounds as printed since prompt version 3,
+§25, then the two budgets; a rerun after a crash shares the $55 through `--budget-carry`; the
+optional `bun run test:live` adds under $0.20). The M1 rehearsal (§57) ran every step below
+against a loopback stub of the Anthropic API.
 
 1. **Key and backstop.** On the owner's machine (the cloud container's egress proxy may block
-   `api.anthropic.com`): `export PERFIDIA_ANTHROPIC_API_KEY=…`, a dedicated Anthropic workspace
-   with a Console spend limit (e.g. $100) and its default inference geo set to global (Console,
-   the workspace's data residency settings: US-only bills 1.1×, and the preflight refuses it).
-2. **M0, the phase-2 smokes** (≤ $0.011 and ≤ $1.54, printed before sending: the bound of the
+   `api.anthropic.com`), with Bun 1.4.3 and `bun install --frozen-lockfile` done, every command
+   run from the repository root (`runs/…` and `--lineup claude-duo` resolve from there):
+   - In the Claude Console, create a dedicated workspace (platform.claude.com/settings/workspaces →
+     Create workspace). Not the Default Workspace: it cannot carry a spend limit. Use it for
+     nothing else until M1 is reconciled (the Cost page is daily: other spend on the same UTC day
+     breaks the reconciliation).
+   - Select the workspace → **Spend limits**: a monthly limit (e.g. $100) and an alert.
+   - In its data residency settings, "global" must be among the allowed inference geos and the
+     default inference geo must be global (a workspace migrated from the US-only opt-out starts
+     with allowed `["us"]`, default `us`). US-only bills 1.1×, and the preflight refuses it (exit 3,
+     nothing written, about $0.001 spent on Haiku, $0.023 at a run's start).
+   - Create the API key inside that workspace.
+   - Check the Rate limits page (platform.claude.com/usage/limits) for Claude Sonnet 5.5 and Haiku
+     5.5. Low limits cost nothing (the arena retries and pauses), but 2 hours of pauses in all
+     abort the run (exit 2).
+   - Then `export PERFIDIA_ANTHROPIC_API_KEY=…` and leave `PERFIDIA_ANTHROPIC_BASE_URL` unset (a
+     run against another base URL records its origin in `arena.json`, and a loopback one never
+     meets the exit criterion). No `ANTHROPIC_*` variable is read. A missing or empty key is exit 3
+     before anything is sent; a wrong one is exit 3 at the start preflight (`auth (401)`, with the
+     variable to check).
+   - Run steps 4–5 inside tmux or screen, so a closed terminal does not stop the match.
+2. **M0, the phase-2 smokes** (≤ $0.013 and ≤ $1.72, printed before sending: the bound of the
    real requests, Opus 5.5's two fallback targets included; a smoke costs a fraction of it):
    ```
    bun run arena -- smoke
    bun run arena -- smoke --model opus-5-5 --effort low
    ```
-   Recommended before M1, since `claude-duo`'s p1 is Sonnet 5.5 without fallbacks (≤ $0.22):
+   Recommended before M1, since `claude-duo`'s p1 is Sonnet 5.5 without fallbacks (≤ $0.25):
    ```
    bun run arena -- smoke --model sonnet-5-5 --effort medium
    ```
@@ -443,28 +480,65 @@ $0.011 + $1.54 + $0.22 + $10 + $55 (the three smokes' bounds, §25, then the two
    ```
    bun run arena -- run --fake --lineup claude-duo --stop-after 1 --budget-usd 10 --out runs/rehearsal
    ```
-4. **M1, the calibration day** (central $1.72, high $6.33, budget $10, K $7.81):
+4. **M1, the calibration day** (central $1.72, high $6.33, budget $10, K $7.75):
+
    ```
    bun run arena -- estimate --lineup claude-duo --stop-after 1 --budget-usd 10
    bun run arena -- run --lineup claude-duo --stop-after 1 --budget-usd 10 --out runs/claude-duo-cal --watch
    ```
-   Read `arena.json`: `budget.actualNanoUsd` against the estimate, per-seat cost, cache reads,
-   `promptCaps`, hand-offs (there should be none), refusals.
-5. **M1, the 7-day match** (central $12.05, high $44.28, budget $55, K $52.80):
+
+   Read the report printed at the end, or `bun run arena -- cost runs/claude-duo-cal`. In
+   `arena.json`, amounts are nano-dollars (divide by 10^9):
+   - `budget.actualNanoUsd` against `budget.estimate` (this day's low / central / high). The
+     top-level `estimate` is the 7-day scenario, and `projection` the 7-day projection from the
+     measured day.
+   - `seats[].costNanoUsd`; `seats[].tokens.cacheRead` and `totals.cacheReadPct`.
+   - `seats[].promptCaps` (expect 0), `seats[].handoff` (expect null), `seats[].refusals` and
+     `seats[].errors` (expect `{}`).
+
+   The last report line, `exit criterion of step 4: not met (… ended false … reconciled not yet
+   …)`, is expected after a calibration day: "step 4" is the roadmap's step, not this list's, and
+   a `--stop-after` run never ends. `prediction …: outside` only compares the day's spend with the
+   1-day interval, and `real-time speed for a later real-time run …` is a recommendation for a
+   future real-time match. Do not run `arena calibrate` before step 5 if step 5 is to store the
+   figures below: one calibration day gives `measured-point` profiles that replace the scenario in
+   the 7-day prediction.
+
+5. **M1, the 7-day match** (central $12.05, high $44.28, budget $55, K $52.75):
    ```
    bun run arena -- estimate --lineup claude-duo --budget-usd 55
    bun run arena -- run --lineup claude-duo --budget-usd 55 --out runs/claude-duo-1 --watch
    ```
-   Lockstep takes about 10–15 hours of wall time. If it crashes, rerun with
-   `--budget-carry runs/claude-duo-1` into a new directory: the crashed run's spend counts toward
-   the same $55, its reserve ($2.20) too, for what it may have had in flight.
-6. **After 48 hours,** read the pre-tax usage cost of the run's wall window (`arena.json`
-   `budget.wall`) on the workspace's usage page, then:
+   Lockstep takes about 10–15 hours of wall time.
+   **Stopping it.** One Ctrl-C (or a closed terminal) hands every LLM seat to its bot and the
+   match plays on to its end (exit 0; a hand-off means the exit criterion is not met); a second, a
+   second or more later, aborts (exit 2); a third exits at once. A signal within a second of the
+   one taken counts as the same one: under `bun run arena`, the terminal's Ctrl-C and `bun run`'s
+   forwarded copy arrive a few milliseconds apart (§5).
+   **If it crashes** (the process dies; its `arena.json` keeps `"status": "running"`), start a new
+   match into a new directory:
+   `bun run arena -- run --lineup claude-duo --budget-usd 55 --budget-carry runs/claude-duo-1 --out runs/claude-duo-2 --watch`
+   (`--out runs/claude-duo-1` is refused: runs are never overwritten). This is a new match from
+   day 1 on a new random map, not a resume; add `--seed <the seed in runs/claude-duo-1/arena.json>`
+   to play the same map again. The crashed run's logged spend counts toward the same $55, its
+   reserve ($2.25) too, for what it may have had in flight; the start banner shows the carry and
+   what is left until K, and the end of the report shows `budget $55.00 (carry $…)`. Reconcile and
+   verify `runs/claude-duo-2` in step 6.
+6. **After 48 hours,** read the run's pre-tax cost on the Console's Cost page
+   (platform.claude.com/cost), filtered to the dedicated workspace. The Cost page is daily (UTC)
+   only:
+   - Add up the UTC days that `budget.wall.start`–`budget.wall.end` touch.
+   - Make sure nothing else ran in the workspace on those days (smokes, the calibration day, a
+     crashed attempt), or subtract their `bun run arena -- cost <dir>` totals.
+   - Per-model token counts (the Usage page, platform.claude.com/usage) go into
+     `--input usage.json`.
+   - `--usd` takes a bare number (`anthropic=12.34`, not `$12.34`). Then:
    ```
    bun run arena -- reconcile runs/claude-duo-1 --usd anthropic=<usd>
    ```
-   (or `--input usage.json` with token counts). Exit 0 and `exit4.met: true` in `arena.json` is the
-   Claude form of the exit; `bun run sim -- verify runs/claude-duo-1` re-checks Level E.
+   (or `--input usage.json` with token counts; `--force` only to test before 48 hours). Exit 0 and
+   `exit4.met: true` in `arena.json` is the Claude form of the exit; `bun run sim -- verify
+   runs/claude-duo-1` re-checks Level E.
 
 ## 11. Tests and measurements
 
@@ -511,7 +585,8 @@ true after reconcile, `met` false because it is fake); the orchestrator suite in
   preflight (design §4.2's message already does) and bounds a probe from above with one token per
   byte of the sample prompt at the 1-hour cache-write price, and (§25) every Claude price at its
   US-only 1.1×: $0.17 per probe for `claude-duo` instead of about $0.05, a reserve of $2.20 instead
-  of about $1.8, K $52.80 instead of about $53.2.
+  of about $1.8, K $52.80 instead of about $53.2. Since prompt version 3 (its larger stable prefix):
+  $0.20 per probe, a reserve of $2.25, K $52.75.
 - **Prompt estimate.** One token per UTF-8 byte and 32 tokens per part instead of the design's
   `ceil(bytes ÷ 2)`: an upper bound for any byte-level tokenizer, so the cap and the attempt bound
   hold whatever the text. Each round starts from a measured prompt, so the overestimate does not
@@ -872,7 +947,7 @@ Measured on the shared 4-vCPU container: `arena estimate --lineup mid-tier` 0.4 
   and sent as is, with a plan warning; whether it maps to a reasoning level is unverified until a
   smoke.
 - **The probe bound** keeps every long-context tier, as in Pass 1a (`claude-duo`'s reserve is
-  $2.20 with the US-only prices of §25).
+  $2.20 with the US-only prices of §25; $2.25 since prompt version 3).
 - **The tool transform** is wired per seat (§19, §25), but only the identity exists: Gemini's
   schema transform comes with its adapter (Pass 2), so every seat's `toolsHash` is the neutral
   list's today.
@@ -1472,8 +1547,8 @@ Defaults (the owner said "go" with every default of the design's decisions): Ope
 `z-ai/fp8` with `data_collection: "deny"` and `zdr: true`; medium effort; Anthropic fallbacks off;
 `last-round` reminders; 32,768 output tokens; a 15-minute timeout; the native operator channel;
 Flex off. Every step below is bounded by the printed bound or the run's budget; M2 spends at most
-$0.23 (the four smokes' bounds) + $0.35 (step 2's live tests: three under $0.05 each, the Claude
-test under $0.20) + $8 + $40 = $48.58.
+$0.26 (the four smokes' bounds, as printed since prompt version 3) + $0.35 (step 2's live tests:
+three under $0.05 each, the Claude test under $0.20) + $8 + $40 = $48.61.
 
 **A decision the review adds** (§30.4): in the comparison presets the GLM seat now says `low`, the
 level its requests already carried (GLM-5.3 lists max, high and low; no `medium`). The alternative
@@ -1496,7 +1571,7 @@ GLM-5.3 Flash on Z.AI):
    export PERFIDIA_ANTHROPIC_API_KEY=…  PERFIDIA_OPENAI_API_KEY=…
    export PERFIDIA_GOOGLE_API_KEY=…     PERFIDIA_OPENROUTER_API_KEY=…
    ```
-2. **Smokes with recordings** (≤ $0.011, $0.018, $0.19, $0.013; each prints its bound first):
+2. **Smokes with recordings** (≤ $0.013, $0.021, $0.22, $0.014; each prints its bound first):
    ```
    bun run arena -- smoke --record recordings/anthropic-haiku
    bun run arena -- smoke --provider openai --record recordings/openai-luna
@@ -1509,7 +1584,7 @@ GLM-5.3 Flash on Z.AI):
    `PERFIDIA_LIVE=1 bun run test:live` runs one live test per provider whose key is set (each under
    $0.05; the Claude test of phase 2 too, under $0.20).
 3. **Rehearse for free**, then **the 1-day calibration** (central $0.97, high $4.40, budget $8, K
-   $6.57):
+   $6.54):
    ```
    bun run arena -- run --fake --lineup budget-mix --stop-after 1 --budget-usd 8 --out runs/budget-mix-rehearsal
    bun run arena -- estimate --lineup budget-mix --stop-after 1 --budget-usd 8
@@ -1523,8 +1598,15 @@ GLM-5.3 Flash on Z.AI):
    bun run arena -- calibrate runs/budget-mix-cal
    bun run arena -- estimate --lineup budget-mix --budget-usd 40
    ```
+   Alone, a calibration day warns "no briefing growth … biased low" (the M1 rehearsal, §57): pass
+   a 7-day `--fake` run of the lineup among the run directories, so that the briefing's growth over
+   the week is measured too:
+   ```
+   bun run arena -- run --fake --lineup budget-mix --out runs/budget-mix-fake7
+   bun run arena -- calibrate runs/budget-mix-cal runs/budget-mix-fake7
+   ```
 5. **The 7-day match** (scenario before calibration: central $6.79, high $30.80, budget $40, K
-   $38.57; the estimate after step 4 is what `estimate.json` stores; one seat-day per model stays
+   $38.54; the estimate after step 4 is what `estimate.json` stores; one seat-day per model stays
    `measured-point`):
    ```
    bun run arena -- run --lineup budget-mix --budget-usd 40 --out runs/budget-mix-1 --watch
@@ -1544,19 +1626,19 @@ change; the plan bounds every card valid from the start, and a run slower than i
 hours can slip past the change: the prediction stretches each day's window ×2, so start the 7-day
 match no later than 2026-11-28):
 
-1. Smokes with recordings (≤ $0.22, $0.36, $0.51, $0.12):
+1. Smokes with recordings (≤ $0.25, $0.41, $0.57, $0.13):
    ```
    bun run arena -- smoke --model sonnet-5-5 --effort medium --record recordings/anthropic-sonnet
    bun run arena -- smoke --provider openai --model gpt-6.1-sol --effort medium --record recordings/openai-sol
    bun run arena -- smoke --provider google --model gemini-4-argon --effort medium --record recordings/gemini-argon
    bun run arena -- smoke --provider openrouter --model z-ai/glm-5.3 --effort low --record recordings/openrouter-glm-5.3
    ```
-2. The 1-day calibration (central $5.78, high $24.30, budget $40, K $33.36), then calibrate:
+2. The 1-day calibration (central $5.78, high $24.30, budget $40, K $33.18), then calibrate:
    ```
    bun run arena -- run --lineup mid-tier --stop-after 1 --budget-usd 40 --out runs/mid-tier-cal --watch
    bun run arena -- calibrate runs/mid-tier-cal
    ```
-3. The first comparison match (scenario: central $40.44, high $170.13, budget $200, K $193.36), and
+3. The first comparison match (scenario: central $40.44, high $170.13, budget $200, K $193.18), and
    its reconciliation 48 hours later:
    ```
    bun run arena -- estimate --lineup mid-tier --budget-usd 200
@@ -1709,7 +1791,11 @@ New estimates after the fixes (2026-10-20 cards, 7-day lockstep, fees included; 
 reserve $1.43, K $38.57; `mid-tier` $10.41 / $40.44 / $170.13, reserve $6.64, K $193.36;
 `mid-tier-flash` $8.76 / $32.57 / $131.02, reserve $5.25, K $144.75; `frontier` $36.78 / $134.16 /
 $524.44, reserve $22.90, K $547.10. The GLM and Kimi seats now predict at `low`; the reserves grew
-with the OpenAI 12-hour write price and OpenRouter's completion slack.
+with the OpenAI 12-hour write price and OpenRouter's completion slack. Since prompt version 3
+(`docs/phase2.md` §3.5) every probe and start-preflight bound grew with the stable prefix, the
+predictions unchanged: reserves $1.46 (`budget-mix`, K $38.54), $6.82 (`mid-tier`, K $193.18),
+$5.41 (`mid-tier-flash`, K $144.59), $23.63 (`frontier`, K $546.37), $20.95 (`claude-family`, K
+$169.05).
 
 # Part IV: Pass 3, statistics (agent F)
 
@@ -2374,3 +2460,151 @@ Measurements after the fixes (this box, 4 vCPU shared):
   18.9 and 20.1 s for `de7aa74` measured on the same box in the same hour.
 - `bun run check`: green, 3,823 pass, 36 skip, 0 fail (3,859 tests in 306 files, 9 min 11 s);
   the architecture test's own build 182,350 of 189,440 bytes gzipped.
+
+# Part VI: before the first real match
+
+## 56. Playtest findings
+
+**Method.** `bun run arena -- playtest` (`docs/phase2.md` §12) forks a lockstep `--fake` run at
+one LLM seat's turn and shows a playtester (here an agent) exactly what that seat's model would
+receive: `prompt.md`, `tools.json`, then each round's briefing, results and reminder. The
+playtester answers with tool calls, which go through the real gateway with the seat's caps, and
+bots play the other seats. Nothing is sent to an API. The material is two 7-day `--fake` runs
+(`--lineup claude-duo --seed 7` and the default lineup with `--seed 18`, both `--id-key seed`).
+
+**Three scenarios on prompt version 2** (61 turns, 318 calls). An invalid call is a rejected call,
+or a batch with a rejected item:
+
+| Scenario  | Run, seat, start                    | Turns | Calls | Invalid                                                           |
+| --------- | ----------------------------------- | ----- | ----- | ----------------------------------------------------------------- |
+| Opening   | `claude-duo` s7, p1, turn 1         | 16    | 72    | 1 (1.4%): a build item short of wood and stone                    |
+| Diplomacy | default s18, p2, turn 2             | 27    | 120   | 3 (2.5%): two build items short, one shipment over the 500 cap    |
+| War       | default s18, p2, D5 01:00 (turn 71) | 18    | 126   | 2 (1.6%): a recruit batch and a build batch, items short of stone |
+| All       |                                     | 61    | 318   | 6 (1.9%)                                                          |
+
+Invalid calls were never the problem: each one came back with the shortfall and the time it would
+be affordable. The cost was misreadings and wasted round trips. Briefings were cut with room to
+spare (66% and 69% of LLM wakes on the material runs). The wake economy was invisible, build and
+recruit times were missing, the `cost[L]` index was ambiguous, the trigger roles were undefined,
+and every `read_notes` result repeated the notebook.
+
+**What changed** (`PROMPT_VERSION` 3 and presentation 2, `docs/phase2.md` §3.5). The prompt gained
+READING THE INTERFACE (trigger roles, wake timing, what each queue's `queue_empty` costs, what
+`lastTurn.nextWake` counts, daily resets, the `cost[L]` index, the probe order, the shipment cap)
+and TIMES (compiled build and recruit times). Six tool descriptions were clarified. LLM seats get a
+6,000-character briefing target, in which the events named by the wake never give way. Each city
+lists `lvl`, `more` searches carry a `limit`, and `read_notes` results leave the notebook out. Bots
+keep presentation 1, so goldens and fingerprints are unchanged. On the material runs, cut
+briefings fell from 66% / 69% of LLM wakes to 12% / 11%, and the fake cost moved +1.8% / −0.4%.
+`claude-duo`'s reserve rose by $0.05 (§3).
+
+**Not changed, and why** (`docs/phase2.md` §3.5 has the list). Each of these needs a new ruleset
+version, an engine action, event data that goldens fingerprint, or a change that bots would see.
+Examples: grouping `queue_empty` per seat, withdrawing a proposal, a labelled `points` in battle
+reports, the siege and garrison cheat-sheet text of the published `perfidia-1@1.1.0`,
+`details.availableAt` as a time pair, and `view_map` travel joined to its islands.
+
+**Re-test on version 3:** war and diplomacy, with a betrayal by an ally. The run was regenerated
+with this build (`claude-duo` s7). The playtester took seat p3 (Haiku 5.5, Penelope) at turn 30
+(D3 00:50), as ally p4's attack on the capital was in flight (landing D3 03:50:14), and played
+turns 30–50: 21 turns, 123 calls.
+
+- **Invalid calls:** 3 (2.4%). A settler order was 303 gold short. Two build batches ended with a
+  goldmine item 80 wood and stone short; both came in a turn's last reply, so the model never saw
+  those results.
+- **Play:** the defence was sized from the TIMES table and held for the loss of 3 hoplites. A
+  counter-strike after a spy report won 1,300 against 745. The seat kept pacts with p1 and p5,
+  grew from 4 to 7 cities, and ranked first on D3.
+- **Version 2's confusions that it met were gone.** `more` was null in all 21 briefings (3,978 to
+  6,886 characters, up to 21 events inline). `lvl`, TIMES, the `cost[L]` note, trigger roles, the
+  wake delay and `read_notes` all read as intended.
+
+**Found by the re-test, left for the next prompt or ruleset version** (each moves the pinned
+prompt bytes or a published ruleset's text, and deserves its own re-test):
+
+- **No battle score for 76 enemy pop killed.** This is the ruleset's anti-collusion rule
+  (`docs/rulesets/perfidia-1.md` §8.8): no credit between players who shared an alliance or pact
+  at resolution or in the previous 86,400 s, and both battles were against the ex-ally within
+  that window. The cheat sheet's SCORE line does not say so, and `points: []` gives no reason.
+- **What support stationed with an ally does after a betrayal** is not documented.
+- **Planning own wakes is still arithmetic.** Two own wakes were wasted, and own wakes ran out by
+  D3 17:18. A `budget.upcoming` list of certain triggers would help.
+- **Report contents are not inline.** A wake caused by a battle or spy report needs a `read_notes`
+  round trip to read it.
+- **`found_city` leaves its transport and escort in the new city**, which no text says.
+- **`spy_detected` costs a social wake**, so an enemy can drain a target's social wakes for 100
+  gold each. Changing this is a wake rule, which needs a new ruleset version.
+- **Smaller points:** a build's time is fixed when it is ordered; battle reports use the
+  unlabelled `land.q`; return moves list no units; `support_arrived` has no units for an ally's
+  city; and `stationed` counts the seat's own groups.
+- **Harness:** a forked seat inherits the fake brain's JSON notebook, and `STATUS.md` shows no
+  game state.
+
+## 57. The M1 rehearsal
+
+An owner-style run of §10, steps 1–5, on a scratch copy of `d990659` (prompt version 2). It used
+`PERFIDIA_ANTHROPIC_BASE_URL=http://127.0.0.1:18080`, pointing at the Anthropic wire stub of
+`model/wire-stubs.test.ts` (copied out of the test file, which cannot be imported outside
+`bun test`). The stub answered 2,891 requests with 0 stub problems. A real run takes the same code
+path with the variable unset and a real key.
+
+**What worked.**
+
+- **Smokes:** the three smokes stayed within their printed bounds.
+- **Runs:** the free rehearsal, the calibration day ($0.32, 89% cache reads, no hand-off), two days
+  of the 7-day match, and a whole 7-day match on the stub ($4.18, inside the prediction) all
+  passed Level E.
+- **Money paths:** the kill switch fired at K and stayed under the budget. `--budget-carry`
+  counted a crashed run's spend and reserve. Reconcile's tolerance and its exit 4 behaved as
+  documented.
+- **Preflight refusals:** a missing key, a wrong key, a budget below the low, `$55` and a
+  US-only geography were all refused before anything was written.
+
+**Fixed in this build, each with a regression test:**
+
+- **Ctrl-C under `bun run arena` was often counted twice and aborted the run** (3 of 6 Ctrl-C,
+  2 of 3 SIGTERM, 2 of 3 SIGHUP to the group). The CLI now takes a signal within
+  `SIGNAL_REPEAT_MS` (1 s) of the last one as the same one (§5). Tests: `review.test.ts` (the
+  source, at the boundary) and `phase4.test.ts` (two copies 3 ms apart: one hand-off, no abort);
+  both fail with the window at 0.
+- **A run against a stub left no trace, and after `reconcile --force` reached `exit4.met: true`.**
+  `arena.json` now records `baseUrls` (§6), the report prints them, and a loopback origin never
+  meets `exit4`, in the report or in `arena reconcile`. Tests: `rehearsal.test.ts`,
+  `review.test.ts` for `exit4Met`, and `wire-match.test.ts` (the four stubs' origins recorded).
+- **Reconciling a crashed run** said "virtual (a `--fake` run)". It now uses the crashed run's
+  logged wall window and says the run crashed (§7; `rehearsal.test.ts`).
+- **The report of an aborted run** printed "Level E: FAILED (… expected an end line …)" and a 7-day
+  projection from 10 minutes of spend ($1,077.92). It now prints "Level E: ok up to the abort" when
+  the missing end line is the only divergence. Under one measured day it prints no projection
+  (`arena.json` keeps both fields as they were).
+- **Messages:** the `--budget-carry` banner now shows the carry and what is left until K. A 401
+  at the preflight names the key variable to check. The smokes' no-key error no longer repeats
+  "arena smoke". The real-time speed line says it is for a later real-time run.
+- **Docs:** the §10 steps (the Console setup, reading `arena.json`, stopping and crashing, the
+  Cost page) and M2's calibrate note.
+
+**Not changed.**
+
+- `arena smoke` does not print the `anthropic-workspace-id` response header. That would need the
+  SDK's raw response in the adapter's smoke path; checking the key's workspace in the Console
+  does the same job.
+- The wire stubs stay inside `wire-stubs.test.ts`. A non-test module would make rehearsals easier
+  but is test infrastructure, not the owner's path.
+- The stub's cache model ignores preflight writes, so a first smoke against a fresh stub warns "no
+  cache read after the pre-warm". This is a stub artifact.
+
+**Figures since prompt version 3** (this build, `--price-date 2026-10-20`). The rehearsal's K
+$7.80 / $52.80 and smoke bounds $0.010969 / $1.535745 / $0.219392 were version 2's.
+
+- **Calibration day:** reserve $2.25, K $7.75.
+- **7-day match:** K $52.75.
+- **Smoke bounds:** $0.012233 (Haiku 5.5), $1.712730 (Opus 5.5 at low, its fallbacks included)
+  and $0.244675 (Sonnet 5.5 at medium).
+
+**Owner checks in the Console** (§10 step 1):
+
+- a dedicated workspace with a spend limit;
+- its inference geo global (allowed and default);
+- the key created in that workspace;
+- the Rate limits page;
+- after 48 hours, the Cost page for the UTC days of `budget.wall`.

@@ -33,10 +33,12 @@ import {
 import {
   EXIT_RECONCILE,
   RECONCILE_AFTER_HOURS,
+  crashedRun,
   formatReconcile,
   inputFromFlags,
   readInput,
   reconcileDir,
+  runFiles,
 } from "./reconcile.ts";
 import { formatCost } from "./report.ts";
 import { CALLS_FILE, runArena, type SignalSource } from "./run.ts";
@@ -59,7 +61,8 @@ const UINT32_MAX = 4_294_967_295;
 // `PERFIDIA_LIVE` (Pass 1b: `PERFIDIA_<PROVIDER>_API_KEY` and `_BASE_URL` for openai, google,
 // openrouter and compat too). `arena run` takes over SIGINT, SIGTERM and SIGHUP from before its start
 // preflight: the first hands every LLM seat to its bot (or stops the start preflight, nothing
-// written), the second aborts the run, a third exits at once (after an `operator` line).
+// written), the second aborts the run, a third exits at once (after an `operator` line); a signal
+// within a second of the last one taken counts as the same one (`SIGNAL_REPEAT_MS`).
 
 export const USAGE = [
   "usage: bun run arena -- <command> [flags]",
@@ -539,9 +542,19 @@ function reconcileCommand(argv: readonly string[], io: CliIo, nowMs: number): nu
   }
   const input = file === undefined ? inputFromFlags(usd) : readInput(file);
   const force = f.bool("force");
+  const crashed = crashedRun(runFiles(dir).arena);
   const r = reconcileDir(dir, input, nowMs, { force });
+  if (crashed) {
+    io.err(
+      `warning: the run never ended (arena.json still says running: it crashed, or it still runs); its window ends at its last logged wall-clock time, ${r.wall.end ?? "none"}\n`,
+    );
+  }
   if (r.hoursAfterEnd === null) {
-    io.err("warning: the run's wall-clock times are virtual (a --fake run): no 48-hour check\n");
+    io.err(
+      crashed
+        ? "warning: the crashed run logged no wall-clock time: no 48-hour check\n"
+        : "warning: the run's wall-clock times are virtual (a --fake run): no 48-hour check\n",
+    );
   } else if (r.early) {
     io.err(
       `warning: only ${r.hoursAfterEnd} h since the run's wall-clock end: usage pages can lag up to a day; reconcile again after ${RECONCILE_AFTER_HOURS} h${force ? " (--force: exit4.reconciled is filled anyway)" : " (exit4.reconciled stays null until then; --force fills it now)"}\n`,
@@ -774,15 +787,31 @@ export const OPERATOR_SIGNALS: readonly NodeJS.Signals[] = Object.freeze([
 ]);
 
 /**
+ * A signal within this many milliseconds of the last one taken is the same signal (the M1
+ * rehearsal): under `bun run arena`, one Ctrl-C or a closed terminal reaches the arena twice, from
+ * the terminal (the arena shares `bun run`'s process group) and forwarded by `bun run`, a few
+ * milliseconds apart; counted twice, it aborted the run instead of handing the seats off.
+ */
+export const SIGNAL_REPEAT_MS = 1000;
+
+/**
  * SIGINT, SIGTERM and SIGHUP for `arena run` (subscribed before its start preflight): the first two
  * go to the run (hand off, then abort); a third is handed to the run (it writes an `operator` line)
- * and then exits at once (code 130), whatever the run is doing.
+ * and then exits at once (code 130), whatever the run is doing. A signal less than
+ * `SIGNAL_REPEAT_MS` after the last one taken is dropped (`nowMs`: a monotonic clock).
  */
-export function processSignalsOf(exit: (code: number) => void = (c) => process.exit(c)) {
+export function processSignalsOf(
+  exit: (code: number) => void = (c) => process.exit(c),
+  nowMs: () => number = () => performance.now(),
+) {
   const source: SignalSource = {
     subscribe(handler) {
       let count = 0;
+      let lastMs: number | null = null;
       const on = (signal: NodeJS.Signals): void => {
+        const now = nowMs();
+        if (lastMs !== null && now - lastMs < SIGNAL_REPEAT_MS) return;
+        lastMs = now;
         count += 1;
         try {
           handler(signal);

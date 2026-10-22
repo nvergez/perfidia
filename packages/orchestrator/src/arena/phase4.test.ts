@@ -33,7 +33,7 @@ import { ModelError } from "../model/adapter.ts";
 import { FakeAdapter, type Brain } from "../model/fake.ts";
 import { formatCents, requirePrice } from "../model/prices.ts";
 import { botBrain } from "./brain.ts";
-import { main as arenaMain } from "./cli.ts";
+import { main as arenaMain, processSignalsOf } from "./cli.ts";
 import { estimateSeat } from "./cost.ts";
 import { arenaEnv, planArena, type LlmSeatPlan } from "./plan.ts";
 import { reconcileRun } from "./reconcile.ts";
@@ -449,6 +449,60 @@ describe("operator signals (phase 4 §5.2)", () => {
       expect(
         calls.filter((l) => l.k === "handoff").map((l) => l.k === "handoff" && l.reason),
       ).toEqual(["operator", "operator", "operator", "operator"]);
+      expect(out.report.levelE?.ok).toBe(true);
+    },
+    LONG,
+  );
+
+  test(
+    "one Ctrl-C under `bun run` (two copies 3 ms apart) through the CLI's source: a hand-off, no abort",
+    async () => {
+      // The M1 rehearsal: the terminal and `bun run` both deliver it; 3 of 6 runs aborted.
+      let ms = 0;
+      const source = processSignalsOf(
+        () => undefined,
+        () => ms,
+      );
+      const ctrlC = {
+        source,
+        emit: () => {
+          process.emit("SIGINT", "SIGINT");
+          ms += 3;
+          process.emit("SIGINT", "SIGINT");
+        },
+        subscribed: () => true,
+      };
+      const dir = runDir();
+      const plan = planArena(
+        {
+          ruleset: RULESET,
+          fake: true,
+          seed: 1,
+          idKey: "seed",
+          lineup: "claude-duo",
+          days: 2,
+          stopAfterDays: 1,
+        },
+        arenaEnv({}),
+      );
+      const out = await runArena(plan, {
+        dir,
+        io: memoryIo(),
+        quiet: true,
+        signals: source,
+        adapterFor: firing(ctrlC, 40),
+      });
+      expect([out.status, out.code]).toEqual(["stopped", 0]);
+      const calls = readCalls(dir);
+      expect(calls.flatMap((l) => (l.k === "operator" ? [[l.signal, l.action]] : []))).toEqual([
+        ["SIGINT", "handoff"],
+      ]);
+      expect(calls.flatMap((l) => (l.k === "handoff" ? [l.reason] : []))).toEqual([
+        "operator",
+        "operator",
+        "operator",
+        "operator",
+      ]);
       expect(out.report.levelE?.ok).toBe(true);
     },
     LONG,

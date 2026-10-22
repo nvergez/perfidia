@@ -30,7 +30,7 @@ import { AnthropicAdapter, AnthropicClient, type HttpFetch } from "../model/anth
 import { LEGACY_AT, costOf } from "../model/prices.ts";
 import { FakeAdapter, type Brain } from "../model/fake.ts";
 import { botBrain } from "./brain.ts";
-import { main as arenaMain, processSignalsOf } from "./cli.ts";
+import { SIGNAL_REPEAT_MS, main as arenaMain, processSignalsOf } from "./cli.ts";
 import { LINEUPS_DIR } from "./lineup.ts";
 import { arenaEnv, planArena, type ArenaRequest, type LlmSeatPlan } from "./plan.ts";
 import { SNAPSHOT_ENDPOINTS, toolsFor, type EndpointSource } from "./providers.ts";
@@ -308,7 +308,9 @@ describe("crashes and operator signals (review: money, major)", () => {
     const exits: number[] = [];
     const got: string[] = [];
     const before = process.listenerCount("SIGHUP");
-    const off = processSignalsOf((code) => exits.push(code)).subscribe((s) => got.push(s));
+    let ms = 0;
+    const clock = () => (ms += SIGNAL_REPEAT_MS);
+    const off = processSignalsOf((code) => exits.push(code), clock).subscribe((s) => got.push(s));
     expect(process.listenerCount("SIGHUP")).toBe(before + 1);
     process.emit("SIGHUP", "SIGHUP");
     process.emit("SIGTERM", "SIGTERM");
@@ -317,6 +319,37 @@ describe("crashes and operator signals (review: money, major)", () => {
     expect([got, exits]).toEqual([["SIGHUP", "SIGTERM", "SIGINT"], [130]]);
     off();
     expect(process.listenerCount("SIGHUP")).toBe(before);
+  });
+
+  test("one Ctrl-C under `bun run` arrives twice, 3 ms apart: the process source takes it once", () => {
+    // The M1 rehearsal: the terminal signals the arena's process group and `bun run` forwards its
+    // own copy; counted twice, one Ctrl-C (or a closed terminal) aborted 3 of 6 runs.
+    const exits: number[] = [];
+    const got: string[] = [];
+    let ms = 10_000;
+    const off = processSignalsOf(
+      (code) => exits.push(code),
+      () => ms,
+    ).subscribe((s) => got.push(s));
+    try {
+      process.emit("SIGINT", "SIGINT");
+      ms += 3;
+      process.emit("SIGINT", "SIGINT");
+      ms += SIGNAL_REPEAT_MS - 4;
+      process.emit("SIGHUP", "SIGHUP");
+      expect(got).toEqual(["SIGINT"]);
+      // A second later than the first taken: a second press (the run aborts).
+      ms += 1;
+      process.emit("SIGINT", "SIGINT");
+      ms += 2;
+      process.emit("SIGINT", "SIGINT");
+      expect(got).toEqual(["SIGINT", "SIGINT"]);
+      ms += SIGNAL_REPEAT_MS;
+      process.emit("SIGTERM", "SIGTERM");
+      expect([got, exits]).toEqual([["SIGINT", "SIGINT", "SIGTERM"], [130]]);
+    } finally {
+      off();
+    }
   });
 });
 
@@ -403,6 +436,10 @@ describe("a key echoed by the upstream is redacted (review: money, minor)", () =
     );
     expect(r.code).toBe(3);
     expect(r.err).toContain("preflight of anthropic/claude-sonnet-5-5/medium: auth (401)");
+    // What to fix (the M1 rehearsal: a bare 401 named nothing).
+    expect(r.err).toContain(
+      "; check PERFIDIA_ANTHROPIC_API_KEY: a valid key, created in the workspace",
+    );
     expect(r.err).toContain("[redacted]");
     expect(`${r.out}${r.err}`).not.toContain(KEY);
     expect(`${r.out}${r.err}`).not.toContain(encodeURIComponent(KEY));
@@ -769,9 +806,12 @@ describe("exit4.met (review: correctness)", () => {
     reconciled: true,
   };
 
-  test("every part is needed, each on its own; a fake run never meets it", () => {
-    expect(exit4Met(all, { fake: false })).toBe(true);
-    expect(exit4Met(all, { fake: true })).toBe(false);
+  test("every part is needed, each on its own; a fake run or a loopback base URL never meets it", () => {
+    const real = { fake: false, loopback: false };
+    expect(exit4Met(all, real)).toBe(true);
+    expect(exit4Met(all, { ...real, fake: true })).toBe(false);
+    // The M1 rehearsal: a 7-day run against a stub on 127.0.0.1 reached met after --force.
+    expect(exit4Met(all, { ...real, loopback: true })).toBe(false);
     const flips: [string, Partial<typeof all> | { reconciled: null }][] = [
       ["models", { models: 1 }],
       ["ended", { ended: false }],
@@ -784,7 +824,7 @@ describe("exit4.met (review: correctness)", () => {
       ["reconciled null", { reconciled: null }],
     ];
     for (const [name, flip] of flips) {
-      expect([name, exit4Met({ ...all, ...flip }, { fake: false })]).toEqual([name, false]);
+      expect([name, exit4Met({ ...all, ...flip }, real)]).toEqual([name, false]);
     }
   });
 });

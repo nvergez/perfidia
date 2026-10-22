@@ -531,7 +531,7 @@ describe("arena smoke --provider openai", () => {
     const code = await main(["smoke", "--provider", "openai"], io, {});
     expect(code).toBe(3);
     expect(io.stderr()).toMatch(
-      /arena smoke --provider openai makes one live API call \(at most \$0\.0\d{5} on gpt-6-luna\): set PERFIDIA_OPENAI_API_KEY first\. Nothing was sent\./,
+      /arena smoke: the openai smoke makes one live API call \(at most \$0\.0\d{5} on gpt-6-luna\): set PERFIDIA_OPENAI_API_KEY first\. Nothing was sent\./,
     );
   });
 
